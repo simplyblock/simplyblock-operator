@@ -34,16 +34,26 @@ import (
 // originals were (design §7.3). Its value is the restored group's name.
 const consistencyGroupLabel = "storage.simplyblock.io/consistency-group"
 
+// membersNamespace is where a group restore's member StorageBackups are
+// recorded: beside the StorageGroupBackup a groupBackupRef names, and beside the
+// cluster for a group backup named by id, which no StorageGroupBackup owns.
+func membersNamespace(ops *simplyblockv1alpha2.StorageBackupOps) string {
+	if ops.Spec.GroupBackupRef.Name != "" {
+		return ops.GroupBackupKey().Namespace
+	}
+	return ops.BackupsNamespace()
+}
+
 // listGroupMembers resolves the member StorageBackups of a group backup: the
-// StorageBackups carrying its group-backup-id label beside the cluster, where
-// the mirror records every copy. The operator reads them with its own rights,
-// and the requester's right to the group backup was checked at admission.
+// StorageBackups carrying its group-backup-id label where the mirror records
+// them. The operator reads them with its own rights, and the requester's right
+// to the group backup was checked at admission.
 func (r *StorageBackupOpsReconciler) listGroupMembers(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps, groupBackupID string,
 ) ([]simplyblockv1alpha2.StorageBackup, error) {
 	var members simplyblockv1alpha2.StorageBackupList
 	if err := r.List(ctx, &members,
-		client.InNamespace(ops.BackupsNamespace()),
+		client.InNamespace(membersNamespace(ops)),
 		client.MatchingLabels{simplyblockv1alpha2.BackupLabelGroupBackupID: simplyblockv1alpha2.GroupBackupLabelValue(groupBackupID)},
 	); err != nil {
 		return nil, err
@@ -51,36 +61,32 @@ func (r *StorageBackupOpsReconciler) listGroupMembers(
 	return members.Items, nil
 }
 
-// groupBackupIDFor resolves the group backup a group restore restores: the id
-// spec.groupBackupID names, or the one the group request spec.groupBackupRef
-// names has produced.
+// groupBackupIDFor resolves the group backup a group restore restores, and how
+// many members it has where that is known: the id spec.groupBackupID names, or
+// the one the StorageGroupBackup spec.groupBackupRef names has produced.
 func (r *StorageBackupOpsReconciler) groupBackupIDFor(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
-) (string, error) {
-	if id := ops.TargetGroupBackupID(); id != "" {
-		return id, nil
+) (string, int32, error) {
+	if ops.Spec.GroupBackupID != "" {
+		return ops.Spec.GroupBackupID, 0, nil
 	}
-	var request simplyblockv1alpha2.StorageBackup
-	if err := r.Get(ctx, ops.GroupBackupKey(), &request); err != nil {
+	var sgb simplyblockv1alpha2.StorageGroupBackup
+	if err := r.Get(ctx, ops.GroupBackupKey(), &sgb); err != nil {
 		if apierrors.IsNotFound(err) {
-			return "", fatalf("StorageBackup %s does not exist", ops.GroupBackupKey())
+			return "", 0, fatalf("StorageGroupBackup %s does not exist", ops.GroupBackupKey())
 		}
-		return "", err
-	}
-	if !request.IsGroupRequest() {
-		return "", fatalf("StorageBackup %s is not a consistency-group backup request", ops.GroupBackupKey())
+		return "", 0, err
 	}
 	switch {
-	case request.Status.Phase == simplyblockv1alpha2.StorageBackupPhaseFailed:
-		return "", fatalf("the group backup StorageBackup %s requested failed", ops.GroupBackupKey())
-	case request.Status.Phase != simplyblockv1alpha2.StorageBackupPhaseAvailable || request.GroupBackupID() == "":
-		// Not an error of this operation: the request is still being taken, and
-		// the step is retried until it names its group backup or its deadline
-		// runs out.
-		return "", fmt.Errorf("waiting for the group backup StorageBackup %s requested (phase %q)",
-			ops.GroupBackupKey(), request.Status.Phase)
+	case sgb.Status.Phase == simplyblockv1alpha2.StorageGroupBackupPhaseFailed:
+		return "", 0, fatalf("StorageGroupBackup %s failed", ops.GroupBackupKey())
+	case sgb.Status.Phase != simplyblockv1alpha2.StorageGroupBackupPhaseAvailable || sgb.Status.GroupBackupID == "":
+		// Not an error of this operation: the group backup is still being taken,
+		// and the step is retried until it is Available or its deadline runs out.
+		return "", 0, fmt.Errorf("waiting for StorageGroupBackup %s (phase %q)",
+			ops.GroupBackupKey(), sgb.Status.Phase)
 	}
-	return request.GroupBackupID(), nil
+	return sgb.Status.GroupBackupID, sgb.Status.MemberCount, nil
 }
 
 // validateGroup resolves the group backup, the cluster, and the target pool for
@@ -93,7 +99,7 @@ func (r *StorageBackupOpsReconciler) validateGroup(
 	clusterID string,
 	restore *simplyblockv1alpha2.RestoreSpec,
 ) (bool, error) {
-	groupBackupID, err := r.groupBackupIDFor(ctx, ops)
+	groupBackupID, want, err := r.groupBackupIDFor(ctx, ops)
 	if err != nil {
 		return false, err
 	}
@@ -101,9 +107,15 @@ func (r *StorageBackupOpsReconciler) validateGroup(
 	if err != nil {
 		return false, err
 	}
-	if len(members) == 0 {
-		return false, fatalf("group backup %s has no members recorded beside cluster %s",
-			groupBackupID, ops.Spec.ClusterRef.Name)
+	switch {
+	case want > 0 && len(members) < int(want):
+		// The mirror moves the members beside their StorageGroupBackup on its
+		// own, so a shortfall here is a step in flight rather than a fault.
+		return false, fmt.Errorf("waiting for %d of %d member(s) of group backup %s to be recorded in %s",
+			int(want)-len(members), want, groupBackupID, membersNamespace(ops))
+	case len(members) == 0:
+		return false, fatalf("group backup %s has no members recorded in %s",
+			groupBackupID, membersNamespace(ops))
 	}
 
 	poolUUID, err := utils.ResolvePoolUUID(ctx, r.Client,

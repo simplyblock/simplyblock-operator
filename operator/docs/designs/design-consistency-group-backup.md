@@ -9,14 +9,14 @@
 
 ## Phasing Overview
 
-| Phase       | Status  | Scope                                                                                                                                                                                  | Sections           |
-|-------------|---------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
-| **Phase 1** | Planned | Control plane: back up the member snapshots of one group generation as one all-or-nothing unit, a `GroupBackup` record, a group manifest in S3, group restore, and the `sbctl` surface | §4, §5, §6, §8     |
-| **Phase 2** | Planned | Kubernetes surface: `StorageBackupPolicy` gains a consistency-group source, and `StorageBackupOps{action: Restore}` restores a whole group backup into a new group of claims           | §7, Appendix A/B/C |
-| **Phase 3** | Planned | Disaster recovery: export, import, and discover a group backup across clusters, carrying the generation as a unit                                                                      | §6.5               |
-| **Phase 4** | Planned | Scheduling and retention: a group-backup schedule and retention that prunes whole generations, not individual members                                                                  | §9                 |
+| Phase       | Status  | Scope                                                                                                                                                                                                                  | Sections             |
+|-------------|---------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------|
+| **Phase 1** | Planned | Control plane: back up the member snapshots of one group generation as one all-or-nothing unit, a `GroupBackup` record, a group manifest in S3, group restore, and the `sbctl` surface                                 | §4, §5, §6, §8       |
+| **Phase 2** | Planned | Kubernetes surface: `StorageBackupPolicy` gains a consistency-group source, `StorageGroupBackup` takes one on demand, and `StorageBackupOps{action: Restore}` restores a whole group backup into a new group of claims | §7, Appendix A/B/C/E |
+| **Phase 3** | Planned | Disaster recovery: export, import, and discover a group backup across clusters, carrying the generation as a unit                                                                                                      | §6.5                 |
+| **Phase 4** | Planned | Scheduling and retention: a group-backup schedule and retention that prunes whole generations, not individual members                                                                                                  | §9                   |
 
-Phase 1 is the control-plane feature and stands alone: it is usable through `sbctl` with no Kubernetes surface. Phase 2 puts the operator's existing data-protection kinds on top of it, extending the single-volume `StorageBackup` family rather than adding a new kind (§7). Phase 3 makes a group backup portable across clusters for disaster recovery, the same way single-volume export/import already is. Phase 4 adds the scheduled, pruned lifecycle.
+Phase 1 is the control-plane feature and stands alone: it is usable through `sbctl` with no Kubernetes surface. Phase 2 puts the operator's data-protection kinds on top of it: it extends the three single-volume kinds and adds one, `StorageGroupBackup`, for a group backup taken on demand (§7). Phase 3 makes a group backup portable across clusters for disaster recovery, the same way single-volume export/import already is. Phase 4 adds the scheduled, pruned lifecycle.
 
 This design builds on two shipped features and fills the gap between them: single-volume backup to S3 ([`design-storagebackup.md`](crd-redesign/design-storagebackup.md)) and the crash-consistent group snapshot generation ([`design-consistency-groups.md`](design-consistency-groups.md)). Backup of a consistency group is named as future work in [`design-consistency-groups.md`](design-consistency-groups.md) §2, and this document specifies it.
 
@@ -54,6 +54,7 @@ P0-1 and P0-2 are the two halves this design joins: the generation gives a crash
 14. [Appendix B: `storagebackup_types.go` additions](#appendix-b-storagebackup_typesgo-additions)
 15. [Appendix C: `storagebackupops_types.go` additions](#appendix-c-storagebackupops_typesgo-additions)
 16. [Appendix D: the group manifest schema](#appendix-d-the-group-manifest-schema)
+17. [Appendix E: `storagegroupbackup_types.go`](#appendix-e-storagegroupbackup_typesgo)
 
 ---
 
@@ -223,7 +224,9 @@ A group backup is portable the way a single backup is. Export emits the group ma
 
 ## 7. Extending the StorageBackup Family
 
-The operator covers a group backup by extending its three single-volume data-protection kinds, not by adding a kind. The entity and action categories are unchanged (`design-crd-model.md` §3): a policy and a backup are things that are, and a restore is a thing that happens.
+The operator covers a group backup by extending its three single-volume data-protection kinds and adding one kind, `StorageGroupBackup`. The entity and action categories are unchanged (`design-crd-model.md` §3): a policy, a backup, and a group backup are things that are, and a restore is a thing that happens.
+
+A `StorageBackup` is one point-in-time copy of one volume (`design-storagebackup.md` §5.1), and that stays its whole meaning. A group backup taken on demand is a different thing: it has N copies, a generation, and a lifecycle of its own (`Creating` until every member completes), a restore names it, and the mirror reads it to decide where the member copies are recorded. That clears the bar for a kind (the `api-design` rule that something watches it or references it by name). A `StorageBackup` with a group-shaped `spec.source` gives one kind two meanings, and such a request produces N more objects of its own kind in another namespace. An earlier version of this design took that shape, and users found it hard to follow.
 
 ### 7.1 `StorageBackupPolicy` gains a consistency-group source
 
@@ -269,11 +272,11 @@ type BackupGroup struct {
 }
 ```
 
-`status.source.group` carries it, in the source group that is written once and never updated (`design-storagebackup.md` §5.2), with one addition allowed: the group identity itself, because the control plane writes a member backup first and attaches it to its group backup in a second write, so the mirror's first event has no group to freeze. A label `storage.simplyblock.io/group-backup-id` on each member `StorageBackup` makes "the members of this group backup" a selector, which is what a group restore addresses (§7.3). The label carries the group backup's bare UUID (`GroupBackupLabelValue`): the control plane's composite `cluster_id/uuid` is not a legal label value, and every writer and selector of the label normalizes through the same function, so an operation may name the group backup in either form. No new object represents the group; the group is the set of member `StorageBackup`s sharing the id, the same way a generation is the set of member snapshots sharing `(group_id, group_seq)` in the control plane.
+`status.source.group` carries it, in the source group that is written once and never updated (`design-storagebackup.md` §5.2), with one addition allowed: the group identity itself, because the control plane writes a member backup first and attaches it to its group backup in a second write, so the mirror's first event has no group to freeze. A label `storage.simplyblock.io/group-backup-id` on each member `StorageBackup` makes "the members of this group backup" a selector, which is what a group restore addresses (§7.3). The label carries the group backup's bare UUID (`GroupBackupLabelValue`): the control plane's composite `cluster_id/uuid` is not a legal label value, and every writer and selector of the label normalizes through the same function, so an operation may name the group backup in either form. A policy's or an imported group backup is the set of member `StorageBackup`s sharing the id, the same way a generation is the set of member snapshots sharing `(group_id, group_seq)` in the control plane. A group backup taken on demand is also represented by its `StorageGroupBackup` (§7.5), and its members are recorded beside it.
 
 ### 7.3 `StorageBackupOps{Restore}` restores a group
 
-A restore operation gains the ability to restore a whole group backup, producing a new consistency group of claims. The action and the kind are unchanged; the target widens.
+A restore operation gains the ability to restore a whole group backup, producing a new consistency group of claims. The action and the kind are unchanged, and the target widens.
 
 ```go
 // GroupBackupID, when set, restores a whole group backup instead of the single
@@ -284,16 +287,15 @@ A restore operation gains the ability to restore a whole group backup, producing
 // +k8s:immutable
 GroupBackupID string `json:"groupBackupID,omitempty"`
 
-// GroupBackupRef restores the whole group backup an on-demand group request
-// (§7.5) produced: a StorageBackup with spec.source.consistencyGroupName. Its
-// namespace defaults to the operation's. Exactly one of BackupRef, GroupBackupID,
-// and GroupBackupRef is set (a CEL rule).
+// GroupBackupRef restores the whole group backup a StorageGroupBackup (§7.5)
+// produced. Its namespace defaults to the operation's. Exactly one of BackupRef,
+// GroupBackupID, and GroupBackupRef is set (a CEL rule).
 // +optional
 // +k8s:immutable
 GroupBackupRef NamespacedReference `json:"groupBackupRef,omitzero"`
 ```
 
-The two group targets differ in where the requester's access is checked. `groupBackupID` resolves the members by label beside the cluster, where the mirror records every copy, so a requester in another namespace must be allowed to `list` StorageBackups there, which in practice is an administrator. `groupBackupRef` names an object in an application namespace: the requester needs `get` on that request, the same rule as `backupRef`, and the operator reads the members beside the cluster with its own rights. An application team therefore restores a group it backed up on demand without any access to the operator's namespace. `groupBackupID` stays for the group backups no request stands for: those a policy scheduled and those imported.
+The two group targets differ in where the members are and where the requester's access is checked. `groupBackupID` resolves the members by label beside the cluster, where the mirror records the copies of a group backup no `StorageGroupBackup` owns, so a requester in another namespace must be allowed to `list` StorageBackups there, which in practice is an administrator. `groupBackupRef` names a `StorageGroupBackup`, whose members are recorded beside it (§7.5): the requester needs `get` on the `StorageGroupBackup`, the same rule as `backupRef`, and the members are read from its namespace. An application team therefore restores a group it backed up on demand without any access to the operator's namespace. `groupBackupID` stays for the group backups no `StorageGroupBackup` stands for: those a policy scheduled and those imported.
 
 A group restore validates that every member `StorageBackup` of the id is present and restorable, then drives the control-plane group restore (§6), and binds one claim per restored member volume, labeling them with `storage.simplyblock.io/consistency-group` so the restored claims form a group. The steps widen from the single-volume restore (`Validating → Restoring → AwaitingVolume → Binding`) to the group: `Validating → Restoring → AwaitingVolumes → Binding`, where `Restoring` drives N member recoveries and `AwaitingVolumes` waits for all N. A group restore takes no lock. Two restores of one group backup read the same immutable copies from the store and produce different volumes, claims, and groups, so there is nothing for them to serialize on, which is `design-storagebackup.md` §14 Q5 answered for the group. What two restores can contend for is a name, and each is named per operation: the claims are `<claimName>-<member>` in the operation's namespace, refused at admission and at `Validating` when they exist, and the restored consistency group is `<claimName>-<operation UID>`, held to a label value because it is also the claims' `storage.simplyblock.io/consistency-group` label. The group name carries the UID because the control plane refuses a duplicate group name, and two restores in two namespaces may pick the same `claimName`.
 
@@ -301,31 +303,45 @@ A group restore cannot be aborted once it has created a logical volume, the same
 
 ### 7.4 Reference validation at creation
 
-Every added reference is validated at admission, the group rule (`design-storagebackup.md` §7), with one exception stated below. A `StorageBackupOps` with a `groupBackupID` is rejected when no `StorageBackup` carries that id: the id is immutable, so a group backup that is not there at creation will never be, and the restore's whole purpose is gone. A `StorageBackupOps` with a `groupBackupRef` is rejected when the reference names no `StorageBackup`, names a request for one claim, or names a group request that `Failed`, because none of these will ever name a group backup. A group request still in progress is admitted, since it will finish, and the restore holds at `Validating` until the request is `Available` and names its group backup. A `StorageBackupPolicy` with a `consistencyGroupName` is rejected when it also sets `claimSelector` (a CEL rule), because the two are alternatives.
+Every added reference is validated at admission, the group rule (`design-storagebackup.md` §7), with one exception stated below. A `StorageBackupOps` with a `groupBackupID` is rejected when no `StorageBackup` carries that id: the id is immutable, so a group backup that is not there at creation will never be, and the restore's whole purpose is gone. A `StorageBackupOps` with a `groupBackupRef` is rejected when the reference names no `StorageGroupBackup`, or one that `Failed`, because neither will ever name a group backup. A `StorageGroupBackup` still in progress is admitted, since it will finish, and the restore holds at `Validating` until it is `Available` and names its group backup. A `StorageGroupBackup` is validated at admission against its own one reference, the consistency group, by the policy's rule below: a group that does not exist yet is admitted and the `StorageGroupBackup` waits in `Pending`. A `StorageBackupPolicy` with a `consistencyGroupName` is rejected when it also sets `claimSelector` (a CEL rule), because the two are alternatives.
 
 The exception is the policy's `consistencyGroupName` itself: it is **not** rejected when no group of that name exists yet. A consistency group is born from its first labeled member volume (`design-consistency-groups.md` §4.1), so a policy that declares how a group is backed up is routinely applied before the group exists — a GitOps bundle that creates the policy and the first member together, in any order, is the common case. Requiring the group at admission would reject exactly that bundle. Instead, the policy reconciler resolves the group by name each pass (`ConsistencyGroupByName`) and holds the policy in `Pending` with a message naming the group it waits for, attaching it the moment the group appears. This is the `api-design` rule that existence is admission's only when the referent cannot legitimately arrive later; here it can, so readiness is the controller's.
 
-### 7.5 `StorageBackup` gains an on-demand group request
+### 7.5 `StorageGroupBackup`: a group backup taken on demand
 
-A `StorageBackupPolicy` with `consistencyGroupName` backs a group up on a schedule. An on-demand group backup is the request form of the same thing, and it reuses the single-volume request (`design-storagebackup.md` §5.3) rather than adding a kind: `spec.source` gains `consistencyGroupName`, and a CEL rule admits exactly one of `claimName` and `consistencyGroupName`.
+A `StorageBackupPolicy` with `consistencyGroupName` backs a group up on a schedule. A `StorageGroupBackup` backs one up now: one generation, every member backed up, committed as one unit. It is the group analog of a `StorageBackup` with `spec.source` (`design-storagebackup.md` §5.3), and it sits beside the group's claims the same way.
 
-```go
-// ConsistencyGroupName asks for an on-demand backup of a whole consistency
-// group as one unit. Set exactly one of this and ClaimName.
-// +kubebuilder:validation:MaxLength=63
-// +optional
-// +k8s:immutable
-ConsistencyGroupName string `json:"consistencyGroupName,omitempty"`
+```yaml
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageGroupBackup            # short name sgb
+metadata: {name: orders-now, namespace: app-a}
+spec:
+  source:
+    consistencyGroupName: orders
 ```
 
-The request sits beside its claims, like a single-volume request. The reconciler finds the claims in its namespace labeled `storage.simplyblock.io/consistency-group=<name>`, takes the cluster from their volume handles, and refuses claims on two clusters. It then works in two calls, so a retry never takes a second generation:
+The type is Appendix E. Spec is the source alone, immutable. Status carries the phase (`Pending`, `Creating`, `Available`, `Failed`), the group backup's id, the generation, the member count, one entry per member naming its `StorageBackup`, the total size, the completion time, an `Available` condition, and `observedGeneration`.
 
-1. Resolve the group with `ConsistencyGroupByName`, take one generation (`POST /consistency-groups/{id}/snapshots {request_id}`), and record its sequence in `status.source.group.generation` before anything else. The `request_id` is `sbk-<request UID>`. The control plane stamps it on every member snapshot of the generation, and a take that names an id a generation of the group already carries returns that generation instead of freezing the group again.
-2. With the backup stream synced, look for a group backup of that generation among the group's member volumes. If the stream has none, ask for one (`POST /consistency-groups/{id}/backups {group_seq}`), and record `status.source.group.groupBackupID` and `memberCount`.
+**Taking it.** The reconciler finds the claims in its namespace labeled `storage.simplyblock.io/consistency-group=<name>`, takes the cluster from their volume handles, and refuses claims on two clusters. It then makes two calls, and neither is made twice for one `StorageGroupBackup`:
 
-A pass that takes the generation and dies before recording it is answered with the same generation on the next pass, by the request id. A pass that asks for the backup and loses the answer finds it again by the generation. Neither call is made twice for one request. The request then follows the member copies on the stream, woken by a trigger keyed on the group backup's id: `Failed` when any member fails, `Available` when `memberCount` members have completed, `Creating` until then. A group with no labeled claims yet, a group the control plane does not know yet, and a cluster with no backup location hold the request in `Pending`.
+1. Resolve the group with `ConsistencyGroupByName`, take one generation (`POST /consistency-groups/{id}/snapshots {request_id}`), and record its sequence in `status.generation` before anything else. The `request_id` is `sgb-<UID>`. The control plane stamps it on every member snapshot of the generation, and a take that names an id a generation of the group already carries returns that generation instead of freezing the group again.
+2. With the backup stream synced, look for a group backup of that generation among the group's member volumes. If the stream has none, ask for one (`POST /consistency-groups/{id}/backups {group_seq}`), and record `status.groupBackupID` and `status.memberCount`.
 
-The request owns the group, not the member copies. It sets no `status.backup`, so the mirror records each member copy beside the cluster with the `group-backup-id` label, exactly as it does for a policy's group backup, and a restore by `groupBackupID` works for it too. A restore by `groupBackupRef` (§7.3) names the request itself.
+A pass that takes the generation and dies before recording it is answered with the same generation on the next pass, by the request id. A pass that asks for the backup and loses the answer finds it again by the generation. The `StorageGroupBackup` then follows the member copies on the stream, woken by a trigger keyed on the group backup's id: `Failed` when any member fails, `Available` when `memberCount` members have completed, `Creating` until then. A group with no labeled claims yet, a group the control plane does not know yet, and a cluster with no backup location hold it in `Pending`.
+
+**Where the member copies are recorded.** Each member copy is an ordinary `StorageBackup` record (`spec.clusterRef`, one per copy, §7.2), and the mirror creates it. What changes is the namespace. The mirror records a copy beside the `StorageGroupBackup` that owns its group backup, and beside the cluster otherwise. Ownership is read from an index on `StorageGroupBackup.status.groupBackupID`, so a policy's or an imported group backup's members stay beside the cluster as they always have. A member recorded beside its group carries one more label, `storage.simplyblock.io/group-backup` with the `StorageGroupBackup`'s name, beside the `group-backup-id` label every member carries. `kubectl get sb -n app-a -l storage.simplyblock.io/group-backup=orders-now` lists the members of one group backup in the namespace that asked for it, and a single member can be restored on its own with `backupRef`, without leaving that namespace.
+
+The record is keyed, as every record is, by the name the store's identifier gives (`StorageBackupName(backupID)`), so a copy has one name in either namespace. The mirror reconciles that name and places the record:
+
+- **The copy belongs to a `StorageGroupBackup`.** The record is written in the group's namespace, and a record of the same name beside the cluster is deleted.
+- **It belongs to none.** The record is written beside the cluster, and a record of the same name in any other namespace is deleted.
+- **The store no longer reports the copy.** Every record of that name is deleted, in any namespace, which is the mirror's rule today.
+
+The control plane reports a member copy as soon as it accepts the group backup, which can be before the `StorageGroupBackup` has recorded the id it got back. Those members are first recorded beside the cluster. A change to a `StorageGroupBackup`'s `status.groupBackupID` enqueues its member copies, and each is moved on the next pass. A move writes the record in its new namespace first and then deletes the old one, so a copy always has a record: a reader may see a member in both namespaces for one reconcile, and never in neither. The mirror finds a record placed away from the cluster through the cluster its `status.clusterID` names, so its own watch on `StorageBackup` reconciles it under the key the stream knows rather than taking it for a copy that left the store.
+
+**Deleting it.** Deleting a `StorageGroupBackup` deletes nothing in the store, and deletes no record. It carries no owner reference on its members for that reason: a garbage-collected member would hide a copy that is still in the bucket and still restorable (`design-storagebackup.md` §5.1). The deletion enqueues the members it lists, and each is moved back beside the cluster, which is what deleting a single-volume request does with its copy. A `StorageGroupBackup` deleted while the operator is down leaves its members beside it until the next event for each copy, when the mirror finds no owner and moves it. Deleting the whole namespace deletes the member records with it, and the mirror records each copy again beside the cluster on its next pass, because the store still reports it.
+
+**What it does not do.** It takes no schedule and keeps no retention: one object is one group backup, kept until deleted, and the copies follow the control plane's retention (§9). It does not restore anything. A restore is a `StorageBackupOps` naming it (§7.3).
 
 ---
 
@@ -354,7 +370,7 @@ The group endpoints are thin: create resolves a generation and fans out to the s
 
 Retention is the control plane's, as it is for single-volume backups (`design-storagebackup.md` §9). A group-backup policy carries `maxVersions` and `maxAge` that the control plane applies **per generation**: pruning a group backup deletes its group manifest and its record, then retires its member backups: one that the next generation still chains against is merged into that generation's copy (the single-volume schedule's own merge, one per volume chain per cycle), and one that nothing chains against is deleted. The group schedule repeats the retirement every cycle, so a merge that could not start when the generation was pruned is picked up later. Without this a pruned generation's full copies outlived it in the bucket for good while the chain grew under them (live 2026-10-20). Pruning a whole generation is the unit, so a group's retention count is generations kept, not member copies kept.
 
-Scheduling is Phase 4. Until then a group backup is taken on demand through the create endpoint, `sbctl`, or a `StorageBackup` group request (§7.5), and kept until deleted. The schedule, when it lands, takes one generation per interval and backs it up, which is the single-volume schedule applied to the group source (§7.1).
+Scheduling is Phase 4. Until then a group backup is taken on demand through the create endpoint, `sbctl`, or a `StorageGroupBackup` (§7.5), and kept until deleted. The schedule, when it lands, takes one generation per interval and backs it up, which is the single-volume schedule applied to the group source (§7.1).
 
 ---
 
@@ -365,7 +381,8 @@ Scheduling is Phase 4. Until then a group backup is taken on demand through the 
 | Reason                  | Object                | When                                                                                               |
 |-------------------------|-----------------------|----------------------------------------------------------------------------------------------------|
 | `GroupBackupCreated`    | `StorageBackupPolicy` | A policy with a `consistencyGroupName` took a generation and started its backup                    |
-| `GroupBackupAvailable`  | `StorageBackup`       | Every member of a generation completed and the group manifest was published                        |
+| `GroupBackupAvailable`  | `StorageGroupBackup`  | Every member of a generation completed and the group manifest was published                        |
+| `GroupBackupFailed`     | `StorageGroupBackup`  | A member of an on-demand group backup failed; the member is named                                  |
 | `GroupBackupIncomplete` | `StorageBackupPolicy` | A generation's backup could not complete within its deadline; the members that completed are named |
 | `GroupRestoreStarted`   | `StorageBackupOps`    | A group restore began driving member recoveries                                                    |
 | `GroupRestored`         | `StorageBackupOps`    | All N member volumes are online and joined into the restored group                                 |
@@ -392,7 +409,7 @@ The test plan is [`test-plan-consistency-group-backup.md`](../tests/test-plan-co
 
 - **Control-plane unit tests** prove the commit barrier and the group record: a group backup is not `completed` and its group manifest is not written until every member backup is `completed`; a member failure holds the group in `in_progress` and then fails it as a whole; the group manifest lists exactly the generation's members; and group restore unwinds on a member failure. These ride the existing backup unit harness (`tests/unit/backup/`, `tests/integration/backup/`) and the consistency-group harness, mocking the data plane. The all-or-nothing barrier is where the risk concentrates, and it is where a mocked member failure must leave no group manifest.
 - **Control-plane integration tests** (real FoundationDB, mocked nodes) prove the records round-trip: a `GroupBackup` and its member `Backup`s persist and read back, the indexes resolve "members of a group backup" and "group backups of a group," and import preserves the group ids all-or-nothing.
-- **Operator envtest** proves the CRD extensions: a policy with a `consistencyGroupName` resolves its named group and is refused for an unknown name or a `claimSelector` set alongside it; the mirror groups member `StorageBackup`s by `group-backup-id`; two `StorageBackupOps` restores of one group backup run side by side and take no lock, and neither can abort after creating a volume; a `StorageBackupOps{groupBackupRef}` restores the group backup its request produced and waits while that request is in progress; a `StorageBackup` group request takes one generation and asks for one group backup however many times it is reconciled.
+- **Operator envtest** proves the CRD extensions: a policy with a `consistencyGroupName` resolves its named group and is refused for an unknown name or a `claimSelector` set alongside it; the mirror groups member `StorageBackup`s by `group-backup-id`; two `StorageBackupOps` restores of one group backup run side by side and take no lock, and neither can abort after creating a volume; a `StorageBackupOps{groupBackupRef}` restores the group backup its `StorageGroupBackup` produced and waits while that is in progress; a `StorageGroupBackup` takes one generation and asks for one group backup however many times it is reconciled; and the mirror records its members beside it, moves a member recorded beside the cluster before the id was known, and moves them back when the `StorageGroupBackup` is deleted.
 - **Live cluster** proves the end-to-end crash-consistency: back up a group under load, restore it on another cluster, and verify every member restores to the same generation boundary, which is the group analog of the single-volume restore verification and is only provable against real SPDK and real S3.
 
 The regression focus is the barrier and the unwind: a group backup that commits while a member is still uploading, or a group restore that leaves a half-group, are the two failures that would make the feature silently lossy, and both get a red-first regression test.
@@ -401,13 +418,13 @@ The regression focus is the barrier and the unwind: a group backup that commits 
 
 ## 12. Open Questions
 
-| #   | Question                                                                                                                                                                                                                                 | Owner          |
-|-----|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------|
-| Q1  | Heterogeneous members: when a group spans buckets or encryption dispositions, does the group manifest carry a location per member, or is homogeneity a permanent constraint?                                                             | Control plane  |
-| Q2  | Does the mirror create one `StorageBackup` per member (this design), or one `StorageBackup` for the group with members in status? The former keeps "one object per copy"; the latter is fewer objects but a different observation shape. | Operator / API |
-| Q3  | Group-backup deadline: a fixed timeout like the single-volume `_DEFAULT_BACKUP_TIMEOUT_SEC`, or a function of member count and size? A twenty-member group is twenty uploads.                                                            | Control plane  |
-| Q4  | Restore-into-existing-group: the first version always restores into a new group. Is restoring a generation back over a live group ever wanted, and if so how is it reconciled with the members' current chains?                          | Control plane  |
-| Q5  | Partial-generation backup: `list_generations` reports incomplete snapshot generations rather than hiding them. Should a group backup ever be allowed over an incomplete generation, flagged incomplete, or always refused (this design)? | Control plane  |
+| #   | Question                                                                                                                                                                                                                                                                                                                                                                           | Owner          |
+|-----|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------|
+| Q1  | Heterogeneous members: when a group spans buckets or encryption dispositions, does the group manifest carry a location per member, or is homogeneity a permanent constraint?                                                                                                                                                                                                       | Control plane  |
+| Q2  | Settled: one `StorageBackup` per member copy, and the group is its own kind, `StorageGroupBackup`, for a group backup taken on demand (§7.5). Open: whether the mirror also creates a `StorageGroupBackup` record for each group backup a policy took or an import brought in, which needs a group-backup stream from the control plane, and would let `groupBackupID` be retired. | Operator / API |
+| Q3  | Group-backup deadline: a fixed timeout like the single-volume `_DEFAULT_BACKUP_TIMEOUT_SEC`, or a function of member count and size? A twenty-member group is twenty uploads.                                                                                                                                                                                                      | Control plane  |
+| Q4  | Restore-into-existing-group: the first version always restores into a new group. Is restoring a generation back over a live group ever wanted, and if so how is it reconciled with the members' current chains?                                                                                                                                                                    | Control plane  |
+| Q5  | Partial-generation backup: `list_generations` reports incomplete snapshot generations rather than hiding them. Should a group backup ever be allowed over an incomplete generation, flagged incomplete, or always refused (this design)?                                                                                                                                           | Control plane  |
 
 ---
 
@@ -458,7 +475,7 @@ type BackupGroup struct {
 //   Group *BackupGroup `json:"group,omitempty"`
 ```
 
-Each member `StorageBackup` carries the label `storage.simplyblock.io/group-backup-id` so the members of one group backup are a selector. A `+kubebuilder:printcolumn` surfaces the generation: `Group` from `.status.source.group.consistencyGroupName` and `Generation` from `.status.source.group.generation`.
+Each member `StorageBackup` carries the label `storage.simplyblock.io/group-backup-id` so the members of one group backup are a selector. A member recorded beside the `StorageGroupBackup` that owns it also carries `storage.simplyblock.io/group-backup`, the `StorageGroupBackup`'s name (§7.5). A `+kubebuilder:printcolumn` surfaces the generation: `Group` from `.status.source.group.consistencyGroupName` and `Generation` from `.status.source.group.generation`.
 
 ## Appendix C: `storagebackupops_types.go` additions
 
@@ -475,7 +492,7 @@ The base type is `design-storagebackup.md` Appendix C and is unchanged; this is 
 GroupBackupID string `json:"groupBackupID,omitempty"`
 ```
 
-`GroupBackupRef NamespacedReference` joins it, naming a group request (§7.5). The restore step machine widens for a group restore: `Validating → Restoring → AwaitingVolumes → Binding`. A group restore takes no lock (§7.3). A CEL rule admits exactly one of `backupRef`, `groupBackupID`, and `groupBackupRef`. Admission (`StorageBackupOpsValidator`) rejects a `groupBackupID` that no `StorageBackup` carries, and a `groupBackupRef` that names no group request or a failed one.
+`GroupBackupRef NamespacedReference` joins it, naming a `StorageGroupBackup` (§7.5). The restore step machine widens for a group restore: `Validating → Restoring → AwaitingVolumes → Binding`. A group restore takes no lock (§7.3). A CEL rule admits exactly one of `backupRef`, `groupBackupID`, and `groupBackupRef`. Admission (`StorageBackupOpsValidator`) rejects a `groupBackupID` that no `StorageBackup` carries, and a `groupBackupRef` that names no `StorageGroupBackup` or a failed one.
 
 > This appendix states additions to kinds declared in full by `design-storagebackup.md`; it is not itself a standalone kind, so the `api-design` `check-crds.py --design` full-kind audit runs against that document, and these deltas are reviewed against it by reading.
 
@@ -508,3 +525,163 @@ The S3 object at `groups/<group_backup_id>.json`, read by discovery and restore.
 ```
 
 `members` names the N member backups by `backup_id`; a reader then reads each `manifests/<backup_id>.json` to assemble that member's chain. `membership.expected_lvol_ids` is the generation's membership at the take, so a reader verifies completeness (`members` covers `expected_lvol_ids`) before restore, which is the `expected` versus `present` check (`design-consistency-groups.md` §8.3) encoded in the bucket. `encrypted` is the shared disposition, not a key: each member has its own DEK recorded in its own `manifests/<backup_id>.json`, because the per-member backups carry per-volume keys and there is no group-level key (§3.4). A reader resolves per-member keys before a restore. A `schema_version` the reader does not know is refused, as the per-backup manifest does.
+
+## Appendix E: `storagegroupbackup_types.go`
+
+A new kind (§7.5), declared in full. It is served at `v1alpha2` only, as the storage version, so it has no conversion and no `v1alpha1` spoke.
+
+```go
+// StorageGroupBackupPhase is where a group backup taken on demand has got to.
+// Available is the terminal success, as on StorageBackup: what matters is that
+// the group can be restored, not that the copying finished.
+// +kubebuilder:validation:Enum=Pending;Creating;Available;Failed
+type StorageGroupBackupPhase string
+
+const (
+	StorageGroupBackupPhasePending   StorageGroupBackupPhase = "Pending"
+	StorageGroupBackupPhaseCreating  StorageGroupBackupPhase = "Creating"
+	StorageGroupBackupPhaseAvailable StorageGroupBackupPhase = "Available"
+	StorageGroupBackupPhaseFailed    StorageGroupBackupPhase = "Failed"
+)
+
+// GroupBackupSource names the consistency group to back up.
+type GroupBackupSource struct {
+	// ConsistencyGroupName is the consistency group to back up as one unit: the
+	// group the claims in this object's namespace labeled
+	// storage.simplyblock.io/consistency-group with this value belong to. The
+	// cluster is the one that provisioned them. A group that does not exist yet
+	// holds this object in Pending until it does.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Required
+	// +k8s:immutable
+	ConsistencyGroupName string `json:"consistencyGroupName"`
+}
+
+// StorageGroupBackupSpec asks for one group backup.
+type StorageGroupBackupSpec struct {
+	// Source is the consistency group to back up.
+	// +kubebuilder:validation:Required
+	// +k8s:immutable
+	Source GroupBackupSource `json:"source"`
+}
+
+// GroupBackupMember is one member copy of the group backup.
+type GroupBackupMember struct {
+	// BackupID is the control plane's identifier for the member copy.
+	// +kubebuilder:validation:Required
+	BackupID string `json:"backupID"`
+
+	// BackupName is the StorageBackup recording the copy, in this object's
+	// namespace. Empty until the record has been placed here.
+	// +optional
+	BackupName string `json:"backupName,omitempty"`
+
+	// ClaimName is the member claim the copy was taken from.
+	// +optional
+	ClaimName string `json:"claimName,omitempty"`
+
+	// LvolName is the member volume the copy was taken from.
+	// +optional
+	LvolName string `json:"lvolName,omitempty"`
+
+	// Phase is the member copy's own phase.
+	// +optional
+	Phase StorageBackupPhase `json:"phase,omitempty"`
+}
+
+// StorageGroupBackupStatus is the observed state of one group backup.
+type StorageGroupBackupStatus struct {
+	// Phase is where the group backup has got to.
+	// +optional
+	Phase StorageGroupBackupPhase `json:"phase,omitempty"`
+
+	// Message is the reason the phase is what it is, in one sentence.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// ClusterID is the backend cluster the group backup was taken on.
+	// +optional
+	ClusterID string `json:"clusterID,omitempty"`
+
+	// GroupBackupID is the control plane's identifier for the group backup. A
+	// StorageBackupOps restores it by naming this object in spec.groupBackupRef.
+	// +optional
+	GroupBackupID string `json:"groupBackupID,omitempty"`
+
+	// Generation is the group sequence of the generation that was backed up.
+	// +optional
+	Generation int64 `json:"generation,omitempty"`
+
+	// MemberCount is how many member copies must complete before the group
+	// backup is Available.
+	// +optional
+	MemberCount int32 `json:"memberCount,omitempty"`
+
+	// Members is one entry per member copy.
+	// +listType=map
+	// +listMapKey=backupID
+	// +optional
+	Members []GroupBackupMember `json:"members,omitempty"`
+
+	// Size is the sum of the member copies' sizes in bytes.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Size *int64 `json:"size,omitempty"`
+
+	// CompletedAt is when the last member copy completed.
+	// +optional
+	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
+
+	// Conditions carries Available, which a restore waiting on this object reads.
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ObservedGeneration is the generation the rest of this status was computed
+	// from.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+}
+
+// +kubebuilder:storageversion
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:scope=Namespaced,shortName=sgb
+// +kubebuilder:printcolumn:name="Group",type=string,JSONPath=".spec.source.consistencyGroupName"
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
+// +kubebuilder:printcolumn:name="Members",type=integer,JSONPath=".status.memberCount"
+// +kubebuilder:printcolumn:name="Generation",type=integer,JSONPath=".status.generation"
+// +kubebuilder:printcolumn:name="Size",type=integer,JSONPath=".status.size"
+// +kubebuilder:printcolumn:name="Completed",type=date,JSONPath=".status.completedAt"
+// +kubebuilder:printcolumn:name="GroupBackupID",type=string,JSONPath=".status.groupBackupID",priority=1
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
+
+// StorageGroupBackup is one backup of a whole consistency group, taken on
+// demand: one crash-consistent generation, every member backed up, committed as
+// one unit. The member copies are recorded as StorageBackups beside it.
+// Deleting it deletes no copy and no record.
+type StorageGroupBackup struct {
+	metav1.TypeMeta `json:",inline"`
+	// +optional
+	metav1.ObjectMeta `json:"metadata,omitzero"`
+	// +required
+	Spec StorageGroupBackupSpec `json:"spec"`
+	// +optional
+	Status StorageGroupBackupStatus `json:"status,omitzero"`
+}
+
+// +kubebuilder:object:root=true
+
+// StorageGroupBackupList contains a list of StorageGroupBackup.
+type StorageGroupBackupList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitzero"`
+	Items           []StorageGroupBackup `json:"items"`
+}
+```
+
+Admission: the CEL rules above (required, bounded, immutable source). No webhook resolves `consistencyGroupName`, because a consistency group is not a Kubernetes object and may legitimately arrive later (§7.4). The `StorageBackup` write guard does not apply: a `StorageGroupBackup` is a request its user creates and deletes. The member records the operator writes beside it are `StorageBackup`s and stay under that guard, so a user cannot delete one, and a namespace teardown can.
+
+RBAC: the operator's role gains `storagegroupbackups` (get, list, watch) and `storagegroupbackups/status` (get, update, patch), and `create` on `storagebackups` in any namespace, which the mirror already holds. Users are granted the kind the way they are granted `StorageBackup`: through the per-kind `storagegroupbackup-admin-role`, `-editor-role`, and `-viewer-role` ClusterRoles, which a cluster administrator binds in an application namespace. The `simplyblock-aggregate-to-*` roles cover clusters and pools only, and stay that way.

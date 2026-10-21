@@ -304,98 +304,114 @@ func containsEvent(seen []string, reason string) bool {
 	return false
 }
 
-// groupRequestIn is an on-demand group backup request in namespace. Available,
-// it names testGroupBackupID.
-func groupRequestIn(namespace string, phase simplyblockv1alpha2.StorageBackupPhase) *simplyblockv1alpha2.StorageBackup {
-	request := &simplyblockv1alpha2.StorageBackup{
-		ObjectMeta: metav1.ObjectMeta{Name: "orders-now", Namespace: namespace},
-		Spec: simplyblockv1alpha2.StorageBackupSpec{
-			Source: &simplyblockv1alpha2.BackupRequest{ConsistencyGroupName: "orders"},
+// groupBackupNamespaceA is the application namespace the restore tests'
+// StorageGroupBackup is in, another than the operation's.
+const groupBackupNamespaceA = "app-a"
+
+// groupBackupIn is a StorageGroupBackup in groupBackupNamespaceA. Available, it
+// names testGroupBackupID with one member.
+func groupBackupIn(phase simplyblockv1alpha2.StorageGroupBackupPhase) *simplyblockv1alpha2.StorageGroupBackup {
+	sgb := &simplyblockv1alpha2.StorageGroupBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: "orders-now", Namespace: groupBackupNamespaceA},
+		Spec: simplyblockv1alpha2.StorageGroupBackupSpec{
+			Source: simplyblockv1alpha2.GroupBackupSource{ConsistencyGroupName: "orders"},
 		},
-		Status: simplyblockv1alpha2.StorageBackupStatus{Phase: phase},
+		Status: simplyblockv1alpha2.StorageGroupBackupStatus{Phase: phase},
 	}
-	if phase == simplyblockv1alpha2.StorageBackupPhaseAvailable {
-		request.Status.Source = &simplyblockv1alpha2.BackupSource{
-			Group: &simplyblockv1alpha2.BackupGroup{GroupBackupID: testGroupBackupID, ConsistencyGroupName: "orders"},
-		}
+	if phase == simplyblockv1alpha2.StorageGroupBackupPhaseAvailable {
+		sgb.Status.GroupBackupID = testGroupBackupID
+		sgb.Status.MemberCount = 1
 	}
-	return request
+	return sgb
 }
 
-// A restore that names a group request in another namespace restores the
-// group backup that request produced, with the members resolved beside the
-// cluster.
-func TestGroupRestoreByReferenceRestoresTheRequestsGroupBackup(t *testing.T) {
+// memberBesideGroupBackup is a member record placed beside the
+// StorageGroupBackup, as the mirror places it.
+func memberBesideGroupBackup(namespace string) *simplyblockv1alpha2.StorageBackup {
+	sb := groupMemberBackup("member-db", "db")
+	sb.Namespace = namespace
+	sb.Labels[simplyblockv1alpha2.BackupLabelGroupBackup] = "orders-now"
+	return sb
+}
+
+func byReference(ops *simplyblockv1alpha2.StorageBackupOps) *simplyblockv1alpha2.StorageBackupOps {
+	ops.Spec.GroupBackupID = ""
+	ops.Spec.GroupBackupRef = simplyblockv1alpha2.NamespacedReference{Name: "orders-now", Namespace: groupBackupNamespaceA}
+	return ops
+}
+
+func reconcileOps(t *testing.T, r *StorageBackupOpsReconciler, passes int) *simplyblockv1alpha2.StorageBackupOps {
+	t.Helper()
+	for range passes {
+		if _, err := r.Reconcile(context.Background(), opsRequest(testOpsName)); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+	}
+	var got simplyblockv1alpha2.StorageBackupOps
+	if err := r.Get(context.Background(), client.ObjectKey{Name: testOpsName, Namespace: testNamespace}, &got); err != nil {
+		t.Fatal(err)
+	}
+	return &got
+}
+
+// A restore that names a StorageGroupBackup in another namespace restores the
+// group backup it produced, with the members read beside it.
+func TestGroupRestoreByReferenceRestoresTheGroupBackup(t *testing.T) {
 	api := &fakeControlPlane{
 		restoredGroupID:      testClusterID + "/restored-cg",
 		restoredGroupMembers: []controlplane.RestoredGroupMember{{LvolID: "lvol-db", MemberName: "db"}},
 		volumes:              map[string]lvol.Volume{},
 	}
-	ops := groupRestoreOps(testOpsName)
-	ops.Spec.GroupBackupID = ""
-	ops.Spec.GroupBackupRef = simplyblockv1alpha2.NamespacedReference{Name: "orders-now", Namespace: "app-a"}
 	r := opsReconciler(t, api,
 		testClusterObject(), testPoolObject(),
-		groupMemberBackup("member-db", "db"),
-		groupRequestIn("app-a", simplyblockv1alpha2.StorageBackupPhaseAvailable),
-		ops)
+		memberBesideGroupBackup(groupBackupNamespaceA),
+		groupBackupIn(simplyblockv1alpha2.StorageGroupBackupPhaseAvailable),
+		byReference(groupRestoreOps(testOpsName)))
 
-	for range 6 {
-		if _, err := r.Reconcile(context.Background(), opsRequest(testOpsName)); err != nil {
-			t.Fatalf("Reconcile: %v", err)
-		}
-	}
+	got := reconcileOps(t, r, 6)
 	if len(api.groupRestored) != 1 || api.groupRestored[0].GroupBackupID != testGroupBackupID {
 		t.Fatalf("group restores asked = %+v, want one of %s", api.groupRestored, testGroupBackupID)
 	}
-	var got simplyblockv1alpha2.StorageBackupOps
-	if err := r.Get(context.Background(), client.ObjectKey{Name: testOpsName, Namespace: testNamespace}, &got); err != nil {
-		t.Fatal(err)
-	}
 	if got.Status.BackupID != testGroupBackupID {
-		t.Errorf("status.backupID = %q, want the group backup the request produced", got.Status.BackupID)
+		t.Errorf("status.backupID = %q, want the group backup the StorageGroupBackup produced", got.Status.BackupID)
 	}
 }
 
-// A group request still being taken holds the restore at Validating rather
-// than failing it: the request will name its group backup when it completes.
-func TestGroupRestoreByReferenceWaitsForTheRequest(t *testing.T) {
-	api := &fakeControlPlane{volumes: map[string]lvol.Volume{}}
-	ops := groupRestoreOps(testOpsName)
-	ops.Spec.GroupBackupID = ""
-	ops.Spec.GroupBackupRef = simplyblockv1alpha2.NamespacedReference{Name: "orders-now", Namespace: "app-a"}
-	r := opsReconciler(t, api,
-		testClusterObject(), testPoolObject(),
-		groupRequestIn("app-a", simplyblockv1alpha2.StorageBackupPhaseCreating),
-		ops)
+// A StorageGroupBackup still being taken, or one whose members the mirror has
+// not placed beside it yet, holds the restore at Validating rather than failing
+// it: both resolve on their own.
+func TestGroupRestoreByReferenceWaitsForTheGroupBackup(t *testing.T) {
+	for name, objs := range map[string][]client.Object{
+		"in progress": {groupBackupIn(simplyblockv1alpha2.StorageGroupBackupPhaseCreating)},
+		// Available, but its one member is still recorded beside the cluster.
+		"members not placed yet": {
+			groupBackupIn(simplyblockv1alpha2.StorageGroupBackupPhaseAvailable),
+			groupMemberBackup("member-db", "db"),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := &fakeControlPlane{volumes: map[string]lvol.Volume{}}
+			objs = append(objs, testClusterObject(), testPoolObject(), byReference(groupRestoreOps(testOpsName)))
+			r := opsReconciler(t, api, objs...)
 
-	for range 6 {
-		if _, err := r.Reconcile(context.Background(), opsRequest(testOpsName)); err != nil {
-			t.Fatalf("Reconcile: %v", err)
-		}
-	}
-	var got simplyblockv1alpha2.StorageBackupOps
-	if err := r.Get(context.Background(), client.ObjectKey{Name: testOpsName, Namespace: testNamespace}, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhaseRunning || got.Status.Step.State != string(stepValidating) {
-		t.Errorf("phase = %q at %q (%s), want Running at Validating", got.Status.Phase, got.Status.Step.State, got.Status.Message)
-	}
-	if api.groupRestores != 0 {
-		t.Errorf("the control plane was asked for %d group restores, want none yet", api.groupRestores)
+			got := reconcileOps(t, r, 6)
+			if got.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhaseRunning || got.Status.Step.State != string(stepValidating) {
+				t.Errorf("phase = %q at %q (%s), want Running at Validating", got.Status.Phase, got.Status.Step.State, got.Status.Message)
+			}
+			if api.groupRestores != 0 {
+				t.Errorf("the control plane was asked for %d group restores, want none yet", api.groupRestores)
+			}
+		})
 	}
 }
 
-// A change to a group request wakes the restores that name it, so a restore
-// waiting for the request moves on when it completes rather than on a timer.
-func TestAGroupRequestWakesTheRestoresNamingIt(t *testing.T) {
-	ops := groupRestoreOps(testOpsName)
-	ops.Spec.GroupBackupID = ""
-	ops.Spec.GroupBackupRef = simplyblockv1alpha2.NamespacedReference{Name: "orders-now", Namespace: "app-a"}
-	request := groupRequestIn("app-a", simplyblockv1alpha2.StorageBackupPhaseAvailable)
-	r := opsReconciler(t, &fakeControlPlane{}, ops, request)
+// A change to a StorageGroupBackup wakes the restores that name it, so a
+// restore waiting for it moves on when it completes rather than on a timer.
+func TestAGroupBackupWakesTheRestoresNamingIt(t *testing.T) {
+	sgb := groupBackupIn(simplyblockv1alpha2.StorageGroupBackupPhaseAvailable)
+	r := opsReconciler(t, &fakeControlPlane{}, byReference(groupRestoreOps(testOpsName)), sgb)
 
-	got := r.operationsOn(context.Background(), request)
+	got := r.operationsOnGroupBackup(context.Background(), sgb)
 	if len(got) != 1 || got[0].Name != testOpsName {
 		t.Errorf("woken = %v, want %s", got, testOpsName)
 	}

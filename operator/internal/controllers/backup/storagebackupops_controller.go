@@ -111,6 +111,7 @@ type RestoreClient interface {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagebackupops/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagebackups,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagebackups/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagegroupbackups,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagepools;storageclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create
@@ -129,11 +130,13 @@ func (r *StorageBackupOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("storagebackupops").
 		Watches(&simplyblockv1alpha2.StorageBackup{},
 			handler.EnqueueRequestsFromMapFunc(r.operationsOn)).
+		Watches(&simplyblockv1alpha2.StorageGroupBackup{},
+			handler.EnqueueRequestsFromMapFunc(r.operationsOnGroupBackup)).
 		Complete(r)
 }
 
-// operationsOn enqueues every operation naming this backup, in any namespace,
-// by spec.backupRef or, for a group request, by spec.groupBackupRef.
+// operationsOn enqueues every operation naming this backup by spec.backupRef,
+// in any namespace.
 func (r *StorageBackupOpsReconciler) operationsOn(
 	ctx context.Context, backup client.Object,
 ) []reconcile.Request {
@@ -145,9 +148,7 @@ func (r *StorageBackupOpsReconciler) operationsOn(
 	var requests []reconcile.Request
 	for i := range operations.Items {
 		ops := &operations.Items[i]
-		names := ops.Spec.BackupRef.Name != "" && backupKey(ops) == key
-		namesGroup := ops.Spec.GroupBackupRef.Name != "" && ops.GroupBackupKey() == key
-		if !names && !namesGroup {
+		if ops.Spec.BackupRef.Name == "" || backupKey(ops) != key {
 			continue
 		}
 		requests = append(requests, reconcile.Request{
@@ -801,4 +802,25 @@ func (r *StorageBackupOpsReconciler) clusterIDFor(
 		return recorded, nil
 	}
 	return utils.ResolveClusterUUID(ctx, r.Client, clusterKey(ops).Namespace, ops.Spec.ClusterRef.Name)
+}
+
+// operationsOnGroupBackup enqueues every operation whose spec.groupBackupRef
+// names this StorageGroupBackup, so a restore waiting for it moves on when it
+// becomes Available rather than on a timer.
+func (r *StorageBackupOpsReconciler) operationsOnGroupBackup(
+	ctx context.Context, sgb client.Object,
+) []reconcile.Request {
+	var operations simplyblockv1alpha2.StorageBackupOpsList
+	if err := r.List(ctx, &operations); err != nil {
+		return nil
+	}
+	key := client.ObjectKeyFromObject(sgb)
+	var requests []reconcile.Request
+	for i := range operations.Items {
+		ops := &operations.Items[i]
+		if ops.Spec.GroupBackupRef.Name != "" && ops.GroupBackupKey() == key {
+			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(ops)})
+		}
+	}
+	return requests
 }

@@ -72,10 +72,11 @@ func testClient(t *testing.T, objs ...client.Object) client.Client {
 			&simplyblockv1alpha2.StorageBackup{},
 			&simplyblockv1alpha2.StorageBackupPolicy{},
 			&simplyblockv1alpha2.StorageBackupOps{},
+			&simplyblockv1alpha2.StorageGroupBackup{},
 		).
 		WithIndex(&corev1.PersistentVolume{}, PersistentVolumeLvolIDIndex, IndexPersistentVolumeLvolID).
 		WithIndex(&simplyblockv1alpha2.StorageBackup{}, RequestedBackupIndex, IndexRequestedBackup).
-		WithIndex(&simplyblockv1alpha2.StorageBackup{}, RequestGroupBackupIndex, IndexRequestGroupBackup).
+		WithIndex(&simplyblockv1alpha2.StorageGroupBackup{}, StorageGroupBackupIndex, IndexStorageGroupBackup).
 		WithObjects(objs...).
 		Build()
 }
@@ -117,14 +118,29 @@ type fakeBackupCache struct {
 
 func (f *fakeBackupCache) Triggers() <-chan event.GenericEvent { return nil }
 func (f *fakeBackupCache) Synced(cpinformer.Scope) bool        { return f.synced }
+
+// Lookup answers only for the cluster's namespace, as the subscription does: it
+// names every record beside the cluster that reported the copy, so a key in any
+// other namespace misses.
 func (f *fakeBackupCache) Lookup(
 	key types.NamespacedName,
 ) (cpinformer.Scope, subscriptions.BackupDTO, bool) {
 	dto, ok := f.backups[key.Name]
-	if !ok {
+	if !ok || key.Namespace != testNamespace {
 		return nil, subscriptions.BackupDTO{}, false
 	}
 	return testScope(), dto, true
+}
+
+func (f *fakeBackupCache) FindGroupMembers(_, groupBackupID string) []subscriptions.BackupDTO {
+	var out []subscriptions.BackupDTO
+	for _, b := range f.backups {
+		if b.GroupBackupID != "" && simplyblockv1alpha2.GroupBackupLabelValue(b.GroupBackupID) ==
+			simplyblockv1alpha2.GroupBackupLabelValue(groupBackupID) {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 // fakeControlPlane answers the band's control-plane calls from fields a test

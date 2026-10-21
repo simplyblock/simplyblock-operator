@@ -188,14 +188,13 @@ type StorageBackupOpsSpec struct {
 	// +optional
 	GroupBackupID string `json:"groupBackupID,omitempty"`
 
-	// GroupBackupRef restores the whole group backup an on-demand group request
-	// produced: a StorageBackup with spec.source.consistencyGroupName. Its
-	// namespace defaults to this operation's, and a request in another namespace
-	// needs the requesting user to be allowed to read it there, the same rule as
-	// BackupRef. The request names the group backup, so restoring a group taken
-	// in an application's namespace needs no access to the namespace the member
-	// copies are recorded in. Set exactly one of this, GroupBackupID, and
-	// BackupRef.
+	// GroupBackupRef restores the whole group backup a StorageGroupBackup
+	// produced. Its namespace defaults to this operation's, and a
+	// StorageGroupBackup in another namespace needs the requesting user to be
+	// allowed to read it there, the same rule as BackupRef. The member copies are
+	// recorded beside the StorageGroupBackup, so restoring a group taken in an
+	// application's namespace needs no access to any other namespace's backups.
+	// Set exactly one of this, GroupBackupID, and BackupRef.
 	// +k8s:immutable
 	// +optional
 	GroupBackupRef NamespacedReference `json:"groupBackupRef,omitzero"`
@@ -254,21 +253,21 @@ func (ops *StorageBackupOps) BackupsNamespace() string {
 }
 
 // IsGroupRestore reports an operation on a whole group backup, named by id or
-// by the group request that produced it, rather than on one StorageBackup. It is
+// by the StorageGroupBackup that produced it, rather than on one StorageBackup. It is
 // decided by the spec alone, so every step branches the same way from the
 // operation's first pass.
 func (ops *StorageBackupOps) IsGroupRestore() bool {
 	return ops.Spec.GroupBackupID != "" || ops.Spec.GroupBackupRef.Name != ""
 }
 
-// GroupBackupKey is the group request a groupBackupRef names.
+// GroupBackupKey is the StorageGroupBackup a groupBackupRef names.
 func (ops *StorageBackupOps) GroupBackupKey() types.NamespacedName {
 	return ops.Spec.GroupBackupRef.In(ops.Namespace)
 }
 
 // TargetGroupBackupID is the group backup a group restore restores: the id the
-// spec names, or the one Validating read from the group request and recorded in
-// status.backupID.
+// spec names, or the one Validating read from the StorageGroupBackup and
+// recorded in status.backupID.
 func (ops *StorageBackupOps) TargetGroupBackupID() string {
 	if ops.Spec.GroupBackupID != "" {
 		return ops.Spec.GroupBackupID

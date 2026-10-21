@@ -222,52 +222,16 @@ type BackupCopy struct {
 	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
 }
 
-// BackupRequest asks for one backup of one claim, or one group backup of one
-// consistency group.
-//
-// +kubebuilder:validation:XValidation:rule="(has(self.claimName) ? 1 : 0) + (has(self.consistencyGroupName) ? 1 : 0) == 1",message="set exactly one of claimName (to back up one claim) or consistencyGroupName (to back up a whole consistency group as one unit)"
+// BackupRequest asks for one backup of one claim.
 type BackupRequest struct {
 	// ClaimName is the PersistentVolumeClaim to back up, in this object's own
-	// namespace. It must be bound to a volume this product provisioned. Set
-	// exactly one of this and ConsistencyGroupName.
+	// namespace. It must be bound to a volume this product provisioned.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Required
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Claim Name"
 	// +k8s:immutable
-	// +optional
-	ClaimName string `json:"claimName,omitempty"`
-
-	// ConsistencyGroupName asks for an on-demand backup of a whole consistency
-	// group as one unit: one fresh crash-consistent generation, every member
-	// backed up, committed all or nothing. The group is the one the claims in
-	// this object's namespace labeled storage.simplyblock.io/consistency-group
-	// with this value belong to, and the cluster is the one that provisioned
-	// them. The members' copies are recorded beside the cluster like every other
-	// copy. This object is the group's handle, which a StorageBackupOps names in
-	// spec.groupBackupRef to restore the whole group. Set exactly one of this and
-	// ClaimName.
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Consistency Group Name"
-	// +k8s:immutable
-	// +optional
-	ConsistencyGroupName string `json:"consistencyGroupName,omitempty"`
-}
-
-// IsGroupRequest reports a request for a whole consistency-group backup rather
-// than a backup of one claim.
-func (b *StorageBackup) IsGroupRequest() bool {
-	return b.Spec.Source != nil && b.Spec.Source.ConsistencyGroupName != ""
-}
-
-// GroupBackupID is the group backup a group request produced, or a member copy
-// belongs to. Empty until the control plane has accepted the group backup, and
-// on a standalone single-volume backup.
-func (b *StorageBackup) GroupBackupID() string {
-	if g := b.Source().Group; g != nil {
-		return g.GroupBackupID
-	}
-	return ""
+	ClaimName string `json:"claimName"`
 }
 
 // StorageBackupSpec is a record of a copy the store holds (clusterRef, written

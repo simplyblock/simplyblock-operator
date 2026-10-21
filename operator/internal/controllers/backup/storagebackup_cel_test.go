@@ -74,7 +74,6 @@ func TestStorageBackupSpecIsEitherARecordOrARequest(t *testing.T) {
 	c := celClient(t)
 
 	request := &simplyblockv1alpha2.BackupRequest{ClaimName: testClaim}
-	group := &simplyblockv1alpha2.BackupRequest{ConsistencyGroupName: "orders"}
 	for name, tc := range map[string]struct {
 		spec simplyblockv1alpha2.StorageBackupSpec
 		want string // empty means admitted
@@ -85,18 +84,7 @@ func TestStorageBackupSpecIsEitherARecordOrARequest(t *testing.T) {
 			spec: simplyblockv1alpha2.StorageBackupSpec{ClusterRef: "production", Source: request},
 			want: "exactly one of source",
 		},
-		"neither":         {want: "exactly one of source"},
-		"a group request": {spec: simplyblockv1alpha2.StorageBackupSpec{Source: group}},
-		"a request naming a claim and a group": {
-			spec: simplyblockv1alpha2.StorageBackupSpec{Source: &simplyblockv1alpha2.BackupRequest{
-				ClaimName: testClaim, ConsistencyGroupName: "orders",
-			}},
-			want: "exactly one of claimName",
-		},
-		"a request naming nothing": {
-			spec: simplyblockv1alpha2.StorageBackupSpec{Source: &simplyblockv1alpha2.BackupRequest{}},
-			want: "exactly one of claimName",
-		},
+		"neither": {want: "exactly one of source"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			admitted(t, c, &simplyblockv1alpha2.StorageBackup{
@@ -138,5 +126,44 @@ func TestStorageBackupOpsNamesExactlyOneTarget(t *testing.T) {
 				},
 			}, tc.want)
 		})
+	}
+}
+
+// A StorageGroupBackup names one consistency group, and the name cannot be
+// changed once the object exists: a group backup of another group is another
+// object.
+func TestStorageGroupBackupNamesOneGroupForGood(t *testing.T) {
+	c := celClient(t)
+
+	for name, tc := range map[string]struct {
+		group string
+		want  string
+	}{
+		"a group":    {group: "orders"},
+		"no group":   {want: "spec.source.consistencyGroupName"},
+		"a long one": {group: strings.Repeat("a", 64), want: "spec.source.consistencyGroupName"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			admitted(t, c, &simplyblockv1alpha2.StorageGroupBackup{
+				ObjectMeta: metav1.ObjectMeta{GenerateName: "cel-", Namespace: "default"},
+				Spec: simplyblockv1alpha2.StorageGroupBackupSpec{
+					Source: simplyblockv1alpha2.GroupBackupSource{ConsistencyGroupName: tc.group},
+				},
+			}, tc.want)
+		})
+	}
+
+	sgb := &simplyblockv1alpha2.StorageGroupBackup{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "cel-", Namespace: "default"},
+		Spec: simplyblockv1alpha2.StorageGroupBackupSpec{
+			Source: simplyblockv1alpha2.GroupBackupSource{ConsistencyGroupName: "orders"},
+		},
+	}
+	if err := c.Create(context.Background(), sgb); err != nil {
+		t.Fatal(err)
+	}
+	sgb.Spec.Source.ConsistencyGroupName = "billing"
+	if err := c.Update(context.Background(), sgb); err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Errorf("changing the group was %v, want refused as immutable", err)
 	}
 }

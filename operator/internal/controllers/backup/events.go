@@ -37,6 +37,11 @@ const (
 	ReasonGroupRestored       = "GroupRestored"
 	ReasonGroupRestoreFailed  = "GroupRestoreFailed"
 
+	// ReasonGroupBackupAvailable and ReasonGroupBackupFailed are a group backup
+	// taken on demand reaching its end: every member completed, or one failed.
+	ReasonGroupBackupAvailable = "GroupBackupAvailable"
+	ReasonGroupBackupFailed    = "GroupBackupFailed"
+
 	// ReasonOperationAborted cannot fire from the last two steps of a restore,
 	// because the graph declares no abort edge there. It is declared anyway, so
 	// that a reason appearing when an action gains an edge is one every consumer

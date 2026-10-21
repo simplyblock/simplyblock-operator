@@ -710,6 +710,16 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupRequest")
 		os.Exit(1)
 	}
+	if err := (&backupcontrollers.StorageGroupBackupReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagegroupbackup-controller"),
+		API:      backupAPI,
+		Backups:  backupSubscription,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageGroupBackup")
+		os.Exit(1)
+	}
 	if err := (&backupcontrollers.StorageBackupPolicyReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),

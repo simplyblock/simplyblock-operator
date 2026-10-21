@@ -165,14 +165,13 @@ spec:
                   rule: self == oldSelf
               groupBackupRef:
                 description: |-
-                  GroupBackupRef restores the whole group backup an on-demand group request
-                  produced: a StorageBackup with spec.source.consistencyGroupName. Its
-                  namespace defaults to this operation's, and a request in another namespace
-                  needs the requesting user to be allowed to read it there, the same rule as
-                  BackupRef. The request names the group backup, so restoring a group taken
-                  in an application's namespace needs no access to the namespace the member
-                  copies are recorded in. Set exactly one of this, GroupBackupID, and
-                  BackupRef.
+                  GroupBackupRef restores the whole group backup a StorageGroupBackup
+                  produced. Its namespace defaults to this operation's, and a
+                  StorageGroupBackup in another namespace needs the requesting user to be
+                  allowed to read it there, the same rule as BackupRef. The member copies are
+                  recorded beside the StorageGroupBackup, so restoring a group taken in an
+                  application's namespace needs no access to any other namespace's backups.
+                  Set exactly one of this, GroupBackupID, and BackupRef.
                 properties:
                   name:
                     description: Name is the object's name.

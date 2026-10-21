@@ -111,6 +111,8 @@ type BackupCache interface {
 	Lookup(key types.NamespacedName) (cpinformer.Scope, subscriptions.BackupDTO, bool)
 	// Synced reports whether a scope's initial snapshot has been applied.
 	Synced(scope cpinformer.Scope) bool
+	// FindGroupMembers returns the member copies of one group backup.
+	FindGroupMembers(clusterID, groupBackupID string) []subscriptions.BackupDTO
 }
 
 // StorageBackupReconciler mirrors a cluster's store into StorageBackup objects.
@@ -128,6 +130,7 @@ type StorageBackupReconciler struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagebackups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagebackups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagegroupbackups,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumes;persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
@@ -147,6 +150,12 @@ func (r *StorageBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	); err != nil {
 		return err
 	}
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(), &simplyblockv1alpha2.StorageGroupBackup{},
+		StorageGroupBackupIndex, IndexStorageGroupBackup,
+	); err != nil {
+		return err
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha2.StorageBackup{}).
 		Named("storagebackup").
@@ -159,6 +168,9 @@ func (r *StorageBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}
 			},
 		}).
+		// A StorageGroupBackup that learns its group backup's id, or goes, moves
+		// its member records: beside it, or back beside the cluster.
+		Watches(&simplyblockv1alpha2.StorageGroupBackup{}, handler.EnqueueRequestsFromMapFunc(r.membersOf)).
 		WatchesRawSource(source.Channel(r.Backups.Triggers(), &handler.EnqueueRequestForObject{})).
 		Complete(r)
 }
@@ -169,8 +181,6 @@ func (r *StorageBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // alone, because a cold cache is an absence of information rather than
 // information.
 func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	scope, dto, inCache := r.Backups.Lookup(req.NamespacedName)
-
 	var sb simplyblockv1alpha2.StorageBackup
 	err := r.Get(ctx, req.NamespacedName, &sb)
 	exists := err == nil
@@ -188,6 +198,19 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	}
 
+	// The stream names every copy by its key beside the cluster, and a record
+	// placed beside its StorageGroupBackup is reconciled by its own key too, from
+	// the watch on this kind. Both resolve to the one key the stream knows.
+	var record *simplyblockv1alpha2.StorageBackup
+	if exists {
+		record = &sb
+	}
+	home, err := r.homeKey(ctx, req.NamespacedName, record)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	scope, dto, inCache := r.Backups.Lookup(home)
+
 	// A backup a request owns has that request for its object, not a record.
 	var owners simplyblockv1alpha2.StorageBackupList
 	if err := r.List(ctx, &owners, client.MatchingFields{RequestedBackupIndex: req.Name}); err != nil {
@@ -202,14 +225,116 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// deleted its manifest: the control plane keeps only a record of it, and the
 	// copy has left the store.
 	case inCache && len(scope) == 1 && dto.Status != cpBackupMerged:
-		return r.upsert(ctx, req.NamespacedName, scope, dto)
-
-	case exists:
-		return r.unreported(ctx, &sb)
+		return r.place(ctx, home, scope, dto)
 
 	default:
-		return ctrl.Result{}, nil // nothing cached and no object — nothing to do
+		// The store does not report the copy: every record of it goes, wherever
+		// it was placed, once the scope has synced.
+		return r.unreportedEverywhere(ctx, req.Name)
 	}
+}
+
+// homeKey is the key the stream names a record by: beside the cluster that
+// reported the copy. A request for a record placed elsewhere is mapped back
+// through the cluster its status names. Anything else is its own home.
+func (r *StorageBackupReconciler) homeKey(
+	ctx context.Context, key types.NamespacedName, record *simplyblockv1alpha2.StorageBackup,
+) (types.NamespacedName, error) {
+	if _, _, ok := r.Backups.Lookup(key); ok || record == nil || record.Status.ClusterID == "" {
+		return key, nil
+	}
+	cluster, err := r.clusterFor(ctx, metav1.NamespaceAll, record.Status.ClusterID)
+	if err != nil || cluster == nil {
+		return key, err
+	}
+	return types.NamespacedName{Namespace: cluster.Namespace, Name: key.Name}, nil
+}
+
+// place records a reported copy in the namespace it belongs in, beside the
+// StorageGroupBackup that owns its group backup or beside the cluster, and then
+// removes any record of it elsewhere. The new record is written first, so a copy
+// is never without one.
+func (r *StorageBackupReconciler) place(
+	ctx context.Context, home types.NamespacedName, scope cpinformer.Scope, dto subscriptions.BackupDTO,
+) (ctrl.Result, error) {
+	owner, err := r.ownerOf(ctx, dto)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	key := home
+	if owner != nil {
+		key.Namespace = owner.Namespace
+	}
+	res, err := r.upsert(ctx, key, home.Namespace, scope, dto, owner)
+	if err != nil || res.RequeueAfter > 0 {
+		return res, err
+	}
+	return res, r.removeRecordsExcept(ctx, key.Name, key.Namespace)
+}
+
+// ownerOf is the StorageGroupBackup whose group backup the copy is a member of,
+// or nil for a standalone copy and for a group backup no StorageGroupBackup
+// stands for.
+func (r *StorageBackupReconciler) ownerOf(
+	ctx context.Context, dto subscriptions.BackupDTO,
+) (*simplyblockv1alpha2.StorageGroupBackup, error) {
+	if dto.GroupBackupID == "" {
+		return nil, nil
+	}
+	var owners simplyblockv1alpha2.StorageGroupBackupList
+	if err := r.List(ctx, &owners, client.MatchingFields{
+		StorageGroupBackupIndex: simplyblockv1alpha2.GroupBackupLabelValue(dto.GroupBackupID),
+	}); err != nil {
+		return nil, err
+	}
+	for i := range owners.Items {
+		if owners.Items[i].DeletionTimestamp.IsZero() {
+			return &owners.Items[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// membersOf maps a StorageGroupBackup to its member copies' keys beside the
+// cluster, the keys the stream names them by, so each is placed again when the
+// object learns its group backup's id or goes.
+func (r *StorageBackupReconciler) membersOf(ctx context.Context, o client.Object) []reconcile.Request {
+	sgb, ok := o.(*simplyblockv1alpha2.StorageGroupBackup)
+	if !ok || sgb.Status.GroupBackupID == "" || sgb.Status.ClusterID == "" {
+		return nil
+	}
+	cluster, err := r.clusterFor(ctx, metav1.NamespaceAll, sgb.Status.ClusterID)
+	if err != nil || cluster == nil {
+		return nil
+	}
+	copies := r.Backups.FindGroupMembers(sgb.Status.ClusterID, sgb.Status.GroupBackupID)
+	out := make([]reconcile.Request, 0, len(copies))
+	for _, c := range copies {
+		out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{
+			Namespace: cluster.Namespace, Name: simplyblockv1alpha2.StorageBackupName(c.ID),
+		}})
+	}
+	return out
+}
+
+// unreportedEverywhere applies unreported to every record of the name, in any
+// namespace, and asks to be run again when any of them is held for a cold scope.
+func (r *StorageBackupReconciler) unreportedEverywhere(ctx context.Context, name string) (ctrl.Result, error) {
+	records, err := r.recordsNamed(ctx, name)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	var result ctrl.Result
+	for i := range records {
+		res, err := r.unreported(ctx, &records[i])
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if res.RequeueAfter > 0 {
+			result = res
+		}
+	}
+	return result, nil
 }
 
 // deferTo leaves a backup to the request that owns it: it removes any record of
@@ -255,18 +380,41 @@ func (r *StorageBackupReconciler) recordOf(
 
 // removeRecords deletes the records, not the requests, that carry the name.
 func (r *StorageBackupReconciler) removeRecords(ctx context.Context, name string) error {
-	var all simplyblockv1alpha2.StorageBackupList
-	if err := r.List(ctx, &all); err != nil {
+	return r.removeRecordsExcept(ctx, name, "")
+}
+
+// removeRecordsExcept deletes the records of the name in every namespace but
+// keep. An empty keep keeps none.
+func (r *StorageBackupReconciler) removeRecordsExcept(ctx context.Context, name, keep string) error {
+	records, err := r.recordsNamed(ctx, name)
+	if err != nil {
 		return err
 	}
-	for i := range all.Items {
-		if sb := &all.Items[i]; sb.Name == name && sb.Spec.Source == nil {
-			if err := r.Delete(ctx, sb); client.IgnoreNotFound(err) != nil {
-				return err
-			}
+	for i := range records {
+		if records[i].Namespace == keep {
+			continue
+		}
+		if err := r.Delete(ctx, &records[i]); client.IgnoreNotFound(err) != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// recordsNamed lists the records, not the requests, of one name in any
+// namespace.
+func (r *StorageBackupReconciler) recordsNamed(ctx context.Context, name string) ([]simplyblockv1alpha2.StorageBackup, error) {
+	var all simplyblockv1alpha2.StorageBackupList
+	if err := r.List(ctx, &all); err != nil {
+		return nil, err
+	}
+	var out []simplyblockv1alpha2.StorageBackup
+	for i := range all.Items {
+		if sb := all.Items[i]; sb.Name == name && sb.Spec.Source == nil {
+			out = append(out, sb)
+		}
+	}
+	return out, nil
 }
 
 // upsert creates the object if it is missing and brings its status to what the
@@ -274,10 +422,12 @@ func (r *StorageBackupReconciler) removeRecords(ctx context.Context, name string
 func (r *StorageBackupReconciler) upsert(
 	ctx context.Context,
 	key types.NamespacedName,
+	clusterNamespace string,
 	scope cpinformer.Scope,
 	dto subscriptions.BackupDTO,
+	owner *simplyblockv1alpha2.StorageGroupBackup,
 ) (ctrl.Result, error) {
-	cluster, err := r.clusterFor(ctx, key.Namespace, scope[0])
+	cluster, err := r.clusterFor(ctx, clusterNamespace, scope[0])
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -293,7 +443,7 @@ func (r *StorageBackupReconciler) upsert(
 		return ctrl.Result{}, err
 	}
 
-	created, err := r.ensureObject(ctx, key, cluster, taken)
+	created, err := r.ensureObject(ctx, key, cluster, taken, owner)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -315,11 +465,12 @@ func (r *StorageBackupReconciler) ensureObject(
 	key types.NamespacedName,
 	cluster *simplyblockv1alpha2.StorageCluster,
 	taken simplyblockv1alpha2.BackupSource,
+	owner *simplyblockv1alpha2.StorageGroupBackup,
 ) (bool, error) {
 	var existing simplyblockv1alpha2.StorageBackup
 	err := r.Get(ctx, key, &existing)
 	if err == nil {
-		return false, r.reconcileLabels(ctx, &existing, cluster, taken)
+		return false, r.reconcileLabels(ctx, &existing, cluster, taken, owner)
 	}
 	if !apierrors.IsNotFound(err) {
 		return false, err
@@ -329,7 +480,7 @@ func (r *StorageBackupReconciler) ensureObject(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      key.Name,
 			Namespace: key.Namespace,
-			Labels:    backupLabels(cluster, taken),
+			Labels:    backupLabels(cluster, taken, owner),
 		},
 		Spec: simplyblockv1alpha2.StorageBackupSpec{
 			ClusterRef: cluster.Name,
@@ -358,8 +509,9 @@ func (r *StorageBackupReconciler) reconcileLabels(
 	sb *simplyblockv1alpha2.StorageBackup,
 	cluster *simplyblockv1alpha2.StorageCluster,
 	taken simplyblockv1alpha2.BackupSource,
+	owner *simplyblockv1alpha2.StorageGroupBackup,
 ) error {
-	want := backupLabels(cluster, taken)
+	want := backupLabels(cluster, taken, owner)
 	if labelsMatch(sb.Labels, want) {
 		return nil
 	}
@@ -384,12 +536,14 @@ var ownedBackupLabelKeys = []string{
 	simplyblockv1alpha2.BackupLabelCluster,
 	simplyblockv1alpha2.BackupLabelClaim,
 	simplyblockv1alpha2.BackupLabelGroupBackupID,
+	simplyblockv1alpha2.BackupLabelGroupBackup,
 }
 
 // backupLabels are the labels a backup object carries, which is how it is found
 // by the thing somebody knows: the cluster, and the claim whose data is in it.
 func backupLabels(
 	cluster *simplyblockv1alpha2.StorageCluster, taken simplyblockv1alpha2.BackupSource,
+	owner *simplyblockv1alpha2.StorageGroupBackup,
 ) map[string]string {
 	labels := map[string]string{simplyblockv1alpha2.BackupLabelCluster: cluster.Name}
 	if taken.ClaimName != "" {
@@ -397,6 +551,9 @@ func backupLabels(
 	}
 	if taken.Group != nil && taken.Group.GroupBackupID != "" {
 		labels[simplyblockv1alpha2.BackupLabelGroupBackupID] = simplyblockv1alpha2.GroupBackupLabelValue(taken.Group.GroupBackupID)
+	}
+	if owner != nil {
+		labels[simplyblockv1alpha2.BackupLabelGroupBackup] = owner.Name
 	}
 	return labels
 }
@@ -574,7 +731,7 @@ func (r *StorageBackupReconciler) unreported(
 		return ctrl.Result{}, err
 	}
 
-	cluster, err := r.clusterFor(ctx, sb.Namespace, clusterID)
+	cluster, err := r.clusterFor(ctx, metav1.NamespaceAll, clusterID)
 	if err != nil || cluster == nil {
 		return ctrl.Result{}, err
 	}

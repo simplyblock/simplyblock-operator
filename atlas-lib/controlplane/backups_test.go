@@ -336,3 +336,78 @@ func TestClientCreateVolumeBackupRejectsALocationThatIsNotAnID(t *testing.T) {
 		t.Errorf("id = %q, want an error for a response that names no backup", id)
 	}
 }
+
+// Taking a group generation addresses the group by its UUID, whichever form the
+// caller holds it in, sends the caller's request id so a retry is answered with
+// the same generation, and returns the generation's sequence: the number a group
+// backup of that generation is asked for by.
+func TestClientTakeGroupSnapshot(t *testing.T) {
+	const group = "99999999-9999-9999-9999-999999999999"
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), group+"/snapshots") {
+			t.Errorf("request = %s %s, want POST .../consistency-groups/%s/snapshots", r.Method, r.URL.Path, group)
+		}
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"request_id":"sbk-req-1"`) {
+			t.Errorf("body = %s, want it to carry the request id", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"group_seq":7,"created_at":1700000000,"expected":2,"present":2,"complete":true,"members":[]}`))
+	})
+
+	seq, err := c.TakeGroupSnapshot(context.Background(), testCluster, testCluster+"/"+group, "sbk-req-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seq != 7 {
+		t.Errorf("seq = %d, want 7", seq)
+	}
+}
+
+// A group backup is asked for one named generation, so a retry that names the
+// same generation backs up nothing new, and the call returns the group backup's id.
+func TestClientCreateGroupBackup(t *testing.T) {
+	const (
+		group       = "99999999-9999-9999-9999-999999999999"
+		groupBackup = "55555555-5555-5555-5555-555555555555"
+	)
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), group+"/backups") {
+			t.Errorf("request = %s %s, want POST .../consistency-groups/%s/backups", r.Method, r.URL.Path, group)
+		}
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"group_seq":7`) {
+			t.Errorf("body = %s, want it to name generation 7", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"` + groupBackup + `","cluster_id":"` + testCluster + `",` +
+			`"consistency_group_id":"` + group + `","consistency_group_name":"cg","group_seq":7,` +
+			`"status":"in_progress","members":[{"lvol_id":"a","backup_id":"b"},{"lvol_id":"c","backup_id":"d"}],` +
+			`"size":0,"created_at":1,"completed_at":0,"encrypted":false}`))
+	})
+
+	created, err := c.CreateGroupBackup(context.Background(), testCluster, group, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID != groupBackup || created.MemberCount != 2 {
+		t.Errorf("group backup = %+v, want %s with 2 members", created, groupBackup)
+	}
+}
+
+// The control plane refuses a group it cannot back up as one unit with a 409,
+// which is a status error the caller can read rather than a transport failure.
+func TestClientCreateGroupBackupRefused(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"detail":"not homogeneous"}`))
+	})
+
+	_, err := c.CreateGroupBackup(context.Background(), testCluster, "99999999-9999-9999-9999-999999999999", 7)
+	var status *StatusError
+	if !errors.As(err, &status) || status.StatusCode != http.StatusConflict {
+		t.Errorf("err = %v, want a 409 StatusError", err)
+	}
+}

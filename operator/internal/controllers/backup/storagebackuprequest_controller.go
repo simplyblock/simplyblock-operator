@@ -27,7 +27,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
-	"github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/errs/class"
 	"github.com/simplyblock/atlas/lvol"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -45,12 +44,6 @@ const (
 // BackupRequestClient is the control-plane surface a request writes through.
 type BackupRequestClient interface {
 	CreateVolumeBackup(ctx context.Context, clusterID, poolID, volumeID string) (string, error)
-
-	// The group path: resolve the group, take one generation, and back that
-	// generation up as one unit.
-	ConsistencyGroupByName(ctx context.Context, clusterID, name string) (string, error)
-	TakeGroupSnapshot(ctx context.Context, clusterID, groupID, requestID string) (int, error)
-	CreateGroupBackup(ctx context.Context, clusterID, groupID string, groupSeq int) (controlplane.CreatedGroupBackup, error)
 }
 
 // RequestBackups is the read surface a request needs from the backup subscription.
@@ -58,16 +51,6 @@ type RequestBackups interface {
 	Find(id string) (cpinformer.Scope, subscriptions.BackupDTO, bool)
 	// RequestTriggers carries the record names of backups that changed.
 	RequestTriggers() <-chan event.GenericEvent
-
-	// Synced reports whether a scope's first frame has been applied.
-	Synced(scope cpinformer.Scope) bool
-	// FindGroupMembers returns the member copies of one group backup.
-	FindGroupMembers(clusterID, groupBackupID string) []subscriptions.BackupDTO
-	// FindGroupBackupByGeneration returns the group backup of a generation whose
-	// members include one of the volumes.
-	FindGroupBackupByGeneration(clusterID string, seq int64, lvolIDs []string) (string, bool)
-	// GroupTriggers carries the bare ids of group backups whose members changed.
-	GroupTriggers() <-chan event.GenericEvent
 }
 
 // StorageBackupRequestReconciler asks the control plane to back the claim's
@@ -93,19 +76,11 @@ func (r *StorageBackupRequestReconciler) SetupWithManager(mgr ctrl.Manager) erro
 		sb, ok := o.(*simplyblockv1alpha2.StorageBackup)
 		return ok && sb.Spec.Source != nil
 	})
-	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(), &simplyblockv1alpha2.StorageBackup{},
-		RequestGroupBackupIndex, IndexRequestGroupBackup,
-	); err != nil {
-		return err
-	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha2.StorageBackup{}, builder.WithPredicates(isRequest)).
 		Named("storagebackuprequest").
 		WatchesRawSource(source.Channel(r.Backups.RequestTriggers(),
 			handler.EnqueueRequestsFromMapFunc(r.requestsForBackup))).
-		WatchesRawSource(source.Channel(r.Backups.GroupTriggers(),
-			handler.EnqueueRequestsFromMapFunc(r.requestsForGroupBackup))).
 		Complete(r)
 }
 
@@ -156,10 +131,6 @@ func (r *StorageBackupRequestReconciler) Reconcile(
 	if sb.Spec.Source == nil || sb.Status.Phase == simplyblockv1alpha2.StorageBackupPhaseAvailable ||
 		sb.Status.Phase == simplyblockv1alpha2.StorageBackupPhaseFailed {
 		return ctrl.Result{}, nil
-	}
-
-	if sb.IsGroupRequest() {
-		return r.reconcileGroup(ctx, &sb)
 	}
 
 	s, err := r.resolve(ctx, &sb)
@@ -214,7 +185,7 @@ func (r *StorageBackupRequestReconciler) resolve(
 		return nil, refused("volume %s names its pool %q, not its identifier", pv.Name, handle.PoolRef)
 	}
 
-	if err := r.clusterMayBackUp(ctx, handle.ClusterID); err != nil {
+	if err := clusterMayBackUp(ctx, r.Client, handle.ClusterID); err != nil {
 		return nil, err
 	}
 	return &requestSubject{claim: name, volume: pv.Name, fsType: pv.Spec.CSI.FSType, handle: handle}, nil
@@ -222,9 +193,9 @@ func (r *StorageBackupRequestReconciler) resolve(
 
 // clusterMayBackUp holds a request until a StorageCluster in any namespace
 // reports the cluster and it has a backup location configured.
-func (r *StorageBackupRequestReconciler) clusterMayBackUp(ctx context.Context, clusterID string) error {
+func clusterMayBackUp(ctx context.Context, c client.Reader, clusterID string) error {
 	var clusters simplyblockv1alpha2.StorageClusterList
-	if err := r.List(ctx, &clusters); err != nil {
+	if err := c.List(ctx, &clusters); err != nil {
 		return err
 	}
 	for _, c := range clusters.Items {

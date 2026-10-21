@@ -43,3 +43,6 @@ resources:
 - storagebackup_admin_role.yaml
 - storagebackup_editor_role.yaml
 - storagebackup_viewer_role.yaml
+- storagegroupbackup_admin_role.yaml
+- storagegroupbackup_editor_role.yaml
+- storagegroupbackup_viewer_role.yaml

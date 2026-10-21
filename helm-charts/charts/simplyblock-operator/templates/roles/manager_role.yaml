@@ -436,6 +436,7 @@ rules:
   - storageclusters/status
   - storagedeviceops/status
   - storagedevices/status
+  - storagegroupbackups/status
   - storagenodeops/status
   - storagenodes/status
   - storagenodesets/status
@@ -464,6 +465,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - storagegroupbackups
   - storagenodesets
   - volumegroupsnapshotops
   verbs:
