@@ -39,12 +39,21 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
-const (
-	failoverSTS   = "simplyblock-pnfs-mds-0f2ac1d3"
-	failoverPod0  = failoverSTS + "-0"
-	failoverPod1  = failoverSTS + "-1"
-	failoverState = testExportClusterID + ":pool-a:3c81a0f4-1d2b-4e77-9a01-5f6c8b2d0e13"
+// The StatefulSet and pod names are the ones the driver derives, so the
+// export reconciler finds the fixtures it would create itself.
+var (
+	failoverSTS  = driver.MDSStatefulSetName(mdsDriver(), testExportClusterID)
+	failoverPod0 = driver.MDSPodName(mdsDriver(), testExportClusterID, 0)
+	failoverPod1 = driver.MDSPodName(mdsDriver(), testExportClusterID, 1)
 )
+
+const (
+	failoverIP1     = "10.244.1.10"
+	pendingName     = "pending"
+	kindStatefulSet = "StatefulSet"
+)
+
+const failoverState = testExportClusterID + ":pool-a:3c81a0f4-1d2b-4e77-9a01-5f6c8b2d0e13"
 
 // objectRecorder keeps who an event was about, beside its reason.
 type objectRecorder struct {
@@ -140,7 +149,7 @@ func failoverPodNamed(name, node, uid, ip string) *corev1.Pod {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name, Namespace: testOperatorNS, UID: types.UID(uid), Labels: map[string]string{"app": "mds"},
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "apps/v1", Kind: "StatefulSet", Name: failoverSTS,
+				APIVersion: "apps/v1", Kind: kindStatefulSet, Name: failoverSTS,
 				UID: testMDSStatefulSetUID, Controller: ptr.To(true),
 			}},
 		},
@@ -154,12 +163,13 @@ func failoverPodNamed(name, node, uid, ip string) *corev1.Pod {
 }
 
 func failoverObjects(sts *appsv1.StatefulSet, extra ...client.Object) []client.Object {
-	objects := []client.Object{
+	objects := make([]client.Object, 0, 6+len(extra))
+	objects = append(objects,
 		sts, mdsDriver(),
 		failoverPodNamed(failoverPod0, "n0", "uid-0", "10.244.0.10"),
-		failoverPodNamed(failoverPod1, "n1", "uid-1", "10.244.1.10"),
+		failoverPodNamed(failoverPod1, "n1", "uid-1", failoverIP1),
 		kubeNode("n0", "192.168.10.80"), kubeNode("n1", "192.168.10.81"),
-	}
+	)
 	return append(objects, extra...)
 }
 
@@ -297,7 +307,7 @@ func TestTheTakeoverHandsEachExportToTheNewActiveAndMovesTheEndpoint(t *testing.
 	if err := w.cl.Get(context.Background(), key, &eps); err != nil {
 		t.Fatalf("reading the EndpointSlice: %v", err)
 	}
-	if len(eps.Endpoints) != 1 || eps.Endpoints[0].Addresses[0] != "10.244.1.10" {
+	if len(eps.Endpoints) != 1 || eps.Endpoints[0].Addresses[0] != failoverIP1 {
 		t.Errorf("endpoints = %+v, want the new active's pod IP only", eps.Endpoints)
 	}
 }
@@ -312,16 +322,16 @@ func TestO43TheServiceAndSliceAreNamedFromTheStatefulSetForEveryOrdinal(t *testi
 	if err := gw.Serve(context.Background(), failoverPod0, "10.244.0.10"); err != nil {
 		t.Fatalf("Serve ordinal 0: %v", err)
 	}
-	if err := gw.Serve(context.Background(), failoverPod1, "10.244.1.10"); err != nil {
+	if err := gw.Serve(context.Background(), failoverPod1, failoverIP1); err != nil {
 		t.Fatalf("Serve ordinal 1: %v", err)
 	}
 
-	var slices discoveryv1.EndpointSliceList
-	if err := w.cl.List(context.Background(), &slices); err != nil {
+	var sliceList discoveryv1.EndpointSliceList
+	if err := w.cl.List(context.Background(), &sliceList); err != nil {
 		t.Fatal(err)
 	}
-	if len(slices.Items) != 1 || slices.Items[0].Endpoints[0].Addresses[0] != "10.244.1.10" {
-		t.Fatalf("slices = %+v, want the one slice rewritten", slices.Items)
+	if len(sliceList.Items) != 1 || sliceList.Items[0].Endpoints[0].Addresses[0] != failoverIP1 {
+		t.Fatalf("slices = %+v, want the one slice rewritten", sliceList.Items)
 	}
 	var svcs corev1.ServiceList
 	if err := w.cl.List(context.Background(), &svcs); err != nil {
@@ -330,7 +340,7 @@ func TestO43TheServiceAndSliceAreNamedFromTheStatefulSetForEveryOrdinal(t *testi
 	if len(svcs.Items) != 1 || svcs.Items[0].Name != failoverSTS+"-nfs" {
 		t.Errorf("services = %+v, want one named from the StatefulSet", svcs.Items)
 	}
-	if len(svcs.Items) == 1 && (len(svcs.Items[0].OwnerReferences) != 1 || svcs.Items[0].OwnerReferences[0].Kind != "StatefulSet") {
+	if len(svcs.Items) == 1 && (len(svcs.Items[0].OwnerReferences) != 1 || svcs.Items[0].OwnerReferences[0].Kind != kindStatefulSet) {
 		t.Errorf("Service owners = %+v, want the StatefulSet", svcs.Items[0].OwnerReferences)
 	}
 }
@@ -390,12 +400,12 @@ func TestTheGatewayServesTheNewAddressAndForgetsTheWithdrawnOneAgain(t *testing.
 	_ = gw.Withdraw(context.Background(), failoverPod1)
 
 	for range 2 {
-		if err := gw.Serve(context.Background(), failoverPod1, "10.244.1.10"); err != nil {
+		if err := gw.Serve(context.Background(), failoverPod1, failoverIP1); err != nil {
 			t.Fatalf("Serve: %v", err)
 		}
 	}
 
-	if got := sliceAddresses(t, w.cl); !slices.Equal(got, []string{"10.244.1.10"}) {
+	if got := sliceAddresses(t, w.cl); !slices.Equal(got, []string{failoverIP1}) {
 		t.Errorf("endpoints = %v, want the new address", got)
 	}
 	old := svc + ">10.244.0.10"
@@ -425,7 +435,7 @@ func TestTheExportsAdapterListsTheClustersLiveExportsOnly(t *testing.T) {
 	otherCluster.Name = "other"
 	otherCluster.Spec.VolumeRef = "7d1e0c55-3a2b-4f6e-9c8d-1b2a3c4d5e6f:pool-a:3c81a0f4-1d2b-4e77-9a01-5f6c8b2d0e13"
 	pending := testExport(nil)
-	pending.Name = "pending"
+	pending.Name = pendingName
 	deleting := boundExportOn(failoverPod0, simplyblockv1alpha2.NFSExportPhaseReady)
 	deleting.Name = "deleting"
 	now := metav1.Now()
@@ -437,12 +447,12 @@ func TestTheExportsAdapterListsTheClustersLiveExportsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	var names []string
+	names := make([]string, 0, len(got))
 	for _, e := range got {
 		names = append(names, e.Key.Name)
 	}
 	slices.Sort(names)
-	if want := []string{"pending", testExportName}; !slices.Equal(names, want) {
+	if want := []string{testExportName, pendingName}; !slices.Equal(names, want) {
 		t.Errorf("exports = %v, want %v: not another cluster's, not a degraded one, not one being deleted", names, want)
 	}
 }
@@ -450,7 +460,7 @@ func TestTheExportsAdapterListsTheClustersLiveExportsOnly(t *testing.T) {
 func TestTheExportsAdapterBuildsSpecsForBoundExportsOnly(t *testing.T) {
 	bound := boundExportOn(failoverPod0, simplyblockv1alpha2.NFSExportPhaseReady)
 	pending := testExport(nil)
-	pending.Name = "pending"
+	pending.Name = pendingName
 	w := newFailoverWorld(t, failoverObjects(failoverStatefulSet(nil), bound, pending)...)
 	a := &mdsExports{r: w.r.Exports, clusterID: testExportClusterID}
 

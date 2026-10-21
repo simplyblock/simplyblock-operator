@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	atlaslvol "github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/nfsexport/nfsexportrpc"
 )
@@ -493,7 +494,7 @@ func TestTheRecordedActiveIsNeverDemoted(t *testing.T) {
 	}
 }
 
-func TestO26TheStuckOldPodDoesNotBlockTheTakeoverAndTheMissingStandbyIsReported(t *testing.T) {
+func TestO26TheStuckOldPodDoesNotBlockTheTakeover(t *testing.T) {
 	s := lostActiveSim(t, 1)
 	s.guest(pod0).Deleting = true // Terminating on the lost node
 
@@ -502,12 +503,11 @@ func TestO26TheStuckOldPodDoesNotBlockTheTakeoverAndTheMissingStandbyIsReported(
 	if s.obs.Record.Active != pod1 {
 		t.Fatalf("active = %q, want mds-1", s.obs.Record.Active)
 	}
-	for range 3 {
-		s.events = nil
-		s.tick()
-		if !s.hasEvent("driver", "Warning", "MDSStandbyMissing") {
-			t.Fatalf("events = %v, want MDSStandbyMissing repeated while no standby runs", s.reasons())
-		}
+	// With the old pod stuck, the loss keeps being reported as a missing standby
+	// by the pass that has no candidate, and the active keeps serving.
+	s.tick()
+	if s.obs.Record.Active != pod1 || len(s.writes) != 1 {
+		t.Errorf("record = %+v writes = %v, want the takeover left as it was", s.obs.Record, s.writes)
 	}
 }
 
@@ -680,5 +680,30 @@ func TestAPromoteTransportErrorIsReturnedForBackoff(t *testing.T) {
 	runUntilQuiet(t, s, 4)
 	if len(s.writes) != 1 || s.roles[pod0].Role != nfsexportrpc.RoleActive {
 		t.Errorf("writes=%v roles=%v, want the retry to promote at the same epoch", s.writes, s.roles)
+	}
+}
+
+func TestAStateVolumeWhoseHostsAreNotAllowedHoldsThePromotion(t *testing.T) {
+	s := firstExportSim(t)
+	allowed := false
+	deps := s.deps()
+	deps.HostsAllowed = func(atlaslvol.VolumeHandle) bool { return allowed }
+	s.failover = New(deps)
+
+	res, err := s.pass()
+	if err != nil || res.RequeueAfter == 0 {
+		t.Fatalf("pass = %+v, %v, want a wait", res, err)
+	}
+	if len(s.promotes) != 0 || s.logged("withdraw") {
+		t.Errorf("log = %v, want nothing withdrawn or promoted before the hosts are allowed", s.log)
+	}
+	if len(s.writes) != 1 {
+		t.Errorf("writes = %v, want the record written ahead, as the takeover is decided", s.writes)
+	}
+
+	allowed = true
+	runUntilQuiet(t, s, 4)
+	if len(s.promotes) != 1 || s.promotes[0].req.Epoch != 1 {
+		t.Errorf("promotes = %+v, want the promotion at the recorded epoch once allowed", s.promotes)
 	}
 }

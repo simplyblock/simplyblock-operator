@@ -25,6 +25,8 @@ import (
 	"github.com/simplyblock/atlas/nfsexport/nfsexportrpc"
 )
 
+var errHostsNotAllowed = errors.New("the state volume does not allow every pod's host yet")
+
 // The cadence of a pass. A takeover in progress comes back quickly, and a
 // healthy cluster is looked at every few seconds, since a lost link raises no
 // event of its own.
@@ -49,6 +51,10 @@ type Deps struct {
 	Config   Config
 	// HostNQN is the host NQN of one ordinal of the StatefulSet (§5.2).
 	HostNQN func(statefulSetUID string, ordinal int) (string, error)
+	// HostsAllowed says whether every pod's host is allowed on a volume. Nil
+	// allows all. A state volume that is not allowed holds the promotion, since
+	// the standby could not connect it.
+	HostsAllowed func(atlaslvol.VolumeHandle) bool
 }
 
 // takeover is the in-memory part of one takeover: what only timing and the
@@ -310,6 +316,10 @@ func (f *Failover) promote(ctx context.Context, obs Observation, target Guest) (
 		return Result{RequeueAfter: f.backoff.until.Sub(now)}, nil
 	}
 	req, err := f.request(ctx, obs, target)
+	if errors.Is(err, errHostsNotAllowed) {
+		// The workload reports it, and the pass looks again.
+		return Result{RequeueAfter: RequeueIdle}, nil
+	}
 	if err != nil {
 		return Result{}, err
 	}
@@ -349,6 +359,9 @@ func (f *Failover) request(ctx context.Context, obs Observation, target Guest) (
 	handle, ok := atlaslvol.ParseHandle(atlaslvol.VolumeHandle(obs.StateVolume))
 	if !ok {
 		return nfsexportrpc.PromoteRequest{}, fmt.Errorf("state volume %q is not a volume handle", obs.StateVolume)
+	}
+	if f.deps.HostsAllowed != nil && !f.deps.HostsAllowed(atlaslvol.VolumeHandle(obs.StateVolume)) {
+		return nfsexportrpc.PromoteRequest{}, errHostsNotAllowed
 	}
 	nqn, err := f.deps.HostNQN(obs.StatefulSetUID, target.Ordinal)
 	if err != nil {
@@ -546,15 +559,9 @@ func (f *Failover) finish(obs Observation, active Guest) {
 	f.deps.Events.Exports(kind, "MDSPromoted", msg)
 }
 
-// steady is what a settled cluster owes: a report when no standby runs, and
-// the rollout of a changed template.
+// steady is what a settled cluster owes: the rollout of a changed template. The
+// report of a missing standby while the active serves is the workload's.
 func (f *Failover) steady(ctx context.Context, obs Observation, active Guest) (Result, error) {
-	if obs.Replicas > 1 && !slices.ContainsFunc(obs.Guests, func(g Guest) bool {
-		return g.Pod != active.Pod && g.HasSession && g.Role == nfsexportrpc.RoleStandby
-	}) {
-		f.deps.Events.Driver(corev1.EventTypeWarning, "MDSStandbyMissing",
-			"no standby is running and ready, so the exports are unserved after a loss of the active")
-	}
 	if err := f.rollout(ctx, obs, active); err != nil {
 		return Result{}, err
 	}

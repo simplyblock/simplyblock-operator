@@ -107,6 +107,19 @@ func (r *NFSExportReconciler) bindMDS(
 	}
 
 	podName := driver.MDSPodName(d, handle.ClusterID, 0)
+	if r.Serving != nil {
+		// A takeover that has not finished leaves the export waiting: it binds
+		// to the pod that serves, never to the one the record is moving to.
+		serving, why, err := r.Serving.ServingPod(ctx, driver.MDSStatefulSetName(d, handle.ClusterID))
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if serving == "" {
+			r.event(export, corev1.EventTypeNormal, "WaitingForActiveMDS", why)
+			return r.waitForMDS(ctx, export, why, nfsExportMDSBootRequeue)
+		}
+		podName = serving
+	}
 	var pod corev1.Pod
 	err = r.Get(ctx, client.ObjectKey{Namespace: r.OperatorNamespace, Name: podName}, &pod)
 	switch {
