@@ -93,6 +93,18 @@ func placementEligible(member *simplyblockv1alpha2.StorageCluster) bool {
 
 // rollUpPhase is the phase table, and the sentence explaining the row it
 // picked.
+// isBuilding reports whether a member is still being built, which it is until
+// it has been activated: its backend cluster may exist while its nodes are
+// added (Provisioning) and while it activates.
+func isBuilding(phase simplyblockv1alpha2.StorageClusterPhase) bool {
+	switch phase {
+	case "", simplyblockv1alpha2.StorageClusterPhasePending, simplyblockv1alpha2.StorageClusterPhaseCreating,
+		simplyblockv1alpha2.StorageClusterPhaseProvisioning, simplyblockv1alpha2.StorageClusterPhaseActivating:
+		return true
+	}
+	return false
+}
+
 func rollUpPhase(
 	members []memberReading, phases []simplyblockv1alpha2.StorageClusterPhase,
 ) (simplyblockv1alpha2.StorageClusterPhase, string) {
@@ -105,16 +117,12 @@ func rollUpPhase(
 	serving := 0
 	for i, phase := range phases {
 		name := members[i].Cluster.Name
-		switch phase {
-		case "", simplyblockv1alpha2.StorageClusterPhasePending, simplyblockv1alpha2.StorageClusterPhaseCreating,
-			simplyblockv1alpha2.StorageClusterPhaseProvisioning, simplyblockv1alpha2.StorageClusterPhaseActivating:
-			// A member is still being built until it has been activated: its
-			// backend cluster may exist while its nodes are added (Provisioning)
-			// and while it activates.
+		switch {
+		case isBuilding(phase):
 			building = append(building, name)
-		case simplyblockv1alpha2.StorageClusterPhaseSuspended:
+		case phase == simplyblockv1alpha2.StorageClusterPhaseSuspended:
 			suspended = append(suspended, name)
-		case simplyblockv1alpha2.StorageClusterPhaseUnavailable:
+		case phase == simplyblockv1alpha2.StorageClusterPhaseUnavailable:
 			unavailable = append(unavailable, name)
 		}
 		if isServing(phase) {

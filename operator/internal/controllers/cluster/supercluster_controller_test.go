@@ -202,6 +202,24 @@ func TestAMemberWithNoUUIDIsNotAskedForCapacity(t *testing.T) {
 	}
 }
 
+// A member that is not serving yet has a backend cluster with no nodes, and the
+// control plane answers its capacity read with a 500 rather than an empty
+// list, which on dev-ocp was dozens of errors per member while nodes were
+// added. A capacity is read once the member serves.
+func TestAMemberNotServingYetIsNotAskedForCapacity(t *testing.T) {
+	api := &fakeControlPlane{capacity: func(id string) (*simplyblockv1alpha2.AggregateCapacity, error) {
+		t.Errorf("the capacity of %s was read while it is not serving", id)
+		return nil, nil
+	}}
+	r := newSuperclusterReconciler(t, api, &recorder{},
+		newTestSupercluster(),
+		newTestMember("prod-dense-kqv", "uuid-dense", func(c *simplyblockv1alpha2.StorageCluster) {
+			c.Status.Phase = simplyblockv1alpha2.StorageClusterPhaseProvisioning
+		}))
+
+	reconcileSupercluster(t, r)
+}
+
 // I-03
 func TestAMemberGoingUnavailableDegradesTheSuperclusterAndLeavesPlacement(t *testing.T) {
 	api := &fakeControlPlane{capacity: capacityBy(nil)}

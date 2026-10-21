@@ -191,14 +191,16 @@ func (r *SuperclusterReconciler) Reconcile(
 }
 
 // memberCapacity reads one member's capacity as that member. A member with no
-// backend cluster has nothing to read. A read that fails keeps the member's
+// backend cluster has nothing to read, and neither has one still being built:
+// its backend cluster has no nodes, and the control plane answers that read
+// with a 500 rather than an empty list. A read that fails keeps the member's
 // last reading, so a control-plane blip does not take the member's capacity
 // out of the supercluster's sum until the next poll.
 func (r *SuperclusterReconciler) memberCapacity(
 	ctx context.Context,
 	supercluster, member *simplyblockv1alpha2.StorageCluster,
 ) *simplyblockv1alpha2.AggregateCapacity {
-	if member.Status.UUID == "" {
+	if member.Status.UUID == "" || isBuilding(member.Status.Phase) {
 		return nil
 	}
 	readCtx := ctx
