@@ -25,6 +25,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -48,6 +49,10 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
+
+// memberServicesPoll is how often a member looks again for its supercluster's
+// Services, which are not its own objects and so send it no event.
+const memberServicesPoll = 10 * time.Second
 
 // SingletonControlPlaneName is the one ControlPlane a deployment has, which is
 // where a cluster that states no storage-node image takes one from.
@@ -204,6 +209,22 @@ func (r *StorageNodeWorkloadReconciler) Reconcile(
 		logf.FromContext(ctx).V(1).Info("the cluster has not recorded its workload names yet",
 			"cluster", cluster.Name)
 		return ctrl.Result{}, nil
+	}
+
+	// A member is reached through its supercluster's Services, so nothing of
+	// its workload starts before they and their certificates exist: a node
+	// that came up first would wait on a name that resolves to nothing. Those
+	// objects are the supercluster's and wake nothing here, so the wait polls.
+	if cluster.Spec.SuperclusterRef != "" {
+		ready, waiting, err := utils.WorkloadServicesReady(ctx, r.Client, &cluster, r.TLSEnabled)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !ready {
+			logf.FromContext(ctx).V(1).Info("the member waits for its supercluster's Services",
+				"cluster", cluster.Name, "waiting", waiting)
+			return ctrl.Result{RequeueAfter: memberServicesPoll}, nil
+		}
 	}
 
 	// One reading of the node set feeds both halves that depend on it. The
@@ -435,45 +456,15 @@ func (r *StorageNodeWorkloadReconciler) tlsSecretVersion(
 	return secret.ResourceVersion, nil
 }
 
-// reconcileService applies the headless Service the per-pod DNS names hang off.
+// reconcileService applies the headless Services the per-pod DNS names hang off.
+// A member's are its supercluster's, which the supercluster applies (§6.2).
 func (r *StorageNodeWorkloadReconciler) reconcileService(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
-	for _, desired := range []*corev1.Service{
-		utils.BuildStorageNodeService(cluster, r.TLSEnabled, r.TLSProvider),
-		utils.BuildSpdkProxyService(cluster, r.TLSEnabled, r.TLSProvider),
-	} {
-		if err := controllerutil.SetControllerReference(cluster, desired, r.Scheme); err != nil {
-			return err
-		}
-		var existing corev1.Service
-		err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
-		if apierrors.IsNotFound(err) {
-			if err := r.Create(ctx, desired); err != nil {
-				return err
-			}
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		// A Service another object controls is another cluster's: two clusters
-		// that recorded the same names, of which the other was first. Taking it
-		// over would hand that cluster's nodes to this one, so the pass stops
-		// here, and the cluster's own reconciler gives it other names.
-		if owner := metav1.GetControllerOf(&existing); owner != nil && owner.UID != cluster.UID {
-			return fmt.Errorf("the Service %s belongs to %s %s, not to this cluster",
-				existing.Name, owner.Kind, owner.Name)
-		}
-		// The cluster IP is assigned by Kubernetes and may not be rewritten, so
-		// it is carried forward rather than re-stated.
-		desired.ResourceVersion = existing.ResourceVersion
-		desired.Spec.ClusterIP = existing.Spec.ClusterIP
-		if err := r.Update(ctx, desired); err != nil {
-			return err
-		}
+	if cluster.Spec.SuperclusterRef != "" {
+		return nil
 	}
-	return nil
+	return utils.ApplyWorkloadServices(ctx, r.Client, r.Scheme, cluster, r.TLSEnabled, r.TLSProvider)
 }
 
 // reconcileEndpointSlice publishes one per-pod DNS name per worker the cluster's
@@ -674,35 +665,15 @@ func (r *StorageNodeWorkloadReconciler) shareServiceAccount(
 	})
 }
 
-// reconcileCertificates applies the serving certificates cert-manager issues for
-// the two Services, where the deployment uses cert-manager at all. OpenShift's
-// service-ca issues its own from an annotation on the Service, so there is nothing
-// to apply there.
+// reconcileCertificates applies the serving certificates of the two Services.
+// A member's are its supercluster's, as its Services are.
 func (r *StorageNodeWorkloadReconciler) reconcileCertificates(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
-	if !r.TLSEnabled || !utils.IsCertManagerTLSProvider(r.TLSProvider) {
+	if cluster.Spec.SuperclusterRef != "" {
 		return nil
 	}
-
-	names, _ := utils.WorkloadNamesOf(cluster)
-	for _, certificate := range []struct{ service, secret string }{
-		{names.NodeAPIService, names.NodeAPITLSSecret},
-		{names.SpdkProxyService, names.SpdkProxyTLSSecret},
-	} {
-		object := utils.BuildServiceServingCertificate(
-			cluster.Namespace, certificate.service, certificate.secret)
-		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, object, func() error {
-			desired := utils.BuildServiceServingCertificate(
-				cluster.Namespace, certificate.service, certificate.secret)
-			object.Object["spec"] = desired.Object["spec"]
-			return controllerutil.SetControllerReference(cluster, object, r.Scheme)
-		})
-		if err != nil {
-			return fmt.Errorf("apply the serving certificate for %s: %w", certificate.service, err)
-		}
-	}
-	return nil
+	return utils.ApplyServingCertificates(ctx, r.Client, r.Scheme, cluster, r.TLSEnabled, r.TLSProvider)
 }
 
 // apply creates an object or updates it in place, which is what every object here

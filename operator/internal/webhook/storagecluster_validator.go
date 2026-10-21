@@ -1,14 +1,10 @@
-// The StorageCluster guard: a validating webhook that keeps a supercluster's
-// member out of a namespace shared with another cluster's storage nodes, and
-// enforces what a supercluster and its members may be (design-superclusters.md
-// §4.2, §4.4, §6).
+// The StorageCluster guard: a validating webhook that enforces what a
+// supercluster and its members may be (design-superclusters.md §4.2, §4.4).
 //
-// Every cluster records workload names of its own (§6.1), so standalone clusters
-// share a namespace freely. A member is reached through Services named for its
-// supercluster (§6.2), and nothing builds those yet, so a member keeps its
-// namespace to itself and its supercluster: beside another cluster with storage
-// nodes, the two would both be reached through the constant names, and the
-// second would come up with storage nodes and no workload behind them.
+// It once also refused a second cluster in a namespace, because every cluster's
+// workload carried constant names. Every cluster now records names of its own
+// (§6.1), and a supercluster's members share the Services the supercluster
+// builds (§6.2), so clusters of any role share a namespace.
 //
 // The supercluster rules sit here rather than in CEL where they need to read
 // another object (a member's supercluster, a supercluster's members) or to
@@ -34,9 +30,7 @@ import (
 
 // +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagecluster,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=storageclusters,verbs=create;update;delete,versions=v1alpha2,name=vstoragecluster.simplyblock.io,admissionReviewVersions=v1
 
-// StorageClusterValidator refuses a member that would share a namespace with
-// another workload-carrying cluster, and such a cluster beside a member, a
-// member whose supercluster does not resolve, a supercluster carrying fields that describe nodes, and the
+// StorageClusterValidator refuses a member whose supercluster does not resolve, a supercluster carrying fields that describe nodes, and the
 // deletion of a supercluster its members still name.
 //
 // failurePolicy=Fail, because the webhook server runs inside the operator pod:
@@ -81,46 +75,7 @@ func (v *StorageClusterValidator) Handle(
 		return v.admitSupercluster(req)
 	}
 	if req.Operation == admissionv1.Create && cluster.Spec.SuperclusterRef != "" {
-		if response := v.admitMembership(ctx, &cluster); !response.Allowed {
-			return response
-		}
-	}
-	return v.admitWorkload(ctx, &cluster)
-}
-
-// admitWorkload refuses a member beside another cluster with storage nodes, and
-// any cluster with storage nodes beside a member. A supercluster renders no
-// workload, so it is neither refused nor counted.
-func (v *StorageClusterValidator) admitWorkload(
-	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
-) admission.Response {
-	var existing simplyblockv1alpha2.StorageClusterList
-	if err := v.Client.List(ctx, &existing,
-		client.InNamespace(cluster.Namespace)); err != nil {
-		return admission.Errored(http.StatusInternalServerError, err)
-	}
-
-	for i := range existing.Items {
-		other := &existing.Items[i]
-		// The object under review is in this list on an update, and on a create
-		// whose admission is being replayed against a cache that has already
-		// seen it. Neither is a second cluster.
-		if other.Name == cluster.Name || other.Spec.Supercluster != nil {
-			continue
-		}
-		if cluster.Spec.SuperclusterRef == "" && other.Spec.SuperclusterRef == "" {
-			continue
-		}
-		member := cluster.Name
-		if cluster.Spec.SuperclusterRef == "" {
-			member = other.Name
-		}
-		return admission.Denied(fmt.Sprintf(
-			"namespace %s already holds StorageCluster %s, and %s is a supercluster member: a "+
-				"member is reached through Services shared with its supercluster, which are not "+
-				"supported yet, so a member shares its namespace with no other cluster that has "+
-				"storage nodes. Put %s in a namespace of its own",
-			cluster.Namespace, other.Name, member, cluster.Name))
+		return v.admitMembership(ctx, &cluster)
 	}
 	return admission.Allowed("")
 }

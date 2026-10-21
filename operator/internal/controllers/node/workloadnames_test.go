@@ -9,6 +9,7 @@ import (
 	"context"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -299,4 +300,113 @@ func TestTheDaemonSetMountsTheClustersOwnCertificate(t *testing.T) {
 		return
 	}
 	t.Error("the DaemonSet mounts no tls volume")
+}
+
+// aMember is a member of supercluster prod, with the names it records.
+func aMember(name, uuid string) *simplyblockv1alpha2.StorageCluster {
+	member := aNamedCluster(name, uuid, atlaskube.MemberWorkloadNames("prod", name))
+	member.Spec.SuperclusterRef = "prod"
+	member.Spec.MaxSubsystemCount, member.Spec.VCPUCount = ptr.To(int32(20)), ptr.To(int32(4))
+	member.Spec.StorageNodes = &simplyblockv1alpha2.StorageNodesSpec{Image: "example.test/storage-node:test"}
+	return member
+}
+
+// theSharedServices are supercluster prod's Services, as its reconciler builds
+// them, and its certificate Secrets.
+func theSharedServices() []client.Object {
+	names := atlaskube.DerivedWorkloadNames("prod")
+	owner := []metav1.OwnerReference{{
+		APIVersion: simplyblockv1alpha2.GroupVersion.String(), Kind: "StorageCluster",
+		Name: "prod", UID: "uid-prod", Controller: ptr.To(true),
+	}}
+	return []client.Object{
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: names.NodeAPIService, Namespace: opsNamespace, OwnerReferences: owner}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: names.SpdkProxyService, Namespace: opsNamespace, OwnerReferences: owner}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: names.NodeAPITLSSecret, Namespace: opsNamespace}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: names.SpdkProxyTLSSecret, Namespace: opsNamespace}},
+	}
+}
+
+// A member's Services are its supercluster's (§6.2): two members building them
+// would fight over one object, so a member builds none and publishes its own
+// endpoints into the shared ones.
+func TestAMemberBuildsNoServiceAndPublishesIntoItsSuperclusters(t *testing.T) {
+	member := aMember("prod-fast-kqv", secondClusterUUID)
+	objects := append([]client.Object{member}, theSharedServices()...)
+	r := aWorkloadReconciler(t, objects...)
+	r.TLSEnabled, r.TLSProvider = true, "openshift"
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(member)}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var services corev1.ServiceList
+	if err := r.List(context.Background(), &services, client.InNamespace(opsNamespace)); err != nil {
+		t.Fatalf("list the Services: %v", err)
+	}
+	for _, service := range services.Items {
+		if owner := metav1.GetControllerOf(&service); owner != nil && owner.Name == member.Name {
+			t.Errorf("the member built Service %s", service.Name)
+		}
+	}
+	var daemonSets appsv1.DaemonSetList
+	if err := r.List(context.Background(), &daemonSets, client.InNamespace(opsNamespace)); err != nil || len(daemonSets.Items) != 1 {
+		t.Errorf("the member's DaemonSet was not built: %d, %v", len(daemonSets.Items), err)
+	}
+}
+
+// A member starts no workload before its supercluster's Services and their
+// serving certificates exist, so no node of it ever comes up outside them.
+func TestAMemberWaitsForItsSuperclustersServices(t *testing.T) {
+	member := aMember("prod-fast-kqv", secondClusterUUID)
+	r := aWorkloadReconciler(t, member)
+	r.TLSEnabled, r.TLSProvider = true, "openshift"
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(member)}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var daemonSets appsv1.DaemonSetList
+	if err := r.List(context.Background(), &daemonSets, client.InNamespace(opsNamespace)); err != nil {
+		t.Fatalf("list the DaemonSets: %v", err)
+	}
+	if len(daemonSets.Items) != 0 {
+		t.Errorf("a DaemonSet was built before the supercluster's Services exist")
+	}
+}
+
+// Two members publish into one spdk-proxy Service, and their SPDK pods may
+// answer on one port, so each member's slice for a port is its own.
+func TestTwoMembersOnOnePortPublishTwoProxySlices(t *testing.T) {
+	first, second := aMember("prod-fast-kqv", firstClusterUUID), aMember("prod-dense-abc", secondClusterUUID)
+	pods := []*corev1.Pod{
+		anSPDKPod("snode-spdk-pod-4420-"+firstClusterUUID[:6], "worker-1", "10.0.0.1", 4420),
+		anSPDKPod("snode-spdk-pod-4420-"+secondClusterUUID[:6], "worker-2", "10.0.0.2", 4420),
+	}
+	objects := make([]client.Object, 0, 2+len(pods))
+	objects = append(objects, first, second)
+	for _, pod := range pods {
+		pod.Namespace = opsNamespace
+		objects = append(objects, pod)
+	}
+	r := aNamesReconciler(t, objects...)
+
+	for _, member := range []*simplyblockv1alpha2.StorageCluster{first, second} {
+		if err := r.reconcileSpdkProxyEndpoints(context.Background(), member); err != nil {
+			t.Fatalf("reconcileSpdkProxyEndpoints(%s): %v", member.Name, err)
+		}
+	}
+
+	var slices discoveryv1.EndpointSliceList
+	if err := r.List(context.Background(), &slices, client.InNamespace(opsNamespace)); err != nil {
+		t.Fatalf("list the slices: %v", err)
+	}
+	if len(slices.Items) != 2 {
+		t.Fatalf("%d slices were published, want one per member", len(slices.Items))
+	}
+	for _, slice := range slices.Items {
+		if owner := metav1.GetControllerOf(&slice); owner == nil || len(slice.Endpoints) != 1 {
+			t.Errorf("slice %s: owner %+v, %d endpoints", slice.Name, owner, len(slice.Endpoints))
+		}
+	}
 }

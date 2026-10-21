@@ -11,13 +11,16 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	atlaskube "github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -325,5 +328,44 @@ func TestTheSuperclusterReconcilerLeavesAnOrdinaryClusterAlone(t *testing.T) {
 	_, after := reconcileSupercluster(t, r)
 	if after.Status.Role != "" {
 		t.Errorf("status.role = %q on an ordinary cluster, want it left to its own reconciler", after.Status.Role)
+	}
+}
+
+// §6.2: a supercluster's members are reached through its Services, so the
+// supercluster builds them, under its recorded names, owned by it, and asks
+// for their serving certificates.
+func TestASuperclusterBuildsTheServicesItsMembersShare(t *testing.T) {
+	supercluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: objectMeta(testSuperclusterName),
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{Supercluster: &simplyblockv1alpha2.SuperclusterSpec{}},
+	}
+	r := newSuperclusterReconciler(t, &fakeControlPlane{}, &recorder{}, supercluster)
+	r.TLSEnabled, r.TLSProvider = true, "openshift"
+
+	key := types.NamespacedName{Namespace: testNamespace, Name: testSuperclusterName}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var got simplyblockv1alpha2.StorageCluster
+	if err := r.Get(context.Background(), key, &got); err != nil {
+		t.Fatalf("read the supercluster: %v", err)
+	}
+	names := atlaskube.DerivedWorkloadNames(testSuperclusterName)
+	for service, secret := range map[string]string{
+		names.NodeAPIService: names.NodeAPITLSSecret, names.SpdkProxyService: names.SpdkProxyTLSSecret,
+	} {
+		var object corev1.Service
+		if err := r.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: service}, &object); err != nil {
+			t.Errorf("Service %s was not built: %v", service, err)
+			continue
+		}
+		if owner := metav1.GetControllerOf(&object); owner == nil || owner.UID != got.UID {
+			t.Errorf("Service %s is controlled by %+v, want the supercluster", service, owner)
+		}
+		if object.Annotations[utils.OpenShiftServingCertAnnotation] != secret {
+			t.Errorf("Service %s asks for certificate %q, want %q",
+				service, object.Annotations[utils.OpenShiftServingCertAnnotation], secret)
+		}
 	}
 }

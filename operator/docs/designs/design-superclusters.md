@@ -23,14 +23,12 @@ of §4.2 and §4.4 except the deletion of a member holding volumes, the
 supercluster reconciler with its roll-up, events, and two gauges (§10.1, §13),
 `status.role` on every cluster, `ErrAggregateCluster` from the resolver (§15),
 the predicates that keep the rebalancer, arbitration, and the workload
-reconciler off a supercluster (§10.3), and the workload names of §6.1 with the
-removal of the one-cluster-per-namespace rule for standalone clusters. Until the
-rest of Phase 1 lands, three rules hold in its place. A member shares its
-namespace with no other cluster that has storage nodes, and builds its
-supercluster's Services itself, because the shared Services of §6.2 are not
-built. A `StoragePool` naming a supercluster is refused at admission until pools
-fan out (§7.1). A `StorageClusterOps` on a supercluster fails before any
-control-plane call until the walk of §9.6 exists.
+reconciler off a supercluster (§10.3), the workload names of §6.1, and the
+shared Services and certificate of §6.2, with which the one-cluster-per-namespace
+rule is gone. Until the rest of Phase 1 lands, two rules hold in its place. A
+`StoragePool` naming a supercluster is refused at admission until pools fan out
+(§7.1). A `StorageClusterOps` on a supercluster fails before any control-plane
+call until the walk of §9.6 exists.
 
 Each phase ships on its own. Phase 1 produces a supercluster that reports one
 status and lets an administrator name the members directly, which is already
@@ -923,8 +921,17 @@ certificate with no reissue, because the certificate names the Service and not
 the members.
 
 **A member's own workload is everything else**: its DaemonSet, its ConfigMaps,
-and its EndpointSlice, each named for the member as a standalone cluster's are
-today.
+and its EndpointSlices, each named for the member as a standalone cluster's are
+today. Its SPDK proxies are published one slice per RPC port, named
+`<member>-spdk-proxy-endpoints-<port>`, because the members' SPDK pods may answer
+on one port. Until P0-3 moves the node agent onto the pod network, a member's
+storage-node API slice lists its workers' addresses, as a standalone cluster's
+does, which is sound while no worker serves two members.
+
+**A member waits for the shared Services.** It claims its creation, and its
+workload builds anything, only once both Services exist, and their certificate
+Secrets where TLS is on. Neither belongs to the member, so it looks again every
+ten seconds rather than waiting on an event.
 
 ---
 

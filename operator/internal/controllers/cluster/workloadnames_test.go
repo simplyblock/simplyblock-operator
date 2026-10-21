@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -212,7 +213,10 @@ func TestAMemberRecordsItsSuperclustersNamesWithItsOwnSuffix(t *testing.T) {
 	member := newUncreatedCluster(func(c *simplyblockv1alpha2.StorageCluster) {
 		c.Spec.SuperclusterRef = testSuperclusterName
 	})
-	r := newClusterReconciler(t, &fakeControlPlane{}, &recorder{}, member, supercluster)
+	shared := atlaskube.DerivedWorkloadNames(testSuperclusterName)
+	r := newClusterReconciler(t, &fakeControlPlane{}, &recorder{}, member, supercluster,
+		&corev1.Service{ObjectMeta: objectMeta(shared.NodeAPIService)},
+		&corev1.Service{ObjectMeta: objectMeta(shared.SpdkProxyService)})
 
 	cluster := reconcileCluster(t, r, 2)
 
@@ -311,5 +315,40 @@ func TestAClusterHeldForItsNamesIsDeletedWithItsBackendCluster(t *testing.T) {
 
 	if deleted != testClusterUUID {
 		t.Errorf("the control plane was asked to delete %q, want the backend cluster %s", deleted, testClusterUUID)
+	}
+}
+
+// A member holds before it claims its creation until its supercluster's
+// Services exist (§5.4), so its backend cluster is never created under names
+// nothing is reached through yet.
+func TestAMemberHoldsItsCreationUntilItsSuperclustersServicesExist(t *testing.T) {
+	supercluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: objectMeta(testSuperclusterName),
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{Supercluster: &simplyblockv1alpha2.SuperclusterSpec{}},
+	}
+	member := newUncreatedCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.Spec.SuperclusterRef = testSuperclusterName
+	})
+	api := &fakeControlPlane{}
+	r := newClusterReconciler(t, api, &recorder{}, member, supercluster)
+
+	held := reconcileCluster(t, r, 4)
+	if held.Status.Step.State != "" || api.createCalls != 0 {
+		t.Fatalf("the member claimed its creation (step %q) or was created (%d) before the Services exist",
+			held.Status.Step.State, api.createCalls)
+	}
+	if !strings.Contains(held.Status.Message, atlaskube.DerivedWorkloadNames(testSuperclusterName).NodeAPIService) {
+		t.Errorf("message = %q, want it to name the Service the member waits for", held.Status.Message)
+	}
+
+	names := atlaskube.DerivedWorkloadNames(testSuperclusterName)
+	for _, service := range []string{names.NodeAPIService, names.SpdkProxyService} {
+		if err := r.Create(context.Background(), &corev1.Service{ObjectMeta: objectMeta(service)}); err != nil {
+			t.Fatalf("create Service %s: %v", service, err)
+		}
+	}
+	claimed := reconcileCluster(t, r, 1)
+	if claimed.Status.Step.State == "" {
+		t.Errorf("the member did not claim its creation once the Services exist")
 	}
 }

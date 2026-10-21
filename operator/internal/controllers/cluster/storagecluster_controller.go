@@ -313,6 +313,13 @@ func (r *StorageClusterReconciler) create(
 	// optimistic-lock patch succeeds for one reconciler and returns 409 to the
 	// rest, so exactly one of them goes on to POST.
 	if cluster.Status.Step.State == "" {
+		// A member creates nothing before the Services it is reached through
+		// exist, and those are its supercluster's (§5.4, §6.2).
+		if cluster.Spec.SuperclusterRef != "" {
+			if held, err := r.awaitSuperclusterServices(ctx, cluster); held || err != nil {
+				return ctrl.Result{RequeueAfter: memberServicesPoll}, err
+			}
+		}
 		return r.claim(ctx, cluster)
 	}
 

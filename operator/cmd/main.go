@@ -940,10 +940,12 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&clustercontroller.SuperclusterReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("supercluster-controller"),
-		API:      clustercontroller.NewControlPlane(controlPlaneEndpoint, controlPlaneCredential),
+		Client:      mgr.GetClient(),
+		Scheme:      mgr.GetScheme(),
+		Recorder:    mgr.GetEventRecorder("supercluster-controller"),
+		API:         clustercontroller.NewControlPlane(controlPlaneEndpoint, controlPlaneCredential),
+		TLSEnabled:  tlsEnabled,
+		TLSProvider: tlsProvider,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Supercluster")
 		os.Exit(1)

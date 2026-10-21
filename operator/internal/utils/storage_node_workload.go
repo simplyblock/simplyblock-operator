@@ -666,7 +666,7 @@ func BuildSpdkProxyEndpointSlice(
 
 	return &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      SpdkProxyEndpointSliceName(names, rpcPort),
+			Name:      SpdkProxyEndpointSliceName(sn, rpcPort),
 			Namespace: sn.Namespace,
 			Labels: map[string]string{
 				discoveryv1.LabelServiceName: names.SpdkProxyService,
@@ -685,14 +685,15 @@ func BuildSpdkProxyEndpointSlice(
 }
 
 // SpdkProxyEndpointSliceName names the slice publishing one RPC port's SPDK
-// proxies. A cluster under the constant names keeps the name every cluster
-// published under before a namespace could hold two; any other prefixes its
-// own Service, so two clusters on one port publish two slices.
-func SpdkProxyEndpointSliceName(names kube.WorkloadNames, rpcPort int32) string {
-	if names.IsConstant() {
+// proxies of one cluster. A cluster under the constant names keeps the name
+// every cluster published under before a namespace could hold two; any other
+// prefixes its own name, because a supercluster's members publish into one
+// Service and their SPDK pods may answer on one port.
+func SpdkProxyEndpointSliceName(cluster *simplyblockv1alpha2.StorageCluster, rpcPort int32) string {
+	if names, _ := WorkloadNamesOf(cluster); names.IsConstant() {
 		return fmt.Sprintf("spdk-proxy-endpoints-%d", rpcPort)
 	}
-	return fmt.Sprintf("%s-endpoints-%d", names.SpdkProxyService, rpcPort)
+	return fmt.Sprintf("%s-spdk-proxy-endpoints-%d", cluster.Name, rpcPort)
 }
 
 // NodeHostnameLabel returns the DNS-label form of a node name: the segment

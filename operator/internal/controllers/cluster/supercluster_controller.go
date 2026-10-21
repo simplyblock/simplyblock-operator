@@ -1,7 +1,9 @@
 // The supercluster reconciler: it reconciles a StorageCluster carrying
 // spec.supercluster, which has no backend cluster of its own, by finding the
 // member clusters whose spec.superclusterRef names it and rolling their status
-// up into its own (design-superclusters.md §10.1).
+// up into its own (design-superclusters.md §10.1), and by building the two
+// Services its members are reached through, with their serving certificates
+// (§6.2).
 //
 // It lives beside StorageClusterReconciler because both reconcile the same
 // kind and split it by one predicate: each object has exactly one reconciler,
@@ -78,6 +80,11 @@ type SuperclusterReconciler struct {
 
 	// API reads each member's capacity, authenticated as that member.
 	API ControlPlane
+
+	// TLSEnabled and TLSProvider decide the serving certificate of the
+	// Services the members share (§6.2), as they do a standalone cluster's.
+	TLSEnabled  bool
+	TLSProvider string
 }
 
 // SetupWithManager registers the index the members are listed through, the
@@ -104,6 +111,7 @@ func (r *SuperclusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					Namespace: obj.GetNamespace(), Name: refs[0],
 				}}}
 			})).
+		Owns(&corev1.Service{}).
 		Named("supercluster").
 		Complete(r)
 }
@@ -159,6 +167,17 @@ func (r *SuperclusterReconciler) Reconcile(
 			status.MaxFaultTolerance = rollup.MaxFaultTolerance
 		})
 	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// The Services the members are reached through are the supercluster's,
+	// built under the names the write above recorded (§6.2).
+	if err := utils.ApplyWorkloadServices(ctx, r.Client, r.Scheme, &supercluster,
+		r.TLSEnabled, r.TLSProvider); err != nil {
+		return ctrl.Result{}, fmt.Errorf("apply the shared Services: %w", err)
+	}
+	if err := utils.ApplyServingCertificates(ctx, r.Client, r.Scheme, &supercluster,
+		r.TLSEnabled, r.TLSProvider); err != nil {
 		return ctrl.Result{}, err
 	}
 

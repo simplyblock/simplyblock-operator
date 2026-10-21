@@ -13,6 +13,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -115,4 +116,26 @@ func (r *StorageClusterReconciler) recordedBackendUUID(
 		return ""
 	}
 	return string(secret.Data["uuid"])
+}
+
+// memberServicesPoll is how often a member looks again for its supercluster's
+// Services, which are not its own objects and so send it no event.
+const memberServicesPoll = 10 * time.Second
+
+// awaitSuperclusterServices reports whether a member has to wait for its
+// supercluster's Services, and says on the member which one it waits for. The
+// member's names are not recorded yet, so they are the ones it will record.
+func (r *StorageClusterReconciler) awaitSuperclusterServices(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+) (bool, error) {
+	future := cluster.DeepCopy()
+	future.Status.WorkloadNames = utils.WorkloadNamesStatus(
+		atlaskube.MemberWorkloadNames(cluster.Spec.SuperclusterRef, cluster.Name))
+	ready, waiting, err := utils.WorkloadServicesReady(ctx, r.Client, future, false)
+	if err != nil || ready {
+		return false, err
+	}
+	return true, r.note(ctx, cluster, fmt.Sprintf(
+		"supercluster %s has not built the Services its members are reached through: %s",
+		cluster.Spec.SuperclusterRef, waiting))
 }
