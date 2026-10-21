@@ -119,9 +119,7 @@ type FoundationDBSpec struct {
 // ControlPlaneTLSProvider is who issues the control plane's serving certificate.
 //
 // The two values are each product's own spelling rather than this group's
-// PascalCase, because they are not this group's words: they are what
-// internal/utils/tls.go already matches on and what the control-plane image
-// reads out of SB_TLS_PROVIDER.
+// PascalCase, because they are not this group's words.
 // +kubebuilder:validation:Enum=cert-manager;OpenShift
 type ControlPlaneTLSProvider string
 

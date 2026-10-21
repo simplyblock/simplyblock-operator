@@ -194,6 +194,20 @@ func TestTheOpenShiftIssuerProjectsItsBundle(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-19-tls-provider-case. The CRD enum spells the provider
+// OpenShift, and the control-plane image's settings accept it only in lowercase,
+// so the enum value copied into SB_TLS_PROVIDER fails the image's validation.
+func TestTheOpenShiftIssuerReachesThePodInTheImagesSpelling(t *testing.T) {
+	deployment := webAPIDeployment(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{
+		Provider: simplyblockv1alpha2.ControlPlaneTLSOpenShift,
+	}))
+	container := deployment.Spec.Template.Spec.Containers[0]
+
+	if got, _ := envOf(container, "SB_TLS_PROVIDER"); got != "openshift" {
+		t.Errorf("SB_TLS_PROVIDER = %q, want openshift", got)
+	}
+}
+
 // certificateKind is what an applied cert-manager object reports itself as.
 const certificateKind = "Certificate"
 

@@ -1735,7 +1735,7 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
       {f.match && val && val !== f.match && <span className="fhint" style={{color: "var(--bad)"}}>must match “{f.match}”</span>}
       {f.validate && f.validate(val, vals || {})
         ? <span className="fhint" style={{color: "var(--bad)"}}>{f.validate(val, vals || {})}</span>
-        : f.hint && <span className="fhint" style={{color: "var(--dim)"}}>{typeof f.hint === "function" ? f.hint(val) : f.hint}</span>}
+        : f.hint && <span className="fhint" style={{color: "var(--dim)"}}>{typeof f.hint === "function" ? f.hint(val, vals || {}) : f.hint}</span>}
     </label>
   );
 }

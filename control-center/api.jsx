@@ -226,6 +226,9 @@ const STATUS_META = {
   Scheduling: {c: "var(--info)", rank: 1, label: "scheduling pod", blink: true}, Joining: {c: "var(--info)", rank: 1, label: "joining cluster", blink: true},
   "Starting SPDK": {c: "var(--info)", rank: 1, label: "starting SPDK", blink: true},
   Failed: {c: "var(--bad)", rank: 4, label: "failed"},
+  // a finished test's outcome (TestBubble status.report.outcome, DRPath lastActions[].outcome)
+  Passed: {c: "var(--ok)", rank: 0, label: "passed"}, FailedInvariant: {c: "var(--bad)", rank: 4, label: "failed an invariant"},
+  Unsupported: {c: "var(--warn)", rank: 3, label: "unsupported"},
   complete: {c: "var(--ok)", rank: 0, label: "complete"},
   Validated: {c: "var(--ok)", rank: 0, label: "Validated"},
   Validating: {c: "var(--info)", rank: 1, label: "Validating", blink: true},

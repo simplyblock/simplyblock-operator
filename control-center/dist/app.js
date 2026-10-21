@@ -4351,6 +4351,32 @@ const VERDICT_RANK = {
   Unknown: 1,
   Ready: 0
 };
+
+// A Go metav1.Duration ("5m0s", "1h30m0s") in seconds; 0 when unparsable.
+const goDurationSeconds = d => {
+  let s = 0;
+  String(d || "").replace(/(\d+(?:\.\d+)?)(h|ms|m|s)/g, (_, n, u) => {
+    s += +n * (u === "h" ? 3600 : u === "m" ? 60 : u === "s" ? 1 : 0.001);
+    return "";
+  });
+  return Math.round(s);
+};
+// The RPO a failover would have now: seconds since the application's last
+// replicated consistency point (status.replication), against the plan's
+// interval. over is past 1.5 × the interval, where the hub's ramen-healthy
+// check reports RPOExceeded. null without async replication or a sync yet.
+const replicationLag = a => {
+  const r = a && a.replication;
+  const at = r ? Date.parse(r.lastSyncTime) : NaN;
+  if (isNaN(at)) return null;
+  const lag = Math.max(0, Math.round(((window.SB_NOW || Date.now()) - at) / 1000));
+  return {
+    lag,
+    interval: r.intervalSeconds,
+    at: r.lastSyncTime,
+    over: r.intervalSeconds > 0 && lag > 1.5 * r.intervalSeconds
+  };
+};
 const ACTION_TERMINAL = ["Completed", "Failed", "RolledBack"];
 const TEST_TERMINAL = ["Completed", "Failed"];
 const RESTORE_TERMINAL = ["Completed", "Failed"];
@@ -4779,6 +4805,12 @@ function normPApp(o) {
       blocking: st.move.blocking || "",
       revertible: !!st.move.revertible,
       revertBlocked: st.move.revertBlocked || ""
+    } : null,
+    // the last replicated consistency point and the interval (async only);
+    // replicationLag turns it into the RPO a failover would have now
+    replication: st.replication && st.replication.lastSyncTime ? {
+      lastSyncTime: st.replication.lastSyncTime,
+      intervalSeconds: goDurationSeconds(st.replication.interval)
     } : null,
     paths,
     siteMapping: st.siteMapping || "Unknown",
@@ -5687,6 +5719,7 @@ Object.assign(window, {
   DR_KINDS,
   DR_ANN,
   VERDICT_RANK,
+  replicationLag,
   ACTION_TERMINAL,
   TEST_TERMINAL,
   worstVerdict,
@@ -31402,6 +31435,7 @@ function PAppTile({
   o: a,
   nav
 }) {
+  const rl = replicationLag(a);
   return /*#__PURE__*/React.createElement("div", {
     className: "tile",
     style: {
@@ -31432,7 +31466,10 @@ function PAppTile({
     className: "lab"
   }, /*#__PURE__*/React.createElement("i", null, "now on"), a.currentCluster || "—"), a.method && /*#__PURE__*/React.createElement("span", {
     className: "lab"
-  }, /*#__PURE__*/React.createElement("i", null, "method"), a.method), a.protected === false && /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement("i", null, "method"), a.method), rl && /*#__PURE__*/React.createElement("span", {
+    className: "lab" + (rl.over ? " warn" : ""),
+    title: `last replicated ${fmtDate(rl.at)}; interval ${fmtSecs(rl.interval)}`
+  }, /*#__PURE__*/React.createElement("i", null, "RPO now"), fmtSecs(rl.lag)), a.protected === false && /*#__PURE__*/React.createElement("span", {
     className: "lab warn"
   }, "not protected"), a.awaitingRestore && /*#__PURE__*/React.createElement("span", {
     className: "lab warn"
@@ -32437,6 +32474,7 @@ function PAppDetail({
   const [actions, tests, restores, scheds] = runs.data || [[], [], [], []];
   const [tab, setTab] = useState("readiness");
   const running = [...actions, ...tests].filter(r => !r.terminal);
+  const rl = replicationLag(a);
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
     obj: a,
     title: a.name,
@@ -32531,6 +32569,11 @@ function PAppDetail({
     k: "Plan",
     v: a.planName,
     s: a.drPolicy ? `DRPolicy ${a.drPolicy}` : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "RPO now",
+    v: rl ? fmtSecs(rl.lag) : "—",
+    c: rl && rl.over ? "var(--bad)" : null,
+    s: rl ? `last replicated ${clockOf(rl.at)} · interval ${fmtSecs(rl.interval)}` : "no async replication reported"
   }), /*#__PURE__*/React.createElement(Stat, {
     k: "Last action",
     v: a.lastAction ? a.lastAction.name : "—"

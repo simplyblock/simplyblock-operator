@@ -29,9 +29,10 @@ user reads and types.
 
 Excluded around it:
 
-- **The published chart repositories:** `helm-charts/charts/<version>/`,
+- **The packaged chart releases:** `helm-charts/charts/<version>/`,
   `helm-charts/charts/index.yaml`, and all of `csi-driver/charts/`. Those are
-  packaged releases and their index, not sources.
+  packaged releases and their index, not sources. The published repository
+  itself lives in the `charts` branch.
 - **The vendored subcharts** under the development chart's own `charts/`.
 - **The three paths `make helm-sync` writes:** `crds/`, `templates/roles/`, and
   `templates/simplyblock-operator-webhook.yaml`. A finding there belongs to the

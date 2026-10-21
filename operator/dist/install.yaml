@@ -13566,6 +13566,17 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              sourceStorageCluster:
+                description: |-
+                  SourceStorageCluster is the backend UUID of the storage cluster the
+                  source lives on. A Group drill resolves the group there. Without it the
+                  UUID comes from a local StorageCluster named like SourceCluster, which a
+                  hub apart from the sites does not have; the DR hub sets it. Immutable.
+                pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               ttlSeconds:
                 description: |-
                   TTLSeconds is an optional maximum lifetime: the drill is torn down after it
@@ -13580,6 +13591,8 @@ spec:
             - sourceRef
             type: object
             x-kubernetes-validations:
+            - message: field sourceStorageCluster is immutable once set
+              rule: '!has(oldSelf.sourceStorageCluster) || has(self.sourceStorageCluster)'
             - message: field sourceNamespace is immutable once set
               rule: '!has(oldSelf.sourceNamespace) || has(self.sourceNamespace)'
             - message: field bubbleNamespace is immutable once set

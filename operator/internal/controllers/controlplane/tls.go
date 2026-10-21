@@ -60,7 +60,9 @@ func tlsEnv(local *simplyblockv1alpha2.LocalControlPlane) []corev1.EnvVar {
 
 	env := []corev1.EnvVar{
 		{Name: "SB_TLS_SERVE", Value: "1"},
-		{Name: "SB_TLS_PROVIDER", Value: string(local.TLSProvider())},
+		// The image accepts the provider only in lowercase, and the enum spells
+		// it OpenShift.
+		{Name: "SB_TLS_PROVIDER", Value: utils.NormalizeTLSProvider(string(local.TLSProvider()))},
 	}
 
 	if !local.RequiresClientCertificate() {
