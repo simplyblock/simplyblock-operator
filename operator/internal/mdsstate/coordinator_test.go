@@ -41,7 +41,7 @@ func coordinatorFor(t *testing.T, api *mdsstatetest.API, sts *appsv1.StatefulSet
 }
 
 func readyPods(names ...string) []corev1.Pod {
-	var out []corev1.Pod
+	out := make([]corev1.Pod, 0, len(names))
 	for _, n := range names {
 		out = append(out, pod(n, true, false))
 	}

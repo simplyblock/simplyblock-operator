@@ -260,9 +260,9 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 // soonest is the shorter of the resync interval and a retry, where zero means
 // no retry was asked for.
-func soonest(resync, retry time.Duration) time.Duration {
-	if retry > 0 && retry < resync {
-		return retry
+func soonest(resync, wait time.Duration) time.Duration {
+	if wait > 0 && wait < resync {
+		return wait
 	}
 	return resync
 }
@@ -297,25 +297,25 @@ func (r *SimplyblockDriverReconciler) refreshMDS(
 	case err != nil:
 		return 0, err
 	}
-	var retry time.Duration
+	var wait time.Duration
 	for i := range list.Items {
 		sts := &list.Items[i]
 		if !sts.DeletionTimestamp.IsZero() {
 			if err := r.finalizeMDS(ctx, sts); err != nil {
 				r.event(d, corev1.EventTypeWarning, mdsstate.ReasonStateUnavailable,
 					fmt.Sprintf("cannot delete the state volume of %s: %v", sts.Name, err))
-				retry = shorter(retry, mdsRetryInterval)
+				wait = shorter(wait, mdsRetryInterval)
 			}
 			continue
 		}
 		if problem := MDSResourcesProblem(d.Spec.PNFS.MDS); problem != "" {
 			r.event(d, corev1.EventTypeWarning, reasonMDSResourcesInvalid,
 				fmt.Sprintf("cannot update the metadata server StatefulSet %s: %s", sts.Name, problem))
-			return retry, nil
+			return wait, nil
 		}
 		updated, err := UpdateMDS(ctx, r.Client, d, sts, data)
 		if err != nil {
-			return retry, err
+			return wait, err
 		}
 		if updated {
 			r.event(d, corev1.EventTypeNormal, reasonMDSUpdated,
@@ -324,11 +324,11 @@ func (r *SimplyblockDriverReconciler) refreshMDS(
 		}
 		again, err := r.coordinateMDS(ctx, d, sts)
 		if err != nil {
-			return retry, err
+			return wait, err
 		}
-		retry = shorter(retry, again)
+		wait = shorter(wait, again)
 	}
-	return retry, nil
+	return wait, nil
 }
 
 // mdsRetryInterval is how long a refused state volume deletion waits.
@@ -392,7 +392,7 @@ func (r *SimplyblockDriverReconciler) clusterExports(ctx context.Context, cluste
 		return !ok || h.ClusterID != clusterID || !e.DeletionTimestamp.IsZero()
 	})
 	slices.SortFunc(items, func(a, b simplyblockv1alpha2.NFSExport) int {
-		if c := a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time); c != 0 {
+		if c := a.CreationTimestamp.Compare(b.CreationTimestamp.Time); c != 0 {
 			return c
 		}
 		return strings.Compare(a.Namespace+"/"+a.Name, b.Namespace+"/"+b.Name)

@@ -99,7 +99,7 @@ func (c *Coordinator) Reconcile(ctx context.Context, in Input) (Result, error) {
 	var sync *HostSync
 	var state *StateVolume
 	if api, err := c.clientFor(ctx, in); err != nil {
-		c.event(corev1.EventTypeWarning, ReasonStateUnavailable,
+		c.event(ReasonStateUnavailable,
 			fmt.Sprintf("cannot reach the control plane of storage cluster %s: %v", in.ClusterID, err))
 		retry(retryInterval)
 	} else if api != nil {
@@ -111,7 +111,7 @@ func (c *Coordinator) Reconcile(ctx context.Context, in Input) (Result, error) {
 		handle, err := c.stateVolume(ctx, state, in)
 		switch {
 		case err != nil:
-			c.event(corev1.EventTypeWarning, ReasonStateUnavailable,
+			c.event(ReasonStateUnavailable,
 				fmt.Sprintf("the state volume of %s: %v", sts.Name, err))
 			retry(retryInterval)
 		case handle != "":
@@ -133,7 +133,7 @@ func (c *Coordinator) Reconcile(ctx context.Context, in Input) (Result, error) {
 	scaled, err := scaler.Scale(ctx, sts, want)
 	switch {
 	case err != nil:
-		c.event(corev1.EventTypeWarning, ReasonScaleHeld,
+		c.event(ReasonScaleHeld,
 			fmt.Sprintf("StatefulSet %s stays at %d replicas: %v", sts.Name, current, err))
 		retry(retryInterval)
 	case scaled == ScaleWaitingForSwitchover:
@@ -151,7 +151,7 @@ func (c *Coordinator) Reconcile(ctx context.Context, in Input) (Result, error) {
 	}
 
 	if StandbyMissing(in.Standbys, sts.Annotations[ActiveAnnotation], in.Pods) {
-		c.event(corev1.EventTypeWarning, ReasonStandbyMissing, fmt.Sprintf(
+		c.event(ReasonStandbyMissing, fmt.Sprintf(
 			"no standby of %s is running and ready, so exports stay unserved after the loss of the active", sts.Name))
 	}
 	return res, nil
@@ -181,7 +181,7 @@ func (c *Coordinator) reportHosts(hosts HostResult, retry func(time.Duration)) H
 	}
 	slices.Sort(failed)
 	for _, h := range failed {
-		c.event(corev1.EventTypeWarning, ReasonHostNotAllowed,
+		c.event(ReasonHostNotAllowed,
 			fmt.Sprintf("cannot allow the metadata server's hosts on volume %s: %v", h, hosts.Failed[h]))
 		retry(retryInterval)
 	}
@@ -196,9 +196,10 @@ func (c *Coordinator) clientFor(ctx context.Context, in Input) (VolumeAPI, error
 	return c.APIFor(ctx, in.ClusterID)
 }
 
-func (c *Coordinator) event(eventType, reason, message string) {
+// event records a warning on the driver.
+func (c *Coordinator) event(reason, message string) {
 	if c.Events != nil {
-		c.Events(eventType, reason, message)
+		c.Events(corev1.EventTypeWarning, reason, message)
 	}
 }
 
