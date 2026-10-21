@@ -233,11 +233,6 @@ type fakeControlPlane struct {
 	tasks        func(string) ([]subscriptions.TaskDTO, error)
 	cancelTask   func(string, string) error
 
-	// capacity answers ClusterCapacity, and capacityCtx is handed the context
-	// it was called with, as clusterCtx is for Cluster().
-	capacity    func(string) (*simplyblockv1alpha2.AggregateCapacity, error)
-	capacityCtx func(context.Context)
-
 	// The counters the write-ahead tests read. Each is the number of times the
 	// control plane was actually asked to do something, which is the only way
 	// to tell a step that skipped its call from one that made it twice.
@@ -390,18 +385,6 @@ func (f *fakeControlPlane) CancelTask(_ context.Context, clusterID, taskID strin
 		return nil
 	}
 	return f.cancelTask(clusterID, taskID)
-}
-
-func (f *fakeControlPlane) ClusterCapacity(
-	ctx context.Context, clusterID string,
-) (*simplyblockv1alpha2.AggregateCapacity, error) {
-	if f.capacityCtx != nil {
-		f.capacityCtx(ctx)
-	}
-	if f.capacity == nil {
-		f.t.Fatal("the control plane was asked for a cluster's capacity and the test did not script it")
-	}
-	return f.capacity(clusterID)
 }
 
 var _ ControlPlane = (*fakeControlPlane)(nil)

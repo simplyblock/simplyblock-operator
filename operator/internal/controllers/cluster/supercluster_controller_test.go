@@ -9,7 +9,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -21,7 +20,6 @@ import (
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 const (
@@ -63,13 +61,6 @@ func newTestMember(
 	return c
 }
 
-func memberSecret(member, secret string) *corev1.Secret {
-	return &corev1.Secret{
-		ObjectMeta: objectMeta("simplyblock-cluster-" + member),
-		Data:       map[string][]byte{"secret": []byte(secret)},
-	}
-}
-
 func newSuperclusterReconciler(
 	t *testing.T, api *fakeControlPlane, rec *recorder, objects ...client.Object,
 ) *SuperclusterReconciler {
@@ -104,19 +95,9 @@ func reconcileSupercluster(
 	return result, &supercluster
 }
 
-func capacityBy(readings map[string]*simplyblockv1alpha2.AggregateCapacity) func(string) (*simplyblockv1alpha2.AggregateCapacity, error) {
-	return func(clusterID string) (*simplyblockv1alpha2.AggregateCapacity, error) {
-		return readings[clusterID], nil
-	}
-}
-
 // I-01
 func TestASuperclusterOfTwoOnlineMembersReportsOnline(t *testing.T) {
-	api := &fakeControlPlane{capacity: capacityBy(map[string]*simplyblockv1alpha2.AggregateCapacity{
-		"uuid-a": reading(1000, 100, 400),
-		"uuid-b": reading(2000, 300, 900),
-	})}
-	r := newSuperclusterReconciler(t, api, &recorder{},
+	r := newSuperclusterReconciler(t, &fakeControlPlane{}, &recorder{},
 		newTestSupercluster(),
 		newTestMember("prod-dense-kqv", "uuid-a"),
 		newTestMember("prod-fast-mzt", "uuid-b"),
@@ -146,9 +127,6 @@ func TestASuperclusterOfTwoOnlineMembersReportsOnline(t *testing.T) {
 	if status.MemberCount == nil || *status.MemberCount != 2 {
 		t.Errorf("memberCount = %v, want 2", status.MemberCount)
 	}
-	if diff := cmp.Diff(reading(3000, 400, 1300), status.Capacity); diff != "" {
-		t.Errorf("capacity (-want +got):\n%s", diff)
-	}
 	for _, m := range status.Members {
 		if !m.PlacementEligible {
 			t.Errorf("member %s is not placement-eligible", m.Name)
@@ -160,30 +138,6 @@ func TestASuperclusterOfTwoOnlineMembersReportsOnline(t *testing.T) {
 	if result.RequeueAfter != superclusterResync {
 		t.Errorf("requeueAfter = %v, want the capacity poll interval %v",
 			result.RequeueAfter, superclusterResync)
-	}
-}
-
-// A member's capacity is read as the member, with its own recorded secret,
-// because the control plane authenticates every cluster's reads by that
-// cluster's secret.
-func TestAMembersCapacityIsReadAsTheMember(t *testing.T) {
-	var tokens []string
-	api := &fakeControlPlane{
-		capacity: capacityBy(nil),
-		capacityCtx: func(ctx context.Context) {
-			token, _ := webapi.BearerTokenFromContext(ctx)
-			tokens = append(tokens, token)
-		},
-	}
-	r := newSuperclusterReconciler(t, api, &recorder{},
-		newTestSupercluster(),
-		newTestMember("prod-dense-kqv", "uuid-a"),
-		memberSecret("prod-dense-kqv", "secret-a"))
-
-	reconcileSupercluster(t, r)
-
-	if diff := cmp.Diff([]string{"secret-a"}, tokens); diff != "" {
-		t.Errorf("bearer tokens on the capacity reads (-want +got):\n%s", diff)
 	}
 }
 
@@ -202,27 +156,9 @@ func TestAMemberWithNoUUIDIsNotAskedForCapacity(t *testing.T) {
 	}
 }
 
-// A member that is not serving yet has a backend cluster with no nodes, and the
-// control plane answers its capacity read with a 500 rather than an empty
-// list, which on dev-ocp was dozens of errors per member while nodes were
-// added. A capacity is read once the member serves.
-func TestAMemberNotServingYetIsNotAskedForCapacity(t *testing.T) {
-	api := &fakeControlPlane{capacity: func(id string) (*simplyblockv1alpha2.AggregateCapacity, error) {
-		t.Errorf("the capacity of %s was read while it is not serving", id)
-		return nil, nil
-	}}
-	r := newSuperclusterReconciler(t, api, &recorder{},
-		newTestSupercluster(),
-		newTestMember("prod-dense-kqv", "uuid-dense", func(c *simplyblockv1alpha2.StorageCluster) {
-			c.Status.Phase = simplyblockv1alpha2.StorageClusterPhaseProvisioning
-		}))
-
-	reconcileSupercluster(t, r)
-}
-
 // I-03
 func TestAMemberGoingUnavailableDegradesTheSuperclusterAndLeavesPlacement(t *testing.T) {
-	api := &fakeControlPlane{capacity: capacityBy(nil)}
+	api := &fakeControlPlane{}
 	rec := &recorder{}
 	r := newSuperclusterReconciler(t, api, rec,
 		newTestSupercluster(),
@@ -258,34 +194,9 @@ func TestAMemberGoingUnavailableDegradesTheSuperclusterAndLeavesPlacement(t *tes
 	}
 }
 
-// I-07: a failed capacity read keeps the member's last reading rather than
-// dropping it from the sum, and the poll comes round again.
-func TestAFailedCapacityReadKeepsTheLastReading(t *testing.T) {
-	api := &fakeControlPlane{capacity: func(string) (*simplyblockv1alpha2.AggregateCapacity, error) {
-		return nil, &ControlPlaneError{Status: 503, Body: "unavailable"}
-	}}
-	last := reading(1000, 100, 400)
-	r := newSuperclusterReconciler(t, api, &recorder{},
-		newTestSupercluster(func(c *simplyblockv1alpha2.StorageCluster) {
-			c.Status.Members = []simplyblockv1alpha2.SuperclusterMemberStatus{
-				{Name: "prod-dense-kqv", UUID: "uuid-a", Capacity: last},
-			}
-		}),
-		newTestMember("prod-dense-kqv", "uuid-a"))
-
-	result, sc := reconcileSupercluster(t, r)
-
-	if diff := cmp.Diff(last, sc.Status.Capacity); diff != "" {
-		t.Errorf("capacity after a failed read (-want +got):\n%s", diff)
-	}
-	if result.RequeueAfter == 0 {
-		t.Error("the reconcile did not come round again after a failed read")
-	}
-}
-
 // A member joining is announced once, on the pass that first sees it.
 func TestAMemberJoiningIsAnnouncedOnce(t *testing.T) {
-	api := &fakeControlPlane{capacity: capacityBy(nil)}
+	api := &fakeControlPlane{}
 	rec := &recorder{}
 	r := newSuperclusterReconciler(t, api, rec,
 		newTestSupercluster(), newTestMember("prod-dense-kqv", "uuid-a"))
@@ -301,26 +212,20 @@ func TestAMemberJoiningIsAnnouncedOnce(t *testing.T) {
 // The supercluster's thresholds apply to the combined capacity, and a crossing
 // is announced on the supercluster once rather than on every poll.
 func TestTheCombinedCapacityCrossingAThresholdIsAnnouncedOnce(t *testing.T) {
-	used := int64(500)
-	api := &fakeControlPlane{capacity: func(string) (*simplyblockv1alpha2.AggregateCapacity, error) {
-		return reading(1000, used, 0), nil
-	}}
 	rec := &recorder{}
-	r := newSuperclusterReconciler(t, api, rec,
-		newTestSupercluster(func(c *simplyblockv1alpha2.StorageCluster) {
-			c.Spec.WarningThreshold = &simplyblockv1alpha2.CapacityThresholdSpec{Capacity: ptr.To(int64(80))}
-			c.Spec.CriticalThreshold = &simplyblockv1alpha2.CapacityThresholdSpec{Capacity: ptr.To(int64(90))}
-		}),
-		newTestMember("prod-dense-kqv", "uuid-a"))
+	r := newSuperclusterReconciler(t, &fakeControlPlane{}, rec)
+	sc := newTestSupercluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.Spec.WarningThreshold = &simplyblockv1alpha2.CapacityThresholdSpec{Capacity: ptr.To(int64(80))}
+		c.Spec.CriticalThreshold = &simplyblockv1alpha2.CapacityThresholdSpec{Capacity: ptr.To(int64(90))}
+	})
 
-	reconcileSupercluster(t, r)
+	r.announceThreshold(sc, reading(1000, 400, 0), reading(1000, 500, 0))
 	if rec.has(AggregateCapacityThreshold) {
 		t.Fatal("a threshold event at 50% of capacity")
 	}
 
-	used = 850
-	reconcileSupercluster(t, r)
-	reconcileSupercluster(t, r)
+	r.announceThreshold(sc, reading(1000, 500, 0), reading(1000, 850, 0))
+	r.announceThreshold(sc, reading(1000, 850, 0), reading(1000, 850, 0))
 	if rec.count(AggregateCapacityThreshold) != 1 {
 		t.Fatalf("%s events at 85%% = %d, want 1", AggregateCapacityThreshold, rec.count(AggregateCapacityThreshold))
 	}
@@ -328,8 +233,7 @@ func TestTheCombinedCapacityCrossingAThresholdIsAnnouncedOnce(t *testing.T) {
 		t.Errorf("%s is %s, want Warning", AggregateCapacityThreshold, typ)
 	}
 
-	used = 950
-	reconcileSupercluster(t, r)
+	r.announceThreshold(sc, reading(1000, 850, 0), reading(1000, 950, 0))
 	if rec.count(AggregateCapacityThreshold) != 2 {
 		t.Errorf("%s events after crossing critical = %d, want 2",
 			AggregateCapacityThreshold, rec.count(AggregateCapacityThreshold))
@@ -427,5 +331,21 @@ func TestASuperclusterOwnsItsServingSecrets(t *testing.T) {
 		if !owned {
 			t.Errorf("Secret %s is owned by %+v, want the supercluster among its owners", name, secret.OwnerReferences)
 		}
+	}
+}
+
+// The supercluster reads no member's capacity from the control plane: it
+// answers that read with a 500 for a member that has recorded no capacity
+// yet, and the supercluster's capacity is left unreported until placement
+// reads it from another source.
+func TestASuperclusterAsksTheControlPlaneForNoCapacity(t *testing.T) {
+	api := &fakeControlPlane{}
+	r := newSuperclusterReconciler(t, api, &recorder{},
+		newTestSupercluster(), newTestMember("prod-dense-kqv", "uuid-a"))
+
+	_, sc := reconcileSupercluster(t, r)
+
+	if sc.Status.Capacity != nil {
+		t.Errorf("capacity = %+v, want none", sc.Status.Capacity)
 	}
 }

@@ -30,7 +30,6 @@ import (
 
 	atlascp "github.com/simplyblock/atlas/controlplane"
 
-	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -87,11 +86,6 @@ type ControlPlane interface {
 	// outcome being asked for reached by another route, so the implementation
 	// reads a 404 as success.
 	CancelTask(ctx context.Context, clusterID, taskID string) error
-
-	// ClusterCapacity is the cluster's latest capacity sample, or nil when the
-	// control plane has none yet, which is a supercluster's reading of one
-	// member.
-	ClusterCapacity(ctx context.Context, clusterID string) (*simplyblockv1alpha2.AggregateCapacity, error)
 
 	// Endpoint is the base URL this call would currently reach the control
 	// plane at, resolved the same way every other call resolves it (§3.3).
@@ -283,24 +277,6 @@ func (c *httpControlPlane) CancelTask(ctx context.Context, clusterID, taskID str
 		return nil
 	}
 	return err
-}
-
-func (c *httpControlPlane) ClusterCapacity(
-	ctx context.Context, clusterID string,
-) (*simplyblockv1alpha2.AggregateCapacity, error) {
-	api, err := c.atlasFor(ctx)
-	if err != nil {
-		return nil, err
-	}
-	reading, err := api.ClusterCapacity(ctx, clusterID)
-	if err != nil || reading == nil {
-		return nil, err
-	}
-	return &simplyblockv1alpha2.AggregateCapacity{
-		TotalBytes:       &reading.TotalBytes,
-		UsedBytes:        &reading.UsedBytes,
-		ProvisionedBytes: &reading.ProvisionedBytes,
-	}, nil
 }
 
 // post issues a call whose body is not read, which every action endpoint is.

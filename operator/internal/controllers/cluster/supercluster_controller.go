@@ -27,7 +27,6 @@ import (
 	ctrlbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -35,7 +34,6 @@ import (
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // superclusterResync is how often the supercluster polls its members'
@@ -142,8 +140,7 @@ func (r *SuperclusterReconciler) Reconcile(
 	for i := range members.Items {
 		member := &members.Items[i]
 		readings = append(readings, memberReading{
-			Cluster:  member,
-			Capacity: r.memberCapacity(ctx, &supercluster, member),
+			Cluster: member,
 		})
 	}
 	rollup := rollUp(readings)
@@ -188,37 +185,6 @@ func (r *SuperclusterReconciler) Reconcile(
 	r.announceThreshold(&supercluster, previous.Capacity, rollup.Capacity)
 	observeSupercluster(&supercluster, rollup)
 	return ctrl.Result{RequeueAfter: superclusterResync}, nil
-}
-
-// memberCapacity reads one member's capacity as that member. A member with no
-// backend cluster has nothing to read, and neither has one still being built:
-// its backend cluster has no nodes, and the control plane answers that read
-// with a 500 rather than an empty list. A read that fails keeps the member's
-// last reading, so a control-plane blip does not take the member's capacity
-// out of the supercluster's sum until the next poll.
-func (r *SuperclusterReconciler) memberCapacity(
-	ctx context.Context,
-	supercluster, member *simplyblockv1alpha2.StorageCluster,
-) *simplyblockv1alpha2.AggregateCapacity {
-	if member.Status.UUID == "" || isBuilding(member.Status.Phase) {
-		return nil
-	}
-	readCtx := ctx
-	if secret, err := readClusterSecret(ctx, r.Client, member); err == nil && secret != "" {
-		readCtx = webapi.WithBearerToken(ctx, secret)
-	}
-	capacity, err := r.API.ClusterCapacity(readCtx, member.Status.UUID)
-	if err == nil {
-		return capacity
-	}
-	logf.FromContext(ctx).Info("a member's capacity could not be read; keeping its last reading",
-		"supercluster", supercluster.Name, "member", member.Name, "error", err.Error())
-	for _, row := range supercluster.Status.Members {
-		if row.Name == member.Name {
-			return row.Capacity
-		}
-	}
-	return nil
 }
 
 // announceMembership emits MemberAdded for a member the previous status did not
