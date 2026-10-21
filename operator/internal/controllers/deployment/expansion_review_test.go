@@ -110,6 +110,47 @@ func TestOpenShiftStatesItsKubeletFlag(t *testing.T) {
 	}
 }
 
+// Talos is stated to the node, not only resolved into the kubelet flag: the node
+// reserves huge pages through the Talos API when it knows the host is Talos, and
+// the talosctl slot of spec.images is the image it does that with.
+func TestTalosStatesItselfAndItsTalosctlImage(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentTalos
+		c.Spec.Images = &simplyblockv1alpha2.DeploymentImages{
+			Talosctl: &simplyblockv1alpha2.ExternalImageSpec{Image: "ghcr.io/siderolabs/talosctl:v1.12.7"},
+		}
+	})
+	r := reconcilerFor(t)
+
+	workload := r.buildWorkload(config)
+	if workload.Talos == nil || !*workload.Talos {
+		t.Error("a Talos document did not state Talos on the workload")
+	}
+	if workload.EnableKubeletConfiguration == nil || !*workload.EnableKubeletConfiguration {
+		t.Error("a Talos document did not resolve to configuring the kubelet (through the Talos API)")
+	}
+	if workload.TalosctlImage != "ghcr.io/siderolabs/talosctl:v1.12.7" {
+		t.Errorf("TalosctlImage = %q, want the talosctl slot", workload.TalosctlImage)
+	}
+}
+
+// Any other environment leaves Talos unstated, and an unstated talosctl slot
+// writes the zero value so the node agent's default stands.
+func TestANonTalosDocumentLeavesTalosUnstated(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentVanilla
+	})
+	r := reconcilerFor(t)
+
+	workload := r.buildWorkload(config)
+	if workload.Talos != nil {
+		t.Errorf("Talos = %v for a Vanilla document", *workload.Talos)
+	}
+	if workload.TalosctlImage != "" {
+		t.Errorf("TalosctlImage = %q with no talosctl slot", workload.TalosctlImage)
+	}
+}
+
 // A growth document's nodes join a cluster that is already serving, which the
 // control plane reads as a request to rebalance onto them.
 func TestAGrowthDocumentMarksItsNodesAsAnExpansion(t *testing.T) {

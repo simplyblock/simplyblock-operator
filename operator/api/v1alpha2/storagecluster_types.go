@@ -618,6 +618,22 @@ type StorageNodesSpec struct {
 	// +optional
 	UbuntuHost *bool `json:"ubuntuHost,omitempty"`
 
+	// Talos states that the workers run Talos Linux: an immutable host with no
+	// shell, which the node therefore never touches directly. It reserves the
+	// huge pages a worker needs through the Talos API instead, and skips the
+	// host-configuration Jobs that would nsenter into the host. The expansion
+	// sets it from spec.environment, as it sets OpenShift; the node agent reads
+	// it as TALOS_CLUSTER.
+	// +optional
+	Talos *bool `json:"talos,omitempty"`
+
+	// TalosctlImage is the talosctl image the node runs as a Job on a Talos
+	// worker to reach its Talos API. Empty keeps the node agent's own default;
+	// a deployment pins it to the cluster's Talos minor, or to a mirror on an
+	// air-gapped site. It is spec.images.talosctl on the deployment config.
+	// +optional
+	TalosctlImage string `json:"talosctlImage,omitempty"`
+
 	// OpenShift is what this deployment states because it runs on OpenShift,
 	// and its presence is that statement. See OpenShiftSpec.
 	// +optional
