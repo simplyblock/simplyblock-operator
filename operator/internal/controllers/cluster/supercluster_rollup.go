@@ -106,7 +106,11 @@ func rollUpPhase(
 	for i, phase := range phases {
 		name := members[i].Cluster.Name
 		switch phase {
-		case "", simplyblockv1alpha2.StorageClusterPhasePending, simplyblockv1alpha2.StorageClusterPhaseCreating:
+		case "", simplyblockv1alpha2.StorageClusterPhasePending, simplyblockv1alpha2.StorageClusterPhaseCreating,
+			simplyblockv1alpha2.StorageClusterPhaseProvisioning, simplyblockv1alpha2.StorageClusterPhaseActivating:
+			// A member is still being built until it has been activated: its
+			// backend cluster may exist while its nodes are added (Provisioning)
+			// and while it activates.
 			building = append(building, name)
 		case simplyblockv1alpha2.StorageClusterPhaseSuspended:
 			suspended = append(suspended, name)

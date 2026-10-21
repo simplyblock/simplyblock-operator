@@ -43,17 +43,17 @@ groups below.
 
 File: `operator/internal/controllers/cluster/supercluster_rollup_test.go`
 
-| #    | Scenario                                                                                                          | Type     | Test                                                   |
-|------|-------------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------------|
-| U-01 | Every member `Online` rolls up to `Online`                                                                        | Positive | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
-| U-02 | One member `Degraded`, the rest `Online`, rolls up to `Degraded`                                                  | Positive | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
-| U-03 | One member `Rebalancing` rolls up to `Degraded`, not `Rebalancing`                                                | Positive | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
-| U-04 | One member `Unavailable` while another serves rolls up to `Degraded`                                              | Positive | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
-| U-05 | No member serving, at least one `Suspended`, with none `Unavailable`, rolls up to `Suspended`                     | Positive | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
-| U-06 | No member serving, one `Unavailable`, rolls up to `Unavailable`                                                   | Negative | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
-| U-07 | One member unresolved, or still `Pending` or `Creating`, rolls up to `Provisioning`                               | Boundary | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
-| U-08 | `maxFaultTolerance` is the lowest among members, and unset when any member reports none                           | Boundary | `TestTheSuperclusterFaultToleranceIsItsWeakestMembers` |
-| U-09 | Capacity sums the members' readings, and a member with no reading contributes nothing rather than zeroing the sum | Boundary | `TestTheSuperclusterCapacitySumsTheMembersReadings`    |
+| #    | Scenario                                                                                                                                             | Type     | Test                                                   |
+|------|------------------------------------------------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------------|
+| U-01 | Every member `Online` rolls up to `Online`                                                                                                           | Positive | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
+| U-02 | One member `Degraded`, the rest `Online`, rolls up to `Degraded`                                                                                     | Positive | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
+| U-03 | One member `Rebalancing` rolls up to `Degraded`, not `Rebalancing`                                                                                   | Positive | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
+| U-04 | One member `Unavailable` while another serves rolls up to `Degraded`                                                                                 | Positive | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
+| U-05 | No member serving, at least one `Suspended`, with none `Unavailable`, rolls up to `Suspended`                                                        | Positive | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
+| U-06 | No member serving, one `Unavailable`, rolls up to `Unavailable`                                                                                      | Negative | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
+| U-07 | A member not yet activated (`Pending`, `Creating`, `Provisioning`, or `Activating`, or never reconciled) rolls the supercluster up to `Provisioning` | Boundary | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
+| U-08 | `maxFaultTolerance` is the lowest among members, and unset when any member reports none                                                              | Boundary | `TestTheSuperclusterFaultToleranceIsItsWeakestMembers` |
+| U-09 | Capacity sums the members' readings, and a member with no reading contributes nothing rather than zeroing the sum                                    | Boundary | `TestTheSuperclusterCapacitySumsTheMembersReadings`    |
 
 ### Member Derivation and Naming (design §5.1, §5.2)
 

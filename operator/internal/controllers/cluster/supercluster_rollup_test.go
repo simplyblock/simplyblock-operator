@@ -50,6 +50,7 @@ func TestTheSuperclusterPhaseRollsUpFromItsMembers(t *testing.T) {
 		pending     = simplyblockv1alpha2.StorageClusterPhasePending
 		creating    = simplyblockv1alpha2.StorageClusterPhaseCreating
 		provision   = simplyblockv1alpha2.StorageClusterPhaseProvisioning
+		activating  = simplyblockv1alpha2.StorageClusterPhaseActivating
 	)
 	for _, tc := range []struct {
 		id     string
@@ -62,13 +63,15 @@ func TestTheSuperclusterPhaseRollsUpFromItsMembers(t *testing.T) {
 		{"U-03", "one member rebalancing", []simplyblockv1alpha2.StorageClusterPhase{online, rebalancing}, degraded},
 		{"U-04", "one member unavailable while another serves",
 			[]simplyblockv1alpha2.StorageClusterPhase{online, unavailable}, degraded},
-		{"U-05", "none serving, one suspended, none unavailable",
-			[]simplyblockv1alpha2.StorageClusterPhase{suspended, provision}, suspended},
+		{"U-05", "none serving, suspended, none unavailable",
+			[]simplyblockv1alpha2.StorageClusterPhase{suspended, suspended}, suspended},
 		{"U-06", "none serving, one unavailable",
 			[]simplyblockv1alpha2.StorageClusterPhase{suspended, unavailable}, unavailable},
 		{"U-07", "one member still pending", []simplyblockv1alpha2.StorageClusterPhase{online, pending}, provision},
 		{"U-07", "one member still creating", []simplyblockv1alpha2.StorageClusterPhase{online, creating}, provision},
 		{"U-07", "one member never reconciled", []simplyblockv1alpha2.StorageClusterPhase{online, ""}, provision},
+		{"U-07", "every member still provisioning", []simplyblockv1alpha2.StorageClusterPhase{provision, provision}, provision},
+		{"U-07", "one member activating", []simplyblockv1alpha2.StorageClusterPhase{online, activating}, provision},
 		{"U-142", "no member yet", nil, provision},
 	} {
 		t.Run(tc.id+" "+tc.name, func(t *testing.T) {

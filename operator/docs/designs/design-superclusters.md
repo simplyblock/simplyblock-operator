@@ -374,13 +374,13 @@ namespace whose `spec.superclusterRef` names it, through a field index.
 **The phase rolls up.** A supercluster uses the existing `StorageClusterPhase`
 values, so a dashboard reading the phase column needs no new vocabulary.
 
-| Members                                                         | Supercluster phase |
-|-----------------------------------------------------------------|--------------------|
-| No member yet, or any member still `Pending` or `Creating`      | `Provisioning`     |
-| Every member `Online`                                           | `Online`           |
-| At least one member serving, at least one not `Online`          | `Degraded`         |
-| No member serving, at least one `Suspended`, none `Unavailable` | `Suspended`        |
-| No member serving, otherwise                                    | `Unavailable`      |
+| Members                                                                                                 | Supercluster phase |
+|---------------------------------------------------------------------------------------------------------|--------------------|
+| No member yet, or any member not yet activated (`Pending`, `Creating`, `Provisioning`, or `Activating`) | `Provisioning`     |
+| Every member `Online`                                                                                   | `Online`           |
+| At least one member serving, at least one not `Online`                                                  | `Degraded`         |
+| No member serving, at least one `Suspended`, none `Unavailable`                                         | `Suspended`        |
+| No member serving, otherwise                                                                            | `Unavailable`      |
 
 "Serving" is `Online`, `Degraded`, `Rebalancing`, or `Shrinking`. A member that
 is rebalancing makes the supercluster `Degraded`, and the member row in
