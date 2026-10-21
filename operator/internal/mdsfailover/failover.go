@@ -237,6 +237,7 @@ func (f *Failover) conditions(obs Observation, active Guest, found bool) Conditi
 		NoSession: !found || !active.HasSession,
 		Unready:   !found || !active.Ready || !active.NodeReady,
 	}
+	c.Unresponsive = found && active.HasSession && active.Role == 0
 	c.Rebooted = found && !active.Deleting && active.Instance != rec.Instance &&
 		active.HasSession && active.Role == nfsexportrpc.RoleStandby
 	for _, g := range obs.Guests {

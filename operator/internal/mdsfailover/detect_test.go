@@ -342,3 +342,40 @@ func TestParseRecordRefusesAnEpochThatIsNotANumber(t *testing.T) {
 		t.Errorf("empty annotations = %+v, %v, want the empty record", rec, err)
 	}
 }
+
+// A guest that is frozen leaves its runner running, so the session stays up and
+// the loss shows only as a guest that does not answer while its pod is not Ready.
+var hungConditions = Conditions{Unresponsive: true, Unready: true, StandbyUp: true}
+
+func TestAnActiveThatHoldsASessionButDoesNotAnswerIsLostAfterTheWindow(t *testing.T) {
+	clk := newFakeClock()
+	d := NewDetector(20 * time.Second)
+
+	if got := d.Judge(clk.Now(), hungConditions); got != VerdictHeld {
+		t.Fatalf("first observation = %v, want held", got)
+	}
+	clk.advance(20 * time.Second)
+	if got := d.Judge(clk.Now(), hungConditions); got != VerdictHeld {
+		t.Errorf("at the window = %v, want held", got)
+	}
+	clk.advance(time.Second)
+	if got := d.Judge(clk.Now(), hungConditions); got != VerdictLost {
+		t.Errorf("past the window = %v, want lost", got)
+	}
+}
+
+func TestAHungActiveNeedsEachOfItsSignalsAndAStandby(t *testing.T) {
+	for name, c := range map[string]Conditions{
+		"it answers (a guest that is promoting is not Ready yet)": {Unready: true, StandbyUp: true},
+		"its pod is Ready (one slow answer)":                      {Unresponsive: true, StandbyUp: true},
+		"no standby could take over":                              {Unresponsive: true, Unready: true},
+	} {
+		clk := newFakeClock()
+		d := NewDetector(20 * time.Second)
+		d.Judge(clk.Now(), c)
+		clk.advance(time.Minute)
+		if got := d.Judge(clk.Now(), c); got != VerdictHealthy {
+			t.Errorf("%s: verdict = %v, want healthy", name, got)
+		}
+	}
+}

@@ -341,8 +341,8 @@ The takeover's progress is the active record (§4.3) and each export's status. T
 
 The signals are the active's csi-link session, its pod's `Ready` condition and deletion timestamp, its node's `Ready` condition, and the instance its pod reports. A pod with a deletion timestamp is a planned loss and starts the takeover at once (§7.4). Anything else needs every condition below to hold continuously for the detection window:
 
-- The active has no csi-link session.
-- The active's pod is not `Ready`, or its node is not `Ready`.
+- The active has no csi-link session, or has one and does not answer `Describe`. A frozen guest leaves its runner running, so its session stays up and only the missing answer shows it.
+- The active's pod is not `Ready`, or its node is not `Ready`. A guest that answers while it is promoting is not `Ready` yet, and it is never lost.
 - A standby has a session and its agent reports the standby role.
 
 A pod whose name is the record's active, whose boot differs from the record's (the pod's UID and runner container ID, §4.3), and whose agent reports the standby role is lost at once, without the window and without the other conditions. This covers `standbys: 0`, where the only guest restarts in place, and a restart of the runner in the active's pod.

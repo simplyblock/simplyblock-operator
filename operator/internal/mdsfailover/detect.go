@@ -20,6 +20,8 @@ type Conditions struct {
 	NoSession bool
 	// Unready is the active's pod or its node not being Ready.
 	Unready bool
+	// Unresponsive is an active that holds a session and does not answer Describe.
+	Unresponsive bool
 	// StandbyUp is a standby with a session that reports the standby role.
 	StandbyUp bool
 }
@@ -57,7 +59,11 @@ func (d *Detector) Judge(now time.Time, c Conditions) Verdict {
 		d.Reset()
 		return VerdictLost
 	}
-	if !c.NoSession || !c.Unready || !c.StandbyUp {
+	// A lost node shows as no session. A frozen guest keeps its runner's
+	// session and shows as an active that does not answer. Either way the pod
+	// has to be not Ready, and a standby has to be able to take over.
+	gone := c.NoSession || c.Unresponsive
+	if !gone || !c.Unready || !c.StandbyUp {
 		d.Reset()
 		return VerdictHealthy
 	}

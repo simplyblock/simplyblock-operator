@@ -764,3 +764,59 @@ func TestARestartOnASettledClusterAnnouncesNothing(t *testing.T) {
 		t.Errorf("MDSPromoted events = %d after a restart, want %d", got, before)
 	}
 }
+
+// A frozen guest keeps its runner's link session, so the session condition never
+// holds. The guest not answering, with its pod not Ready, is the loss.
+func TestAHungActiveThatKeepsItsSessionIsReplacedAfterTheWindow(t *testing.T) {
+	s := newSim(t)
+	s.serving(pod0, 1)
+	s.bind(2)
+	s.hang(pod0)
+
+	s.tick()
+	if len(s.writes) != 0 {
+		t.Fatalf("record written inside the window: %+v", s.writes)
+	}
+	if !s.hasEvent("driver", "Normal", "MDSFailoverHeld") {
+		t.Errorf("events = %v, want MDSFailoverHeld while the loss is observed", s.reasons())
+	}
+	s.clock.advance(21 * time.Second)
+	runUntilQuiet(t, s, 6)
+
+	if len(s.writes) != 1 || s.writes[0].Active != pod1 || s.writes[0].Epoch != 2 {
+		t.Fatalf("record writes = %+v, want one naming mds-1 at epoch 2", s.writes)
+	}
+	if len(s.promotes) != 1 || s.promotes[0].pod != pod1 {
+		t.Errorf("promotes = %+v, want mds-1 promoted", s.promotes)
+	}
+}
+
+func TestAnActiveThatAnswersButIsNotReadyIsNotReplaced(t *testing.T) {
+	s := newSim(t)
+	s.serving(pod0, 1)
+	s.bind(2)
+	s.guest(pod0).Ready = false
+
+	for i := 0; i < 8; i++ {
+		s.tick()
+		s.clock.advance(15 * time.Second)
+	}
+	if len(s.writes) != 0 || len(s.promotes) != 0 {
+		t.Errorf("replaced an active that answers: writes=%+v promotes=%+v", s.writes, s.promotes)
+	}
+}
+
+func TestAReadyActiveThatMissesAnAnswerIsNotReplaced(t *testing.T) {
+	s := newSim(t)
+	s.serving(pod0, 1)
+	s.bind(2)
+	s.silent = map[string]bool{pod0: true}
+
+	for i := 0; i < 8; i++ {
+		s.tick()
+		s.clock.advance(15 * time.Second)
+	}
+	if len(s.writes) != 0 || len(s.promotes) != 0 {
+		t.Errorf("replaced a Ready active over a missed answer: writes=%+v promotes=%+v", s.writes, s.promotes)
+	}
+}

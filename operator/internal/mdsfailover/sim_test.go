@@ -68,6 +68,8 @@ type sim struct {
 	// faults fail the n-th call (1-based) of a named step once, as a crash.
 	faults map[string]int
 	calls  map[string]int
+	// silent is the guests whose Describe never answers.
+	silent map[string]bool
 	// observeErr fails every Observe while it is set.
 	observeErr error
 	// conflictNext makes the next record write lose.
@@ -137,6 +139,16 @@ func (s *sim) serving(pod string, epoch uint64) {
 
 // lose makes the guest vanish from the operator's view: no session, pod and
 // node not Ready.
+// hang is a guest that keeps its runner's session and does not answer, with its
+// pod not Ready.
+func (s *sim) hang(pod string) {
+	if s.silent == nil {
+		s.silent = map[string]bool{}
+	}
+	s.silent[pod] = true
+	s.guest(pod).Ready = false
+}
+
 func (s *sim) lose(pod string) {
 	g := s.guest(pod)
 	g.HasSession, g.Ready, g.NodeReady = false, false, false
@@ -294,6 +306,9 @@ func (s *sim) Write(_ context.Context, version string, rec Record) (string, erro
 func (s *sim) Describe(_ context.Context, pod string) (nfsexportrpc.Description, error) {
 	if !s.guest(pod).HasSession {
 		return nfsexportrpc.Description{}, errors.New("no session")
+	}
+	if s.silent[pod] {
+		return nfsexportrpc.Description{}, errors.New("timed out")
 	}
 	return s.roles[pod], nil
 }
