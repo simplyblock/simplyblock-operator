@@ -249,3 +249,22 @@ func TestAMemberRecordsItsSuperclustersNamesWithItsOwnSuffix(t *testing.T) {
 		t.Errorf("workloadNames = %+v, want %+v", got, want)
 	}
 }
+
+// Every node's hostname is built from the record, so a reconcile never rewrites
+// it, even when the rule that chose it would now choose otherwise: here the
+// constant names are free again, and the cluster keeps its own.
+func TestARecordedNameIsNeverRewritten(t *testing.T) {
+	names := atlaskube.DerivedWorkloadNames(testClusterName)
+	api := &fakeControlPlane{
+		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+	}
+	r := newClusterReconciler(t, api, &recorder{}, newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.Status.WorkloadNames = utils.WorkloadNamesStatus(names)
+	}))
+
+	cluster := reconcileCluster(t, r, 3)
+
+	if got := recordedNames(t, cluster); got != names {
+		t.Errorf("workloadNames = %+v, want the recorded %+v", got, names)
+	}
+}
