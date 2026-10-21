@@ -137,8 +137,8 @@ func TestUnstatedNodeFlagsAreTheEnvironments(t *testing.T) {
 	})
 
 	workload := reconcilerFor(t).buildWorkload(config)
-	if workload.EnableKubeletConfiguration == nil || *workload.EnableKubeletConfiguration {
-		t.Errorf("Talos's kubelet flag is %v, want false", workload.EnableKubeletConfiguration)
+	if workload.EnableKubeletConfiguration == nil || !*workload.EnableKubeletConfiguration {
+		t.Errorf("Talos's kubelet flag is %v, want true (configured through the Talos API)", workload.EnableKubeletConfiguration)
 	}
 	if workload.EnableCpuTopology != nil {
 		t.Errorf("Talos's CPU topology flag is %v, want unset", *workload.EnableCpuTopology)
@@ -161,8 +161,8 @@ func TestTalosStatesItselfAndItsTalosctlImage(t *testing.T) {
 	if workload.Talos == nil || !*workload.Talos {
 		t.Error("a Talos document did not state Talos on the workload")
 	}
-	if workload.EnableKubeletConfiguration == nil || *workload.EnableKubeletConfiguration {
-		t.Error("a Talos document did not resolve to skipping the kubelet configuration")
+	if workload.EnableKubeletConfiguration == nil || !*workload.EnableKubeletConfiguration {
+		t.Error("a Talos document did not resolve to configuring the kubelet (through the Talos API)")
 	}
 	if workload.TalosctlImage != "ghcr.io/siderolabs/talosctl:v1.12.7" {
 		t.Errorf("TalosctlImage = %q, want the talosctl slot", workload.TalosctlImage)
