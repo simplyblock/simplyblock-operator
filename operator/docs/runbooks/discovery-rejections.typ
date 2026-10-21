@@ -3,13 +3,16 @@
 // when it happens and how to get past it. It lives with the runbooks because the
 // support team reads it while a customer's deployment is stuck.
 //
-// Build: typst compile discovery-rejections.typ
+// Build: typst compile discovery-rejections.typ (the first build downloads the
+// fletcher package from Typst Universe, which draws the flowchart).
 //
 // Keep it in step with the code that produces these messages:
 // atlas-lib/blockdev/candidate.go (disk inspection), operator/internal/discovery
 // (filters, network, NUMA, journal), operator/internal/controllers/deployment
 // (the run and document checks), and operator/internal/webhook (admission).
 // The document is written for support staff, so it names no code locations.
+
+#import "@preview/fletcher:0.5.8" as fletcher: diagram, node, edge
 
 #set document(title: "Deployment discovery rejections", author: "simplyblock")
 #set page(
@@ -88,6 +91,81 @@ and *writes* the draft. The rejections are grouped by the stage that produces th
 probe refused it: NotBlank`. *What* was found (the mountpoint, the filesystem type, the holding device) is in
 the probe report ConfigMap under `devices[].rejections[].detail`. Ask the customer for it whenever the
 reason name alone does not settle the case.]
+
+#pagebreak(weak: true)
+== The order of the checks
+
+Discovery runs its checks in the order below. To find out why a worker or a disk is missing from the draft,
+follow it from the top until the first check it fails; the red box names the rejection and the section that
+explains it. Every disk refusal from the disk inspection (section 4) is one box here, because the probe
+records all of them at once rather than one after another.
+
+#let ok = rgb("#e8eef5")
+#let bad = rgb("#fbeaea")
+#let red = rgb("#b03a2e")
+#let check(pos, body) = node(pos, body, fill: ok, stroke: 0.6pt + navy, corner-radius: 2pt, width: 56mm)
+#let exit(pos, body) = node(pos, body, fill: bad, stroke: 0.6pt + red, corner-radius: 2pt, width: 60mm)
+#let terminal(pos, body) = node(pos, text(fill: white, weight: "bold", body), fill: navy, shape: fletcher.shapes.pill, width: 40mm)
+#let connector(pos) = node(pos, text(weight: "bold")[A], shape: circle, stroke: 0.6pt + navy, fill: ok)
+#let no(from, to) = edge(from, to, "-|>", stroke: 0.6pt + red, label: text(fill: red)[no], label-side: left)
+#let next(from, to) = edge(from, to, "-|>", stroke: 0.6pt + navy)
+
+#align(center, {
+  set text(7.4pt)
+  set par(leading: 0.4em)
+  diagram(
+    spacing: (7mm, 3.4mm),
+    node-inset: 4pt,
+
+    terminal((0, 0), [Discovery starts]),
+    check((0, 1), [*Each worker:* usable? \ not cordoned, tainted, control-plane, or misnamed]),
+    exit((1, 1), [Worker skipped (§3). None left: *No free worker* (§2)]),
+    check((0, 2), [Did the worker's probe report?]),
+    exit((1, 2), [*Probe failed* (§3). On every worker: *All probes failed* (§2)]),
+    check((0, 3), [*Each disk:* a whole disk?]),
+    exit((1, 3), [*Not a whole disk* (§5.1). Partitions only in logical block device mode]),
+    check((0, 4), [A local disk, not a simplyblock volume?]),
+    exit((1, 4), [*simplyblock volume* (§5.1)]),
+    check((0, 5), [Matches the run's mode? \ NVMe (default) or logical block devices]),
+    exit((1, 5), [*Not NVMe* (§5.1). Ask whether logical block devices are meant]),
+    check((0, 6), [Free on the worker? \ not mounted, held, formatted, partitioned, ...]),
+    exit((1, 6), [Inspection reason: `Mounted`, `NotBlank`, `LVMPhysicalVolume`, ... (§4)]),
+    check((0, 7), [Passes the run's filters? \ iSCSI, allow and deny lists, model, size]),
+    exit((1, 7), [*iSCSI disk*, *allow or deny list*, *model*, or *size filter* (§5.1)]),
+    connector((0, 8)),
+
+    connector((2, 0)),
+    check((2, 1), [*Each worker:* any disk left?]),
+    exit((3, 1), [*No disk left*, or NVMe disks held by another driver (§5.2)]),
+    check((2, 2), [On the shared management and data networks?]),
+    exit((3, 2), [*Management network* or *data network* (§5.2)]),
+    check((2, 3), [All disks on one NUMA node?]),
+    exit((3, 3), [*Second NUMA node*: the other socket's disks are left out (§5.2)]),
+    check((2, 4), [Journal disk available? \ logical block device mode only]),
+    exit((3, 4), [*Only one disk* or *equal disks* (§5.3). The run fails]),
+    check((2, 5), [Any worker left with disks?]),
+    exit((3, 5), [*No usable disk* (§2). The run fails]),
+    check((2, 6), [Draft CDC written. \ Document checks pass?]),
+    exit((3, 6), [Draft held in `Draft`, approved CDC `Failed` (§6)]),
+    check((2, 7), [Approval accepted?]),
+    exit((3, 7), [Request denied (§7)]),
+    terminal((2, 8), [Cluster deployed]),
+
+    next((0, 0), (0, 1)), next((0, 1), (0, 2)), next((0, 2), (0, 3)), next((0, 3), (0, 4)),
+    next((0, 4), (0, 5)), next((0, 5), (0, 6)), next((0, 6), (0, 7)), next((0, 7), (0, 8)),
+    next((2, 0), (2, 1)), next((2, 1), (2, 2)), next((2, 2), (2, 3)), next((2, 3), (2, 4)),
+    next((2, 4), (2, 5)), next((2, 5), (2, 6)), next((2, 6), (2, 7)), next((2, 7), (2, 8)),
+    no((0, 1), (1, 1)), no((0, 2), (1, 2)), no((0, 3), (1, 3)), no((0, 4), (1, 4)),
+    no((0, 5), (1, 5)), no((0, 6), (1, 6)), no((0, 7), (1, 7)),
+    no((2, 1), (3, 1)), no((2, 2), (3, 2)), no((2, 3), (3, 3)), no((2, 4), (3, 4)),
+    no((2, 5), (3, 5)), no((2, 6), (3, 6)), no((2, 7), (3, 7)),
+  )
+})
+
+A worker that fails a check on the left is left out, and so is a disk; the run continues with the rest.
+Disks that pass every check on the left continue at *A*. The "Not a whole disk" and "Not NVMe" refusals
+are left out of the run's summary message, because every worker has many such devices; look for them in
+the events.
 
 = Discovery run
 
