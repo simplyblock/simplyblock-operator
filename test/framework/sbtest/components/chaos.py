@@ -38,9 +38,15 @@ from . import kube
 #: gets a new one (a DaemonSet's, on the same node).
 _TARGETS: dict[str, tuple[str, bool]] = {
     "mds": ("simplyblock-pnfs-mds-", True),
+    "mds-standby": ("simplyblock-pnfs-mds-", True),
     "csi-node": ("simplyblock-csi-node-", False),
     "csi-controller": ("simplyblock-csi-controller-", True),
 }
+
+
+#: The StatefulSet annotation that names the MDS pod serving clients. Its absence is a cluster of
+#: the old single-guest design, where every MDS pod is the server.
+MDS_ACTIVE_ANNOTATION = "storage.simplyblock.io/mds-active"
 
 
 class RestartPlan:
@@ -105,10 +111,10 @@ class _Record:
 
 @component
 class Restarter(Component):
-    """Delete the MDS pod, a pNFS client's node plugin, or the controller, during the run."""
+    """Delete the active or a standby MDS pod, a pNFS client's node plugin, or the controller, during the run."""
 
     name = "chaos.restart"
-    summary = "restart the MDS, csi-node, or csi-controller pods during the run"
+    summary = "restart the active or a standby MDS, csi-node, or csi-controller pod during the run"
     namespace_options = {"namespace": "operator"}  # noqa: RUF012
 
     def defaults(self) -> dict[str, Any]:
@@ -117,7 +123,10 @@ class Restarter(Component):
             # Relative weights. The metadata server matters most under load, the node plugin
             # next. The controller is off the I/O path and proves little until the run
             # provisions volumes mid-flight.
-            "weights": {"mds": 3.0, "csi-node": 2.0, "csi-controller": 1.0},
+            # `mds` is the active guest and `mds-standby` a pod that is not: deleting a standby
+            # restarts no server, so it is a lighter case than the active's.
+            "weights": {"mds": 3.0, "mds-standby": 1.0, "csi-node": 2.0,
+                        "csi-controller": 1.0},
             "guaranteed": 1,
             # Targets for the guaranteed restarts, in order. Empty draws them by weight.
             "guaranteed_targets": [],
@@ -201,12 +210,34 @@ class Restarter(Component):
         with self._lock:
             return sum(1 for r in self._records if r.ready is None)
 
+    def _active_mds(self) -> str | None:
+        """The pod the MDS StatefulSet's annotation names as the active guest, or None when no
+        StatefulSet of the MDS carries it."""
+        prefix, _ = _TARGETS["mds"]
+        cp = kube.read(["-n", self.opt("namespace"), "get", "statefulsets", "-o", "json"])
+        for it in json.loads(cp.stdout or "{}").get("items", []):
+            meta = it.get("metadata", {})
+            if str(meta.get("name", "")).startswith(prefix):
+                active = (meta.get("annotations") or {}).get(MDS_ACTIVE_ANNOTATION)
+                if active:
+                    return str(active)
+        return None
+
     def _victim(self, ctx: RunContext, target: str) -> kube.Pod | None:
         """The pod to delete. A node plugin is chosen among the nodes that mount a pNFS
-        volume, when the workload said which: those are the ones a restart can hurt."""
+        volume, when the workload said which: those are the ones a restart can hurt. `mds`
+        is the active guest and `mds-standby` any other MDS pod."""
         prefix, _ = _TARGETS[target]
         pods = [p for p in kube.list_pods(self.opt("namespace"), [prefix])
                 if p.name.startswith(prefix) and p.phase == "Running"]
+        if target in ("mds", "mds-standby"):
+            active = self._active_mds()
+            if active is None and target == "mds-standby":
+                ctx.log.info(f"{self.name}: no MDS StatefulSet names an active pod, so there "
+                             "is no standby to restart")
+                return None
+            if active is not None:
+                pods = [p for p in pods if (p.name == active) == (target == "mds")]
         if target == "csi-node":
             clients = set(ctx.shared.get("pnfs.client_nodes") or [])
             pods = [p for p in pods if kube.short(p.node) in clients] or pods

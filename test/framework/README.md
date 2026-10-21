@@ -692,6 +692,17 @@ server weighted highest. A second restart while one is in flight happens only wi
 `overlap_chance`, and nothing restarts in the last `quiet_tail_s`, so each recovery is
 observed before fio ends. The log names the seed, and `seed:` replays the schedule.
 
+The metadata server is a StatefulSet of one active guest and standbys, and the
+`storage.simplyblock.io/mds-active` annotation names the active pod. The target `mds` is that
+pod, and its restarts are the ones every metadata server detector judges. The target
+`mds-standby` is any other metadata server pod (default weight 1.0, settable in `weights` and
+`guaranteed_targets`). Deleting a standby restarts no server, so it is recorded under its own
+target, and no pause or reservation detector counts it as a server restart. `chaos.recovery`
+still fails a standby that never came back. When no StatefulSet carries the annotation (the
+single-guest design), `mds` is any metadata server pod as before and `mds-standby` finds no
+victim. `nvme.stale-reservations` ignores every key whose top byte is 0x01, which covers a
+guest's epoch key and nfsd's constant key, because a client's key leads with its boot time.
+
 What each restart should cost differs, and the detectors judge it that way. A metadata
 server restart pauses every client until its grace period ends, so a pause within
 `restart_pause_s` that begins at one is INFO. A node plugin or controller restart is not on
