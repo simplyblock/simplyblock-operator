@@ -28,6 +28,8 @@ import (
 	"net/http"
 	"sync"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
@@ -45,18 +47,18 @@ type ControlPlane interface {
 
 	// CreateCluster is not idempotent, which is why the creation machine
 	// claims its slot in Kubernetes before calling it.
-	CreateCluster(ctx context.Context, params utils.ClusterAddParams) (webapi.ClusterResponse, error)
+	CreateCluster(ctx context.Context, params atlascp.CreateClusterParams) (atlascp.Cluster, error)
 
 	// Cluster reads one cluster by its UUID.
-	Cluster(ctx context.Context, clusterID string) (webapi.ClusterResponse, error)
+	Cluster(ctx context.Context, clusterID string) (atlascp.Cluster, error)
 
 	// ClusterByName finds a cluster the operator may not have created. It
 	// reports false rather than an error when there is none, because "no such
 	// cluster" is the ordinary answer on the creation path.
-	ClusterByName(ctx context.Context, name string) (utils.ClusterListEntry, bool, error)
+	ClusterByName(ctx context.Context, name string) (atlascp.Cluster, bool, error)
 	// Clusters lists every cluster of the control plane, as ClusterByName
 	// reads them.
-	Clusters(ctx context.Context) ([]utils.ClusterListEntry, error)
+	Clusters(ctx context.Context) ([]atlascp.Cluster, error)
 
 	// DeleteCluster is retried until it succeeds, and the finalizer is not
 	// removed before it does.
@@ -140,51 +142,63 @@ func (c *httpControlPlane) Ready(ctx context.Context) error {
 	return err
 }
 
+// The cluster's own calls go through atlas-lib's generated client, which checks
+// every body against the control plane's spec; the rest of this surface is
+// still hand-written requests over webapi.Client.
+
 func (c *httpControlPlane) CreateCluster(
-	ctx context.Context, params utils.ClusterAddParams,
-) (webapi.ClusterResponse, error) {
-	body, err := c.call(c.adminContext(ctx), http.MethodPost, "/api/v2/clusters/", params)
+	ctx context.Context, params atlascp.CreateClusterParams,
+) (atlascp.Cluster, error) {
+	api, err := c.atlasFor(c.adminContext(ctx))
 	if err != nil {
-		return webapi.ClusterResponse{}, err
+		return atlascp.Cluster{}, err
 	}
-	return webapi.ParseClusterResponse(body)
+	return api.CreateCluster(ctx, params)
 }
 
 func (c *httpControlPlane) Cluster(
 	ctx context.Context, clusterID string,
-) (webapi.ClusterResponse, error) {
-	body, err := c.call(ctx, http.MethodGet, "/api/v2/clusters/"+clusterID, nil)
+) (atlascp.Cluster, error) {
+	api, err := c.atlasFor(ctx)
 	if err != nil {
-		return webapi.ClusterResponse{}, err
+		return atlascp.Cluster{}, err
 	}
-	return webapi.ParseClusterResponse(body)
+	return api.GetCluster(ctx, clusterID)
 }
 
-func (c *httpControlPlane) Clusters(ctx context.Context) ([]utils.ClusterListEntry, error) {
-	body, err := c.call(c.adminContext(ctx), http.MethodGet, "/api/v2/clusters/", nil)
+func (c *httpControlPlane) Clusters(ctx context.Context) ([]atlascp.Cluster, error) {
+	api, err := c.atlasFor(c.adminContext(ctx))
 	if err != nil {
 		return nil, err
 	}
-	var entries []utils.ClusterListEntry
-	if err := json.Unmarshal(body, &entries); err != nil {
-		return nil, fmt.Errorf("read the cluster list: %w", err)
-	}
-	return entries, nil
+	return api.ListClusters(ctx)
 }
 
 func (c *httpControlPlane) ClusterByName(
 	ctx context.Context, name string,
-) (utils.ClusterListEntry, bool, error) {
-	entries, err := c.Clusters(ctx)
+) (atlascp.Cluster, bool, error) {
+	clusters, err := c.Clusters(ctx)
 	if err != nil {
-		return utils.ClusterListEntry{}, false, err
+		return atlascp.Cluster{}, false, err
 	}
-	for _, entry := range entries {
-		if entry.Name == name {
-			return entry, true, nil
+	for _, cluster := range clusters {
+		if cluster.Name == name {
+			return cluster, true, nil
 		}
 	}
-	return utils.ClusterListEntry{}, false, nil
+	return atlascp.Cluster{}, false, nil
+}
+
+// atlasFor is atlas-lib's client for one call: the endpoint and connection this
+// call goes out on, and the credential the context carries, which is the
+// cluster's secret where a caller attached one and the operator's own token
+// otherwise.
+func (c *httpControlPlane) atlasFor(ctx context.Context) (*atlascp.Client, error) {
+	api, err := atlascp.New(c.clientFor(ctx).AtlasConfig(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("build the control-plane client: %w", err)
+	}
+	return api, nil
 }
 
 func (c *httpControlPlane) DeleteCluster(ctx context.Context, clusterID string) error {
@@ -274,38 +288,18 @@ func (c *httpControlPlane) CancelTask(ctx context.Context, clusterID, taskID str
 func (c *httpControlPlane) ClusterCapacity(
 	ctx context.Context, clusterID string,
 ) (*simplyblockv1alpha2.AggregateCapacity, error) {
-	body, err := c.call(ctx, http.MethodGet, "/api/v2/clusters/"+clusterID+"/capacity", nil)
+	api, err := c.atlasFor(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return newestCapacity(body)
-}
-
-// newestCapacity reads the latest sample out of the capacity endpoint's
-// answer, which is a list of dated samples rather than one reading.
-func newestCapacity(body []byte) (*simplyblockv1alpha2.AggregateCapacity, error) {
-	var samples []struct {
-		Date        int64 `json:"date"`
-		Total       int64 `json:"size_total"`
-		Used        int64 `json:"size_used"`
-		Provisioned int64 `json:"size_prov"`
-	}
-	if err := json.Unmarshal(body, &samples); err != nil {
-		return nil, fmt.Errorf("decode the capacity samples: %w", err)
-	}
-	if len(samples) == 0 {
-		return nil, nil
-	}
-	newest := samples[0]
-	for _, sample := range samples[1:] {
-		if sample.Date > newest.Date {
-			newest = sample
-		}
+	reading, err := api.ClusterCapacity(ctx, clusterID)
+	if err != nil || reading == nil {
+		return nil, err
 	}
 	return &simplyblockv1alpha2.AggregateCapacity{
-		TotalBytes:       &newest.Total,
-		UsedBytes:        &newest.Used,
-		ProvisionedBytes: &newest.Provisioned,
+		TotalBytes:       &reading.TotalBytes,
+		UsedBytes:        &reading.UsedBytes,
+		ProvisionedBytes: &reading.ProvisionedBytes,
 	}, nil
 }
 

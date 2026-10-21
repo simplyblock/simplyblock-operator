@@ -327,29 +327,3 @@ func TestTheSuperclusterReconcilerLeavesAnOrdinaryClusterAlone(t *testing.T) {
 		t.Errorf("status.role = %q on an ordinary cluster, want it left to its own reconciler", after.Status.Role)
 	}
 }
-
-// The capacity endpoint answers with up to twenty dated samples rather than
-// one reading (sbcli cluster_ops.get_capacity), and the newest is the reading.
-// An empty list is no reading, not a reading of zero.
-func TestTheNewestCapacitySampleIsTheReading(t *testing.T) {
-	body := []byte(`[
-		{"date": 1792000000, "size_total": 1000, "size_used": 100, "size_prov": 400, "size_free": 900, "size_util": 10},
-		{"date": 1792000060, "size_total": 1000, "size_used": 150, "size_prov": 450, "size_free": 850, "size_util": 15},
-		{"date": 1791999940, "size_total": 1000, "size_used": 50, "size_prov": 350, "size_free": 950, "size_util": 5}
-	]`)
-
-	got, err := newestCapacity(body)
-	if err != nil {
-		t.Fatalf("newestCapacity: %v", err)
-	}
-	if diff := cmp.Diff(reading(1000, 150, 450), got); diff != "" {
-		t.Errorf("reading (-want +got):\n%s", diff)
-	}
-
-	if got, err := newestCapacity([]byte(`[]`)); err != nil || got != nil {
-		t.Errorf("newestCapacity(empty) = %+v, %v, want no reading", got, err)
-	}
-	if _, err := newestCapacity([]byte(`{"detail": "nope"}`)); err == nil {
-		t.Error("a body that is not a list of samples decoded without an error")
-	}
-}

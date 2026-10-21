@@ -20,12 +20,12 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // awaitingActivation is an Activate that requested its call `inStep` ago and
@@ -50,7 +50,7 @@ func lockedBy(name string) func(*simplyblockv1alpha2.StorageCluster) {
 
 // clusterReadingAt is the control plane answering with one status throughout.
 func clusterReadingAt(status string) *fakeControlPlane {
-	return &fakeControlPlane{cluster: func(string) (webapi.ClusterResponse, error) {
+	return &fakeControlPlane{cluster: func(string) (atlascp.Cluster, error) {
 		reading := activeCluster()
 		reading.Status = status
 		return reading, nil

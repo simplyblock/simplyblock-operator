@@ -13,10 +13,11 @@ package cluster
 import (
 	"testing"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // streamedCluster is the cluster cache holding one active cluster.
@@ -43,7 +44,7 @@ func streamedCluster(mutate ...func(*subscriptions.ClusterDTO)) *fakeClusterCach
 // what turns "prefers the cache" into an assertion.
 func refuseClusterReads(t *testing.T, api *fakeControlPlane) {
 	t.Helper()
-	api.cluster = func(string) (webapi.ClusterResponse, error) {
+	api.cluster = func(string) (atlascp.Cluster, error) {
 		t.Error("the cluster was read from the control plane, not from the stream")
 		return activeCluster(), nil
 	}
@@ -149,7 +150,7 @@ func TestAShrinkingClusterReportsItsPhase(t *testing.T) {
 // second would report a live cluster as gone.
 func TestAnUnsyncedClusterCacheFallsBackToTheControlPlane(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{}, newTestCluster())
 	r.Clusters = &fakeClusterCache{synced: false}
@@ -193,7 +194,7 @@ func TestTheTaskWindowIsBuiltFromTheTaskStream(t *testing.T) {
 func TestAnUnsyncedTaskCacheFallsBackToTheControlPlane(t *testing.T) {
 	asked := false
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		tasks: func(string) ([]subscriptions.TaskDTO, error) {
 			asked = true
 			return []subscriptions.TaskDTO{
@@ -313,7 +314,7 @@ func TestCancelTaskDoesNotFinishWhileTheTaskIsSuspended(t *testing.T) {
 // a read of the cluster rather than of the node.
 func TestTheRebalancingWaitReadsTheClusterStream(t *testing.T) {
 	api := rollingAPI(newRollingFleet(nodeA))
-	api.cluster = func(string) (webapi.ClusterResponse, error) {
+	api.cluster = func(string) (atlascp.Cluster, error) {
 		t.Error("the cluster was read from the control plane, not from the stream")
 		return activeCluster(), nil
 	}

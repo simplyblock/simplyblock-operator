@@ -40,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	atlasnet "github.com/simplyblock/atlas/net"
 	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/atlas/statemachine"
@@ -458,12 +459,12 @@ func (r *StorageClusterReconciler) postCluster(
 	if err != nil {
 		existing, found, lookupErr := r.API.ClusterByName(ctx, cluster.Name)
 		if lookupErr != nil || !found {
-			var refusal *ControlPlaneError
+			var refusal *atlascp.StatusError
 			if errors.As(err, &refusal) {
 				r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
 					ClusterCreationFailed, ClusterCreationFailed,
 					"The control plane refused the cluster (status=%d): %s",
-					refusal.Status, refusal.Body)
+					refusal.StatusCode, refusal.Body)
 			} else {
 				r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
 					ClusterCreationFailed, ClusterCreationFailed,
@@ -472,7 +473,7 @@ func (r *StorageClusterReconciler) postCluster(
 			return ctrl.Result{RequeueAfter: clusterRetry}, r.note(ctx, cluster, err.Error())
 		}
 		log.Info("the cluster already exists in the control plane; adopting it",
-			"cluster", cluster.Name, "uuid", existing.UUID)
+			"cluster", cluster.Name, "uuid", existing.ID)
 		if _, err := r.enterCreationStep(ctx, cluster, machine,
 			simplyblockv1alpha2.StorageClusterStepAdopting); err != nil {
 			return ctrl.Result{}, err
@@ -485,14 +486,14 @@ func (r *StorageClusterReconciler) postCluster(
 		return ctrl.Result{}, err
 	}
 	return r.persist(ctx, cluster, adoption{
-		UUID:   created.UUID,
+		UUID:   created.ID,
 		Secret: created.Secret,
 		NQN:    created.NQN,
 		Status: created.Status,
 		NDCS:   created.NDCS,
 		NPCS:   created.NPCS,
 		FTT:    created.MaxFaultTolerance,
-		Names:  created.BackendWorkloadNames,
+		Names:  created.WorkloadNames,
 	}, false)
 }
 
@@ -510,7 +511,7 @@ type adoption struct {
 
 	// Names are the workload names the control plane recorded for the
 	// cluster, which persist checks against the cluster's own record.
-	Names webapi.BackendWorkloadNames
+	Names atlascp.ClusterWorkloadNames
 }
 
 // adopt takes over a backend cluster the operator did not create.
@@ -540,9 +541,9 @@ func (r *StorageClusterReconciler) adopt(
 			return ctrl.Result{RequeueAfter: clusterRetry}, r.restartCreation(ctx, cluster)
 		}
 		found = adoption{
-			UUID: entry.UUID, Secret: entry.Secret, NQN: entry.NQN,
+			UUID: entry.ID, Secret: entry.Secret, NQN: entry.NQN,
 			Status: entry.Status, NDCS: entry.NDCS, NPCS: entry.NPCS,
-			Names: entry.BackendWorkloadNames,
+			Names: entry.WorkloadNames,
 		}
 	}
 
@@ -588,9 +589,9 @@ func (r *StorageClusterReconciler) upgradeClaim(
 		clusterSecret = reading.Secret
 	}
 	return adoption{
-		UUID: reading.UUID, Secret: clusterSecret, NQN: reading.NQN,
+		UUID: reading.ID, Secret: clusterSecret, NQN: reading.NQN,
 		Status: reading.Status, NDCS: reading.NDCS, NPCS: reading.NPCS,
-		FTT: reading.MaxFaultTolerance, Names: reading.BackendWorkloadNames,
+		FTT: reading.MaxFaultTolerance, Names: reading.WorkloadNames,
 	}, true, nil
 }
 
@@ -817,7 +818,7 @@ func (r *StorageClusterReconciler) reading(
 		return subscriptions.ClusterDTO{}, err
 	}
 	return subscriptions.ClusterDTO{
-		ID:                response.UUID,
+		ID:                response.ID,
 		NQN:               response.NQN,
 		Status:            response.Status,
 		Rebalancing:       response.Rebalancing,
@@ -1004,20 +1005,20 @@ func (r *StorageClusterReconciler) teardown(
 // a persisted step.
 func (r *StorageClusterReconciler) creationParams(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
-) (utils.ClusterAddParams, error) {
+) (atlascp.CreateClusterParams, error) {
 	backup, err := r.backupConfig(ctx, cluster)
 	if err != nil {
 		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
 			BackupCredentialsError, BackupCredentialsError,
 			"The backup credentials could not be resolved: %v", err)
-		return utils.ClusterAddParams{}, err
+		return atlascp.CreateClusterParams{}, err
 	}
 
 	vault, err := vaultConfig(cluster.Spec.KMS)
 	if err != nil {
 		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
 			InvalidConfig, InvalidConfig, "The key store is not usable: %v", err)
-		return utils.ClusterAddParams{}, err
+		return atlascp.CreateClusterParams{}, err
 	}
 
 	// minHugePagesSize is optional: left unset, the control plane computes the
@@ -1029,34 +1030,34 @@ func (r *StorageClusterReconciler) creationParams(
 		hugePages = utils.ParseSize(raw, "si/iec", "", false)
 	}
 
-	return utils.ClusterAddParams{
-		BackendWorkloadNames:   backendWorkloadNamesOf(cluster),
-		Name:                   cluster.Name,
-		CapWarn:                capacityThreshold(cluster.Spec.WarningThreshold),
-		CapCrit:                capacityThreshold(cluster.Spec.CriticalThreshold),
-		ProvCapWarn:            provisionedCapacityThreshold(cluster.Spec.WarningThreshold),
-		ProvCapCrit:            provisionedCapacityThreshold(cluster.Spec.CriticalThreshold),
-		DistrNdcs:              stripeDataChunks(cluster.Spec.Stripe),
-		DistrNpcs:              StripeParityChunks(cluster.Spec.Stripe),
-		SpdkVcpuCount:          ptr.IntFrom(cluster.Spec.VCPUCount, 8),
-		HugepagesMem:           ptr.Int64From(hugePages, 0),
-		MaxSubsys:              uint(ptr.IntFrom(cluster.Spec.MaxSubsystemCount, 10)), //nolint:gosec // bounded by the CRD to 10..75
-		EnableNodeAffinity:     ptr.BoolFromOrFalse(cluster.Spec.EnableNodeAffinity),
-		Fabric:                 cluster.Spec.FabricType,
-		CRName:                 cluster.Name,
-		CRNameSpace:            cluster.Namespace,
-		CRPlural:               "storageclusters",
-		ClientDataIfname:       cluster.Spec.ClientDataIfname,
-		NvmfBasePort:           ptr.IntFrom(cluster.Spec.NvmfBasePort, 4420),
-		RpcBasePort:            ptr.IntFrom(cluster.Spec.RpcBasePort, 8080),
-		SnodeApiPort:           ptr.IntFrom(cluster.Spec.SnodeApiPort, 50001),
-		BackupConfig:           backup,
-		HashicorpVaultSettings: vault,
-		EnableFailureDomain:    ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains),
-		InlineChecksum:         ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
-		Atomic4k:               ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
-		DeviceMode:             deviceMode(cluster.Spec.DeviceClass),
-		IsSingleNode:           cluster.Spec.ClusterMode == simplyblockv1alpha2.ClusterModeSingle,
+	return atlascp.CreateClusterParams{
+		WorkloadNames:       backendWorkloadNamesOf(cluster),
+		Name:                cluster.Name,
+		CapWarn:             capacityThreshold(cluster.Spec.WarningThreshold),
+		CapCrit:             capacityThreshold(cluster.Spec.CriticalThreshold),
+		ProvCapWarn:         provisionedCapacityThreshold(cluster.Spec.WarningThreshold),
+		ProvCapCrit:         provisionedCapacityThreshold(cluster.Spec.CriticalThreshold),
+		NDCS:                stripeDataChunks(cluster.Spec.Stripe),
+		NPCS:                StripeParityChunks(cluster.Spec.Stripe),
+		SpdkVCPUCount:       ptr.IntFrom(cluster.Spec.VCPUCount, 8),
+		HugepagesMemBytes:   ptr.Int64From(hugePages, 0),
+		MaxSubsys:           ptr.IntFrom(cluster.Spec.MaxSubsystemCount, 10),
+		EnableNodeAffinity:  ptr.BoolFromOrFalse(cluster.Spec.EnableNodeAffinity),
+		Fabric:              cluster.Spec.FabricType,
+		CRName:              cluster.Name,
+		CRNamespace:         cluster.Namespace,
+		CRPlural:            "storageclusters",
+		ClientDataNIC:       cluster.Spec.ClientDataIfname,
+		NvmfBasePort:        ptr.IntFrom(cluster.Spec.NvmfBasePort, 4420),
+		RPCBasePort:         ptr.IntFrom(cluster.Spec.RpcBasePort, 8080),
+		SnodeAPIPort:        ptr.IntFrom(cluster.Spec.SnodeApiPort, 50001),
+		Backup:              backup,
+		VaultBaseURL:        vault,
+		EnableFailureDomain: ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains),
+		InlineChecksum:      ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
+		Atomic4K:            ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
+		DeviceMode:          deviceMode(cluster.Spec.DeviceClass),
+		SingleNode:          cluster.Spec.ClusterMode == simplyblockv1alpha2.ClusterModeSingle,
 	}, nil
 }
 
@@ -1078,7 +1079,7 @@ func deviceMode(class simplyblockv1alpha2.StorageClusterDeviceClass) string {
 // and applies its own defaults now that the operator stops sending them (§12).
 func (r *StorageClusterReconciler) backupConfig(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
-) (*utils.BackupConfig, error) {
+) (*atlascp.ClusterBackup, error) {
 	store := cluster.Spec.Backup
 	if store == nil {
 		return nil, nil
@@ -1121,28 +1122,26 @@ func (r *StorageClusterReconciler) backupConfig(
 		return nil, fmt.Errorf("spec.backup.endpoint: %w", err)
 	}
 
-	return &utils.BackupConfig{
-		Credentials: &utils.BackupCredentials{
-			AccessKeyID:     string(accessKeyID),
-			SecretAccessKey: string(secretAccessKey),
-		},
-		Endpoint:   store.Endpoint,
-		BucketName: store.Bucket,
-		Region:     store.Region,
+	return &atlascp.ClusterBackup{
+		AccessKeyID:     string(accessKeyID),
+		SecretAccessKey: string(secretAccessKey),
+		Endpoint:        store.Endpoint,
+		BucketName:      store.Bucket,
+		Region:          store.Region,
 	}, nil
 }
 
-// vaultConfig maps the key store onto the control plane's own name for it. The
-// regrouping under spec.kms is Kubernetes-side only: the control plane keeps
-// hashicorp_vault_settings.base_url, and this is where the two meet.
-func vaultConfig(kms *simplyblockv1alpha2.KMSSpec) (*utils.HashicorpVaultConfig, error) {
+// vaultConfig is the key store's endpoint. The regrouping under spec.kms is
+// Kubernetes-side only: the control plane keeps hashicorp_vault_settings.base_url,
+// and this is where the two meet.
+func vaultConfig(kms *simplyblockv1alpha2.KMSSpec) (string, error) {
 	if kms == nil || kms.Vault == nil || kms.Vault.Endpoint == "" {
-		return nil, nil
+		return "", nil
 	}
 	if err := atlasnet.ValidateExternalURL(kms.Vault.Endpoint); err != nil {
-		return nil, fmt.Errorf("spec.kms.vault.endpoint: %w", err)
+		return "", fmt.Errorf("spec.kms.vault.endpoint: %w", err)
 	}
-	return &utils.HashicorpVaultConfig{BaseURL: kms.Vault.Endpoint}, nil
+	return kms.Vault.Endpoint, nil
 }
 
 // writeClusterSecret records the cluster's UUID and secret beside the object
@@ -1236,7 +1235,7 @@ func (r *StorageClusterReconciler) upsertCSICredentials(
 // mergeCSICredentials writes own into creds and, when the control plane's
 // cluster list was read, one non-local entry per other cluster of that
 // list, pruning non-local entries the list no longer has.
-func mergeCSICredentials(creds *CSICredentials, own CSIClusterEntry, peers []utils.ClusterListEntry, listed bool) {
+func mergeCSICredentials(creds *CSICredentials, own CSIClusterEntry, peers []atlascp.Cluster, listed bool) {
 	replaced := false
 	for i := range creds.Clusters {
 		if creds.Clusters[i].ClusterID == own.ClusterID {
@@ -1252,14 +1251,14 @@ func mergeCSICredentials(creds *CSICredentials, own CSIClusterEntry, peers []uti
 	}
 	known := map[string]bool{}
 	for _, p := range peers {
-		known[p.UUID] = true
-		if p.UUID == own.ClusterID {
+		known[p.ID] = true
+		if p.ID == own.ClusterID {
 			continue
 		}
-		entry := CSIClusterEntry{ClusterID: p.UUID, ClusterEndpoint: own.ClusterEndpoint, ClusterSecret: p.Secret}
+		entry := CSIClusterEntry{ClusterID: p.ID, ClusterEndpoint: own.ClusterEndpoint, ClusterSecret: p.Secret}
 		found := false
 		for i := range creds.Clusters {
-			if creds.Clusters[i].ClusterID != p.UUID {
+			if creds.Clusters[i].ClusterID != p.ID {
 				continue
 			}
 			found = true

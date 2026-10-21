@@ -27,6 +27,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -92,12 +93,12 @@ func newUncreatedCluster(
 
 func TestACreatedClusterReachesSteadyState(t *testing.T) {
 	api := &fakeControlPlane{
-		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
+		create: func(atlascp.CreateClusterParams) (atlascp.Cluster, error) {
 			reading := activeCluster()
 			reading.Secret = testClusterSecret
 			return reading, nil
 		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{}, newUncreatedCluster())
 
@@ -140,12 +141,12 @@ func TestCSICredentialsCarryTheControlPlanesResolvedEndpoint(t *testing.T) {
 	const hubEndpoint = "http://simplyblock-webappapi.hub.example:31500"
 	api := &fakeControlPlane{
 		endpoint: hubEndpoint,
-		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
+		create: func(atlascp.CreateClusterParams) (atlascp.Cluster, error) {
 			reading := activeCluster()
 			reading.Secret = testClusterSecret
 			return reading, nil
 		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{}, newUncreatedCluster())
 	reconcileCluster(t, r, 6)
@@ -182,15 +183,15 @@ func TestCreationParamsMapDeviceClassToTheWireDeviceMode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var gotParams utils.ClusterAddParams
+			var gotParams atlascp.CreateClusterParams
 			api := &fakeControlPlane{
-				create: func(params utils.ClusterAddParams) (webapi.ClusterResponse, error) {
+				create: func(params atlascp.CreateClusterParams) (atlascp.Cluster, error) {
 					gotParams = params
 					reading := activeCluster()
 					reading.Secret = testClusterSecret
 					return reading, nil
 				},
-				cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+				cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 			}
 			cluster := newUncreatedCluster(func(c *simplyblockv1alpha2.StorageCluster) {
 				c.Spec.DeviceClass = tt.class
@@ -211,14 +212,14 @@ func TestCreationParamsMapDeviceClassToTheWireDeviceMode(t *testing.T) {
 // rather than posting a second cluster.
 func TestAStaleReconcilerCannotClaimTheCreationTwice(t *testing.T) {
 	api := &fakeControlPlane{
-		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
+		create: func(atlascp.CreateClusterParams) (atlascp.Cluster, error) {
 			// A creation response carries the secret the control plane just
 			// minted for the cluster. Only the list response omits it.
 			reading := activeCluster()
 			reading.Secret = testClusterSecret
 			return reading, nil
 		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{}, newUncreatedCluster())
 	ctx := context.Background()
@@ -274,7 +275,7 @@ func TestAControlPlaneThatIsNotReadyHoldsTheCreation(t *testing.T) {
 // Nothing is posted, and the cluster the Secret names is taken over.
 func TestAnUpgradeSecretAdoptsRatherThanCreating(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(id string) (webapi.ClusterResponse, error) {
+		cluster: func(id string) (atlascp.Cluster, error) {
 			if id != testClusterUUID {
 				t.Errorf("the upgrade secret's cluster was not read, %q was", id)
 			}
@@ -319,7 +320,7 @@ func TestAnUpgradeSecretAuthenticatesTheAdoptionReadAsTheAdoptedCluster(t *testi
 		ok    bool
 	}
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) {
+		cluster: func(string) (atlascp.Cluster, error) {
 			return activeCluster(), nil
 		},
 		clusterCtx: func(ctx context.Context) {
@@ -365,12 +366,12 @@ func TestStorageClusterSyncAuthenticatesAsTheClusterOnceItsSecretIsKnown(t *test
 		ok    bool
 	}
 	api := &fakeControlPlane{
-		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
+		create: func(atlascp.CreateClusterParams) (atlascp.Cluster, error) {
 			reading := activeCluster()
 			reading.Secret = testClusterSecret
 			return reading, nil
 		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		clusterCtx: func(ctx context.Context) {
 			token, ok := webapi.BearerTokenFromContext(ctx)
 			calls = append(calls, struct {
@@ -405,19 +406,19 @@ func TestStorageClusterSyncAuthenticatesAsTheClusterOnceItsSecretIsKnown(t *test
 // resourceVersions, and a response lost after the backend committed.
 func TestAFailedPostAdoptsAClusterThatAlreadyExists(t *testing.T) {
 	api := &fakeControlPlane{
-		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
-			return webapi.ClusterResponse{}, &ControlPlaneError{
+		create: func(atlascp.CreateClusterParams) (atlascp.Cluster, error) {
+			return atlascp.Cluster{}, &ControlPlaneError{
 				Status: http.StatusConflict, Body: "a cluster of that name exists",
 			}
 		},
-		byName: func(string) (utils.ClusterListEntry, bool, error) {
-			return utils.ClusterListEntry{
-				UUID: testClusterUUID, Secret: testClusterSecret,
+		byName: func(string) (atlascp.Cluster, bool, error) {
+			return atlascp.Cluster{
+				ID: testClusterUUID, Secret: testClusterSecret,
 				Name: testClusterName, Status: utils.ClusterStatusActive,
 				NDCS: 2, NPCS: 1,
 			}, true, nil
 		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	rec := &recorder{}
 	r := newClusterReconciler(t, api, rec, newUncreatedCluster())
@@ -437,8 +438,8 @@ func TestAFailedPostAdoptsAClusterThatAlreadyExists(t *testing.T) {
 // operator's log.
 func TestARefusedCreationCarriesTheControlPlanesAnswer(t *testing.T) {
 	api := &fakeControlPlane{
-		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
-			return webapi.ClusterResponse{}, &ControlPlaneError{
+		create: func(atlascp.CreateClusterParams) (atlascp.Cluster, error) {
+			return atlascp.Cluster{}, &ControlPlaneError{
 				Status: http.StatusBadRequest, Body: "distr_ndcs must be positive",
 			}
 		},
@@ -495,7 +496,7 @@ func TestAMissingBackupSecretHoldsTheCreation(t *testing.T) {
 // in it, newest first, and never more than twenty.
 func TestTheTaskWindowHoldsOnlyWhatIsRunning(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		tasks: func(string) ([]subscriptions.TaskDTO, error) {
 			tasks := []subscriptions.TaskDTO{
 				{ID: "running-1", Type: "balancing_on_restart", Status: "running"},
@@ -536,7 +537,7 @@ func TestTheTaskWindowHoldsOnlyWhatIsRunning(t *testing.T) {
 // what remains of it. The list is a window and the events are the history.
 func TestATaskLeavingTheWindowEmitsAnEvent(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		tasks:   func(string) ([]subscriptions.TaskDTO, error) { return nil, nil },
 	}
 	rec := &recorder{}
@@ -561,7 +562,7 @@ func TestATaskLeavingTheWindowEmitsAnEvent(t *testing.T) {
 // that.
 func TestAFailedTaskReadLeavesTheWindowAlone(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		tasks: func(string) ([]subscriptions.TaskDTO, error) {
 			return nil, errors.New("connection refused")
 		},
@@ -585,7 +586,7 @@ func TestAFailedTaskReadLeavesTheWindowAlone(t *testing.T) {
 // one authoritative number rather than recomputing it.
 func TestTheEffectiveRestartLimitIsClampedToTheFaultTolerance(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	asked := newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
 		c.Spec.MaxConcurrentWorkerRestarts = ptr.To(int32(4))
@@ -692,7 +693,7 @@ func TestAnOrdinaryClusterReportsItsRole(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := &fakeControlPlane{
-				cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+				cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 			}
 			r := newClusterReconciler(t, api, &recorder{}, newTestCluster(tc.mutate))
 

@@ -952,7 +952,7 @@ func (r *StorageClusterOpsReconciler) clusterReading(
 		return subscriptions.ClusterDTO{}, fmt.Errorf("read cluster %s: %w", clusterID, err)
 	}
 	return subscriptions.ClusterDTO{
-		ID:                response.UUID,
+		ID:                response.ID,
 		NQN:               response.NQN,
 		Status:            response.Status,
 		Rebalancing:       response.Rebalancing,

@@ -23,11 +23,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // The four steps between a node's shutdown and its restart are not abortable.
@@ -110,20 +110,20 @@ func TestAConflictedReleaseIsReportedRatherThanSwallowed(t *testing.T) {
 // while nothing can provision from it.
 func TestAdoptionByNameDoesNotPersistAnEmptyCredential(t *testing.T) {
 	api := &fakeControlPlane{
-		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
-			return webapi.ClusterResponse{}, &ControlPlaneError{
+		create: func(atlascp.CreateClusterParams) (atlascp.Cluster, error) {
+			return atlascp.Cluster{}, &ControlPlaneError{
 				Status: 409, Body: "a cluster of that name exists",
 			}
 		},
-		byName: func(string) (utils.ClusterListEntry, bool, error) {
+		byName: func(string) (atlascp.Cluster, bool, error) {
 			// What the list actually returns: no secret, because the field is
 			// write-only in the control plane's own schema.
-			return utils.ClusterListEntry{
-				UUID: testClusterUUID, Name: testClusterName,
+			return atlascp.Cluster{
+				ID: testClusterUUID, Name: testClusterName,
 				Status: utils.ClusterStatusActive, NDCS: 2, NPCS: 1,
 			}, true, nil
 		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{}, newUncreatedCluster())
 
@@ -279,7 +279,7 @@ func TestAStepIsNeverPersistedWithoutItsDeadline(t *testing.T) {
 		Recorder: &recorder{},
 		API: &fakeControlPlane{
 			t:       t,
-			cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+			cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		},
 	}
 

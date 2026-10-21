@@ -7,18 +7,21 @@ package cluster
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	atlaskube "github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
+	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
 )
 
 func recordedNames(t *testing.T, cluster *simplyblockv1alpha2.StorageCluster) atlaskube.WorkloadNames {
@@ -46,18 +49,18 @@ func otherCluster(names atlaskube.WorkloadNames) *simplyblockv1alpha2.StorageClu
 	}
 }
 
-func createdWith(names webapi.BackendWorkloadNames) func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
-	return func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
+func createdWith(names atlascp.ClusterWorkloadNames) func(atlascp.CreateClusterParams) (atlascp.Cluster, error) {
+	return func(atlascp.CreateClusterParams) (atlascp.Cluster, error) {
 		reading := activeCluster()
 		reading.Secret = testClusterSecret
-		reading.BackendWorkloadNames = names
+		reading.WorkloadNames = names
 		return reading, nil
 	}
 }
 
 func TestAClusterCreatedBeforeTheRecordIsGivenTheConstantNames(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{}, newTestCluster())
 
@@ -85,7 +88,7 @@ func TestANewClusterTakesItsOwnNames(t *testing.T) {
 // them, and its adoption is not held for names the control plane never had.
 func TestAClusterAdoptedFromHelmKeepsTheConstantNames(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	upgrade := &corev1.Secret{
 		ObjectMeta: objectMeta("simplyblock-" + testClusterName + "-upgrade"),
@@ -119,20 +122,20 @@ func TestASecondClusterInANamespaceTakesItsOwnNames(t *testing.T) {
 
 func TestTheCreateBodyCarriesTheWorkloadNames(t *testing.T) {
 	names := atlaskube.DerivedWorkloadNames(testClusterName)
-	var sent utils.ClusterAddParams
+	var sent atlascp.CreateClusterParams
 	api := &fakeControlPlane{
-		create: func(params utils.ClusterAddParams) (webapi.ClusterResponse, error) {
+		create: func(params atlascp.CreateClusterParams) (atlascp.Cluster, error) {
 			sent = params
 			return createdWith(utils.BackendWorkloadNames(names))(params)
 		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{}, newUncreatedCluster())
 
 	cluster := reconcileCluster(t, r, 6)
 
-	if sent.BackendWorkloadNames != utils.BackendWorkloadNames(names) {
-		t.Errorf("create body names = %+v, want %+v", sent.BackendWorkloadNames, utils.BackendWorkloadNames(names))
+	if sent.WorkloadNames != utils.BackendWorkloadNames(names) {
+		t.Errorf("create body names = %+v, want %+v", sent.WorkloadNames, utils.BackendWorkloadNames(names))
 	}
 	if cluster.Status.UUID != testClusterUUID {
 		t.Errorf("status.uuid = %q, want the created cluster (message %q)", cluster.Status.UUID, cluster.Status.Message)
@@ -146,13 +149,13 @@ func TestTheCreateBodyCarriesTheWorkloadNames(t *testing.T) {
 func TestAControlPlaneThatDropsTheNamesHoldsTheCluster(t *testing.T) {
 	api := &fakeControlPlane{
 		forgetsNames: true,
-		create:       createdWith(webapi.BackendWorkloadNames{}),
-		cluster:      func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		create:       createdWith(atlascp.ClusterWorkloadNames{}),
+		cluster:      func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		// The cluster it created is listed, without the names, so a later
 		// pass adopts it rather than creating another.
-		byName: func(string) (utils.ClusterListEntry, bool, error) {
-			return utils.ClusterListEntry{
-				UUID: testClusterUUID, Name: testClusterName, Status: utils.ClusterStatusActive,
+		byName: func(string) (atlascp.Cluster, bool, error) {
+			return atlascp.Cluster{
+				ID: testClusterUUID, Name: testClusterName, Status: utils.ClusterStatusActive,
 				NDCS: 2, NPCS: 1,
 			}, true, nil
 		},
@@ -224,7 +227,7 @@ func TestAMemberRecordsItsSuperclustersNamesWithItsOwnSuffix(t *testing.T) {
 func TestARecordedNameIsNeverRewritten(t *testing.T) {
 	names := atlaskube.DerivedWorkloadNames(testClusterName)
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{}, newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
 		c.Status.WorkloadNames = utils.WorkloadNamesStatus(names)
@@ -234,5 +237,46 @@ func TestARecordedNameIsNeverRewritten(t *testing.T) {
 
 	if got := recordedNames(t, cluster); got != names {
 		t.Errorf("workloadNames = %+v, want the recorded %+v", got, names)
+	}
+}
+
+// The names leave the operator under the spec's keys, through the generated
+// client, and are read back from the control plane's answer. The body of the
+// cluster a control plane with sbcli#1512 answers with is the fixture.
+func TestTheWorkloadNamesCrossTheWireUnderTheSpecsKeys(t *testing.T) {
+	names := atlaskube.DerivedWorkloadNames(testClusterName)
+	server := webapimock.NewSpecServerFromFile(t, clusterAdminSpecPath, false)
+	defer server.Close()
+	server.Register(http.MethodPost, "/api/v2/clusters/", webapimock.RouteResponse{
+		Status:  http.StatusCreated,
+		Headers: jsonContent,
+		Body: `{"id":"` + testClusterUUID + `","nqn":"nqn.x","status":"active","distr_ndcs":2,"distr_npcs":1,` +
+			`"snode_api_service":"` + names.NodeAPIService + `","spdk_proxy_service":"` + names.SpdkProxyService + `",` +
+			`"spdk_proxy_tls_secret":"` + names.SpdkProxyTLSSecret + `","node_label_suffix":""}`,
+	})
+	api := NewControlPlane(func(context.Context) string { return server.URL() }, nil)
+
+	created, err := api.CreateCluster(context.Background(), atlascp.CreateClusterParams{
+		Name: testClusterName, MaxSubsys: 20, SpdkVCPUCount: 8, ClientDataNIC: "eth1",
+		WorkloadNames: utils.BackendWorkloadNames(names),
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(server.Requests()[0].Body, &body); err != nil {
+		t.Fatalf("decode the create body: %v", err)
+	}
+	for key, want := range map[string]string{
+		"snode_api_service": names.NodeAPIService, "spdk_proxy_service": names.SpdkProxyService,
+		"spdk_proxy_tls_secret": names.SpdkProxyTLSSecret, "client_data_nic": "eth1",
+	} {
+		if body[key] != want {
+			t.Errorf("create body %q = %v, want %q", key, body[key], want)
+		}
+	}
+	if !utils.BackendHolds(created.WorkloadNames, names) {
+		t.Errorf("the answer's names %+v do not hold %+v", created.WorkloadNames, names)
 	}
 }

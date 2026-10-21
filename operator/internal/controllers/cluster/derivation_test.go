@@ -19,11 +19,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
-	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 func TestEffectiveConcurrentRestarts(t *testing.T) {
@@ -111,8 +110,8 @@ func TestAVaultURLThatIsNotExternalIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an external vault endpoint was refused: %v", err)
 	}
-	if got == nil || got.BaseURL != "https://203.0.113.10:8200" {
-		t.Errorf("vaultConfig = %+v, want the endpoint carried through", got)
+	if got != "https://203.0.113.10:8200" {
+		t.Errorf("vaultConfig = %q, want the endpoint carried through", got)
 	}
 }
 
@@ -129,8 +128,8 @@ func TestAnAbsentKeyStoreSendsNothing(t *testing.T) {
 			if err != nil {
 				t.Fatalf("vaultConfig: %v", err)
 			}
-			if got != nil {
-				t.Errorf("vaultConfig = %+v, want nothing sent", got)
+			if got != "" {
+				t.Errorf("vaultConfig = %q, want nothing sent", got)
 			}
 		})
 	}
@@ -161,7 +160,7 @@ func TestTheBackupStoreResolvesItsCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backupConfig: %v", err)
 	}
-	if got.Credentials.AccessKeyID != "the-key" || got.Credentials.SecretAccessKey != "the-secret" {
+	if got.AccessKeyID != "the-key" || got.SecretAccessKey != "the-secret" {
 		t.Errorf("the credentials were not read from the Secret: %+v", got)
 	}
 	if got.Endpoint != "https://203.0.113.20:9000" || got.BucketName != "simplyblock-backups" ||
@@ -232,14 +231,14 @@ func TestReconcilingAClusterThatIsGoneDoesNothing(t *testing.T) {
 // falls through to making one rather than adopting nothing.
 func TestAnIncompleteUpgradeSecretFallsThroughToCreation(t *testing.T) {
 	api := &fakeControlPlane{
-		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
+		create: func(atlascp.CreateClusterParams) (atlascp.Cluster, error) {
 			// A creation response carries the secret the control plane just
 			// minted for the cluster. Only the list response omits it.
 			reading := activeCluster()
 			reading.Secret = testClusterSecret
 			return reading, nil
 		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	halfFilled := &corev1.Secret{
 		ObjectMeta: objectMeta("simplyblock-" + testClusterName + "-upgrade"),
@@ -265,7 +264,7 @@ func TestAnIncompleteUpgradeSecretFallsThroughToCreation(t *testing.T) {
 // the cluster takes its credentials with it rather than leaving them behind.
 func TestTheClusterSecretIsOwnedByTheCluster(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	cluster := newTestCluster()
 	r := newClusterReconciler(t, api, &recorder{}, cluster)

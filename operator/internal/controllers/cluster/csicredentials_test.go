@@ -3,7 +3,7 @@ package cluster
 import (
 	"testing"
 
-	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	atlascp "github.com/simplyblock/atlas/controlplane"
 )
 
 func entryIDs(c CSICredentials) map[string]CSIClusterEntry {
@@ -20,7 +20,7 @@ func TestMergeCSICredentialsRegistersEveryClusterOfTheControlPlane(t *testing.T)
 	// PV whose handle names B: the driver on A must reach B's cluster too.
 	creds := CSICredentials{}
 	own := CSIClusterEntry{ClusterID: "A", ClusterEndpoint: "http://cp:5000", ClusterSecret: "sa", Local: true}
-	peers := []utils.ClusterListEntry{{UUID: "A", Secret: "sa"}, {UUID: "B", Secret: "sb"}}
+	peers := []atlascp.Cluster{{ID: "A", Secret: "sa"}, {ID: "B", Secret: "sb"}}
 	mergeCSICredentials(&creds, own, peers, true)
 	got := entryIDs(creds)
 	if len(got) != 2 || !got["A"].Local || got["B"].Local || got["B"].ClusterSecret != "sb" || got["B"].ClusterEndpoint != "http://cp:5000" {
@@ -36,7 +36,7 @@ func TestMergeCSICredentialsKeepsAnotherLocalEntryAndPrunesStaleForeignOnes(t *t
 	}}
 	own := CSIClusterEntry{ClusterID: "A", ClusterEndpoint: "http://cp:5000", ClusterSecret: "sa", Local: true}
 	// The list withholds B's secret: the recorded one stays.
-	peers := []utils.ClusterListEntry{{UUID: "A"}, {UUID: "A2"}, {UUID: "B"}}
+	peers := []atlascp.Cluster{{ID: "A"}, {ID: "A2"}, {ID: "B"}}
 	mergeCSICredentials(&creds, own, peers, true)
 	got := entryIDs(creds)
 	if _, stale := got["OLD"]; stale {

@@ -11,6 +11,7 @@
 package webapi
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -52,4 +53,16 @@ func transportOf(c *Client) http.RoundTripper {
 		return nil
 	}
 	return c.HttpClient.Transport
+}
+
+// AtlasConfig is this client's endpoint, connection, and credential in the
+// shape atlas-lib's client takes, for one call. The credential follows Do: a
+// token WithBearerToken attached to ctx, which is how a call authenticates as
+// a cluster, wins over the service-account token.
+func (c *Client) AtlasConfig(ctx context.Context) controlplane.Config {
+	token := c.saToken
+	if override, ok := BearerTokenFromContext(ctx); ok {
+		token = override
+	}
+	return controlplane.Config{Endpoint: c.BaseURL, Token: token, Transport: transportOf(c)}
 }

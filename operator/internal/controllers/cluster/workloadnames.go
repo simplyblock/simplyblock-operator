@@ -16,11 +16,11 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	atlaskube "github.com/simplyblock/atlas/kube"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // chooseWorkloadNames decides the names of a cluster that has none recorded.
@@ -84,7 +84,7 @@ func (r *StorageClusterReconciler) backendMissesWorkloadNames(
 
 // backendWorkloadNamesOf is the part of the cluster's names the create body
 // carries.
-func backendWorkloadNamesOf(cluster *simplyblockv1alpha2.StorageCluster) webapi.BackendWorkloadNames {
+func backendWorkloadNamesOf(cluster *simplyblockv1alpha2.StorageCluster) atlascp.ClusterWorkloadNames {
 	names, _ := utils.WorkloadNamesOf(cluster)
 	return utils.BackendWorkloadNames(names)
 }
