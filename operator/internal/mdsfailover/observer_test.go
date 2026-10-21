@@ -181,6 +181,14 @@ func TestO40TheThirdRetryOfANodeReadStillDecides(t *testing.T) {
 	}
 }
 
+func TestStatefulSetOfStripsTheOrdinal(t *testing.T) {
+	for pod, want := range map[string]string{"drv-pnfs-mds-ab12-0": "drv-pnfs-mds-ab12", "x-7": "x", "plain": "plain"} {
+		if got := StatefulSetOf(pod); got != want {
+			t.Errorf("StatefulSetOf(%q) = %q, want %q", pod, got, want)
+		}
+	}
+}
+
 func TestOrdinalAndInstance(t *testing.T) {
 	if Ordinal("mds-12") != 12 || Ordinal(stsName) != -1 || Ordinal("mds-x") != -1 {
 		t.Error("Ordinal is wrong")

@@ -115,6 +115,11 @@ type NFSExportReconciler struct {
 	// works without csi-link (design-pnfs-mds-vm.md §8.1).
 	Flows FlowForgetter
 
+	// Serving holds a binding until the active metadata server serves. Nil binds
+	// to the StatefulSet's first pod at once, which is what a deployment with no
+	// csi-link and the tests that predate the takeover rely on.
+	Serving MDSServingGate
+
 	// withdrawn is each export's address withdrawn while its pod went away,
 	// until the replacement's address replaces it.
 	withdrawnMu sync.Mutex

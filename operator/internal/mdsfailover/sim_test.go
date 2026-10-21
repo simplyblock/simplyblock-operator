@@ -316,7 +316,7 @@ func (s *sim) activate(pod string, req nfsexportrpc.PromoteRequest) nfsexportrpc
 }
 
 // Gateway.
-func (s *sim) Withdraw(context.Context) error {
+func (s *sim) Withdraw(context.Context, string) error {
 	if err := s.crash("withdraw"); err != nil {
 		return err
 	}
@@ -328,7 +328,7 @@ func (s *sim) Withdraw(context.Context) error {
 	return nil
 }
 
-func (s *sim) Serve(_ context.Context, ip string) error {
+func (s *sim) Serve(_ context.Context, _, ip string) error {
 	if err := s.crash("serve"); err != nil {
 		return err
 	}

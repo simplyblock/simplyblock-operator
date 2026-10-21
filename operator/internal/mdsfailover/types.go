@@ -85,11 +85,12 @@ type Guests interface {
 // Gateway moves the metadata server's one Service endpoint.
 type Gateway interface {
 	// Withdraw empties the EndpointSlice and has the nodes forget the flows to the
-	// address it held. Idempotent: an empty slice asks for nothing.
-	Withdraw(ctx context.Context) error
+	// address it held. Idempotent: an empty slice asks for nothing. pod is a pod of
+	// the StatefulSet, which names its Service.
+	Withdraw(ctx context.Context, pod string) error
 	// Serve points the EndpointSlice at the pod IP, and has the nodes forget the flows to
 	// the address withdrawn or replaced. Idempotent.
-	Serve(ctx context.Context, ip string) error
+	Serve(ctx context.Context, pod, ip string) error
 }
 
 // ExportState is the part of an export's status a takeover reads.

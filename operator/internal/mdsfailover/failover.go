@@ -313,7 +313,7 @@ func (f *Failover) promote(ctx context.Context, obs Observation, target Guest) (
 	if err != nil {
 		return Result{}, err
 	}
-	if err := f.deps.Gateway.Withdraw(ctx); err != nil {
+	if err := f.deps.Gateway.Withdraw(ctx, target.Pod); err != nil {
 		return Result{}, fmt.Errorf("withdrawing the metadata server's address: %w", err)
 	}
 	f.ensurePending(rec.Epoch)
@@ -461,7 +461,7 @@ func (f *Failover) serve(ctx context.Context, obs Observation, active Guest) (Re
 	}
 	f.ensurePending(obs.Record.Epoch)
 	started := f.now()
-	if err := f.deps.Gateway.Serve(ctx, active.PodIP); err != nil {
+	if err := f.deps.Gateway.Serve(ctx, active.Pod, active.PodIP); err != nil {
 		return Result{}, fmt.Errorf("pointing the metadata server's address at %s: %w", active.Pod, err)
 	}
 	if t := f.pending; t != nil && t.serveAt.IsZero() {
