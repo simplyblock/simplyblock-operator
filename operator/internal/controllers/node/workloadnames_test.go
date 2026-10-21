@@ -134,8 +134,9 @@ func TestAMembersEndpointsCarryItsNodeLabelSuffix(t *testing.T) {
 }
 
 // The control plane names a cluster's SPDK pods snode-spdk-pod-<port>-<first six
-// of its UUID>, and a pod without that ending comes from an older template that
-// predates two clusters in a namespace.
+// of its UUID>. A pod without that ending comes from an older template, which
+// predates both the record and two clusters in a namespace, so it belongs to
+// the cluster under the constant names and to no cluster with names of its own.
 func TestAClusterPublishesOnlyItsOwnSPDKPods(t *testing.T) {
 	names := atlaskube.DerivedWorkloadNames(secondCluster)
 	cluster := aNamedCluster(secondCluster, secondClusterUUID, names)
@@ -169,8 +170,25 @@ func TestAClusterPublishesOnlyItsOwnSPDKPods(t *testing.T) {
 	for _, endpoint := range slice.Endpoints {
 		published[endpoint.Addresses[0]] = true
 	}
-	if !published["10.0.0.2"] || !published["10.0.0.3"] || published["10.0.0.1"] {
-		t.Errorf("published %v, want this cluster's pod and the older one and not the other cluster's", published)
+	if !published["10.0.0.2"] || published["10.0.0.3"] || published["10.0.0.1"] {
+		t.Errorf("published %v, want this cluster's pod alone", published)
+	}
+}
+
+func TestTheClusterUnderTheConstantNamesPublishesAnOlderTemplatesPod(t *testing.T) {
+	cluster := aNamedCluster("first", firstClusterUUID, atlaskube.ConstantWorkloadNames())
+	older := anSPDKPod("snode-spdk-pod-4420", "worker-3", "10.0.0.3", 4420)
+	older.Namespace = opsNamespace
+	r := aNamesReconciler(t, cluster, older)
+
+	if err := r.reconcileSpdkProxyEndpoints(context.Background(), cluster); err != nil {
+		t.Fatalf("reconcileSpdkProxyEndpoints: %v", err)
+	}
+
+	var slice discoveryv1.EndpointSlice
+	key := client.ObjectKey{Namespace: opsNamespace, Name: "spdk-proxy-endpoints-4420"}
+	if err := r.Get(context.Background(), key, &slice); err != nil {
+		t.Fatalf("the older template's pod was not published: %v", err)
 	}
 }
 

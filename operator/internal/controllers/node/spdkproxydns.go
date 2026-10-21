@@ -50,11 +50,14 @@ var spdkPodName = regexp.MustCompile(`^snode-spdk-pod-[0-9]+-([0-9a-f]{6})$`)
 // spdkPodOfCluster reports whether a pod is one of the cluster's SPDK pods. A
 // namespace may hold several clusters, and each publishes only its own. A pod
 // named by an older template carries no cluster at all, and comes from a
-// deployment that predates two clusters in a namespace, so it is the cluster's.
+// deployment that predates both the workload names and two clusters in a
+// namespace, so it belongs to the cluster under the constant names, and to no
+// cluster with names of its own.
 func spdkPodOfCluster(pod *corev1.Pod, cluster *simplyblockv1alpha2.StorageCluster) bool {
 	match := spdkPodName.FindStringSubmatch(pod.Name)
 	if match == nil {
-		return true
+		names, _ := utils.WorkloadNamesOf(cluster)
+		return names.IsConstant()
 	}
 	return strings.HasPrefix(cluster.Status.UUID, match[1])
 }
