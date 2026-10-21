@@ -12305,15 +12305,18 @@
             "title": "Group Backup Id"
           },
           "created_at": {
-            "type": "integer",
+            "type": "string",
+            "format": "date-time",
             "title": "Created At"
           },
           "completed_at": {
-            "type": "integer",
+            "type": "string",
+            "format": "date-time",
             "title": "Completed At"
           },
           "size": {
             "type": "integer",
+            "minimum": 0.0,
             "title": "Size"
           },
           "source": {

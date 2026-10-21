@@ -1599,8 +1599,8 @@ type GroupBackupExportOutput struct {
 
 // GroupBackupManifest The self-describing document for one consistency-group backup.
 type GroupBackupManifest struct {
-	CompletedAt     int                  `json:"completed_at"`
-	CreatedAt       int                  `json:"created_at"`
+	CompletedAt     time.Time            `json:"completed_at"`
+	CreatedAt       time.Time            `json:"created_at"`
 	Encrypted       *bool                `json:"encrypted,omitempty"`
 	GroupBackupId   openapi_types.UUID   `json:"group_backup_id"`
 	MemberBackupIds []openapi_types.UUID `json:"member_backup_ids"`
