@@ -275,12 +275,11 @@ class ChurnWorkload(Component):
         fio.collect_instance(ctx, ns, inst, [])
 
     def _keep_stalled(self, ctx: RunContext, ns: str, inst: fio.FioInstance) -> None:
-        """A pod that stalled is deleted next, and its log and events go with it: what the pod
-        printed and what the kubelet said are all that tell a slow layout from a stuck mount."""
-        for suffix, args in (("log", ["logs", inst.pod, "--all-containers", "--tail=-1"]),
-                             ("describe.txt", ["describe", "pod", inst.pod])):
+        """Keep the log and description of a pod that stalled, which the delete that follows
+        takes: they tell a slow layout from a stuck mount."""
+        for name, args in ((f"churn-stall-{inst.pod}.log", ["logs", inst.pod, "--all-containers"]),
+                           (f"churn-stall-{inst.pod}-describe.txt", ["describe", "pod", inst.pod])):
             cp = kube.run(["-n", ns, *args], check=False, timeout=120)
-            name = f"churn-stall-{inst.pod}" + (f".{suffix}" if suffix == "log" else f"-{suffix}")
             with open(ctx.path(name), "w") as fh:
                 fh.write(cp.stdout or cp.stderr or "")
 

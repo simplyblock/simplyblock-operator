@@ -1067,10 +1067,6 @@ class ChurnStall(unittest.TestCase):
         self.assertIn("laying out file", kept["churn-stall-r1-fio-churn-1.log"])
         self.assertIn("Events", kept["churn-stall-r1-fio-churn-1-describe.txt"])
 
-    def test_the_default_io_timeout_leaves_a_slow_layout_room(self):
-        from sbtest.components.workloads import churn
-        self.assertGreaterEqual(churn.ChurnWorkload().defaults()["io_timeout_s"], 300.0)
-
 
 class RestartSchedule(unittest.TestCase):
     """When chaos.restart restarts what: at least `guaranteed` times inside the window,

@@ -232,8 +232,7 @@ class NodePinning(unittest.TestCase):
     pod's nodeName needs the full one (vm02.lab.localdomain), and a pod bound to a node that
     does not exist stays Pending with no events, so no metadata worker ever started."""
 
-    NODES = json.dumps({"items": [{"metadata": {"name": "w1.lab.localdomain"}},
-                                  {"metadata": {"name": "w2.lab.localdomain"}}]})
+    NODES = "w1.lab.localdomain w2.lab.localdomain"
 
     def test_the_pods_are_pinned_by_the_nodes_full_name(self):
         w = workload()
