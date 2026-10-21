@@ -350,10 +350,7 @@ func MDSObjects(
 		volumes = append(volumes, *v)
 	}
 
-	stateSize := spec.StateSize
-	if stateSize.IsZero() {
-		stateSize = resource.MustParse(mdsDefaultStateSize)
-	}
+	stateSize := resource.MustParse(mdsDefaultStateSize)
 
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{

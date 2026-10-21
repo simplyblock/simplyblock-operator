@@ -464,21 +464,22 @@ driver:
   # pNFS: ReadWriteMany volumes served by an NFS metadata server, whose clients
   # read and write the volume's NVMe-oF namespace directly.
   pnfs:
-    # The metadata server: one pod per storage cluster, running the NFS server in
-    # a QEMU guest on a node with /dev/kvm. On by default, so a ReadWriteMany
-    # volume needs nothing beyond the install. Off, no pNFS volume can be
-    # exported and its export waits in Pending.
+    # The metadata server: per storage cluster, an active pod and standby pods,
+    # each running the NFS server in a QEMU guest on a node with /dev/kvm. On by
+    # default, so a ReadWriteMany volume needs nothing beyond the install. Off,
+    # no pNFS volume can be exported and its export waits in Pending.
     mds:
       enabled: true
-      # Merged with the kvm-capable label the pod always requires.
+      # Merged with the kvm-capable label the pods always require.
       nodeSelector: {}
       tolerations: []
-      # The pod's requests and limits. Empty takes the driver's defaults: 2 CPUs
+      # Each pod's requests and limits. Empty takes the driver's defaults: 2 CPUs
       # and 2Gi of memory as limits.
       resources: {}
-      # The guest's state disk, which holds the NFS client-recovery database.
-      # Empty takes 1Gi.
-      stateSize: ""
+      # Standby guests beside the active one, each on its own KVM node, 0 to 4.
+      # Unset takes the driver's default of 1. A standby without a node stays
+      # pending while the active serves.
+      # standbys: 1
       # The storage data network the metadata server is attached to, through a
       # Multus macvlan on the host interface carrying the subnet. All three are
       # needed, and the range must hold no address anything else on the network

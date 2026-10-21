@@ -28,7 +28,6 @@ func withMDS(d *simplyblockv1alpha2.SimplyblockDriver) *simplyblockv1alpha2.Simp
 			corev1.ResourceCPU:    resource.MustParse("2"),
 			corev1.ResourceMemory: resource.MustParse("2Gi"),
 		}},
-		StateSize: resource.MustParse("2Gi"),
 	}
 	return d
 }
@@ -226,7 +225,6 @@ func TestMDSStateDiskIsABlockClaimAtTheRunnersPath(t *testing.T) {
 // the API server would refuse.
 func TestMDSStateDiskDefaultsItsSize(t *testing.T) {
 	d := withMDS(testDriver("simplyblock"))
-	d.Spec.PNFS.MDS.StateSize = resource.Quantity{}
 	_, sts := mdsObjects(t, d)
 	got := sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]
 	if !got.Equal(resource.MustParse("1Gi")) {
