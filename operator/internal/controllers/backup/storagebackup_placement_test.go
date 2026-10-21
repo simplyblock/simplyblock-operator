@@ -52,7 +52,7 @@ func memberRecord(namespace string) *simplyblockv1alpha2.StorageBackup {
 	}
 }
 
-func recordIn(t *testing.T, r *StorageBackupReconciler, namespace string) (*simplyblockv1alpha2.StorageBackup, bool) {
+func recordInNamespace(t *testing.T, r *StorageBackupReconciler, namespace string) (*simplyblockv1alpha2.StorageBackup, bool) {
 	t.Helper()
 	var sb simplyblockv1alpha2.StorageBackup
 	err := r.Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: backupObjectName()}, &sb)
@@ -79,7 +79,7 @@ func TestMirrorRecordsAMemberBesideItsGroupBackup(t *testing.T) {
 	r := backupMirror(t, syncedCache(groupMemberCopy()), testClusterObject(), sourceVolume(), owningGroupBackup())
 	reconcileKey(t, r, testNamespace)
 
-	sb, ok := recordIn(t, r, placementNamespace)
+	sb, ok := recordInNamespace(t, r, placementNamespace)
 	if !ok {
 		t.Fatalf("no record beside the StorageGroupBackup in %s", placementNamespace)
 	}
@@ -92,7 +92,7 @@ func TestMirrorRecordsAMemberBesideItsGroupBackup(t *testing.T) {
 	if sb.Status.Phase != simplyblockv1alpha2.StorageBackupPhaseAvailable || sb.Spec.ClusterRef != testClusterCR {
 		t.Errorf("record = phase %q, clusterRef %q, want Available on %s", sb.Status.Phase, sb.Spec.ClusterRef, testClusterCR)
 	}
-	if _, ok := recordIn(t, r, testNamespace); ok {
+	if _, ok := recordInNamespace(t, r, testNamespace); ok {
 		t.Errorf("the member is also recorded beside the cluster")
 	}
 }
@@ -105,10 +105,10 @@ func TestMirrorMovesAMemberRecordedBeforeItsOwnerWasKnown(t *testing.T) {
 		testClusterObject(), sourceVolume(), owningGroupBackup(), memberRecord(testNamespace))
 	reconcileKey(t, r, testNamespace)
 
-	if _, ok := recordIn(t, r, placementNamespace); !ok {
+	if _, ok := recordInNamespace(t, r, placementNamespace); !ok {
 		t.Errorf("the member was not moved beside its StorageGroupBackup")
 	}
-	if _, ok := recordIn(t, r, testNamespace); ok {
+	if _, ok := recordInNamespace(t, r, testNamespace); ok {
 		t.Errorf("the member's old record beside the cluster is still there")
 	}
 }
@@ -121,14 +121,14 @@ func TestMirrorMovesAMemberBackWhenItsOwnerIsGone(t *testing.T) {
 	r := backupMirror(t, syncedCache(groupMemberCopy()), testClusterObject(), sourceVolume(), away)
 	reconcileKey(t, r, testNamespace)
 
-	sb, ok := recordIn(t, r, testNamespace)
+	sb, ok := recordInNamespace(t, r, testNamespace)
 	if !ok {
 		t.Fatalf("the member was not moved back beside the cluster")
 	}
 	if _, labeled := sb.Labels[simplyblockv1alpha2.BackupLabelGroupBackup]; labeled {
 		t.Errorf("the record beside the cluster still carries the group-backup label")
 	}
-	if _, ok := recordIn(t, r, placementNamespace); ok {
+	if _, ok := recordInNamespace(t, r, placementNamespace); ok {
 		t.Errorf("the record beside the deleted StorageGroupBackup is still there")
 	}
 }
@@ -141,10 +141,10 @@ func TestMirrorKeepsAMemberReconciledByItsOwnKey(t *testing.T) {
 		testClusterObject(), sourceVolume(), owningGroupBackup(), memberRecord(placementNamespace))
 	reconcileKey(t, r, placementNamespace)
 
-	if _, ok := recordIn(t, r, placementNamespace); !ok {
+	if _, ok := recordInNamespace(t, r, placementNamespace); !ok {
 		t.Errorf("a member beside its StorageGroupBackup was deleted when reconciled by its own key")
 	}
-	if _, ok := recordIn(t, r, testNamespace); ok {
+	if _, ok := recordInNamespace(t, r, testNamespace); ok {
 		t.Errorf("reconciling the member by its own key recorded it beside the cluster too")
 	}
 }
@@ -154,7 +154,7 @@ func TestMirrorDeletesAMemberThatLeftTheStore(t *testing.T) {
 	r := backupMirror(t, syncedCache(), testClusterObject(), owningGroupBackup(), memberRecord(placementNamespace))
 	reconcileKey(t, r, testNamespace)
 
-	if _, ok := recordIn(t, r, placementNamespace); ok {
+	if _, ok := recordInNamespace(t, r, placementNamespace); ok {
 		t.Errorf("the record of a copy that left the store is still beside its StorageGroupBackup")
 	}
 }
