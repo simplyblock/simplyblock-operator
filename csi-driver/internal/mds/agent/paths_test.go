@@ -349,3 +349,38 @@ func TestTheKeeperReconcilesOneSubsystemAtATime(t *testing.T) {
 		t.Error("two exports of one subsystem were reconciled at once")
 	}
 }
+
+// The state volume and the exports of a promotion are connected by the agent
+// itself, not through Create, and path repair keeps them all the same.
+func TestTheKeeperKeepsATrackedConnectionUntilItIsForgotten(t *testing.T) {
+	r := &reconciles{}
+	k := newKeeper(r, &recordingLog{})
+	ctx := context.Background()
+
+	k.Track("state-volume", lvol.Connection{NQN: "nqn:lvol:state"}, "host-a")
+	k.Tick(ctx)
+	if got := r.calls(); !slices.Equal(got, []string{"nqn:lvol:state as host-a"}) {
+		t.Fatalf("reconciled %v, want the state volume as host-a", got)
+	}
+
+	k.Forget("state-volume")
+	k.Tick(ctx)
+	if got := r.calls(); len(got) != 1 {
+		t.Errorf("reconciled %v after Forget, want no further call", got)
+	}
+}
+
+func TestACreateOfATrackedExportReplacesItsConnection(t *testing.T) {
+	r := &reconciles{}
+	k := newKeeper(r, &recordingLog{})
+	ctx := context.Background()
+
+	k.Track("/exports/a", lvol.Connection{NQN: "nqn:lvol:old"}, "host-a")
+	if err := k.Wrap(&fakeAssembler{}).Create(ctx, spec("/exports/a", "nqn:lvol:new")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	k.Tick(ctx)
+	if got := r.calls(); len(got) != 1 || !strings.HasPrefix(got[0], "nqn:lvol:new") {
+		t.Errorf("reconciled %v, want the newer connection only", got)
+	}
+}
