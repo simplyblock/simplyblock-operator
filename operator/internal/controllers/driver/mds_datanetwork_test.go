@@ -59,7 +59,7 @@ func subnetKey(t *testing.T) string {
 // storage node stays reachable, and tells the runner which interface it is.
 func TestMDSPodAttachesToTheDataNetwork(t *testing.T) {
 	d := withDataNetwork(testDriver("simplyblock"))
-	_, sts, err := MDSObjects(d, testClusterID, "simplyblock-state",
+	_, sts, err := MDSObjects(d, testClusterID,
 		&MDSDataAttachment{Network: "simplyblock-mds-data", Interface: testDataIface})
 	if err != nil {
 		t.Fatalf("MDSObjects: %v", err)
@@ -113,7 +113,7 @@ func TestMDSPodTemplateChangesWithTheAddressRange(t *testing.T) {
 		t.Helper()
 		d := withDataNetwork(testDriver("simplyblock"))
 		d.Spec.PNFS.MDS.DataNetwork.RangeStart, d.Spec.PNFS.MDS.DataNetwork.RangeEnd = start, end
-		_, sts, err := MDSObjects(d, testClusterID, "simplyblock-state", attachment)
+		_, sts, err := MDSObjects(d, testClusterID, attachment)
 		if err != nil {
 			t.Fatalf("MDSObjects: %v", err)
 		}
@@ -135,8 +135,8 @@ func TestMDSPodWithoutADataNetworkHasNoAttachment(t *testing.T) {
 	if v, found := sts.Spec.Template.Annotations[NetworksAnnotation]; found {
 		t.Errorf("networks annotation = %q, want none", v)
 	}
-	if sts.Spec.Template.Spec.Affinity != nil {
-		t.Errorf("affinity = %+v, want none", sts.Spec.Template.Spec.Affinity)
+	if a := sts.Spec.Template.Spec.Affinity; a == nil || a.NodeAffinity != nil {
+		t.Errorf("affinity = %+v, want the pods' anti-affinity and no node affinity", a)
 	}
 	for _, arg := range runnerContainer(t, sts).Args {
 		if arg == "--data-interface="+MDSDataInterface {

@@ -19,7 +19,6 @@ package v1alpha2
 
 import (
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -160,16 +159,18 @@ type DriverTLS struct {
 // metadata server, whose clients read and write the volume's NVMe-oF namespace
 // directly.
 type DriverPNFS struct {
-	// MDS runs the metadata server: one pod per storage cluster, whose QEMU
-	// guest runs the NFS server with its own kernel, so no node runs nfsd,
-	// mounts an export, or needs nfs-utils. The pod needs a node with
-	// /dev/kvm. Unset, no pNFS volume can be exported: its export waits in
-	// Pending until this is set.
+	// MDS runs the metadata server: per storage cluster, an active pod and,
+	// by default, one standby on another node, each a QEMU guest running the
+	// NFS server with its own kernel, so no node runs nfsd, mounts an
+	// export, or needs nfs-utils. The pods need nodes with /dev/kvm. Unset,
+	// no pNFS volume can be exported: its export waits in Pending until this
+	// is set.
 	// +optional
 	MDS *DriverPNFSMDS `json:"mds,omitempty"`
 }
 
-// DriverPNFSMDS is the pod that hosts the metadata server's guest.
+// DriverPNFSMDS is the metadata server: an active guest and standbys on other
+// nodes, one of which takes over when the active is lost.
 type DriverPNFSMDS struct {
 	// Image is the metadata server image: QEMU, the guest kernel, the guest
 	// root filesystem, and the runner. Unset takes the operator's own registry
@@ -180,52 +181,47 @@ type DriverPNFSMDS struct {
 	// +optional
 	Image string `json:"image,omitempty"`
 
-	// Resources are the pod's requests and limits. The guest's vCPUs are the
-	// whole cores the CPU limit covers, at least one, and its memory is the
-	// memory limit less 256Mi for QEMU, so the memory limit has to be at
-	// least 512Mi. A CPU or memory limit left unset defaults to 2 and 2Gi,
-	// and a memory request left unset to 512Mi, or the limit when that is
-	// lower. The guest returns the memory it frees to the node, so the pod
-	// uses about what the guest does.
+	// Resources are each pod's requests and limits, so every standby adds
+	// one pod's worth. The guest's vCPUs are the whole cores the CPU limit
+	// covers, at least one, and its memory is the memory limit less 256Mi for
+	// QEMU, so the memory limit has to be at least 512Mi. A CPU or memory
+	// limit left unset defaults to 2 and 2Gi, and a memory request left unset
+	// to 512Mi, or the limit when that is lower. The guest returns the memory
+	// it frees to the node, so each pod uses about what its guest does.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 
-	// NodeSelector is merged with the kvm-capable label the pod always
-	// requires.
+	// NodeSelector is merged with the kvm-capable label the pods always
+	// require. No two of the guests run on one node.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
-	// Tolerations let the pod schedule onto tainted KVM nodes.
+	// Tolerations let the pods schedule onto tainted KVM nodes.
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
-	// StateSize is the size of the guest's state disk, which holds the NFS
-	// client-recovery database that lets clients reclaim their state after
-	// the pod restarts.
-	// +kubebuilder:default="1Gi"
+	// Standbys is how many standby guests run beside the active one, each on
+	// its own node. A standby takes over when the active is lost, in about the
+	// time a restart takes. At 0, exports stay unserved after the loss of the
+	// active's node until the lost pod is deleted and started again
+	// elsewhere. Each standby needs another node offering KVM, and one
+	// without such a node stays pending while the active serves.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=4
+	// +kubebuilder:default=1
 	// +optional
-	StateSize resource.Quantity `json:"stateSize,omitempty"`
-
-	// StateStorageClassName is the storage class of the state disk, which is
-	// always a simplyblock volume so the pod can restart on any worker with
-	// its client-recovery database. A named class must be provisioned by this
-	// driver and must not be a pNFS class. Unset gives each storage cluster a
-	// class of its own, <driver>-<cluster>-pnfs-mds-state, derived from the
-	// cluster's simplyblock class without its QoS caps and reserved for the
-	// state disk by an admission policy. Read only when the metadata server is
-	// first created: a StatefulSet's claim template cannot change afterward.
-	// +optional
-	StateStorageClassName *string `json:"stateStorageClassName,omitempty"`
+	Standbys *int32 `json:"standbys,omitempty"`
 
 	// DataNetwork attaches the metadata server to the storage data network, so
-	// its guest reaches the storage nodes there rather than through the pod
-	// network. The pod gets a macvlan interface on whichever host interface
+	// its guests reach the storage nodes there rather than through the pod
+	// network. Each pod gets a macvlan interface on whichever host interface
 	// carries the subnet, and runs only on nodes that have one, preferring
 	// nodes that are not storage nodes. It needs Multus and the whereabouts IPAM
-	// plugin, which OpenShift ships. Unset, the guest reaches the storage nodes
-	// through the pod network, which needs the nodes to forward traffic
-	// arriving on their data interfaces. Changing it restarts the metadata
-	// server.
+	// plugin, which OpenShift ships, and a range of at least one address per
+	// pod. Unset, the guests reach the storage nodes through the pod network,
+	// which needs the nodes to forward traffic arriving on their data
+	// interfaces. Changing it rolls every guest onto the new template, the
+	// active last.
 	// +optional
 	DataNetwork *DriverPNFSDataNetwork `json:"dataNetwork,omitempty"`
 }
