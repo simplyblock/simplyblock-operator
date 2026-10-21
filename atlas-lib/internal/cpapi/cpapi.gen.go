@@ -1231,10 +1231,14 @@ type ClusterDTO struct {
 	MaxFaultTolerance           int                `json:"max_fault_tolerance"`
 	Name                        *string            `json:"name"`
 	NodeAffinity                bool               `json:"node_affinity"`
+	NodeLabelSuffix             string             `json:"node_label_suffix"`
 	Nqn                         string             `json:"nqn"`
 	ProvisionedCapacityCritical int                `json:"provisioned_capacity_critical"`
 	ProvisionedCapacityWarning  int                `json:"provisioned_capacity_warning"`
 	Secret                      *string            `json:"secret,omitempty"`
+	SnodeApiService             string             `json:"snode_api_service"`
+	SpdkProxyService            string             `json:"spdk_proxy_service"`
+	SpdkProxyTlsSecret          string             `json:"spdk_proxy_tls_secret"`
 	Status                      ClusterDTOStatus   `json:"status"`
 	TlsEnabled                  bool               `json:"tls_enabled"`
 	UtilizationCritical         int                `json:"utilization_critical"`
@@ -1286,6 +1290,7 @@ type ClusterParams struct {
 	MaxQueueSize           *int                     `json:"max_queue_size,omitempty"`
 	MaxSubsys              int                      `json:"max_subsys"`
 	Name                   *string                  `json:"name,omitempty"`
+	NodeLabelSuffix        *string                  `json:"node_label_suffix,omitempty"`
 	NvmfBasePort           *int                     `json:"nvmf_base_port,omitempty"`
 	PageSizeInBlocks       *int                     `json:"page_size_in_blocks,omitempty"`
 	ProvCapCrit            *int                     `json:"prov_cap_crit,omitempty"`
@@ -1293,6 +1298,9 @@ type ClusterParams struct {
 	QpairCount             *int                     `json:"qpair_count,omitempty"`
 	RpcBasePort            *int                     `json:"rpc_base_port,omitempty"`
 	SnodeApiPort           *int                     `json:"snode_api_port,omitempty"`
+	SnodeApiService        *string                  `json:"snode_api_service,omitempty"`
+	SpdkProxyService       *string                  `json:"spdk_proxy_service,omitempty"`
+	SpdkProxyTlsSecret     *string                  `json:"spdk_proxy_tls_secret,omitempty"`
 	SpdkVcpuCount          int                      `json:"spdk_vcpu_count"`
 	StrictNodeAntiAffinity *bool                    `json:"strict_node_anti_affinity,omitempty"`
 }

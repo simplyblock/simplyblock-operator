@@ -10935,6 +10935,22 @@
           },
           "capacity": {
             "$ref": "#/components/schemas/CapacityStatDTO"
+          },
+          "snode_api_service": {
+            "type": "string",
+            "title": "Snode Api Service"
+          },
+          "spdk_proxy_service": {
+            "type": "string",
+            "title": "Spdk Proxy Service"
+          },
+          "spdk_proxy_tls_secret": {
+            "type": "string",
+            "title": "Spdk Proxy Tls Secret"
+          },
+          "node_label_suffix": {
+            "type": "string",
+            "title": "Node Label Suffix"
           }
         },
         "type": "object",
@@ -10962,7 +10978,11 @@
           "tls_enabled",
           "max_fault_tolerance",
           "backup_enabled",
-          "capacity"
+          "capacity",
+          "snode_api_service",
+          "spdk_proxy_service",
+          "spdk_proxy_tls_secret",
+          "node_label_suffix"
         ],
         "title": "ClusterDTO"
       },
@@ -11248,6 +11268,33 @@
             "type": "boolean",
             "title": "Atomic 4K",
             "default": false
+          },
+          "snode_api_service": {
+            "type": "string",
+            "maxLength": 63,
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+            "title": "Snode Api Service",
+            "default": "simplyblock-storage-node-api"
+          },
+          "spdk_proxy_service": {
+            "type": "string",
+            "maxLength": 63,
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+            "title": "Spdk Proxy Service",
+            "default": "simplyblock-spdk-proxy"
+          },
+          "spdk_proxy_tls_secret": {
+            "type": "string",
+            "maxLength": 253,
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+            "title": "Spdk Proxy Tls Secret",
+            "default": "simplyblock-spdk-proxy-tls"
+          },
+          "node_label_suffix": {
+            "type": "string",
+            "pattern": "^(-[a-z0-9]{1,3})?$",
+            "title": "Node Label Suffix",
+            "default": ""
           }
         },
         "type": "object",
