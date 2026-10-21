@@ -123,3 +123,47 @@ func TestAHandWrittenMembersSuffixComesFromItsName(t *testing.T) {
 		t.Errorf("the suffix does not make a hostname label: %v", errs)
 	}
 }
+
+// A dot in a cluster name becomes a hyphen in a Service name, so prod.fast and
+// prod-fast would derive one Service, and the second cluster would be left
+// without a workload. A name the Service cannot carry unchanged carries a
+// digest of the whole name instead, and a name it can carry stays readable.
+func TestClusterNamesThatSanitizeAlikeDeriveDifferentServices(t *testing.T) {
+	dotted, hyphenated := DerivedWorkloadNames("prod.fast"), DerivedWorkloadNames("prod-fast")
+
+	if dotted.NodeAPIService == hyphenated.NodeAPIService || dotted.SpdkProxyService == hyphenated.SpdkProxyService {
+		t.Errorf("prod.fast and prod-fast derive %+v and %+v", dotted, hyphenated)
+	}
+	if hyphenated.NodeAPIService != "sb-prod-fast-node-api" {
+		t.Errorf("prod-fast derives %q, want the readable sb-prod-fast-node-api", hyphenated.NodeAPIService)
+	}
+	if errs := validation.IsDNS1035Label(dotted.NodeAPIService); len(errs) > 0 {
+		t.Errorf("prod.fast derives %q: %v", dotted.NodeAPIService, errs)
+	}
+}
+
+// A worker label of up to 63 characters plus a member's suffix would exceed
+// the 63 a DNS label may carry. The label is cut and carries a digest of the
+// whole worker label, so it stays one valid segment, keeps the suffix, and two
+// long workers sharing a prefix stay apart. sbcli builds the same hostname.
+func TestALongWorkerLabelWithASuffixStaysOneDNSLabel(t *testing.T) {
+	names := MemberWorkloadNames("prod", "prod-dense-kqv")
+	long := strings.Repeat("w", 60)
+
+	first, second := names.Hostname(long+"-one.example.com"), names.Hostname(long+"-two")
+
+	for _, hostname := range []string{first, second} {
+		if errs := validation.IsDNS1123Label(hostname); len(errs) > 0 {
+			t.Errorf("hostname %q: %v", hostname, errs)
+		}
+		if !strings.HasSuffix(hostname, "-kqv") {
+			t.Errorf("hostname %q lost the member's suffix", hostname)
+		}
+	}
+	if first == second {
+		t.Errorf("two long workers share hostname %q", first)
+	}
+	if want := long[:63-4-9] + "-" + digestOf([]string{long + "-one"}) + "-kqv"; first != want {
+		t.Errorf("hostname = %q, want %q, the rule sbcli applies", first, want)
+	}
+}

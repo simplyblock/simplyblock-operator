@@ -30,6 +30,10 @@ var (
 	derivedSpdkProxyService = Formula{Kind: DNSLabel, Prefix: "sb-", Suffix: "-spdk-proxy"}
 )
 
+// maxHostnameLength is what one DNS label, and so a hostname in a headless
+// Service, may carry.
+const maxHostnameLength = MaxLabelValueLength
+
 // WorkloadNames are the names one cluster's workload is reached by.
 type WorkloadNames struct {
 	NodeAPIService     string
@@ -48,14 +52,17 @@ func ConstantWorkloadNames() WorkloadNames {
 	return servedBy(ConstantNodeAPIService, ConstantSpdkProxyService)
 }
 
-// DerivedWorkloadNames are the names a cluster takes when the constant names
-// belong to another cluster in its namespace. A cluster name too long for a
-// Service is cut, and carries a digest of the whole name so that two names
-// sharing a prefix stay apart.
+// DerivedWorkloadNames are the names a new cluster takes. A cluster name too
+// long for a Service is cut and carries a digest of the whole name, so two
+// names sharing a prefix stay apart. A name the Service cannot carry unchanged,
+// one with a dot or an upper-case letter, always carries the digest, because
+// prod.fast and prod-fast would otherwise derive one Service.
 func DerivedWorkloadNames(cluster string) WorkloadNames {
-	return servedBy(
-		derivedNodeAPIService.Derive(cluster).Value,
-		derivedSpdkProxyService.Derive(cluster).Value)
+	nodeAPI, spdkProxy := derivedNodeAPIService, derivedSpdkProxyService
+	if DNSLabel.sanitize(cluster) != cluster {
+		nodeAPI.AlwaysDigest, spdkProxy.AlwaysDigest = true, true
+	}
+	return servedBy(nodeAPI.Derive(cluster).Value, spdkProxy.Derive(cluster).Value)
 }
 
 func servedBy(nodeAPIService, spdkProxyService string) WorkloadNames {
@@ -74,10 +81,18 @@ func (n WorkloadNames) IsConstant() bool {
 
 // Hostname is a worker's hostname label in this cluster's Services: the worker
 // name up to its first dot, so a fully qualified node name stays one DNS
-// segment, followed by the cluster's suffix.
+// segment, followed by the cluster's suffix. A label too long to take the
+// suffix is cut and carries an eight-character digest of the whole label, so
+// it stays one segment and two long workers sharing a prefix stay apart. The
+// control plane builds the same hostname (sbcli StorageNode._k8s_service_host),
+// so the rule is the same on both sides.
 func (n WorkloadNames) Hostname(worker string) string {
 	label, _, _ := strings.Cut(worker, ".")
-	return label + n.NodeLabelSuffix
+	if len(label)+len(n.NodeLabelSuffix) <= maxHostnameLength {
+		return label + n.NodeLabelSuffix
+	}
+	keep := maxHostnameLength - len(n.NodeLabelSuffix) - digestLength - 1
+	return strings.TrimRight(label[:keep], "-") + "-" + digestOf([]string{label}) + n.NodeLabelSuffix
 }
 
 // MemberWorkloadNames are the names a supercluster's member is reached by: its
