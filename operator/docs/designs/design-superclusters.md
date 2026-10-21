@@ -10,15 +10,15 @@
 
 ## Phasing Overview
 
-| Phase                   | Status      | Scope                                                                                                                              | Blocked by                                                                                       |
-|-------------------------|-------------|------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
-| **Phase 1** (§4–§6)     | In progress | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | A new cluster, on a control plane without P0-4. Workers shared between members: P0-3 and §16 Q11 |
-| **Phase 2** (§7)        | Planned     | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | IOPS and throughput ceilings: P0-5                                                               |
-| **Phase 3** (§8.1–§8.3) | Planned     | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                                                                |
-| **Phase 4** (§8.4)      | Planned     | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3                                                                                          |
-| **Phase 5** (§7.5)      | Planned     | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2, P0-5                                                                                    |
+| Phase                   | Status  | Scope                                                                                                                              | Blocked by                                                                                                       |
+|-------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------|
+| **Phase 1** (§4–§6)     | Built   | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | A new cluster, on a control plane without P0-4. Workers shared between members, which are outside it: P0-3, P0-6 |
+| **Phase 2** (§7)        | Planned | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | IOPS and throughput ceilings: P0-5                                                                               |
+| **Phase 3** (§8.1–§8.3) | Planned | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                                                                                |
+| **Phase 4** (§8.4)      | Planned | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3                                                                                                          |
+| **Phase 5** (§7.5)      | Planned | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2, P0-5                                                                                                    |
 
-**Phase 1 in place:** the API of §4.1 and its status (§4.3), the admission rules
+**Phase 1 is built:** the API of §4.1 and its status (§4.3), the admission rules
 of §4.2 and §4.4 except the deletion of a member holding volumes, the
 supercluster reconciler with its roll-up, events, and two gauges (§10.1, §13),
 `status.role` on every cluster, `ErrAggregateCluster` from the resolver (§15),
