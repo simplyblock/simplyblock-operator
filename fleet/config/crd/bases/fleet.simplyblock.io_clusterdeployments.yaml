@@ -1010,10 +1010,10 @@ spec:
                   rule: '!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf'
                 - message: approval cannot be withdrawn
                   rule: '!has(oldSelf.approved) || !oldSelf.approved || self.approved'
-                - message: 'every group must name the same device class: all nvme
-                    or all block'
-                  rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)))
-                    || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))
+                - message: 'every group of a node set must name the same device class:
+                    all nvme or all block'
+                  rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))
+                    || s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))
                 - message: spec.cluster.openshift is what a deployment onto OpenShift
                     states, so spec.environment has to be OpenShift
                   rule: '!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment)

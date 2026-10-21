@@ -369,3 +369,31 @@ func TestATemplateTakesArbitrationOnlyWhenDual(t *testing.T) {
 		})
 	}
 }
+
+// Each node set of a supercluster's document becomes a member with a DaemonSet
+// of its own, so the device class is one per node set rather than one per
+// document (design-superclusters.md §5.1): two node sets may differ, and two
+// groups of one node set may not.
+func TestTheDeviceClassIsOnePerNodeSet(t *testing.T) {
+	apiClient := apiServer(t)
+	group := func(name, worker string, devices simplyblockv1alpha2.DeviceSelection) simplyblockv1alpha2.NodeGroup {
+		return simplyblockv1alpha2.NodeGroup{Name: name, Workers: []string{worker}, Devices: &devices}
+	}
+	nvme := simplyblockv1alpha2.DeviceSelection{NVMe: []string{"0000:00:02.0"}}
+	block := simplyblockv1alpha2.DeviceSelection{Block: []string{"/dev/sdb"}}
+
+	config := aStoredDocument(t, apiClient, "per-set-class")
+	config.Spec.NodeSets = []simplyblockv1alpha2.NodeSet{
+		{Name: "fast", Groups: []simplyblockv1alpha2.NodeGroup{group("g", "worker-1", nvme)}},
+		{Name: "dense", Groups: []simplyblockv1alpha2.NodeGroup{group("g", "worker-2", block)}},
+	}
+	if err := apiClient.Update(context.Background(), config); err != nil {
+		t.Fatalf("two node sets of two device classes were refused: %v", err)
+	}
+
+	config.Spec.NodeSets[1].Groups = append(config.Spec.NodeSets[1].Groups, group("h", "worker-3", nvme))
+	err := apiClient.Update(context.Background(), config)
+	if err == nil || !strings.Contains(err.Error(), "device class") {
+		t.Errorf("a node set mixing device classes was admitted, or refused for another reason: %v", err)
+	}
+}

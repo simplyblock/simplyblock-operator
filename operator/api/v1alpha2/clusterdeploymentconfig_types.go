@@ -679,7 +679,7 @@ type DeploymentImages struct {
 // document carries no field for it.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval cannot be withdrawn"
-// +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))) || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group must name the same device class: all nvme or all block"
+// +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)) || s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group of a node set must name the same device class: all nvme or all block"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
@@ -748,6 +748,15 @@ type ClusterDeploymentConfigSpec struct {
 }
 
 // ClusterDeploymentConfigStatus is the observed state of the document.
+// ExpansionMember is a member cluster the expansion drew a name for.
+type ExpansionMember struct {
+	// NodeSet is the node set the member is made of.
+	NodeSet string `json:"nodeSet"`
+
+	// Cluster is the member StorageCluster's name, <cluster>-<nodeset>-<suffix>.
+	Cluster string `json:"cluster"`
+}
+
 type ClusterDeploymentConfigStatus struct {
 	// Phase is the operator's own view of the document.
 	// +optional
@@ -758,11 +767,21 @@ type ClusterDeploymentConfigStatus struct {
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
-	// ClusterRef names the StorageCluster the expansion produced or added to. It
-	// is a record rather than a dependency: nothing resolves it after expansion,
-	// which is what makes the document safe to delete.
+	// ClusterRef names the StorageCluster the expansion produced or added to,
+	// the supercluster when it produced one. It is a record rather than a
+	// dependency: nothing resolves it after expansion, which is what makes the
+	// document safe to delete.
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
+
+	// Members are the member clusters the expansion created or is creating, one
+	// per node set, when the document produces a supercluster. Each name is
+	// recorded before its member is created, so that a retry creates the same
+	// member rather than drawing another name.
+	// +optional
+	// +listType=map
+	// +listMapKey=nodeSet
+	Members []ExpansionMember `json:"members,omitempty"`
 
 	// NodeRefs names the StorageNode objects the expansion created, for the same
 	// reason.

@@ -1016,23 +1016,22 @@ spec:
               rule: '!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf'
             - message: approval cannot be withdrawn
               rule: '!has(oldSelf.approved) || !oldSelf.approved || self.approved'
-            - message: 'every group must name the same device class: all nvme or all
-                block'
-              rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)))
-                || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))
+            - message: 'every group of a node set must name the same device class:
+                all nvme or all block'
+              rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))
+                || s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))
             - message: spec.cluster.openshift is what a deployment onto OpenShift
                 states, so spec.environment has to be OpenShift
               rule: '!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment)
                 && self.environment == ''OpenShift'')'
           status:
-            description: ClusterDeploymentConfigStatus is the observed state of the
-              document.
             properties:
               clusterRef:
                 description: |-
-                  ClusterRef names the StorageCluster the expansion produced or added to. It
-                  is a record rather than a dependency: nothing resolves it after expansion,
-                  which is what makes the document safe to delete.
+                  ClusterRef names the StorageCluster the expansion produced or added to,
+                  the supercluster when it produced one. It is a record rather than a
+                  dependency: nothing resolves it after expansion, which is what makes the
+                  document safe to delete.
                 type: string
               expansionStartedAt:
                 description: |-
@@ -1047,6 +1046,31 @@ spec:
                   which nothing in memory and no step deadline supplies.
                 format: date-time
                 type: string
+              members:
+                description: |-
+                  Members are the member clusters the expansion created or is creating, one
+                  per node set, when the document produces a supercluster. Each name is
+                  recorded before its member is created, so that a retry creates the same
+                  member rather than drawing another name.
+                items:
+                  description: |-
+                    ClusterDeploymentConfigStatus is the observed state of the document.
+                    ExpansionMember is a member cluster the expansion drew a name for.
+                  properties:
+                    cluster:
+                      description: Cluster is the member StorageCluster's name, <cluster>-<nodeset>-<suffix>.
+                      type: string
+                    nodeSet:
+                      description: NodeSet is the node set the member is made of.
+                      type: string
+                  required:
+                  - cluster
+                  - nodeSet
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - nodeSet
+                x-kubernetes-list-type: map
               message:
                 description: |-
                   Message is the reason the phase is what it is: one sentence, replaced as
