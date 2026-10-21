@@ -28,6 +28,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -544,7 +545,8 @@ func equalConfigStatus(a, b simplyblockv1alpha2.ClusterDeploymentConfigStatus) b
 		a.ClusterRef != b.ClusterRef ||
 		a.ObservedGeneration != b.ObservedGeneration ||
 		a.Step.State != b.Step.State ||
-		len(a.NodeRefs) != len(b.NodeRefs) {
+		len(a.NodeRefs) != len(b.NodeRefs) ||
+		!slices.Equal(a.Members, b.Members) {
 		return false
 	}
 	if (a.Step.Deadline == nil) != (b.Step.Deadline == nil) {

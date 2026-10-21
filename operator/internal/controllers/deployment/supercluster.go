@@ -7,9 +7,15 @@
 package deployment
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"math/big"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -56,4 +62,150 @@ func drawMemberSuffix() (string, error) {
 		suffix[i] = memberSuffixLetters[n.Int64()]
 	}
 	return string(suffix), nil
+}
+
+// expansionTarget is one cluster the expansion builds nodes for, and the part of
+// the document that describes it.
+type expansionTarget struct {
+	cluster  string
+	document *simplyblockv1alpha2.ClusterDeploymentConfig
+}
+
+// expansionTargets are the clusters the document builds nodes for: the cluster
+// it created or grows, or each member of the supercluster it created, as
+// status.members records them.
+func expansionTargets(config *simplyblockv1alpha2.ClusterDeploymentConfig) []expansionTarget {
+	if !IsSuperclusterDocument(config) {
+		return []expansionTarget{{cluster: config.Status.ClusterRef, document: config}}
+	}
+	targets := make([]expansionTarget, 0, len(config.Status.Members))
+	for _, entry := range config.Status.Members {
+		for _, set := range config.Spec.NodeSets {
+			if set.Name == entry.NodeSet {
+				targets = append(targets, expansionTarget{cluster: entry.Cluster, document: memberView(config, set)})
+			}
+		}
+	}
+	return targets
+}
+
+// createSupercluster is CreatingCluster for a supercluster's document (§5.4):
+// the supercluster first, because a member names it in a field admission
+// resolves; then every member's name, recorded before any member is created;
+// then the members, by the recorded names.
+func (r *ClusterDeploymentConfigReconciler) createSupercluster(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) (bool, error) {
+	name := config.Spec.Cluster.Name
+	var existing simplyblockv1alpha2.StorageCluster
+	switch err := r.Get(ctx, client.ObjectKey{Namespace: config.Namespace, Name: name}, &existing); {
+	case err == nil && config.Status.ClusterRef != name:
+		return false, refusef(ClusterExists,
+			"spec.cluster.name is %s and a StorageCluster by that name already exists", name)
+	case apierrors.IsNotFound(err):
+		supercluster := &simplyblockv1alpha2.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: config.Namespace},
+			Spec: simplyblockv1alpha2.StorageClusterSpec{
+				Supercluster: &simplyblockv1alpha2.SuperclusterSpec{},
+			},
+		}
+		if err := r.Create(ctx, supercluster); err != nil && !apierrors.IsAlreadyExists(err) {
+			return false, fmt.Errorf("creating supercluster %s: %w", name, err)
+		}
+		r.emit(config, corev1.EventTypeNormal, ClusterCreated, fmt.Sprintf("Created supercluster %s", name))
+	case err != nil:
+		return false, fmt.Errorf("reading StorageCluster %s: %w", name, err)
+	}
+	if config.Status.ClusterRef != name {
+		if err := r.recordCluster(ctx, config, name); err != nil {
+			return false, err
+		}
+		config.Status.ClusterRef = name
+	}
+
+	members, err := r.recordMembers(ctx, config)
+	if err != nil {
+		return false, err
+	}
+
+	for _, entry := range members {
+		for _, set := range config.Spec.NodeSets {
+			if set.Name != entry.NodeSet {
+				continue
+			}
+			member, err := r.buildCluster(memberView(config, set), entry.Cluster)
+			if err != nil {
+				return false, err
+			}
+			member.Spec.SuperclusterRef = name
+			if err := r.Create(ctx, member); err != nil {
+				if apierrors.IsAlreadyExists(err) {
+					continue
+				}
+				return false, fmt.Errorf("creating member %s: %w", entry.Cluster, err)
+			}
+			r.emit(config, corev1.EventTypeNormal, ClusterCreated, fmt.Sprintf(
+				"Created member %s of supercluster %s from node set %s", entry.Cluster, name, set.Name))
+		}
+	}
+	return true, nil
+}
+
+// recordMembers draws a name for every node set that has none recorded and
+// writes them all before any member is created, so a crash between two
+// creates resumes with the same names. A drawn name that is already a
+// StorageCluster, or a suffix another member carries, is drawn again, because
+// the suffix tells members apart in node hostnames (§5.3, §6.2).
+func (r *ClusterDeploymentConfigReconciler) recordMembers(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) ([]simplyblockv1alpha2.ExpansionMember, error) {
+	members := append([]simplyblockv1alpha2.ExpansionMember(nil), config.Status.Members...)
+	recorded := map[string]bool{}
+	suffixes := map[string]bool{}
+	for _, entry := range members {
+		recorded[entry.NodeSet] = true
+		suffixes[entry.Cluster[len(entry.Cluster)-memberSuffixLength:]] = true
+	}
+
+	drawn := false
+	for _, set := range config.Spec.NodeSets {
+		if recorded[set.Name] {
+			continue
+		}
+		for {
+			suffix, err := drawMemberSuffix()
+			if err != nil {
+				return nil, err
+			}
+			candidate := memberName(config.Spec.Cluster.Name, set.Name, suffix)
+			taken, err := r.clusterExists(ctx, config.Namespace, candidate)
+			if err != nil {
+				return nil, err
+			}
+			if taken || suffixes[suffix] {
+				continue
+			}
+			suffixes[suffix] = true
+			members = append(members, simplyblockv1alpha2.ExpansionMember{NodeSet: set.Name, Cluster: candidate})
+			drawn = true
+			break
+		}
+	}
+	if !drawn {
+		return members, nil
+	}
+	err := r.writeStatus(ctx, config, func(status *simplyblockv1alpha2.ClusterDeploymentConfigStatus) {
+		status.Members = members
+	})
+	return members, err
+}
+
+// clusterExists reports whether a StorageCluster of the name exists.
+func (r *ClusterDeploymentConfigReconciler) clusterExists(ctx context.Context, namespace, name string) (bool, error) {
+	var cluster simplyblockv1alpha2.StorageCluster
+	err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &cluster)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	return err == nil, err
 }

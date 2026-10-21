@@ -6,6 +6,7 @@
 package deployment
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -101,10 +102,8 @@ func TestANodeSetOverTheStorageNodeLimitIsReported(t *testing.T) {
 			c.Spec.NodeSets = sets
 		})
 
-		var objects []client.Object
-		objects = append(objects, workers(append(names, "worker-99")...)...)
 		var limit *finding
-		for _, f := range findingsOf(t, config, objects...) {
+		for _, f := range findingsOf(t, config, workers(append(names, "worker-99")...)...) {
 			if f.reason == MemberTooLarge {
 				limit = &f
 			}
@@ -137,5 +136,208 @@ func TestADocumentBesideAnotherClusterIsValid(t *testing.T) {
 
 	if found := findingsOf(t, aSuperclusterDocument(nil), objects...); len(found) > 0 {
 		t.Errorf("findings = %+v, want none", found)
+	}
+}
+
+// expandingDocument is an approved supercluster document, as CreatingCluster
+// reads it.
+func expandingDocument() *simplyblockv1alpha2.ClusterDeploymentConfig {
+	return aSuperclusterDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Approved = true
+	})
+}
+
+func readCluster(t *testing.T, r client.Reader, name string) *simplyblockv1alpha2.StorageCluster {
+	t.Helper()
+	var cluster simplyblockv1alpha2.StorageCluster
+	if err := r.Get(context.Background(), client.ObjectKey{Namespace: theNamespace, Name: name}, &cluster); err != nil {
+		t.Fatalf("StorageCluster %s: %v", name, err)
+	}
+	return &cluster
+}
+
+func readDocument(t *testing.T, r client.Reader) *simplyblockv1alpha2.ClusterDeploymentConfig {
+	t.Helper()
+	var config simplyblockv1alpha2.ClusterDeploymentConfig
+	if err := r.Get(context.Background(), client.ObjectKey{Namespace: theNamespace, Name: "deployment"}, &config); err != nil {
+		t.Fatalf("read the document: %v", err)
+	}
+	return &config
+}
+
+// §5.4: the supercluster is created before its members, each member's name is
+// recorded before it is created, and each member is its node set's cluster.
+func TestASuperclusterDocumentCreatesTheSuperclusterAndAMemberPerNodeSet(t *testing.T) {
+	config := expandingDocument()
+	r := reconcilerFor(t, append(workers("worker-1", "worker-2"), config)...)
+
+	if done, err := r.createCluster(context.Background(), config); err != nil || !done {
+		t.Fatalf("createCluster: done=%v err=%v", done, err)
+	}
+
+	if supercluster := readCluster(t, r, theCluster); supercluster.Spec.Supercluster == nil {
+		t.Errorf("StorageCluster %s is not a supercluster", theCluster)
+	}
+	recorded := readDocument(t, r)
+	if recorded.Status.ClusterRef != theCluster {
+		t.Errorf("status.clusterRef = %q, want the supercluster", recorded.Status.ClusterRef)
+	}
+	if len(recorded.Status.Members) != 2 {
+		t.Fatalf("status.members = %+v, want one per node set", recorded.Status.Members)
+	}
+	interfaces := map[string]string{"fast": "eth1", "dense": "eth3"}
+	for _, entry := range recorded.Status.Members {
+		if !strings.HasPrefix(entry.Cluster, theCluster+"-"+entry.NodeSet+"-") || len(entry.Cluster) != len(theCluster+"-"+entry.NodeSet+"-xyz") {
+			t.Errorf("member of node set %s is named %q, want %s-%s-<suffix>", entry.NodeSet, entry.Cluster, theCluster, entry.NodeSet)
+		}
+		member := readCluster(t, r, entry.Cluster)
+		if member.Spec.SuperclusterRef != theCluster {
+			t.Errorf("member %s names supercluster %q", member.Name, member.Spec.SuperclusterRef)
+		}
+		if member.Spec.ClusterMode != simplyblockv1alpha2.ClusterModeSingle ||
+			member.Spec.DeviceClass != simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock {
+			t.Errorf("member %s: mode %q class %q, want the template's Single and its node set's block",
+				member.Name, member.Spec.ClusterMode, member.Spec.DeviceClass)
+		}
+		if member.Spec.StorageNodes == nil || member.Spec.StorageNodes.MgmtInterface != interfaces[entry.NodeSet] {
+			t.Errorf("member %s does not run on its node set's interface %s: %+v",
+				member.Name, interfaces[entry.NodeSet], member.Spec.StorageNodes)
+		}
+	}
+}
+
+// A retry after a crash creates the members it recorded rather than drawing
+// new names, so no second member of a node set is ever created.
+func TestARetriedCreationCreatesTheRecordedMembers(t *testing.T) {
+	config := expandingDocument()
+	config.Status.Members = []simplyblockv1alpha2.ExpansionMember{
+		{NodeSet: "fast", Cluster: theCluster + "-fast-kqv"},
+		{NodeSet: "dense", Cluster: theCluster + "-dense-abc"},
+	}
+	r := reconcilerFor(t, append(workers("worker-1", "worker-2"), config)...)
+
+	if done, err := r.createCluster(context.Background(), config); err != nil || !done {
+		t.Fatalf("createCluster: done=%v err=%v", done, err)
+	}
+
+	var clusters simplyblockv1alpha2.StorageClusterList
+	if err := r.List(context.Background(), &clusters); err != nil {
+		t.Fatalf("list the clusters: %v", err)
+	}
+	names := map[string]bool{}
+	for _, cluster := range clusters.Items {
+		names[cluster.Name] = true
+	}
+	if len(names) != 3 || !names[theCluster+"-fast-kqv"] || !names[theCluster+"-dense-abc"] {
+		t.Errorf("clusters = %v, want the supercluster and the two recorded members", names)
+	}
+}
+
+// expandedMembers is the document after CreatingCluster, with its two members.
+func expandedMembers(uuids bool) (*simplyblockv1alpha2.ClusterDeploymentConfig, []client.Object) {
+	config := expandingDocument()
+	config.Status.ClusterRef = theCluster
+	config.Status.Members = []simplyblockv1alpha2.ExpansionMember{
+		{NodeSet: "fast", Cluster: theCluster + "-fast-kqv"},
+		{NodeSet: "dense", Cluster: theCluster + "-dense-abc"},
+	}
+	objects := workers("worker-1", "worker-2")
+	for i, entry := range config.Status.Members {
+		member := aCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+			c.Name = entry.Cluster
+			c.Spec.SuperclusterRef = theCluster
+			c.Status.UUID = ""
+			if uuids || i == 0 {
+				c.Status.UUID = "uuid-" + entry.NodeSet
+			}
+		})
+		objects = append(objects, member)
+	}
+	return config, append(objects, config)
+}
+
+func TestAwaitingTheClusterWaitsForEveryMember(t *testing.T) {
+	config, objects := expandedMembers(false)
+	r := reconcilerFor(t, objects...)
+
+	if done, err := r.awaitCluster(context.Background(), config); err != nil || done {
+		t.Errorf("awaitCluster = %v, %v with one member uncreated, want to wait", done, err)
+	}
+}
+
+func TestEachMemberGetsTheNodesOfItsNodeSet(t *testing.T) {
+	config, objects := expandedMembers(true)
+	r := reconcilerFor(t, objects...)
+
+	if done, err := r.createNodes(context.Background(), config); err != nil || !done {
+		t.Fatalf("createNodes: done=%v err=%v", done, err)
+	}
+
+	var nodes simplyblockv1alpha2.StorageNodeList
+	if err := r.List(context.Background(), &nodes); err != nil {
+		t.Fatalf("list the nodes: %v", err)
+	}
+	owners := map[string]string{}
+	for _, node := range nodes.Items {
+		owners[node.Spec.WorkerNode] = node.Spec.ClusterRef
+	}
+	if owners["worker-1"] != theCluster+"-fast-kqv" || owners["worker-2"] != theCluster+"-dense-abc" || len(nodes.Items) != 2 {
+		t.Errorf("nodes by worker = %v, want worker-1 in the fast member and worker-2 in the dense one", owners)
+	}
+	if got := readDocument(t, r).Status.NodeRefs; len(got) != 2 {
+		t.Errorf("status.nodeRefs = %v, want both members' nodes", got)
+	}
+}
+
+// A member is activated once its own nodes are online, without waiting for the
+// other members, and the step finishes with the last.
+func TestEachMemberIsActivatedOnceItsNodesAreOnline(t *testing.T) {
+	config, objects := expandedMembers(true)
+	r := reconcilerFor(t, objects...)
+	if _, err := r.createNodes(context.Background(), config); err != nil {
+		t.Fatalf("createNodes: %v", err)
+	}
+	config = readDocument(t, r)
+
+	setPhase := func(worker string, phase simplyblockv1alpha2.StorageNodePhase) {
+		var nodes simplyblockv1alpha2.StorageNodeList
+		if err := r.List(context.Background(), &nodes); err != nil {
+			t.Fatalf("list the nodes: %v", err)
+		}
+		for i := range nodes.Items {
+			if nodes.Items[i].Spec.WorkerNode == worker {
+				nodes.Items[i].Status.Phase = phase
+				if err := r.Update(context.Background(), &nodes.Items[i]); err != nil {
+					t.Fatalf("update node: %v", err)
+				}
+			}
+		}
+	}
+	activations := func() map[string]bool {
+		var ops simplyblockv1alpha2.StorageClusterOpsList
+		if err := r.List(context.Background(), &ops); err != nil {
+			t.Fatalf("list the operations: %v", err)
+		}
+		out := map[string]bool{}
+		for _, op := range ops.Items {
+			out[op.Spec.ClusterRef] = true
+		}
+		return out
+	}
+
+	setPhase("worker-1", simplyblockv1alpha2.StorageNodePhaseOnline)
+	if done, err := r.activateCluster(context.Background(), config); err != nil || done {
+		t.Fatalf("activateCluster = %v, %v with one member's node offline, want to wait", done, err)
+	}
+	if got := activations(); !got[theCluster+"-fast-kqv"] || got[theCluster+"-dense-abc"] {
+		t.Errorf("activated %v, want the fast member alone", got)
+	}
+
+	setPhase("worker-2", simplyblockv1alpha2.StorageNodePhaseOnline)
+	if done, err := r.activateCluster(context.Background(), config); err != nil || !done {
+		t.Fatalf("activateCluster = %v, %v with every node online, want done", done, err)
+	}
+	if got := activations(); len(got) != 2 {
+		t.Errorf("activated %v, want both members", got)
 	}
 }

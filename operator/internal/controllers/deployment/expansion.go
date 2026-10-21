@@ -117,6 +117,9 @@ func nextStep(machine *statemachine.Machine[configStep]) (configStep, error) {
 func (r *ClusterDeploymentConfigReconciler) createCluster(
 	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) (bool, error) {
+	if IsSuperclusterDocument(config) {
+		return r.createSupercluster(ctx, config)
+	}
 	name, err := targetClusterName(config)
 	if err != nil {
 		return false, err
@@ -204,7 +207,23 @@ func (r *ClusterDeploymentConfigReconciler) activateCluster(
 		return false, refusef(ClusterNotFound,
 			"the document records no cluster to activate")
 	}
+	done := true
+	for _, target := range expansionTargets(config) {
+		activated, err := r.activateTarget(ctx, config, target.cluster)
+		if err != nil {
+			return false, err
+		}
+		done = done && activated
+	}
+	return done, nil
+}
 
+// activateTarget asks for one cluster to be activated once every node the
+// document created for it is online. A supercluster's members are independent
+// clusters, so each is activated without waiting for the others.
+func (r *ClusterDeploymentConfigReconciler) activateTarget(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig, cluster string,
+) (bool, error) {
 	for _, name := range config.Status.NodeRefs {
 		var node simplyblockv1alpha2.StorageNode
 		key := client.ObjectKey{Namespace: config.Namespace, Name: name}
@@ -217,6 +236,9 @@ func (r *ClusterDeploymentConfigReconciler) activateCluster(
 			}
 			return false, fmt.Errorf("reading StorageNode %s: %w", name, err)
 		}
+		if node.Spec.ClusterRef != cluster {
+			continue
+		}
 		if node.Status.Phase != simplyblockv1alpha2.StorageNodePhaseOnline {
 			r.emit(config, corev1.EventTypeNormal, AwaitingNodes, fmt.Sprintf(
 				"StorageNode %s is %s rather than Online", name, node.Status.Phase))
@@ -224,11 +246,11 @@ func (r *ClusterDeploymentConfigReconciler) activateCluster(
 		}
 	}
 
-	name := config.Status.ClusterRef + "-activate"
+	name := cluster + "-activate"
 	ops := &simplyblockv1alpha2.StorageClusterOps{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: config.Namespace},
 		Spec: simplyblockv1alpha2.StorageClusterOpsSpec{
-			ClusterRef: config.Status.ClusterRef,
+			ClusterRef: cluster,
 			Action:     simplyblockv1alpha2.StorageClusterOpsActionActivate,
 		},
 	}
@@ -237,8 +259,7 @@ func (r *ClusterDeploymentConfigReconciler) activateCluster(
 	}
 	if err := r.Create(ctx, ops); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
-			return false, fmt.Errorf("asking for cluster %s to be activated: %w",
-				config.Status.ClusterRef, err)
+			return false, fmt.Errorf("asking for cluster %s to be activated: %w", cluster, err)
 		}
 		// Raised on an earlier pass, which is the step being re-entered rather
 		// than anything having gone wrong.
@@ -246,8 +267,7 @@ func (r *ClusterDeploymentConfigReconciler) activateCluster(
 	}
 
 	r.emit(config, corev1.EventTypeNormal, ActivationRequested, fmt.Sprintf(
-		"Every node is online, so cluster %s was asked to activate",
-		config.Status.ClusterRef))
+		"Every node is online, so cluster %s was asked to activate", cluster))
 	return true, nil
 }
 
@@ -447,12 +467,17 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 func (r *ClusterDeploymentConfigReconciler) awaitCluster(
 	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) (bool, error) {
-	var cluster simplyblockv1alpha2.StorageCluster
-	key := client.ObjectKey{Namespace: config.Namespace, Name: config.Status.ClusterRef}
-	if err := r.Get(ctx, key, &cluster); err != nil {
-		return false, fmt.Errorf("reading StorageCluster %s: %w", config.Status.ClusterRef, err)
+	for _, target := range expansionTargets(config) {
+		var cluster simplyblockv1alpha2.StorageCluster
+		key := client.ObjectKey{Namespace: config.Namespace, Name: target.cluster}
+		if err := r.Get(ctx, key, &cluster); err != nil {
+			return false, fmt.Errorf("reading StorageCluster %s: %w", target.cluster, err)
+		}
+		if cluster.Status.UUID == "" {
+			return false, nil
+		}
 	}
-	return cluster.Status.UUID != "", nil
+	return true, nil
 }
 
 // createNodes writes one StorageNode per worker per slot, and creates only the
@@ -465,28 +490,47 @@ func (r *ClusterDeploymentConfigReconciler) awaitCluster(
 func (r *ClusterDeploymentConfigReconciler) createNodes(
 	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) (bool, error) {
-	var cluster simplyblockv1alpha2.StorageCluster
-	key := client.ObjectKey{Namespace: config.Namespace, Name: config.Status.ClusterRef}
-	if err := r.Get(ctx, key, &cluster); err != nil {
-		return false, fmt.Errorf("reading StorageCluster %s: %w", config.Status.ClusterRef, err)
-	}
-
-	// The mapping is written before any node exists, so a node's add never runs
-	// ahead of the index it is to be sent.
-	if err := r.mapFailureDomains(ctx, config, &cluster); err != nil {
-		return false, err
-	}
-
-	existing, err := r.nodesOfCluster(ctx, config.Namespace, cluster.Name)
-	if err != nil {
-		return false, err
-	}
-
 	// The record is rebuilt from the slots the document describes rather than
 	// accumulated across passes. A pass that created a node and then failed to
 	// persist status.nodeRefs would otherwise skip it on the next pass, as one
 	// that already exists, and the finished document would permanently omit a
 	// node it created.
+	var created []string
+	for _, target := range expansionTargets(config) {
+		names, err := r.createNodesFor(ctx, target.document, target.cluster)
+		if err != nil {
+			return false, err
+		}
+		created = append(created, names...)
+	}
+
+	sort.Strings(created)
+	created = slices.Compact(created)
+	return true, r.recordNodes(ctx, config, created)
+}
+
+// createNodesFor writes the nodes of one cluster from the node sets of the
+// document that builds it, and returns every node of those node sets.
+func (r *ClusterDeploymentConfigReconciler) createNodesFor(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig, name string,
+) ([]string, error) {
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: config.Namespace, Name: name}
+	if err := r.Get(ctx, key, &cluster); err != nil {
+		return nil, fmt.Errorf("reading StorageCluster %s: %w", name, err)
+	}
+
+	// The mapping is written before any node exists, so a node's add never runs
+	// ahead of the index it is to be sent.
+	if err := r.mapFailureDomains(ctx, config, &cluster); err != nil {
+		return nil, err
+	}
+
+	existing, err := r.nodesOfCluster(ctx, config.Namespace, cluster.Name)
+	if err != nil {
+		return nil, err
+	}
+
 	var created []string
 	for _, set := range config.Spec.NodeSets {
 		for _, group := range set.Groups {
@@ -502,22 +546,19 @@ func (r *ClusterDeploymentConfigReconciler) createNodes(
 							created = append(created, node.Name)
 							continue
 						}
-						return false, fmt.Errorf("creating StorageNode for worker %s slot %d: %w",
+						return nil, fmt.Errorf("creating StorageNode for worker %s slot %d: %w",
 							worker, slot, err)
 					}
-					// Counted here rather than from the length of the record
-					// below, which is rebuilt every pass and holds the nodes that
-					// were already there as well.
+					// Counted here rather than from the length of the record,
+					// which is rebuilt every pass and holds the nodes that were
+					// already there as well.
 					countNodesCreated(config.Namespace, 1)
 					created = append(created, node.Name)
 				}
 			}
 		}
 	}
-
-	sort.Strings(created)
-	created = slices.Compact(created)
-	return true, r.recordNodes(ctx, config, created)
+	return created, nil
 }
 
 // slotKey is the identity a StorageNode has within its cluster, which is what
