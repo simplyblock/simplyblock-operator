@@ -280,3 +280,36 @@ func TestTheWorkloadNamesCrossTheWireUnderTheSpecsKeys(t *testing.T) {
 		t.Errorf("the answer's names %+v do not hold %+v", created.WorkloadNames, names)
 	}
 }
+
+// A cluster held for names the control plane did not keep has a backend
+// cluster all the same, created before the names could be compared. Deleting
+// the StorageCluster deletes it, authenticated as that cluster, rather than
+// leaving it behind with no object naming it.
+func TestAClusterHeldForItsNamesIsDeletedWithItsBackendCluster(t *testing.T) {
+	var deleted string
+	api := &fakeControlPlane{
+		forgetsNames: true,
+		create:       createdWith(atlascp.ClusterWorkloadNames{}),
+		byName: func(string) (atlascp.Cluster, bool, error) {
+			return atlascp.Cluster{ID: testClusterUUID, Name: testClusterName, Status: utils.ClusterStatusActive}, true, nil
+		},
+		deleteCall: func(id string) error { deleted = id; return nil },
+	}
+	r := newClusterReconciler(t, api, &recorder{}, newUncreatedCluster())
+	held := reconcileCluster(t, r, 6)
+	if held.Status.Phase != simplyblockv1alpha2.StorageClusterPhaseUnavailable {
+		t.Fatalf("phase = %q, want the cluster held Unavailable", held.Status.Phase)
+	}
+
+	if err := r.Delete(context.Background(), held); err != nil {
+		t.Fatalf("delete the cluster: %v", err)
+	}
+	key := types.NamespacedName{Namespace: testNamespace, Name: testClusterName}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if deleted != testClusterUUID {
+		t.Errorf("the control plane was asked to delete %q, want the backend cluster %s", deleted, testClusterUUID)
+	}
+}

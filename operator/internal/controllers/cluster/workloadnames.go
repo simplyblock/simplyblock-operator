@@ -15,6 +15,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	atlascp "github.com/simplyblock/atlas/controlplane"
 	atlaskube "github.com/simplyblock/atlas/kube"
@@ -87,4 +88,31 @@ func (r *StorageClusterReconciler) backendMissesWorkloadNames(
 func backendWorkloadNamesOf(cluster *simplyblockv1alpha2.StorageCluster) atlascp.ClusterWorkloadNames {
 	names, _ := utils.WorkloadNamesOf(cluster)
 	return utils.BackendWorkloadNames(names)
+}
+
+// recordHeldBackend writes the backend cluster of a cluster held for its names
+// into the cluster's Secret: its UUID, and the credential the creation
+// returned or an earlier pass recorded. The status does not record the backend
+// cluster, because the steady state must not run on it, so the Secret is what
+// lets deleting the StorageCluster delete it too.
+func (r *StorageClusterReconciler) recordHeldBackend(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, found adoption,
+) error {
+	if secret, err := r.credentialFor(ctx, cluster, found); err == nil {
+		found.Secret = secret
+	}
+	return r.writeClusterSecret(ctx, cluster, found)
+}
+
+// recordedBackendUUID is the backend cluster the cluster's Secret names, and
+// empty when there is no Secret or it names none.
+func (r *StorageClusterReconciler) recordedBackendUUID(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+) string {
+	var secret corev1.Secret
+	key := types.NamespacedName{Name: clusterSecretName(cluster), Namespace: cluster.Namespace}
+	if err := r.Get(ctx, key, &secret); err != nil {
+		return ""
+	}
+	return string(secret.Data["uuid"])
 }

@@ -630,7 +630,7 @@ func (r *StorageClusterReconciler) persist(
 		return ctrl.Result{}, err
 	}
 	if missing {
-		return ctrl.Result{RequeueAfter: clusterRetry}, nil
+		return ctrl.Result{RequeueAfter: clusterRetry}, r.recordHeldBackend(ctx, cluster, found)
 	}
 
 	// A credential is the one thing this step cannot invent, and the one the
@@ -960,8 +960,14 @@ func (r *StorageClusterReconciler) teardown(
 		return ctrl.Result{}, nil
 	}
 
-	if cluster.Status.UUID != "" {
-		r.closeStreams(cluster.Status.UUID)
+	// A cluster held before its status recorded the backend cluster still has
+	// one, and its UUID is in the cluster's Secret (recordHeldBackend).
+	uuid := cluster.Status.UUID
+	if uuid == "" {
+		uuid = r.recordedBackendUUID(ctx, cluster)
+	}
+	if uuid != "" {
+		r.closeStreams(uuid)
 		// Authenticates as this cluster, using its own recorded secret, for
 		// the same reason sync() does: the control plane this cluster
 		// belongs to may be a ControlPlane.spec.source.managed one, on a
@@ -970,12 +976,12 @@ func (r *StorageClusterReconciler) teardown(
 		if secret, err := r.clusterSecret(ctx, cluster); err == nil && secret != "" {
 			deleteCtx = webapi.WithBearerToken(ctx, secret)
 		}
-		if err := r.API.DeleteCluster(deleteCtx, cluster.Status.UUID); err != nil {
+		if err := r.API.DeleteCluster(deleteCtx, uuid); err != nil {
 			log.Error(err, "the cluster could not be deleted; retrying",
-				"cluster", cluster.Name, "uuid", cluster.Status.UUID)
+				"cluster", cluster.Name, "uuid", uuid)
 			return ctrl.Result{RequeueAfter: clusterRetry}, nil
 		}
-		if err := r.removeCSICredentials(ctx, cluster.Status.UUID); err != nil {
+		if err := r.removeCSICredentials(ctx, uuid); err != nil {
 			log.Error(err, "the CSI credentials entry could not be removed; retrying",
 				"cluster", cluster.Name)
 			return ctrl.Result{RequeueAfter: clusterRetry}, nil
@@ -1150,7 +1156,7 @@ func (r *StorageClusterReconciler) writeClusterSecret(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, found adoption,
 ) error {
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-		Name:      fmt.Sprintf("simplyblock-cluster-%s", cluster.Name),
+		Name:      clusterSecretName(cluster),
 		Namespace: cluster.Namespace,
 	}}
 	if err := controllerutil.SetControllerReference(cluster, secret, r.Scheme); err != nil {
@@ -1170,6 +1176,12 @@ func (r *StorageClusterReconciler) writeClusterSecret(
 	return nil
 }
 
+// clusterSecretName is the Secret beside a cluster that records its backend
+// cluster's UUID and secret.
+func clusterSecretName(cluster *simplyblockv1alpha2.StorageCluster) string {
+	return fmt.Sprintf("simplyblock-cluster-%s", cluster.Name)
+}
+
 // clusterSecret reads the secret back, and reports the empty string when there
 // is none.
 func (r *StorageClusterReconciler) clusterSecret(
@@ -1186,7 +1198,7 @@ func readClusterSecret(
 ) (string, error) {
 	var secret corev1.Secret
 	key := types.NamespacedName{
-		Name:      fmt.Sprintf("simplyblock-cluster-%s", cluster.Name),
+		Name:      clusterSecretName(cluster),
 		Namespace: cluster.Namespace,
 	}
 	if err := r.Get(ctx, key, &secret); err != nil {
