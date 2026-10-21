@@ -186,7 +186,7 @@ jobs:
         file: csi-driver/deploy/image/Dockerfile.mds
         platforms: linux/amd64,linux/arm64
         build-args: |
-          GUEST_IMAGE=docker.io/simplyblock/spdkcsi:pnfsos-ee82539
+          GUEST_IMAGE=docker.io/simplyblock/spdkcsi:pnfsos-4409341
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         cache-from: type=gha,scope=mds
