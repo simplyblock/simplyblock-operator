@@ -771,8 +771,10 @@ type ClusterDeploymentConfigSpec struct {
 	// +optional
 	EdgeCluster *bool `json:"edgeCluster,omitempty"`
 
-	// ClusterRef names an existing StorageCluster this document adds nodes to.
-	// Absent means the document creates the cluster in Cluster. Setting it to a
+	// ClusterRef names an existing StorageCluster this document adds to: the
+	// nodes of every node set to a standalone cluster or a member, and one new
+	// member per node set to a supercluster. Absent means the document creates
+	// the cluster in Cluster. Setting it to a
 	// cluster that does not exist, or leaving it absent when one already does,
 	// is refused rather than reconciled.
 	//
@@ -782,7 +784,9 @@ type ClusterDeploymentConfigSpec struct {
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
 
-	// Cluster is the StorageCluster to create. Ignored when ClusterRef is set.
+	// Cluster is the StorageCluster to create, or the sizing of the members to
+	// add when ClusterRef names a supercluster, whose name is then not used.
+	// Ignored when ClusterRef names a standalone cluster or a member.
 	// +optional
 	Cluster *ClusterTemplate `json:"cluster,omitempty"`
 

@@ -70,6 +70,11 @@ const (
 	MemberTooLarge    = "MemberTooLarge"
 	MemberNameInvalid = "MemberNameInvalid"
 
+	// MemberSizingUnstated refuses a document that adds members to a
+	// supercluster without stating their sizing in spec.cluster
+	// (design-superclusters.md §5.6).
+	MemberSizingUnstated = "MemberSizingUnstated"
+
 	// JournalDeviceRequired reports logical block devices without a dedicated
 	// journal device, which the control plane refuses at every node add.
 	JournalDeviceRequired = "JournalDeviceRequired"

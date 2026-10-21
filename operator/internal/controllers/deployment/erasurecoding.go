@@ -314,8 +314,15 @@ func ClusterStripeChecks(
 	namespace string,
 	config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) ([]StripeCheck, error) {
+	members, err := AddsMembers(ctx, reader, config)
+	if err != nil {
+		return nil, err
+	}
+	if members {
+		config = asCreation(config)
+	}
 	var checks []StripeCheck
-	for _, scope := range clusterScopes(config) {
+	for _, scope := range clusterScopes(config, members) {
 		found, err := StripeChecks(ctx, reader, namespace, scope.document)
 		if err != nil {
 			return nil, err

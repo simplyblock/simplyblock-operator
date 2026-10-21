@@ -49,6 +49,22 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 ) ([]finding, error) {
 	var findings []finding
 
+	// A document adding members to a supercluster creates each of them, so it is
+	// checked as a document creating them, at the sizing it states
+	// (design-superclusters.md §5.6).
+	members, err := AddsMembers(ctx, r.Client, config)
+	if err != nil {
+		return nil, err
+	}
+	if members && config.Spec.ClusterRef != "" {
+		if config.Spec.Cluster == nil {
+			findings = append(findings, finding{reason: MemberSizingUnstated, message: fmt.Sprintf(
+				"spec.clusterRef names supercluster %s, and the members the document adds have no "+
+					"sizing: state it in spec.cluster", config.Spec.ClusterRef)})
+		}
+		config = asCreation(config)
+	}
+
 	missing, err := r.missingWorkers(ctx, config)
 	if err != nil {
 		return nil, err
@@ -110,7 +126,7 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 	for _, check := range stripe {
 		findings = append(findings, finding{reason: check.Reason, message: check.Message})
 	}
-	for _, scope := range clusterScopes(config) {
+	for _, scope := range clusterScopes(config, members) {
 		if found := conflictingInterfaces(scope.document); found != "" {
 			findings = append(findings, finding{reason: WorkerNotFound, message: scope.prefix + found})
 		}
@@ -118,7 +134,14 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 			findings = append(findings, finding{reason: JournalDeviceRequired, message: scope.prefix + found})
 		}
 	}
-	findings = append(findings, memberLimits(config)...)
+	findings = append(findings, memberLimits(config, members)...)
+	grown, err := r.growthLimit(ctx, config, members)
+	if err != nil {
+		return nil, err
+	}
+	if grown != "" {
+		findings = append(findings, finding{reason: MemberTooLarge, message: grown})
+	}
 	if groups := groupsWithoutManagementInterface(config); len(groups) > 0 {
 		findings = append(findings, finding{
 			reason: NoManagementInterface,
@@ -428,9 +451,9 @@ type clusterScope struct {
 }
 
 // clusterScopes are the clusters a document builds: the whole document for one
-// cluster, and one node set per member for a supercluster's document.
-func clusterScopes(config *simplyblockv1alpha2.ClusterDeploymentConfig) []clusterScope {
-	if !IsSuperclusterDocument(config) {
+// cluster, and one node set per member for a members document.
+func clusterScopes(config *simplyblockv1alpha2.ClusterDeploymentConfig, members bool) []clusterScope {
+	if !members {
 		return []clusterScope{{document: config}}
 	}
 	scopes := make([]clusterScope, 0, len(config.Spec.NodeSets))
@@ -451,7 +474,7 @@ const maxStorageNodesPerCluster = 32
 
 // memberLimits reports node sets over the storage-node limit, and the members a
 // supercluster's document would name with something that is not a name.
-func memberLimits(config *simplyblockv1alpha2.ClusterDeploymentConfig) []finding {
+func memberLimits(config *simplyblockv1alpha2.ClusterDeploymentConfig, members bool) []finding {
 	var findings []finding
 	for _, set := range config.Spec.NodeSets {
 		// The node set's own layout, its overrides merged into the template.
@@ -469,10 +492,10 @@ func memberLimits(config *simplyblockv1alpha2.ClusterDeploymentConfig) []finding
 					"workers into node sets of at most %d workers, each a member of a supercluster",
 				set.Name, nodes, maxStorageNodesPerCluster, maxStorageNodesPerCluster/int(slots))})
 		}
-		if !IsSuperclusterDocument(config) {
+		if !members {
 			continue
 		}
-		name := memberName(config.Spec.Cluster.Name, set.Name, "abc")
+		name := memberName(superclusterName(config), set.Name, "abc")
 		if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
 			findings = append(findings, finding{reason: MemberNameInvalid, message: fmt.Sprintf(
 				"node set %s makes a member named like %s, which a StorageCluster cannot be "+
@@ -481,6 +504,39 @@ func memberLimits(config *simplyblockv1alpha2.ClusterDeploymentConfig) []finding
 		}
 	}
 	return findings
+}
+
+// growthLimit reports a document that grows a cluster past the storage-node
+// limit, counting the nodes the cluster already has. A document adding members
+// is held to the limit per member by memberLimits instead.
+func (r *ClusterDeploymentConfigReconciler) growthLimit(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig, members bool,
+) (string, error) {
+	if members || config.Spec.ClusterRef == "" {
+		return "", nil
+	}
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: config.Namespace, Name: config.Spec.ClusterRef}
+	switch err := r.Get(ctx, key, &cluster); {
+	case apierrors.IsNotFound(err):
+		// The expansion refuses this with ClusterNotFound.
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("reading StorageCluster %s: %w", config.Spec.ClusterRef, err)
+	}
+	held, err := existingFootprint(ctx, r.Client, config.Namespace, cluster.Name)
+	if err != nil {
+		return "", err
+	}
+	total := newFootprint()
+	total.merge(held)
+	total.merge(plannedFootprint(config, slotsPerWorker(&cluster)))
+	if total.nodes() <= maxStorageNodesPerCluster {
+		return "", nil
+	}
+	return fmt.Sprintf(
+		"the document adds %d storage nodes to cluster %s, which has %d, and a cluster holds at most %d",
+		total.nodes()-held.nodes(), cluster.Name, held.nodes(), maxStorageNodesPerCluster), nil
 }
 
 // blockDevicesWithoutJournalDevice reports a cluster of logical block devices

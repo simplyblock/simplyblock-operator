@@ -175,7 +175,11 @@ func (r *ClusterDeploymentConfigReconciler) Reconcile(
 func (r *ClusterDeploymentConfigReconciler) expand(
 	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) (ctrl.Result, error) {
-	machine, err := statemachine.NewFromSnapshot(ctx, expansionGraph(clustersBuilt(config)),
+	members, err := AddsMembers(ctx, r.Client, config)
+	if err != nil {
+		return ctrl.Result{RequeueAfter: configRetry}, err
+	}
+	machine, err := statemachine.NewFromSnapshot(ctx, expansionGraph(clustersBuilt(config, members)),
 		statemachine.FromKube[configStep](config.Status.Step))
 	if err != nil {
 		// An unrecognized step is a downgrade, a hand-edited object, or a rename

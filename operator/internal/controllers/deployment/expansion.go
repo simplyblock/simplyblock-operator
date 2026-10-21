@@ -126,7 +126,16 @@ func nextStep(machine *statemachine.Machine[configStep]) (configStep, error) {
 func (r *ClusterDeploymentConfigReconciler) createCluster(
 	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) (bool, error) {
-	if IsSuperclusterDocument(config) {
+	members, err := AddsMembers(ctx, r.Client, config)
+	if err != nil {
+		return false, err
+	}
+	if members {
+		if config.Spec.Cluster == nil {
+			return false, refusef(MemberSizingUnstated,
+				"spec.clusterRef names supercluster %s, and the members the document adds have no "+
+					"sizing: state it in spec.cluster", config.Spec.ClusterRef)
+		}
 		return r.createSupercluster(ctx, config)
 	}
 	name, err := targetClusterName(config)
@@ -216,7 +225,7 @@ func (r *ClusterDeploymentConfigReconciler) activateCluster(
 		return false, refusef(ClusterNotFound,
 			"the document records no cluster to activate")
 	}
-	targets, err := expansionTargets(config)
+	targets, err := r.expansionTargets(ctx, config)
 	if err != nil {
 		return false, err
 	}
@@ -480,7 +489,7 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 func (r *ClusterDeploymentConfigReconciler) awaitCluster(
 	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) (bool, error) {
-	targets, err := expansionTargets(config)
+	targets, err := r.expansionTargets(ctx, config)
 	if err != nil {
 		return false, err
 	}
@@ -519,7 +528,7 @@ func (r *ClusterDeploymentConfigReconciler) createNodes(
 	// persist status.nodeRefs would otherwise skip it on the next pass, as one
 	// that already exists, and the finished document would permanently omit a
 	// node it created.
-	targets, err := expansionTargets(config)
+	targets, err := r.expansionTargets(ctx, config)
 	if err != nil {
 		return false, err
 	}
