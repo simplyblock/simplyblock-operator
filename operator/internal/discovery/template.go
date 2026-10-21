@@ -175,6 +175,14 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 			"is created and never re-applies it, so a cluster created without this is "+
 			"one nobody can turn it on for.")
 	}
+	if len(seed.SocketsToUse) > 0 {
+		out.Template.SocketsToUse = slices.Clone(seed.SocketsToUse)
+		out.Notes = append(out.Notes, statedNote("socketsToUse", strings.Join(seed.SocketsToUse, ", ")))
+	}
+	if seed.NodesPerSocket != nil {
+		out.Template.NodesPerSocket = seed.NodesPerSocket
+		out.Notes = append(out.Notes, statedNote("nodesPerSocket", fmt.Sprintf("%d", *seed.NodesPerSocket)))
+	}
 	if seed.EnableFailureDomains != nil {
 		out.Template.EnableFailureDomains = seed.EnableFailureDomains
 		out.Notes = append(out.Notes, statedNote("enableFailureDomains", enabled(*seed.EnableFailureDomains)))

@@ -57,9 +57,8 @@ type Planner struct {
 	KubeNodes map[string]KubeNode
 
 	// SlotsPerWorker is how many storage nodes each worker runs, which decides
-	// how many workers a member holds. Zero is one, which is every draft's
-	// layout: neither a run nor an installation states a socket layout, so the
-	// operator leaves it unset.
+	// how many workers a member holds. Zero is one, the layout of a draft that
+	// states none; a discovery run states none.
 	SlotsPerWorker int32
 }
 

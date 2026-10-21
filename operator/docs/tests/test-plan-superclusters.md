@@ -196,22 +196,24 @@ File: `operator/internal/controllers/deployment/supercluster_members_test.go`
 
 ### Balanced Split in the Discovery Generator (design §5.5)
 
-File: `operator/internal/discovery/sizesplit_test.go`
+File: `operator/internal/discovery/sizesplit_test.go`, and
+`operator/internal/controllers/deployment/draftseed_test.go` for U-224
 
-| #    | Scenario                                                                                                                      | Type     | Test                                                                       |
-|------|-------------------------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------------------------------|
-| U-88 | Twenty workers with one slot each are drafted as one node set keeping the tier's name, `discovered`                           | Positive | `TestTwentyWorkersAreOneNodeSetKeepingTheTiersName`                        |
-| U-89 | Thirty-two workers are one node set, thirty-three are two of 17 and 16                                                        | Boundary | `TestTheSplitSizesMembersEvenly`                                           |
-| U-90 | Forty workers with one slot each are two node sets of 20                                                                      | Positive | `TestTheSplitSizesMembersEvenly`                                           |
-| U-91 | Forty workers with two slots each are three node sets of 14, 13, and 13                                                       | Positive | `TestTheSplitSizesMembersEvenly`                                           |
-| U-92 | Sixty-five workers with one slot each are three node sets of 22, 22, and 21                                                   | Positive | `TestTheSplitSizesMembersEvenly`                                           |
-| U-93 | Workers in three failure domains are spread over every node set, with per-domain counts differing by at most one between sets | Positive | `TestFailureDomainsAreSpreadOverEveryMember`                               |
-| U-94 | Workers whose management interface names differ are never drafted into one node set                                           | Negative | `TestWorkersOnDifferentManagementInterfacesAreNeverOneNodeSet`             |
-| U-95 | Group names are unique within every node set after the split                                                                  | Boundary | `TestGroupNamesAreUniqueWithinEveryNodeSet`                                |
-| U-96 | Two runs over an unchanged fleet produce identical node sets and names                                                        | Positive | `TestTheSplitIsTheSameForTheSameFleet`                                     |
-| U-97 | A partition below the erasure-coding minimum is drafted without padding, and validation reports the minimum                   | Negative | `TestASmallPartitionIsNotPadded`, `TestTheStripeMinimumIsCheckedPerMember` |
-| U-98 | An infra tier and a worker tier split independently, drafted as `infra`, `discovered-1`, and `discovered-2`                   | Positive | `TestTiersSplitIndependently`                                              |
-| U-99 | Two hundred workers with distinct disks produce no node set above 32 groups                                                   | Boundary | `TestTwoHundredDistinctWorkersMakeNoNodeSetAboveThirtyTwoGroups`           |
+| #     | Scenario                                                                                                                       | Type     | Test                                                                               |
+|-------|--------------------------------------------------------------------------------------------------------------------------------|----------|------------------------------------------------------------------------------------|
+| U-88  | Twenty workers with one slot each are drafted as one node set keeping the tier's name, `discovered`                            | Positive | `TestTwentyWorkersAreOneNodeSetKeepingTheTiersName`                                |
+| U-89  | Thirty-two workers are one node set, thirty-three are two of 17 and 16                                                         | Boundary | `TestTheSplitSizesMembersEvenly`                                                   |
+| U-90  | Forty workers with one slot each are two node sets of 20                                                                       | Positive | `TestTheSplitSizesMembersEvenly`                                                   |
+| U-91  | Forty workers with two slots each are three node sets of 14, 13, and 13                                                        | Positive | `TestTheSplitSizesMembersEvenly`                                                   |
+| U-92  | Sixty-five workers with one slot each are three node sets of 22, 22, and 21                                                    | Positive | `TestTheSplitSizesMembersEvenly`                                                   |
+| U-93  | Workers in three failure domains are spread over every node set, with per-domain counts differing by at most one between sets  | Positive | `TestFailureDomainsAreSpreadOverEveryMember`                                       |
+| U-94  | Workers whose management interface names differ are never drafted into one node set                                            | Negative | `TestWorkersOnDifferentManagementInterfacesAreNeverOneNodeSet`                     |
+| U-95  | Group names are unique within every node set after the split                                                                   | Boundary | `TestGroupNamesAreUniqueWithinEveryNodeSet`                                        |
+| U-96  | Two runs over an unchanged fleet produce identical node sets and names                                                         | Positive | `TestTheSplitIsTheSameForTheSameFleet`                                             |
+| U-97  | A partition below the erasure-coding minimum is drafted without padding, and validation reports the minimum                    | Negative | `TestASmallPartitionIsNotPadded`, `TestTheStripeMinimumIsCheckedPerMember`         |
+| U-98  | An infra tier and a worker tier split independently, drafted as `infra`, `discovered-1`, and `discovered-2`                    | Positive | `TestTiersSplitIndependently`                                                      |
+| U-99  | Two hundred workers with distinct disks produce no node set above 32 groups                                                    | Boundary | `TestTwoHundredDistinctWorkersMakeNoNodeSetAboveThirtyTwoGroups`                   |
+| U-224 | The installation's stated socket layout seeds the initial draft and sizes its members by the storage nodes per worker it makes | Positive | `TestAStatedSocketLayoutSeedsTheDraft`, `TestTheStatedSocketLayoutSizesTheMembers` |
 
 ### Kubernetes Topology and Placement-Group Labels (design §5.7, §7.2)
 
@@ -617,7 +619,7 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 184       | 111     | all others  |
+| Unit        | 185       | 112     | all others  |
 | Integration | 55        | 12      | all others  |
 | E2E         | 10        | 0       | E-01 … E-10 |
 | Manual      | 2         | 0       | M-01, M-02  |
@@ -626,7 +628,7 @@ Four covered unit rows are existing tests of behavior this design keeps: U-25,
 U-27, U-28, and U-81. The rest, and the six integration rows, are Phase 1's
 first two iterations: the API, admission, the supercluster reconciler, the
 refusals of U-195 to U-198, and the workload names and shared Services of §6 with U-203 to
-U-217, and the expansion into members of §5.1 to §5.4 with U-218 to U-222, the per-node-set overrides of §5.8 with U-124 to U-128 and U-194, growth of §5.6 with U-87, I-60, and I-61, the topology approval rules of §5.7 with U-107, U-108, and U-178 to U-180, the failure domains discovery reads with U-100 to U-104, and the size split of §5.5 with U-88 to U-99, U-105, U-106, and U-151, the suffix draw of U-152, and the placement-group labels of U-173 to U-177, and the delete rules failing open with U-223. The counts exclude struck rows, each superseded by
+U-217, and the expansion into members of §5.1 to §5.4 with U-218 to U-222, the per-node-set overrides of §5.8 with U-124 to U-128 and U-194, growth of §5.6 with U-87, I-60, and I-61, the topology approval rules of §5.7 with U-107, U-108, and U-178 to U-180, the failure domains discovery reads with U-100 to U-104, and the size split of §5.5 with U-88 to U-99, U-105, U-106, and U-151, the suffix draw of U-152, and the placement-group labels of U-173 to U-177, the delete rules failing open with U-223, and the stated socket layout with U-224. The counts exclude struck rows, each superseded by
 the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-35, U-38 … U-46, U-55 … U-57, U-77, U-79, U-122, U-129 … U-130, U-163, U-200, and I-04 … I-07, I-09, I-11 … I-12, I-14, I-17 … I-20, I-26, I-28 … I-30, I-34, I-37, I-40 … I-41, I-43, I-46, I-52.
 
 ---

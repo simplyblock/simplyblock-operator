@@ -975,7 +975,7 @@ prometheus:
 # The Control Center — the simplyblock web console (control-center/ in the
 # monorepo). Off by default: it proxies the Kubernetes API with the pod's
 # ServiceAccount token, so enabling it is a deliberate decision about who may
-# reach the Service. See control-center/README.md, "Who can do what".
+# reach the Service. See control-center/README.md, "Who can do what."
 controlCenter:
   enabled: false
 
