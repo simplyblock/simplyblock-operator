@@ -32,11 +32,11 @@ func recordedNames(t *testing.T, cluster *simplyblockv1alpha2.StorageCluster) at
 	return names
 }
 
-// otherCluster is a second cluster in the test namespace, with the names it
-// recorded.
-func otherCluster(name string, names atlaskube.WorkloadNames) *simplyblockv1alpha2.StorageCluster {
+// otherCluster is a second cluster in the test namespace, named first, with
+// the names it recorded.
+func otherCluster(names atlaskube.WorkloadNames) *simplyblockv1alpha2.StorageCluster {
 	return &simplyblockv1alpha2.StorageCluster{
-		ObjectMeta: objectMeta(name),
+		ObjectMeta: objectMeta("first"),
 		Spec: simplyblockv1alpha2.StorageClusterSpec{
 			MaxSubsystemCount: ptr.To(int32(20)), VCPUCount: ptr.To(int32(8)),
 		},
@@ -81,7 +81,7 @@ func TestTheFirstClusterInANamespaceTakesTheConstantNames(t *testing.T) {
 
 func TestASecondClusterInANamespaceTakesItsOwnNames(t *testing.T) {
 	r := newClusterReconciler(t, &fakeControlPlane{}, &recorder{},
-		newUncreatedCluster(), otherCluster("first", atlaskube.ConstantWorkloadNames()))
+		newUncreatedCluster(), otherCluster(atlaskube.ConstantWorkloadNames()))
 
 	cluster := reconcileCluster(t, r, 2)
 
@@ -94,7 +94,7 @@ func TestASecondClusterInANamespaceTakesItsOwnNames(t *testing.T) {
 // next cluster may take them.
 func TestTheConstantNamesAreFreeWhileNoClusterHoldsThem(t *testing.T) {
 	r := newClusterReconciler(t, &fakeControlPlane{}, &recorder{},
-		newUncreatedCluster(), otherCluster("first", atlaskube.DerivedWorkloadNames("first")))
+		newUncreatedCluster(), otherCluster(atlaskube.DerivedWorkloadNames("first")))
 
 	cluster := reconcileCluster(t, r, 2)
 
@@ -107,7 +107,7 @@ func TestTheConstantNamesAreFreeWhileNoClusterHoldsThem(t *testing.T) {
 // Service decides between them: the one that finds it held by the other before
 // its backend cluster exists takes its own names instead.
 func TestAClusterFindingTheConstantServiceHeldRewritesItsNamesBeforeCreating(t *testing.T) {
-	winner := otherCluster("first", atlaskube.ConstantWorkloadNames())
+	winner := otherCluster(atlaskube.ConstantWorkloadNames())
 	winner.UID = "uid-of-first"
 	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: atlaskube.ConstantNodeAPIService, Namespace: testNamespace,
@@ -146,7 +146,7 @@ func TestTheCreateBodyCarriesTheWorkloadNames(t *testing.T) {
 		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{},
-		newUncreatedCluster(), otherCluster("first", atlaskube.ConstantWorkloadNames()))
+		newUncreatedCluster(), otherCluster(atlaskube.ConstantWorkloadNames()))
 
 	cluster := reconcileCluster(t, r, 6)
 
@@ -176,7 +176,7 @@ func TestAControlPlaneThatDropsTheNamesHoldsTheCluster(t *testing.T) {
 	}
 	rec := &recorder{}
 	r := newClusterReconciler(t, api, rec,
-		newUncreatedCluster(), otherCluster("first", atlaskube.ConstantWorkloadNames()))
+		newUncreatedCluster(), otherCluster(atlaskube.ConstantWorkloadNames()))
 
 	cluster := reconcileCluster(t, r, 6)
 
@@ -210,12 +210,12 @@ func TestAControlPlaneThatPredatesTheNamesStillCreatesTheFirstCluster(t *testing
 
 func TestASuperclusterRecordsItsOwnNames(t *testing.T) {
 	supercluster := &simplyblockv1alpha2.StorageCluster{
-		ObjectMeta: objectMeta("prod"),
+		ObjectMeta: objectMeta(testSuperclusterName),
 		Spec:       simplyblockv1alpha2.StorageClusterSpec{Supercluster: &simplyblockv1alpha2.SuperclusterSpec{}},
 	}
 	r := newSuperclusterReconciler(t, &fakeControlPlane{}, &recorder{}, supercluster)
 
-	key := types.NamespacedName{Namespace: testNamespace, Name: "prod"}
+	key := types.NamespacedName{Namespace: testNamespace, Name: testSuperclusterName}
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -224,7 +224,28 @@ func TestASuperclusterRecordsItsOwnNames(t *testing.T) {
 		t.Fatalf("read the supercluster back: %v", err)
 	}
 
-	if names, want := recordedNames(t, &got), atlaskube.DerivedWorkloadNames("prod"); names != want {
+	if names, want := recordedNames(t, &got), atlaskube.DerivedWorkloadNames(testSuperclusterName); names != want {
 		t.Errorf("workloadNames = %+v, want %+v", names, want)
+	}
+}
+
+// A member is reached through its supercluster's Services with a suffix of its
+// own (§6.2). It records those names from the start, because a record is never
+// changed, and is the only cluster with storage nodes in its namespace until
+// the supercluster builds the shared Services.
+func TestAMemberRecordsItsSuperclustersNamesWithItsOwnSuffix(t *testing.T) {
+	supercluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: objectMeta(testSuperclusterName),
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{Supercluster: &simplyblockv1alpha2.SuperclusterSpec{}},
+	}
+	member := newUncreatedCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.Spec.SuperclusterRef = testSuperclusterName
+	})
+	r := newClusterReconciler(t, &fakeControlPlane{}, &recorder{}, member, supercluster)
+
+	cluster := reconcileCluster(t, r, 2)
+
+	if got, want := recordedNames(t, cluster), atlaskube.MemberWorkloadNames(testSuperclusterName, testClusterName); got != want {
+		t.Errorf("workloadNames = %+v, want %+v", got, want)
 	}
 }

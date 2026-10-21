@@ -462,7 +462,7 @@ func (r *StorageNodeWorkloadReconciler) reconcileService(
 		// over would hand that cluster's nodes to this one, so the pass stops
 		// here, and the cluster's own reconciler gives it other names.
 		if owner := metav1.GetControllerOf(&existing); owner != nil && owner.UID != cluster.UID {
-			return fmt.Errorf("Service %s belongs to %s %s, not to this cluster",
+			return fmt.Errorf("the Service %s belongs to %s %s, not to this cluster",
 				existing.Name, owner.Kind, owner.Name)
 		}
 		// The cluster IP is assigned by Kubernetes and may not be rewritten, so

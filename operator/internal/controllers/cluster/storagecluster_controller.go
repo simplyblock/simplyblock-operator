@@ -303,8 +303,7 @@ func (r *StorageClusterReconciler) create(
 	if err != nil {
 		// An unrecognized step is a downgrade or a hand-edited object, and
 		// neither resolves by reconciling again.
-		return ctrl.Result{}, r.reportPhase(ctx, cluster,
-			simplyblockv1alpha2.StorageClusterPhaseUnavailable,
+		return ctrl.Result{}, r.reportUnavailable(ctx, cluster,
 			fmt.Sprintf("the creation cannot be resumed: %v", err))
 	}
 	defer machine.Close()
@@ -317,8 +316,7 @@ func (r *StorageClusterReconciler) create(
 	}
 
 	if machine.TimeoutReached() {
-		return ctrl.Result{RequeueAfter: clusterRetry}, r.reportPhase(ctx, cluster,
-			simplyblockv1alpha2.StorageClusterPhaseUnavailable,
+		return ctrl.Result{RequeueAfter: clusterRetry}, r.reportUnavailable(ctx, cluster,
 			fmt.Sprintf("creation step %s outlived its deadline", machine.CurrentState()))
 	}
 
@@ -366,8 +364,7 @@ func (r *StorageClusterReconciler) create(
 		return r.adopt(ctx, cluster, machine)
 
 	default:
-		return ctrl.Result{}, r.reportPhase(ctx, cluster,
-			simplyblockv1alpha2.StorageClusterPhaseUnavailable,
+		return ctrl.Result{}, r.reportUnavailable(ctx, cluster,
 			fmt.Sprintf("creation step %s belongs to no path", machine.CurrentState()))
 	}
 }
@@ -389,7 +386,7 @@ func (r *StorageClusterReconciler) claim(
 	if names == nil {
 		chosen, err := r.chooseWorkloadNames(ctx, cluster)
 		if err != nil {
-			return ctrl.Result{RequeueAfter: clusterRetry}, err
+			return ctrl.Result{}, err
 		}
 		names = utils.WorkloadNamesStatus(chosen)
 	}
@@ -452,8 +449,12 @@ func (r *StorageClusterReconciler) postCluster(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if rewritten, err := r.settleWorkloadNames(ctx, cluster); err != nil || rewritten {
-		return ctrl.Result{RequeueAfter: time.Second}, err
+	rewritten, err := r.settleWorkloadNames(ctx, cluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if rewritten {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
 	params, err := r.creationParams(ctx, cluster)
@@ -618,8 +619,12 @@ func (r *StorageClusterReconciler) persist(
 	found adoption,
 	adopted bool,
 ) (ctrl.Result, error) {
-	if missing, err := r.backendMissesWorkloadNames(ctx, cluster, found); missing || err != nil {
-		return ctrl.Result{RequeueAfter: clusterRetry}, err
+	missing, err := r.backendMissesWorkloadNames(ctx, cluster, found)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if missing {
+		return ctrl.Result{RequeueAfter: clusterRetry}, nil
 	}
 
 	// A credential is the one thing this step cannot invent, and the one the
@@ -1365,15 +1370,14 @@ func (r *StorageClusterReconciler) note(
 	})
 }
 
-// reportPhase writes a phase and the sentence explaining it.
-func (r *StorageClusterReconciler) reportPhase(
+// reportUnavailable writes the Unavailable phase and the sentence explaining it.
+func (r *StorageClusterReconciler) reportUnavailable(
 	ctx context.Context,
 	cluster *simplyblockv1alpha2.StorageCluster,
-	phase simplyblockv1alpha2.StorageClusterPhase,
 	message string,
 ) error {
 	err := r.writeStatus(ctx, cluster, func(status *simplyblockv1alpha2.StorageClusterStatus) {
-		status.Phase = phase
+		status.Phase = simplyblockv1alpha2.StorageClusterPhaseUnavailable
 		status.Message = message
 	})
 	r.observePhase(cluster)

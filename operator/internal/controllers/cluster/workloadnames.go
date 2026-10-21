@@ -30,14 +30,19 @@ import (
 //
 // A cluster with a backend cluster was created before the record, and its nodes
 // were registered under the constant names, which are the only ones it can
-// have. A new cluster takes the constant names unless another cluster in its
-// namespace recorded them or holds the Service that carries them.
+// have. A member is reached through its supercluster's Services with a suffix
+// of its own (§6.2). A new standalone cluster takes the constant names unless
+// another cluster in its namespace recorded them or holds the Service that
+// carries them.
 func (r *StorageClusterReconciler) chooseWorkloadNames(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) (atlaskube.WorkloadNames, error) {
 	constant := atlaskube.ConstantWorkloadNames()
 	if cluster.Status.UUID != "" {
 		return constant, nil
+	}
+	if cluster.Spec.SuperclusterRef != "" {
+		return atlaskube.MemberWorkloadNames(cluster.Spec.SuperclusterRef, cluster.Name), nil
 	}
 
 	var clusters simplyblockv1alpha2.StorageClusterList
@@ -140,7 +145,7 @@ func (r *StorageClusterReconciler) backendMissesWorkloadNames(
 		found.UUID, names.NodeAPIService, cluster.Namespace)
 	r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
 		WorkloadNamesNotRecorded, WorkloadNamesNotRecorded, "%s", message)
-	return true, r.reportPhase(ctx, cluster, simplyblockv1alpha2.StorageClusterPhaseUnavailable, message)
+	return true, r.reportUnavailable(ctx, cluster, message)
 }
 
 // backendWorkloadNamesOf is the part of the cluster's names the create body

@@ -7,7 +7,10 @@
 
 package kube
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // The constant names. The control plane uses them for a cluster whose record
 // names none, so they are part of the identity of every node of a cluster
@@ -76,3 +79,28 @@ func (n WorkloadNames) Hostname(worker string) string {
 	label, _, _ := strings.Cut(worker, ".")
 	return label + n.NodeLabelSuffix
 }
+
+// MemberWorkloadNames are the names a supercluster's member is reached by: its
+// supercluster's Services, and a suffix of its own on every hostname, because
+// one worker may carry nodes of several members.
+func MemberWorkloadNames(supercluster, member string) WorkloadNames {
+	names := DerivedWorkloadNames(supercluster)
+	names.NodeLabelSuffix = "-" + memberSuffix(member)
+	return names
+}
+
+// drawnSuffix matches the three letters an expansion draws onto a member's
+// name, <cluster>-<nodeset>-<suffix>.
+var drawnSuffix = regexp.MustCompile(`-([a-z]{3})$`)
+
+// memberSuffix is the member's drawn suffix when its name carries one, and
+// three characters of a digest of its name for a member written by hand.
+func memberSuffix(member string) string {
+	if match := drawnSuffix.FindStringSubmatch(member); match != nil {
+		return match[1]
+	}
+	return digestOf([]string{member})[:memberSuffixLength]
+}
+
+// memberSuffixLength is the length of a member's suffix without its dash.
+const memberSuffixLength = 3

@@ -89,3 +89,37 @@ func TestAWorkersHostnameCarriesTheNodeLabelSuffix(t *testing.T) {
 		t.Errorf("Hostname = %q, want worker-1-abc", got)
 	}
 }
+
+// A member is reached through its supercluster's Services, so that a volume
+// moved between members and a host connected to several of them need nothing
+// per member, with its own suffix on every hostname, because one worker may
+// carry nodes of several members.
+func TestAMemberIsReachedThroughItsSuperclustersServicesWithItsOwnSuffix(t *testing.T) {
+	got := MemberWorkloadNames("prod", "prod-dense-kqv")
+
+	want := DerivedWorkloadNames("prod")
+	want.NodeLabelSuffix = "-kqv"
+	if got != want {
+		t.Errorf("MemberWorkloadNames = %+v, want %+v", got, want)
+	}
+}
+
+// A member written by hand has no drawn suffix in its name. It takes three
+// characters of a digest of its name, the same on every call.
+func TestAHandWrittenMembersSuffixComesFromItsName(t *testing.T) {
+	first, again := MemberWorkloadNames("prod", "fast-tier"), MemberWorkloadNames("prod", "fast-tier")
+	other := MemberWorkloadNames("prod", "dense-tier")
+
+	if len(first.NodeLabelSuffix) != 4 || first.NodeLabelSuffix[0] != '-' {
+		t.Errorf("suffix = %q, want a dash and three characters", first.NodeLabelSuffix)
+	}
+	if first != again {
+		t.Errorf("two calls derive %q and %q", first.NodeLabelSuffix, again.NodeLabelSuffix)
+	}
+	if first.NodeLabelSuffix == other.NodeLabelSuffix {
+		t.Errorf("two members derive one suffix %q", first.NodeLabelSuffix)
+	}
+	if errs := validation.IsDNS1123Label("worker-1" + first.NodeLabelSuffix); len(errs) > 0 {
+		t.Errorf("the suffix does not make a hostname label: %v", errs)
+	}
+}
