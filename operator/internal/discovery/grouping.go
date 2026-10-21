@@ -71,6 +71,12 @@ type Worker struct {
 	// what makes two workers groupable for the same reason the management
 	// interface is.
 	Data []string
+
+	// FailureDomain is the value of the failure-domain label on the worker's
+	// Node, empty when it carries none or one the field does not accept. It is
+	// part of what makes two workers groupable, because a NodeGroup names one
+	// failure domain for every worker it lists.
+	FailureDomain string
 }
 
 // Addresses is how the draft names this worker's devices, ascending and without
@@ -117,6 +123,9 @@ type Group struct {
 	// DataInterfaces are the interfaces every worker in the group carries data
 	// traffic on, empty when they serve data on the management interface.
 	DataInterfaces []string
+
+	// FailureDomain is the failure domain every worker in the group is in.
+	FailureDomain string
 }
 
 // Grouper puts workers into groups.
@@ -146,7 +155,7 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 
 	for _, worker := range workers {
 		addresses := worker.Addresses()
-		signature := worker.Class.signature(addresses, worker.Mgmt.Name, worker.Data)
+		signature := worker.Class.signature(addresses, worker.Mgmt.Name, worker.Data) + "\x00" + worker.FailureDomain
 
 		group, seen := bySignature[signature]
 		if !seen {
@@ -155,6 +164,7 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 				Addresses:      addresses,
 				MgmtInterface:  worker.Mgmt.Name,
 				DataInterfaces: worker.Data,
+				FailureDomain:  worker.FailureDomain,
 			}
 			bySignature[signature] = group
 			order = append(order, signature)
@@ -315,6 +325,7 @@ func nodeGroupOf(group Group) simplyblockv1alpha2.NodeGroup {
 		Workers:        workers,
 		MgmtInterface:  group.MgmtInterface,
 		DataInterfaces: group.DataInterfaces,
+		FailureDomain:  group.FailureDomain,
 	}
 	if len(group.Addresses) > 0 {
 		selection := &simplyblockv1alpha2.DeviceSelection{}

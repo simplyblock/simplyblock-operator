@@ -71,6 +71,33 @@ type Plan struct {
 	// Refusals is every device and every worker declined, with the rule and
 	// the reason. It is the run's account of itself.
 	Refusals []Refusal
+
+	// Findings are what the draft leaves for a reviewer to correct: topology
+	// the Kubernetes API does not carry for every worker, or carries in a
+	// shape the draft cannot use.
+	Findings []Finding
+
+	// FailureDomains reports whether every worker carries a failure domain, so
+	// that the template enables them.
+	FailureDomains bool
+}
+
+// The reasons a finding is raised under.
+const (
+	// TopologyIncomplete names the workers without a failure domain in a fleet
+	// where others have one.
+	TopologyIncomplete = "TopologyIncomplete"
+
+	// FailureDomainInvalid names a worker whose failure-domain label carries a
+	// value the failureDomain field does not accept.
+	FailureDomainInvalid = "FailureDomainInvalid"
+)
+
+// Finding is one thing the draft leaves for a reviewer, under the reason its
+// event is raised with.
+type Finding struct {
+	Reason  string
+	Message string
 }
 
 // Summary is the sentence a run's status carries.
@@ -544,6 +571,7 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 	var misaligned []Refusal
 	plan.Workers, misaligned = alignNetworks(plan.Workers)
 	plan.Refusals = append(plan.Refusals, misaligned...)
+	plan.assignFailureDomains(failureDomainLabelOf(run))
 
 	if len(plan.Workers) > 0 {
 		plan.NodeSets = builder.Build(grouper.Group(plan.Workers))

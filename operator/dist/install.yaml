@@ -3351,6 +3351,16 @@ spec:
                       condition for whichever class is scanned, and so widens what is reported,
                       where every member of the filter narrows it.
                     type: boolean
+                  failureDomainLabel:
+                    default: topology.kubernetes.io/zone
+                    description: |-
+                      FailureDomainLabel is the Node label whose value becomes each worker's
+                      failure domain in the draft, for fleets that label racks or power feeds.
+                      Defaults to topology.kubernetes.io/zone. A worker without the label gets
+                      no failure domain, and the run reports it. A value that is not a valid
+                      failure domain is reported as well, naming the worker, and not used.
+                    maxLength: 317
+                    type: string
                   forceJournalDevice:
                     description: |-
                       ForceJournalDevice makes the run dedicate a journal device even where the

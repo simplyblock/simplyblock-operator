@@ -175,6 +175,14 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 			"is created and never re-applies it, so a cluster created without this is "+
 			"one nobody can turn it on for.")
 	}
+	if seed.EnableFailureDomains != nil {
+		out.Template.EnableFailureDomains = seed.EnableFailureDomains
+		out.Notes = append(out.Notes, statedNote("enableFailureDomains", enabled(*seed.EnableFailureDomains)))
+	} else if plan.FailureDomains {
+		out.Template.EnableFailureDomains = ptr.To(true)
+		out.Notes = append(out.Notes, "enableFailureDomains is on, because every worker carries a "+
+			"failure domain, and each group names its workers' domain")
+	}
 	if seed.EnableAtomicity4K != nil {
 		out.Template.EnableAtomicity4K = seed.EnableAtomicity4K
 		out.Notes = append(out.Notes, statedNote("enableAtomicity4K",
