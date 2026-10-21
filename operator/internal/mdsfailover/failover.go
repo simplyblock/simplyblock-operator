@@ -48,7 +48,7 @@ type Deps struct {
 	Metrics  *Metrics
 	Config   Config
 	// HostNQN is the host NQN of one ordinal of the StatefulSet (§5.2).
-	HostNQN func(statefulSetUID string, ordinal int) string
+	HostNQN func(statefulSetUID string, ordinal int) (string, error)
 }
 
 // takeover is the in-memory part of one takeover: what only timing and the
@@ -350,7 +350,10 @@ func (f *Failover) request(ctx context.Context, obs Observation, target Guest) (
 	if !ok {
 		return nfsexportrpc.PromoteRequest{}, fmt.Errorf("state volume %q is not a volume handle", obs.StateVolume)
 	}
-	nqn := f.deps.HostNQN(obs.StatefulSetUID, target.Ordinal)
+	nqn, err := f.deps.HostNQN(obs.StatefulSetUID, target.Ordinal)
+	if err != nil {
+		return nfsexportrpc.PromoteRequest{}, err
+	}
 	specs, err := f.deps.Exports.Specs(ctx, nqn)
 	if err != nil {
 		return nfsexportrpc.PromoteRequest{}, fmt.Errorf("building the exports' specs: %w", err)

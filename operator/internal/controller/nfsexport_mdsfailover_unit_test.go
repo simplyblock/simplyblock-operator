@@ -32,9 +32,10 @@ import (
 
 	"github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/nfsexport/nfsexportrpc"
-	"github.com/simplyblock/atlas/nqn"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	"github.com/simplyblock/simplyblock-operator/internal/mdsfailover"
+	"github.com/simplyblock/simplyblock-operator/internal/mdsstate"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -192,7 +193,7 @@ func newFailoverWorld(t *testing.T, objects ...client.Object) *failoverWorld {
 // instantClock never waits, so a retry of a read costs a test nothing.
 type instantClock struct{}
 
-func (instantClock) Now() time.Time                                  { return time.Now() }
+func (instantClock) Now() time.Time                             { return time.Now() }
 func (instantClock) Sleep(context.Context, time.Duration) error { return nil }
 
 func (w *failoverWorld) reconcile(t *testing.T) reconcile.Result {
@@ -233,7 +234,7 @@ func TestO07TheFirstExportRecordsEpochOneAndPromotesThroughTheReconciler(t *test
 	}
 	want, _ := nfsexport.MDSReservationKey(testMDSStatefulSetUID, 1)
 	req := w.guests.promotes[0]
-	if req.Key != want || req.HostNQN != mdsHostNQN(testMDSStatefulSetUID, 0) || req.StatefulSetUID != testMDSStatefulSetUID {
+	if req.Key != want || req.HostNQN != wantNQN(t, 0) || req.StatefulSetUID != testMDSStatefulSetUID {
 		t.Errorf("request = %+v, want the key of epoch 1 and the host NQN of ordinal 0", req)
 	}
 	if req.StateVolume.ClusterID != testExportClusterID || req.StateVolume.PoolID != "pool-a" {
@@ -499,19 +500,36 @@ func TestO30TheSinkEmitsOnTheDriverAndOnEveryExportOfTheCluster(t *testing.T) {
 	}
 }
 
-func TestTheHostNQNIsPerOrdinalAndStable(t *testing.T) {
-	a, b := mdsHostNQN(testMDSStatefulSetUID, 0), mdsHostNQN(testMDSStatefulSetUID, 1)
-	if a == b || mdsHostNQN(testMDSStatefulSetUID, 4) == a {
-		t.Errorf("ordinals 0, 1, 4 share an NQN: %s %s", a, b)
+func wantNQN(t *testing.T, ordinal int32) string {
+	t.Helper()
+	n, err := mdsstate.HostNQN(testMDSStatefulSetUID, ordinal)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if again := mdsHostNQN(testMDSStatefulSetUID, 1); again != b {
-		t.Errorf("NQN is not stable: %s then %s", b, again)
+	return n
+}
+
+// The export calls carry the host NQN of the pod's own ordinal, which is what
+// the promotion registered and what the control plane authorized.
+func TestExportCallsCarryTheNQNOfThePodsOrdinal(t *testing.T) {
+	asm := &fakeAssembler{}
+	pod := mdsPod()
+	pod.Name = failoverPod1
+	e := testExport(bound(simplyblockv1alpha2.NFSExportPhaseAssembling))
+	e.Status.MDSPodName = failoverPod1
+	r, _ := newExportReconciler(t, asm, e, pod)
+
+	reconcileExport(t, r)
+
+	if want := wantNQN(t, 1); len(asm.hostNQNs) != 1 || asm.hostNQNs[0] != want {
+		t.Errorf("host NQNs = %v, want [%s], the ordinal 1 identity", asm.hostNQNs, want)
 	}
-	if other := mdsHostNQN("11111111-2222-4333-8444-555555555555", 0); other == a {
-		t.Error("two StatefulSets share an NQN at one ordinal")
-	}
-	if _, ok := nqn.HostUUID(a); !ok {
-		t.Errorf("%s is not a UUID-based host NQN", a)
+}
+
+func TestTheFailoverAndDriverAgreeOnTheNamesTheyShare(t *testing.T) {
+	if mdsfailover.ClusterLabel != driver.MDSClusterLabel || mdsfailover.ContainerName != driver.MDSContainerName {
+		t.Errorf("label %q/%q or container %q/%q differ", mdsfailover.ClusterLabel, driver.MDSClusterLabel,
+			mdsfailover.ContainerName, driver.MDSContainerName)
 	}
 }
 
@@ -522,7 +540,7 @@ func TestO16AnExportWaitsPendingWhileTheRecordedTargetIsNotActive(t *testing.T) 
 		mdsfailover.AnnotationEpoch: "2",
 	})
 	objects := failoverObjects(sts, testExport(nil))
-	r, cl, events := newPodHostedReconciler(t, append(objects[2:], testExport(nil), sts, mdsDriver())...)
+	r, cl, events := newPodHostedReconciler(t, objects...)
 	r.Serving = &mdsServingGate{Client: cl, Namespace: testOperatorNS, Guests: guests}
 
 	reconcileExport(t, r)

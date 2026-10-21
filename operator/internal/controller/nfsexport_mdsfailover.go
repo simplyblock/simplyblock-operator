@@ -14,6 +14,7 @@ import (
 	"context"
 	"sync"
 
+	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
@@ -60,15 +61,22 @@ func (r *MDSFailoverReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 // LeadershipAcquired restarts every detection window.
 func (r *MDSFailoverReconciler) LeadershipAcquired() {}
 
-// Switchover deletes the active pod of the StatefulSet and prefers target as the
-// standby to promote.
-func (r *MDSFailoverReconciler) Switchover(ctx context.Context, statefulSet, target string) error {
+// SwitchoverTo deletes the active pod of the StatefulSet and prefers target as
+// the standby to promote.
+func (r *MDSFailoverReconciler) SwitchoverTo(ctx context.Context, statefulSet, target string) error {
 	return nil
 }
 
-// EnsureActiveBelow is the scale-down hook of the workload.
-func (r *MDSFailoverReconciler) EnsureActiveBelow(ctx context.Context, statefulSet string, replicas int) (bool, error) {
-	return true, nil
+// ActiveOrdinal is the ordinal of the recorded active, and false before the
+// first promotion. It is the read half of mdsstate.Switchover.
+func (r *MDSFailoverReconciler) ActiveOrdinal(ctx context.Context, sts *appsv1.StatefulSet) (int32, bool, error) {
+	return 0, false, nil
+}
+
+// RequestSwitchover moves the active onto an ordinal below keepBelow. It is the
+// write half of mdsstate.Switchover.
+func (r *MDSFailoverReconciler) RequestSwitchover(ctx context.Context, sts *appsv1.StatefulSet, keepBelow int32) error {
+	return nil
 }
 
 // SetupWithManager wires the controller.
@@ -106,9 +114,6 @@ type MDSServingGate interface {
 	// record's epoch, and otherwise "" with why.
 	ServingPod(ctx context.Context, statefulSet string) (pod, why string, err error)
 }
-
-// mdsHostNQN is the host NQN of one ordinal of a StatefulSet.
-func mdsHostNQN(statefulSetUID string, ordinal int) string { return "" }
 
 // mdsEvents emits a takeover's events on the SimplyblockDriver and on the
 // cluster's exports.

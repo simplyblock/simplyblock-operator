@@ -150,15 +150,6 @@ func Ordinal(pod string) int {
 	return n
 }
 
-// StatefulSetOf is the name of the StatefulSet a pod belongs to, which is its
-// name without the ordinal.
-func StatefulSetOf(pod string) string {
-	if Ordinal(pod) < 0 {
-		return pod
-	}
-	return pod[:strings.LastIndex(pod, "-")]
-}
-
 func sortGuests(gs []Guest) {
 	for i := 1; i < len(gs); i++ {
 		for j := i; j > 0 && gs[j].Ordinal < gs[j-1].Ordinal; j-- {

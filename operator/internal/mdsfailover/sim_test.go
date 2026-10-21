@@ -197,7 +197,7 @@ func (s *sim) deps() Deps {
 	return Deps{
 		Clock: s.clock, Observer: s, Store: s, Guests: s, Gateway: s, Exports: s, Pods: s, Events: s,
 		Metrics: s.metrics, Config: s.config,
-		HostNQN: func(uid string, ordinal int) string { return fmt.Sprintf("nqn-%s-%d", uid, ordinal) },
+		HostNQN: func(uid string, ordinal int) (string, error) { return fmt.Sprintf("nqn-%s-%d", uid, ordinal), nil },
 	}
 }
 

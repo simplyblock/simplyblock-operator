@@ -18,18 +18,15 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	"github.com/simplyblock/atlas/kube"
 	atlaslvol "github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
-	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 )
 
 // nfsExportMDSBootRequeue is how often a waiting export looks at a metadata
@@ -41,8 +38,6 @@ const nfsExportMDSBootRequeue = 10 * time.Second
 // The metadata server's workload, applied on a storage cluster's first export,
 // and the driver that configures it.
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch
-// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch;create
-// +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingadmissionpolicies;validatingadmissionpolicybindings,verbs=get;create
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;create
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=get;list;watch
 // The attachment to the storage data network, when the driver names one: the
@@ -111,7 +106,7 @@ func (r *NFSExportReconciler) bindMDS(
 		return ctrl.Result{}, err
 	}
 
-	podName := driver.MDSPodName(d, handle.ClusterID)
+	podName := driver.MDSPodName(d, handle.ClusterID, 0)
 	var pod corev1.Pod
 	err = r.Get(ctx, client.ObjectKey{Namespace: r.OperatorNamespace, Name: podName}, &pod)
 	switch {
@@ -146,9 +141,7 @@ func (r *NFSExportReconciler) bindMDS(
 // builds, by MDSTemplateHash, gets the current template. That restarts the
 // guest, and every export of the cluster rides out the restart through the
 // guest's grace period. Without it, an upgrade leaves the metadata server on
-// the image of the release that created it. The state disk's class is chosen
-// only on create: a claim template cannot be changed afterward, so the
-// existing one is kept.
+// the image of the release that created it.
 func (r *NFSExportReconciler) ensureMDS(
 	ctx context.Context, export *simplyblockv1alpha2.NFSExport, d *simplyblockv1alpha2.SimplyblockDriver,
 	clusterID string,
@@ -173,15 +166,11 @@ func (r *NFSExportReconciler) ensureMDS(
 	if problem := driver.MDSResourcesProblem(d.Spec.PNFS.MDS); problem != "" {
 		return false, &mdsWaitError{reason: "MDSResourcesInvalid", message: problem}
 	}
-	stateClass, err := r.mdsStateClass(ctx, d, clusterID)
-	if err != nil {
-		return false, err
-	}
 	data, err := r.mdsDataAttachment(ctx, export, d)
 	if err != nil {
 		return false, err
 	}
-	sa, sts, err := driver.MDSObjects(d, clusterID, stateClass, data)
+	sa, sts, err := driver.MDSObjects(d, clusterID, data)
 	if err != nil {
 		return false, err
 	}
@@ -198,9 +187,7 @@ func (r *NFSExportReconciler) ensureMDS(
 
 // updateMDS gives an existing metadata server StatefulSet the pod template this
 // release builds, when its recorded hash says it has another one. Only the
-// template and the hash are written: the selector and the claim templates
-// cannot be changed, and the claim template's class is read from the existing
-// object rather than looked up again.
+// template and the hash are written: the selector cannot be changed.
 func (r *NFSExportReconciler) updateMDS(
 	ctx context.Context, export *simplyblockv1alpha2.NFSExport, d *simplyblockv1alpha2.SimplyblockDriver,
 	existing *appsv1.StatefulSet,
@@ -287,130 +274,6 @@ type mdsWaitError struct{ reason, message string }
 
 func (e *mdsWaitError) Error() string { return e.message }
 
-// stateUnavailable is the mdsWaitError of a state disk class that cannot be
-// used.
-func stateUnavailable(format string, args ...any) error {
-	return &mdsWaitError{reason: "MDSStateUnavailable", message: fmt.Sprintf(format, args...)}
-}
-
-// mdsStateClass is the StorageClass of the metadata server's state disk, which
-// is always a simplyblock volume. A node-local disk would pin the pod to the
-// node it first ran on, and the client-recovery database on it is what lets
-// NFS clients reclaim their state when the pod comes back somewhere else.
-//
-// A class named in spec.pnfs.mds.stateStorageClassName is used when this
-// driver provisions it. Otherwise, the storage cluster gets a class of its
-// own (driver.MDSStateClass), reserved for the state disk by an admission
-// policy: one known class rather than whichever user class happens to exist,
-// and none of the caps a user class carries. It is derived from the cluster's
-// own class, since the metadata server serves exports of that cluster only
-// and keeping its state there adds no failure the exports do not already
-// have. Among the cluster's classes one the operator wrote for a pool is
-// preferred, and the first by name otherwise, so the choice is stable.
-//
-// pNFS classes are never chosen: they provision an export, not a block device.
-func (r *NFSExportReconciler) mdsStateClass(
-	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver, clusterID string,
-) (string, error) {
-	provisioner := driver.DriverName(d)
-
-	if named := d.Spec.PNFS.MDS.StateStorageClassName; named != nil && *named != "" {
-		var sc storagev1.StorageClass
-		switch err := r.Get(ctx, client.ObjectKey{Name: *named}, &sc); {
-		case apierrors.IsNotFound(err):
-			return "", stateUnavailable("the state disk's storage class %q does not exist", *named)
-		case err != nil:
-			return "", fmt.Errorf("reading storage class %s: %w", *named, err)
-		}
-		if !isSimplyblockBlockClass(&sc, provisioner) {
-			return "", stateUnavailable(
-				"the state disk's storage class %q is not a simplyblock block volume class "+
-					"(provisioner %q, fstype %q); name a class of %s", *named, sc.Provisioner,
-				sc.Parameters[kube.ParamFSType], provisioner)
-		}
-		return *named, nil
-	}
-
-	// The policy goes first, so the class never exists unreserved.
-	if err := r.ensureStatePolicy(ctx, d); err != nil {
-		return "", err
-	}
-	name := driver.MDSStateClassName(d, clusterID)
-	var existing storagev1.StorageClass
-	switch err := r.Get(ctx, client.ObjectKey{Name: name}, &existing); {
-	case err == nil:
-		return name, nil
-	case !apierrors.IsNotFound(err):
-		return "", fmt.Errorf("reading storage class %s: %w", name, err)
-	}
-
-	source, err := r.clusterBlockClass(ctx, provisioner, clusterID)
-	if err != nil {
-		return "", err
-	}
-	if err := r.Create(ctx, driver.MDSStateClass(d, clusterID, source)); err != nil &&
-		!apierrors.IsAlreadyExists(err) {
-		return "", fmt.Errorf("creating storage class %s: %w", name, err)
-	}
-	return name, nil
-}
-
-// clusterBlockClass is the simplyblock block class of a storage cluster the
-// state disk's class is derived from.
-func (r *NFSExportReconciler) clusterBlockClass(
-	ctx context.Context, provisioner, clusterID string,
-) (*storagev1.StorageClass, error) {
-	var classes storagev1.StorageClassList
-	if err := r.List(ctx, &classes); err != nil {
-		return nil, fmt.Errorf("listing storage classes: %w", err)
-	}
-	var candidates []*storagev1.StorageClass
-	for i := range classes.Items {
-		sc := &classes.Items[i]
-		if isSimplyblockBlockClass(sc, provisioner) && sc.Parameters[kube.ParamClusterID] == clusterID &&
-			!strings.HasSuffix(sc.Name, driver.MDSStateClassSuffix) {
-			candidates = append(candidates, sc)
-		}
-	}
-	if len(candidates) == 0 {
-		return nil, stateUnavailable(
-			"no storage class of %s provisions block volumes on storage cluster %s to derive the "+
-				"state disk's class from; create one, or name one in spec.pnfs.mds.stateStorageClassName",
-			provisioner, clusterID)
-	}
-	slices.SortFunc(candidates, func(a, b *storagev1.StorageClass) int {
-		if am, bm := pool.IsOperatorManaged(a), pool.IsOperatorManaged(b); am != bm {
-			if am {
-				return -1
-			}
-			return 1
-		}
-		return strings.Compare(a.Name, b.Name)
-	})
-	return candidates[0], nil
-}
-
-// ensureStatePolicy creates the admission policy reserving the state disk
-// classes, and its binding, when they are absent. Existing ones are left as
-// they are: an administrator who changed them meant to.
-func (r *NFSExportReconciler) ensureStatePolicy(
-	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
-) error {
-	policy, binding := driver.MDSStatePolicy(d, r.OperatorNamespace)
-	for _, obj := range []client.Object{policy, binding} {
-		if err := r.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("creating %T %s: %w", obj, obj.GetName(), err)
-		}
-	}
-	return nil
-}
-
-// isSimplyblockBlockClass reports whether sc provisions a simplyblock block
-// volume: this driver is its provisioner, and it is not a pNFS class.
-func isSimplyblockBlockClass(sc *storagev1.StorageClass, provisioner string) bool {
-	return sc.Provisioner == provisioner && sc.Parameters[kube.ParamFSType] != kube.FSTypePNFS
-}
-
 // waitForMDS records why the export is not bound yet and comes back later.
 func (r *NFSExportReconciler) waitForMDS(
 	ctx context.Context, export *simplyblockv1alpha2.NFSExport, message string, after time.Duration,
@@ -424,19 +287,13 @@ func (r *NFSExportReconciler) waitForMDS(
 	return ctrl.Result{RequeueAfter: after}, nil
 }
 
-// unschedulable reports why a pod cannot be scheduled, as the event reason the
-// design names: its state disk not binding, or, otherwise, no node offering
-// KVM.
+// unschedulable reports why a pod cannot be scheduled: no node offering KVM.
 func unschedulable(pod *corev1.Pod) (reason, message string, blocked bool) {
 	for _, c := range pod.Status.Conditions {
-		if c.Type != corev1.PodScheduled || c.Status != corev1.ConditionFalse ||
-			c.Reason != corev1.PodReasonUnschedulable {
-			continue
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse &&
+			c.Reason == corev1.PodReasonUnschedulable {
+			return "NoKVMCapableNode", c.Message, true
 		}
-		if strings.Contains(strings.ToLower(c.Message), "persistentvolumeclaim") {
-			return "MDSStateUnavailable", c.Message, true
-		}
-		return "NoKVMCapableNode", c.Message, true
 	}
 	return "", "", false
 }

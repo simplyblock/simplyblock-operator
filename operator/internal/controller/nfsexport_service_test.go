@@ -26,7 +26,7 @@ import (
 func mdsServiceKey() client.ObjectKey {
 	return client.ObjectKey{
 		Namespace: testOperatorNS,
-		Name:      utils.MDSServiceName(driver.MDSPodName(mdsDriver(), testExportClusterID)),
+		Name:      mdsServiceNameOf(driver.MDSPodName(mdsDriver(), testExportClusterID, 0)),
 	}
 }
 
@@ -35,7 +35,7 @@ const sharedServiceIP = "10.96.7.7"
 
 // mdsSliceKeyFor is the EndpointSlice of the metadata server whose pod is pod.
 func mdsSliceKeyFor(pod string) client.ObjectKey {
-	return client.ObjectKey{Namespace: testOperatorNS, Name: utils.MDSEndpointSliceName(utils.MDSServiceName(pod))}
+	return client.ObjectKey{Namespace: testOperatorNS, Name: utils.MDSEndpointSliceName(mdsServiceNameOf(pod))}
 }
 
 // Binding an export points it at the metadata server's Service, in the
@@ -200,7 +200,7 @@ func TestALostServiceCreateIsRetriedNotBoundWithoutAnAddress(t *testing.T) {
 	r, cl, _ := newPodHostedReconciler(t, testExport(nil), mdsDriver(), boundMDSPod(readyPod))
 	r.Client = unseenServiceClient{cl}
 
-	ip, err := r.reconcileMDSServiceObject(context.Background(), driver.MDSPodName(mdsDriver(), testExportClusterID))
+	ip, err := r.reconcileMDSServiceObject(context.Background(), driver.MDSPodName(mdsDriver(), testExportClusterID, 0))
 	if err == nil {
 		t.Fatalf("the lost create returned address %q and no error", ip)
 	}
@@ -210,12 +210,12 @@ func TestALostServiceCreateIsRetriedNotBoundWithoutAnAddress(t *testing.T) {
 // owner from the pod. The slice keeps the owner it has, or it would be
 // orphaned rather than collected with the StatefulSet.
 func TestWithdrawingTheAddressKeepsTheSlicesOwner(t *testing.T) {
-	pod := driver.MDSPodName(mdsDriver(), testExportClusterID)
+	pod := driver.MDSPodName(mdsDriver(), testExportClusterID, 0)
 	owner := metav1.OwnerReference{
 		APIVersion: "apps/v1", Kind: "StatefulSet", Name: "simplyblock-pnfs-mds-x",
 		UID: "sts-uid", Controller: ptr.To(true),
 	}
-	existing := utils.BuildMDSEndpointSlice(testOperatorNS, utils.MDSServiceName(pod), testMDSPodIP)
+	existing := utils.BuildMDSEndpointSlice(testOperatorNS, mdsServiceNameOf(pod), testMDSPodIP)
 	existing.OwnerReferences = []metav1.OwnerReference{owner}
 	r, cl, _ := newPodHostedReconciler(t, testExport(nil), mdsDriver(), existing)
 

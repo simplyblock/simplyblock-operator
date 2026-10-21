@@ -18,21 +18,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	appsv1 "k8s.io/api/apps/v1"
+
+	"github.com/simplyblock/simplyblock-operator/internal/mdsstate"
 )
 
 const (
 	// AnnotationActive names the active pod, and is empty before the first
 	// promotion.
-	AnnotationActive = "storage.simplyblock.io/mds-active"
+	AnnotationActive = mdsstate.ActiveAnnotation
 	// AnnotationActiveInstance is the active's pod UID and runner container ID,
 	// in the assembledBy format.
-	AnnotationActiveInstance = "storage.simplyblock.io/mds-active-instance"
+	AnnotationActiveInstance = mdsstate.ActiveInstanceAnnotation
 	// AnnotationEpoch is the current epoch, a decimal integer that is 1 at the
 	// first promotion.
-	AnnotationEpoch = "storage.simplyblock.io/mds-epoch"
+	AnnotationEpoch = mdsstate.EpochAnnotation
 	// AnnotationStateVolume is the state volume's handle. The workload writes
 	// it and this package only reads it.
-	AnnotationStateVolume = "storage.simplyblock.io/mds-state-volume"
+	AnnotationStateVolume = mdsstate.StateVolumeAnnotation
 )
 
 // ErrConflict is a record write that lost to another writer. The loser does not
