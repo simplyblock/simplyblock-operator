@@ -113,7 +113,11 @@ func (r *MDSFailoverReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, nil
 	}
 	res, err := r.failoverFor(&sts).Pass(ctx)
-	return ctrl.Result{RequeueAfter: res.RequeueAfter}, err
+	if err != nil {
+		// The workqueue's backoff paces the retry.
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: res.RequeueAfter}, nil
 }
 
 func (r *MDSFailoverReconciler) drop(key client.ObjectKey) {
