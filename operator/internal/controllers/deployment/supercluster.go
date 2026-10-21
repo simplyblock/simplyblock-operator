@@ -27,6 +27,15 @@ func IsSuperclusterDocument(config *simplyblockv1alpha2.ClusterDeploymentConfig)
 	return config.Spec.ClusterRef == "" && config.Spec.Cluster != nil && len(config.Spec.NodeSets) > 1
 }
 
+// clustersBuilt is how many clusters the document builds nodes for: each
+// member of a supercluster, or the one cluster.
+func clustersBuilt(config *simplyblockv1alpha2.ClusterDeploymentConfig) int {
+	if IsSuperclusterDocument(config) {
+		return len(config.Spec.NodeSets)
+	}
+	return 1
+}
+
 // memberView is the document as one member reads it: the same template and
 // images, and one node set. Every check and builder that spans a cluster runs
 // on it unchanged, so what spans a cluster spans a member.

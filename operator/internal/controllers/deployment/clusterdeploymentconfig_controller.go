@@ -175,7 +175,7 @@ func (r *ClusterDeploymentConfigReconciler) Reconcile(
 func (r *ClusterDeploymentConfigReconciler) expand(
 	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) (ctrl.Result, error) {
-	machine, err := statemachine.NewFromSnapshot(ctx, expansionGraph(),
+	machine, err := statemachine.NewFromSnapshot(ctx, expansionGraph(clustersBuilt(config)),
 		statemachine.FromKube[configStep](config.Status.Step))
 	if err != nil {
 		// An unrecognized step is a downgrade, a hand-edited object, or a rename
@@ -220,11 +220,13 @@ func (r *ClusterDeploymentConfigReconciler) expand(
 	}
 
 	if machine.IsTerminal() {
-		// The expansion does not wait for the nodes to come up. It created the
-		// objects and is finished; provisioning them is the node controller's and
-		// is bounded by nodeProvisioningBudget, and a document that stayed Expanding
-		// until a twenty-node fleet was online would be reporting the fleet's
-		// progress rather than its own (§4.2).
+		// The expansion does not wait for the last cluster's nodes to come up. It
+		// created the objects and is finished; provisioning them is the node
+		// controller's and is bounded by nodeProvisioningBudget, and a document that
+		// stayed Expanding until a twenty-node fleet was online would be reporting
+		// the fleet's progress rather than its own (§4.2). A supercluster's earlier
+		// members are waited for in CreatingNodes, because the next member's nodes
+		// are not created until they are online.
 		return ctrl.Result{}, r.succeed(ctx, config)
 	}
 

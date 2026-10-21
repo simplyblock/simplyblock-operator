@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -267,14 +268,26 @@ func TestAwaitingTheClusterWaitsForEveryMember(t *testing.T) {
 	}
 }
 
-func TestEachMemberGetsTheNodesOfItsNodeSet(t *testing.T) {
-	config, objects := expandedMembers(true)
-	r := reconcilerFor(t, objects...)
-
-	if done, err := r.createNodes(context.Background(), config); err != nil || !done {
-		t.Fatalf("createNodes: done=%v err=%v", done, err)
+// setNodePhase sets the phase of every node on the worker.
+func setNodePhase(t *testing.T, r client.Client, worker string, phase simplyblockv1alpha2.StorageNodePhase) {
+	t.Helper()
+	var nodes simplyblockv1alpha2.StorageNodeList
+	if err := r.List(context.Background(), &nodes); err != nil {
+		t.Fatalf("list the nodes: %v", err)
 	}
+	for i := range nodes.Items {
+		if nodes.Items[i].Spec.WorkerNode == worker {
+			nodes.Items[i].Status.Phase = phase
+			if err := r.Update(context.Background(), &nodes.Items[i]); err != nil {
+				t.Fatalf("update node: %v", err)
+			}
+		}
+	}
+}
 
+// nodeOwners maps every worker that has a node to the cluster the node is in.
+func nodeOwners(t *testing.T, r client.Reader) map[string]string {
+	t.Helper()
 	var nodes simplyblockv1alpha2.StorageNodeList
 	if err := r.List(context.Background(), &nodes); err != nil {
 		t.Fatalf("list the nodes: %v", err)
@@ -283,11 +296,78 @@ func TestEachMemberGetsTheNodesOfItsNodeSet(t *testing.T) {
 	for _, node := range nodes.Items {
 		owners[node.Spec.WorkerNode] = node.Spec.ClusterRef
 	}
-	if owners["worker-1"] != theCluster+"-fast-kqv" || owners["worker-2"] != theCluster+"-dense-abc" || len(nodes.Items) != 2 {
+	return owners
+}
+
+// §5.4: a member's first node adds reboot its workers on OpenShift, so the
+// second member's nodes are created only once the first member's are online,
+// and each member gets the nodes of its own node set.
+func TestEachMemberGetsItsNodesOnceTheEarlierMembersNodesAreOnline(t *testing.T) {
+	config, objects := expandedMembers(true)
+	r := reconcilerFor(t, objects...)
+
+	if done, err := r.createNodes(context.Background(), config); err != nil || done {
+		t.Fatalf("createNodes = %v, %v with the first member's node not online, want to wait", done, err)
+	}
+	if owners := nodeOwners(t, r); len(owners) != 1 || owners["worker-1"] != theCluster+"-fast-kqv" {
+		t.Fatalf("nodes by worker = %v, want worker-1 in the fast member alone", owners)
+	}
+	if got := readDocument(t, r).Status.NodeRefs; len(got) != 1 {
+		t.Errorf("status.nodeRefs = %v, want the first member's node", got)
+	}
+
+	setNodePhase(t, r.Client, "worker-1", simplyblockv1alpha2.StorageNodePhaseOnline)
+	if done, err := r.createNodes(context.Background(), readDocument(t, r)); err != nil || !done {
+		t.Fatalf("createNodes = %v, %v with the first member's node online, want done", done, err)
+	}
+	owners := nodeOwners(t, r)
+	if owners["worker-1"] != theCluster+"-fast-kqv" || owners["worker-2"] != theCluster+"-dense-abc" || len(owners) != 2 {
 		t.Errorf("nodes by worker = %v, want worker-1 in the fast member and worker-2 in the dense one", owners)
 	}
 	if got := readDocument(t, r).Status.NodeRefs; len(got) != 2 {
 		t.Errorf("status.nodeRefs = %v, want both members' nodes", got)
+	}
+}
+
+// A later member whose nodes exist keeps them on record when an earlier
+// member's node goes offline: the gate holds back creation, and the record
+// still names every node the document built.
+func TestAnEarlierMemberGoingOfflineKeepsTheLaterMembersNodesOnRecord(t *testing.T) {
+	config, objects := expandedMembers(true)
+	r := reconcilerFor(t, objects...)
+	if _, err := r.createNodes(context.Background(), config); err != nil {
+		t.Fatalf("createNodes: %v", err)
+	}
+	setNodePhase(t, r.Client, "worker-1", simplyblockv1alpha2.StorageNodePhaseOnline)
+	if _, err := r.createNodes(context.Background(), readDocument(t, r)); err != nil {
+		t.Fatalf("createNodes: %v", err)
+	}
+
+	setNodePhase(t, r.Client, "worker-1", simplyblockv1alpha2.StorageNodePhaseOffline)
+	if _, err := r.createNodes(context.Background(), readDocument(t, r)); err != nil {
+		t.Fatalf("createNodes: %v", err)
+	}
+	if got := readDocument(t, r).Status.NodeRefs; len(got) != 2 {
+		t.Errorf("status.nodeRefs = %v, want both members' nodes", got)
+	}
+}
+
+// CreatingNodes waits for every member before the last to come online, so its
+// deadline grows by one activation's worth per such member, and a document of
+// one cluster keeps the deadline it had.
+func TestCreatingNodesIsGivenTimeForEveryEarlierMember(t *testing.T) {
+	for _, tc := range []struct {
+		members int
+		want    time.Duration
+	}{
+		{1, creatingNodesDeadline},
+		{4, creatingNodesDeadline + 3*activatingDeadline},
+	} {
+		onEnter := expansionGraph(tc.members).States[stepCreatingNodes].OnEnter
+		got, err := onEnter(context.Background(), stepAwaitingCluster, stepCreatingNodes)
+		if err != nil || got != tc.want {
+			t.Errorf("%d member(s): deadline = %v, %v, want %v", tc.members, got, err, tc.want)
+		}
 	}
 }
 
@@ -299,22 +379,12 @@ func TestEachMemberIsActivatedOnceItsNodesAreOnline(t *testing.T) {
 	if _, err := r.createNodes(context.Background(), config); err != nil {
 		t.Fatalf("createNodes: %v", err)
 	}
+	setNodePhase(t, r.Client, "worker-1", simplyblockv1alpha2.StorageNodePhaseOnline)
+	if _, err := r.createNodes(context.Background(), readDocument(t, r)); err != nil {
+		t.Fatalf("createNodes: %v", err)
+	}
 	config = readDocument(t, r)
 
-	setPhase := func(worker string, phase simplyblockv1alpha2.StorageNodePhase) {
-		var nodes simplyblockv1alpha2.StorageNodeList
-		if err := r.List(context.Background(), &nodes); err != nil {
-			t.Fatalf("list the nodes: %v", err)
-		}
-		for i := range nodes.Items {
-			if nodes.Items[i].Spec.WorkerNode == worker {
-				nodes.Items[i].Status.Phase = phase
-				if err := r.Update(context.Background(), &nodes.Items[i]); err != nil {
-					t.Fatalf("update node: %v", err)
-				}
-			}
-		}
-	}
 	activations := func() map[string]bool {
 		var ops simplyblockv1alpha2.StorageClusterOpsList
 		if err := r.List(context.Background(), &ops); err != nil {
@@ -327,7 +397,6 @@ func TestEachMemberIsActivatedOnceItsNodesAreOnline(t *testing.T) {
 		return out
 	}
 
-	setPhase("worker-1", simplyblockv1alpha2.StorageNodePhaseOnline)
 	if done, err := r.activateCluster(context.Background(), config); err != nil || done {
 		t.Fatalf("activateCluster = %v, %v with one member's node offline, want to wait", done, err)
 	}
@@ -335,7 +404,7 @@ func TestEachMemberIsActivatedOnceItsNodesAreOnline(t *testing.T) {
 		t.Errorf("activated %v, want the fast member alone", got)
 	}
 
-	setPhase("worker-2", simplyblockv1alpha2.StorageNodePhaseOnline)
+	setNodePhase(t, r.Client, "worker-2", simplyblockv1alpha2.StorageNodePhaseOnline)
 	if done, err := r.activateCluster(context.Background(), config); err != nil || !done {
 		t.Fatalf("activateCluster = %v, %v with every node online, want done", done, err)
 	}

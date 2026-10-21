@@ -66,8 +66,17 @@ const (
 	activatingDeadline = 60 * time.Minute
 )
 
-// expansionGraph declares the document's one state graph.
-func expansionGraph() statemachine.Config[configStep] {
+// expansionGraph declares the document's one state graph for a document that
+// builds the given number of clusters: one, or a supercluster's members.
+//
+// CreatingNodes waits for every member before the last to have its nodes
+// online before it creates the next member's, so it is given an activation's
+// worth of time for each of them on top of its own.
+func expansionGraph(members int) statemachine.Config[configStep] {
+	nodesDeadline := creatingNodesDeadline
+	if members > 1 {
+		nodesDeadline += time.Duration(members-1) * activatingDeadline
+	}
 	deadline := func(d time.Duration) statemachine.TransitionFunc[configStep] {
 		return func(context.Context, configStep, configStep) (time.Duration, error) {
 			return d, nil
@@ -90,7 +99,7 @@ func expansionGraph() statemachine.Config[configStep] {
 			},
 			stepCreatingNodes: {
 				To:      []configStep{stepActivating},
-				OnEnter: deadline(creatingNodesDeadline),
+				OnEnter: deadline(nodesDeadline),
 			},
 			stepActivating: {OnEnter: deadline(activatingDeadline)},
 		},
@@ -495,6 +504,13 @@ func (r *ClusterDeploymentConfigReconciler) awaitCluster(
 // workers on a two-socket layout produces four nodes. Reading it off the cluster
 // rather than off the document is what makes a growth document produce nodes that
 // match the fleet it is joining.
+//
+// A supercluster's members get their nodes one member at a time, in node-set
+// order: a member's nodes are created once every node of the members before it
+// is online. On OpenShift a member's first node add on a worker moves the worker
+// into the member's MachineConfigPool and reboots it, and no pool knows the
+// others, so members adding nodes together reboot every worker at once, the
+// control plane's and FoundationDB's included (design-superclusters.md §5.4).
 func (r *ClusterDeploymentConfigReconciler) createNodes(
 	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) (bool, error) {
@@ -508,42 +524,83 @@ func (r *ClusterDeploymentConfigReconciler) createNodes(
 		return false, err
 	}
 	var created []string
-	for _, target := range targets {
-		names, err := r.createNodesFor(ctx, target.document, target.cluster)
+	open, held := true, false
+	for i, target := range targets {
+		// Past the gate, a member's nodes already there stay on record and none
+		// is created: an earlier member going offline after the later ones were
+		// started does not take them out of what the document built.
+		names, skipped, err := r.createNodesFor(ctx, target.document, target.cluster, open)
 		if err != nil {
 			return false, err
 		}
 		created = append(created, names...)
+		held = held || skipped
+		if !open || i == len(targets)-1 {
+			continue
+		}
+		waiting, err := r.firstNodeNotOnline(ctx, config.Namespace, names)
+		if err != nil {
+			return false, err
+		}
+		if waiting != "" {
+			open = false
+			r.emit(config, corev1.EventTypeNormal, AwaitingNodes, fmt.Sprintf(
+				"StorageNode %s of member %s is not Online yet, so the next member's nodes are not created",
+				waiting, target.cluster))
+		}
 	}
 
 	sort.Strings(created)
 	created = slices.Compact(created)
-	return true, r.recordNodes(ctx, config, created)
+	return !held, r.recordNodes(ctx, config, created)
+}
+
+// firstNodeNotOnline names the first of the nodes that is not online, or none.
+func (r *ClusterDeploymentConfigReconciler) firstNodeNotOnline(
+	ctx context.Context, namespace string, names []string,
+) (string, error) {
+	for _, name := range names {
+		var node simplyblockv1alpha2.StorageNode
+		if err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &node); err != nil {
+			if apierrors.IsNotFound(err) {
+				// Created this pass and not in the cache yet: not online either.
+				return name, nil
+			}
+			return "", fmt.Errorf("reading StorageNode %s: %w", name, err)
+		}
+		if node.Status.Phase != simplyblockv1alpha2.StorageNodePhaseOnline {
+			return name, nil
+		}
+	}
+	return "", nil
 }
 
 // createNodesFor writes the nodes of one cluster from the node sets of the
-// document that builds it, and returns every node of those node sets.
+// document that builds it, and returns every node of those node sets that
+// exists. With create unset it writes none, and reports whether a node it
+// would have written is missing.
 func (r *ClusterDeploymentConfigReconciler) createNodesFor(
-	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig, name string,
-) ([]string, error) {
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig, name string, create bool,
+) ([]string, bool, error) {
 	var cluster simplyblockv1alpha2.StorageCluster
 	key := client.ObjectKey{Namespace: config.Namespace, Name: name}
 	if err := r.Get(ctx, key, &cluster); err != nil {
-		return nil, fmt.Errorf("reading StorageCluster %s: %w", name, err)
+		return nil, false, fmt.Errorf("reading StorageCluster %s: %w", name, err)
 	}
 
 	// The mapping is written before any node exists, so a node's add never runs
 	// ahead of the index it is to be sent.
 	if err := r.mapFailureDomains(ctx, config, &cluster); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	existing, err := r.nodesOfCluster(ctx, config.Namespace, cluster.Name)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	var created []string
+	skipped := false
 	for _, set := range config.Spec.NodeSets {
 		for _, group := range set.Groups {
 			for _, worker := range group.Workers {
@@ -552,13 +609,17 @@ func (r *ClusterDeploymentConfigReconciler) createNodesFor(
 						created = append(created, name)
 						continue
 					}
+					if !create {
+						skipped = true
+						continue
+					}
 					node := r.buildNode(config, &cluster, set, group, worker, slot)
 					if err := r.Create(ctx, node); err != nil {
 						if apierrors.IsAlreadyExists(err) {
 							created = append(created, node.Name)
 							continue
 						}
-						return nil, fmt.Errorf("creating StorageNode for worker %s slot %d: %w",
+						return nil, false, fmt.Errorf("creating StorageNode for worker %s slot %d: %w",
 							worker, slot, err)
 					}
 					// Counted here rather than from the length of the record,
@@ -570,7 +631,7 @@ func (r *ClusterDeploymentConfigReconciler) createNodesFor(
 			}
 		}
 	}
-	return created, nil
+	return created, skipped, nil
 }
 
 // slotKey is the identity a StorageNode has within its cluster, which is what
