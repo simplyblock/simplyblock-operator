@@ -9028,6 +9028,46 @@ spec:
                   successful terminal phase and by nothing else, so it only grows.
                 format: int64
                 type: integer
+              workloadNames:
+                description: |-
+                  WorkloadNames are the names this cluster's workload is reached by,
+                  recorded before the workload exists and never changed afterwards,
+                  because every storage node's hostname is built from them. A cluster
+                  created before they were recorded is given the constant names.
+                properties:
+                  nodeAPIService:
+                    description: NodeAPIService is the headless Service of the storage-node
+                      API.
+                    maxLength: 63
+                    type: string
+                  nodeAPITLSSecret:
+                    description: NodeAPITLSSecret is the storage-node API's serving-certificate
+                      Secret.
+                    maxLength: 253
+                    type: string
+                  nodeLabelSuffix:
+                    description: |-
+                      NodeLabelSuffix is appended to a node's hostname in both Services, so
+                      that members of one supercluster on one worker have distinct hostnames.
+                      Empty for every other cluster.
+                    maxLength: 4
+                    type: string
+                  spdkProxyService:
+                    description: SpdkProxyService is the headless Service of the SPDK
+                      proxy.
+                    maxLength: 63
+                    type: string
+                  spdkProxyTLSSecret:
+                    description: SpdkProxyTLSSecret is the SPDK proxy's serving-certificate
+                      Secret.
+                    maxLength: 253
+                    type: string
+                required:
+                - nodeAPIService
+                - nodeAPITLSSecret
+                - spdkProxyService
+                - spdkProxyTLSSecret
+                type: object
             type: object
         type: object
         x-kubernetes-validations:

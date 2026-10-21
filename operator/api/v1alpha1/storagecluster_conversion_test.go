@@ -805,6 +805,21 @@ func TestStorageClusterSuperclusterFieldsSurviveTheHub(t *testing.T) {
 				},
 			},
 		}},
+		{name: "a cluster with its own workload names", hub: &v1alpha2.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "second", Namespace: "sb"},
+			Spec: v1alpha2.StorageClusterSpec{
+				MaxSubsystemCount: ptr.To(int32(20)),
+				VCPUCount:         ptr.To(int32(8)),
+				DeviceClass:       v1alpha2.StorageClusterDeviceClassNVMe,
+			},
+			Status: v1alpha2.StorageClusterStatus{
+				Role: v1alpha2.StorageClusterRoleStandalone,
+				WorkloadNames: &v1alpha2.WorkloadNames{
+					NodeAPIService: "sb-second-node-api", NodeAPITLSSecret: "sb-second-node-api-tls",
+					SpdkProxyService: "sb-second-spdk-proxy", SpdkProxyTLSSecret: "sb-second-spdk-proxy-tls",
+				},
+			},
+		}},
 		{name: "a member", hub: &v1alpha2.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "prod-dense-kqv", Namespace: "sb"},
 			Spec: v1alpha2.StorageClusterSpec{
@@ -840,6 +855,7 @@ func TestStorageClusterSuperclusterFieldsSurviveTheHub(t *testing.T) {
 				{"members", tc.hub.Status.Members, back.Status.Members},
 				{"memberCount", tc.hub.Status.MemberCount, back.Status.MemberCount},
 				{"capacity", tc.hub.Status.Capacity, back.Status.Capacity},
+				{"workloadNames", tc.hub.Status.WorkloadNames, back.Status.WorkloadNames},
 			} {
 				if diff := cmp.Diff(field.before, field.back); diff != "" {
 					t.Errorf("status.%s changed through v1alpha1 (-before +after):\n%s", field.name, diff)

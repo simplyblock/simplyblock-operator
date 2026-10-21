@@ -117,6 +117,10 @@ const (
 	annoClusterStatusMembers     = "storage.simplyblock.io/conversion-status.members"
 	annoClusterStatusMemberCount = "storage.simplyblock.io/conversion-status.memberCount"
 	annoClusterStatusCapacity    = "storage.simplyblock.io/conversion-status.capacity"
+
+	// Losing the workload names would re-derive them, and every node's
+	// hostname is built from them.
+	annoClusterStatusWorkloadNames = "storage.simplyblock.io/conversion-status.workloadNames"
 )
 
 // creationStepToHub maps this version's creation sub-phase onto the hub's
@@ -431,6 +435,7 @@ func stashClusterHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageCluster) 
 		{annoClusterStatusMembers, src.Status.Members},
 		{annoClusterStatusMemberCount, src.Status.MemberCount},
 		{annoClusterStatusCapacity, src.Status.Capacity},
+		{annoClusterStatusWorkloadNames, src.Status.WorkloadNames},
 	} {
 		if err := stash(meta, field.key, field.value); err != nil {
 			return err
@@ -512,6 +517,7 @@ func restoreClusterHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageCluster
 		{annoClusterStatusMembers, &dst.Status.Members},
 		{annoClusterStatusMemberCount, &dst.Status.MemberCount},
 		{annoClusterStatusCapacity, &dst.Status.Capacity},
+		{annoClusterStatusWorkloadNames, &dst.Status.WorkloadNames},
 	} {
 		if err := unstash(meta, field.key, field.target); err != nil {
 			return err

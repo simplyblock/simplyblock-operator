@@ -1101,6 +1101,13 @@ type StorageClusterStatus struct {
 	// +optional
 	Role StorageClusterRole `json:"role,omitempty"`
 
+	// WorkloadNames are the names this cluster's workload is reached by,
+	// recorded before the workload exists and never changed afterwards,
+	// because every storage node's hostname is built from them. A cluster
+	// created before they were recorded is given the constant names.
+	// +optional
+	WorkloadNames *WorkloadNames `json:"workloadNames,omitempty"`
+
 	// Members is each member as last read, on a supercluster only.
 	// +optional
 	// +listType=map
@@ -1188,6 +1195,34 @@ type AggregateCapacity struct {
 	// ProvisionedBytes is the capacity promised to volumes.
 	// +optional
 	ProvisionedBytes *int64 `json:"provisionedBytes,omitempty"`
+}
+
+// WorkloadNames are the Services a cluster's storage nodes are reached through,
+// their serving-certificate Secrets, and the suffix a node's hostname carries in
+// both Services. A node's hostname is <worker><suffix>.<service>.<namespace>.svc.
+type WorkloadNames struct {
+	// NodeAPIService is the headless Service of the storage-node API.
+	// +kubebuilder:validation:MaxLength=63
+	NodeAPIService string `json:"nodeAPIService"`
+
+	// NodeAPITLSSecret is the storage-node API's serving-certificate Secret.
+	// +kubebuilder:validation:MaxLength=253
+	NodeAPITLSSecret string `json:"nodeAPITLSSecret"`
+
+	// SpdkProxyService is the headless Service of the SPDK proxy.
+	// +kubebuilder:validation:MaxLength=63
+	SpdkProxyService string `json:"spdkProxyService"`
+
+	// SpdkProxyTLSSecret is the SPDK proxy's serving-certificate Secret.
+	// +kubebuilder:validation:MaxLength=253
+	SpdkProxyTLSSecret string `json:"spdkProxyTLSSecret"`
+
+	// NodeLabelSuffix is appended to a node's hostname in both Services, so
+	// that members of one supercluster on one worker have distinct hostnames.
+	// Empty for every other cluster.
+	// +kubebuilder:validation:MaxLength=4
+	// +optional
+	NodeLabelSuffix string `json:"nodeLabelSuffix,omitempty"`
 }
 
 // SuperclusterMemberStatus is one member as the supercluster last read it.
