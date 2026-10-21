@@ -55,6 +55,12 @@ type Planner struct {
 	// KubeNodesOf. It is optional: a plan without it is built from the probe
 	// reports alone, and the workers carry a zero KubeNode.
 	KubeNodes map[string]KubeNode
+
+	// SlotsPerWorker is how many storage nodes each worker runs, which decides
+	// how many workers a member holds. Zero is one, which is every draft's
+	// layout: neither a run nor an installation states a socket layout, so the
+	// operator leaves it unset.
+	SlotsPerWorker int32
 }
 
 // Plan is what a run concluded: the draft to write, and why it looks like that.
@@ -574,7 +580,7 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 	plan.assignFailureDomains(failureDomainLabelOf(run))
 
 	if len(plan.Workers) > 0 {
-		plan.NodeSets = builder.Build(grouper.Group(plan.Workers))
+		plan.NodeSets = splitMembers(builder.Build(grouper.Group(plan.Workers)), plan.Workers, grouper, p.SlotsPerWorker)
 	}
 	return plan
 }
