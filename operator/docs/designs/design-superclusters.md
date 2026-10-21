@@ -25,14 +25,15 @@ supercluster reconciler with its roll-up, events, and two gauges (§10.1, §13),
 the predicates that keep the rebalancer, arbitration, and the workload
 reconciler off a supercluster (§10.3), the workload names of §6.1, the shared
 Services and certificate of §6.2, with which the one-cluster-per-namespace rule
-is gone, and the expansion of a document of several node sets into a
-supercluster and its members (§5.1 to §5.4). Still to come in Phase 1: the
-discovery generator's split (§5.5), growth into a supercluster (§5.6), topology
-(§5.7), per-node-set overrides (§5.8), and workers shared between members. Until
-the rest of Phase 1 lands, two rules hold in its place. A
-`StoragePool` naming a supercluster is refused at admission until pools fan out
-(§7.1). A `StorageClusterOps` on a supercluster fails before any control-plane
-call until the walk of §9.6 exists.
+is gone, and the whole of §5: the expansion of a document of several node sets
+into a supercluster and its members, one member's first node adds at a time
+(§5.1 to §5.4), the discovery generator's split (§5.5), growth into a
+supercluster or a member (§5.6), topology (§5.7), and per-node-set overrides
+(§5.8). Still to come in Phase 1: workers shared between members, which waits on
+P0-3, and a source for the capacity roll-up (§16 Q13). Until Phase 2 lands, two
+rules hold in its place. A `StoragePool` naming a supercluster is refused at
+admission until pools fan out (§7.1). A `StorageClusterOps` on a supercluster
+fails before any control-plane call until the walk of §9.6 exists.
 
 Each phase ships on its own. Phase 1 produces a supercluster that reports one
 status and lets an administrator name the members directly, which is already
