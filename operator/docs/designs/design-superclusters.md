@@ -1598,14 +1598,14 @@ it answers `ResourceExhausted`, rate-limited to one per minute per supercluster.
 
 ### 13.2 Prometheus metrics
 
-| Metric                                                | Labels                              | Description                                                            |
-|-------------------------------------------------------|-------------------------------------|------------------------------------------------------------------------|
-| `simplyblock_supercluster_member_count`               | `supercluster`, `state`             | Gauge of members by `eligible`, `cordoned`, `notServing`, `missing`    |
-| `simplyblock_supercluster_capacity_bytes`             | `supercluster`, `kind`              | Gauge of combined `total`, `used`, and `provisioned` bytes             |
-| `simplyblock_supercluster_placement_decisions_total`  | `supercluster`, `cluster`, `result` | Counter of `CreateVolume` placements by chosen member, or `exhausted`  |
-| `simplyblock_supercluster_placement_duration_seconds` | `supercluster`                      | Histogram of member selection time, lookup and capacity reads included |
-| `simplyblock_relocation_operations_total`             | `supercluster`, `result`            | Counter of `Relocate` operations by `succeeded`, `failed`, `aborted`   |
-| `simplyblock_relocation_duration_seconds`             | `supercluster`                      | Histogram from `Replicating` to `Succeeded`                            |
+| Metric                                                | Labels                                           | Description                                                            |
+|-------------------------------------------------------|--------------------------------------------------|------------------------------------------------------------------------|
+| `simplyblock_supercluster_member_count`               | `namespace`, `supercluster`, `state`             | Gauge of members by `eligible`, `cordoned`, `notServing`, `missing`    |
+| `simplyblock_supercluster_capacity_bytes`             | `namespace`, `supercluster`, `kind`              | Gauge of combined `total`, `used`, and `provisioned` bytes             |
+| `simplyblock_supercluster_placement_decisions_total`  | `namespace`, `supercluster`, `cluster`, `result` | Counter of `CreateVolume` placements by chosen member, or `exhausted`  |
+| `simplyblock_supercluster_placement_duration_seconds` | `namespace`, `supercluster`                      | Histogram of member selection time, lookup and capacity reads included |
+| `simplyblock_relocation_operations_total`             | `supercluster`, `result`                         | Counter of `Relocate` operations by `succeeded`, `failed`, `aborted`   |
+| `simplyblock_relocation_duration_seconds`             | `supercluster`                                   | Histogram from `Replicating` to `Succeeded`                            |
 
 Existing per-cluster series gain a `supercluster` label on members, empty on
 standalone clusters, so a dashboard groups a supercluster's members with one

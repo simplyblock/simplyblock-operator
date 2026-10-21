@@ -17,6 +17,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
@@ -112,6 +113,11 @@ func (r *SuperclusterReconciler) Reconcile(
 ) (ctrl.Result, error) {
 	var supercluster simplyblockv1alpha2.StorageCluster
 	if err := r.Get(ctx, req.NamespacedName, &supercluster); err != nil {
+		// A supercluster that is gone reports nothing; one that could not be
+		// read this pass keeps what it last reported.
+		if apierrors.IsNotFound(err) {
+			forgetSupercluster(req.NamespacedName)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !isSupercluster(&supercluster) || !supercluster.DeletionTimestamp.IsZero() {
