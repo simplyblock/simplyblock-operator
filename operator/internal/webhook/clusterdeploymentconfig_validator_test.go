@@ -467,8 +467,9 @@ func TestApprovingASuperclusterChecksTheStripePerMember(t *testing.T) {
 	members := testConfig()
 	members.Spec.Cluster.ClusterMode = simplyblockv1alpha2.ClusterModeSingle
 	members.Spec.NodeSets = nil
-	var existing []client.Object
-	for _, worker := range []string{"worker-1", "worker-2", "worker-3", "worker-4"} {
+	fleet := []string{"worker-1", "worker-2", "worker-3", "worker-4"}
+	existing := make([]client.Object, 0, len(fleet))
+	for _, worker := range fleet {
 		set := testConfig().Spec.NodeSets[0]
 		set.Name = "set-" + worker
 		set.Groups[0].Workers = []string{worker}
