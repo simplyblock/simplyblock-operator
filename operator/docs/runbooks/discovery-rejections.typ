@@ -1,16 +1,24 @@
-// Every reason a discovery run leaves a worker or a device out of the drafted
-// ClusterDeploymentConfig, fails, or has its CDC refused afterwards, with how to
-// fix each. It lives with the runbooks because administrators read it while a
-// deployment is stuck. Build: typst compile discovery-rejections.typ
+// Support runbook: every reason a discovery run leaves a worker or a disk out of
+// the drafted ClusterDeploymentConfig, fails, or has its document refused, with
+// when it happens and how to get past it. It lives with the runbooks because the
+// support team reads it while a customer's deployment is stuck.
+//
+// Build: typst compile discovery-rejections.typ
+//
+// Keep it in step with the code that produces these messages:
+// atlas-lib/blockdev/candidate.go (disk inspection), operator/internal/discovery
+// (filters, network, NUMA, journal), operator/internal/controllers/deployment
+// (the run and document checks), and operator/internal/webhook (admission).
+// The document is written for support staff, so it names no code locations.
 
-#set document(title: "CDC generation rejections", author: "simplyblock")
+#set document(title: "Deployment discovery rejections", author: "simplyblock")
 #set page(
   paper: "a4",
   flipped: true,
   margin: (x: 15mm, top: 13mm, bottom: 15mm),
   footer: context [
     #set text(7pt, fill: gray)
-    simplyblock operator: CDC generation rejections
+    simplyblock support: deployment discovery rejections
     #h(1fr)
     page #counter(page).display()
   ],
@@ -39,277 +47,290 @@
     ..cells,
   )
 }
+#let cols = (1.1fr, 1.9fr, 1.7fr, 2.2fr)
+#let head = ([Rejection], [What the customer sees], [When it happens], [How to resolve])
 
-#align(center, text(18pt, weight: "bold")[ClusterDeploymentConfig generation: rejections and fixes])
+#align(center, text(18pt, weight: "bold")[Deployment discovery: rejections and how to resolve them])
 
-Every reason a discovery run (`OperatorOps` with `action: Discover`) leaves a worker or a device out of
-the drafted ClusterDeploymentConfig (CDC), fails the run, or a CDC is refused afterwards by validation or
-admission. The source of truth is `atlas-lib/blockdev/candidate.go` (probe reasons),
-`operator/internal/discovery` (rules), `operator/internal/controllers/deployment` (run and validation), and
-`operator/internal/webhook` (admission). Update this file when any of those changes.
+A customer deploys simplyblock by running *discovery*: an `OperatorOps` resource with `action: Discover`.
+Discovery inspects the Kubernetes workers and their disks and writes a draft *ClusterDeploymentConfig*
+(CDC). The customer reviews the draft and approves it. This document lists every reason discovery leaves a
+worker or a disk out of the draft, fails altogether, or why a CDC is refused afterwards, and what to do
+about each.
 
-= Subsystems
+Placeholders in messages are written in angle brackets, for example `<worker>`. Commands on a host run
+through `oc debug node/<node>` followed by `chroot /host` on OpenShift, or through SSH elsewhere.
 
-A run goes through three steps: *Inspecting* (pick workers), *Probing* (one probe Job per worker writes a
-report ConfigMap), and *Writing* (apply the rules, draft the CDC). The rejections below are grouped by the
-subsystem that makes them, in the order a run meets them. A device or a worker carries the first refusal
-that applies, except in the node probe, which records every reason it finds.
+= Where the rejections show up
 
-#grid((1.3fr, 1.9fr, 1.8fr, 1.6fr, 0.5fr), ([Subsystem], [Code], [Rejects], [Reported as], [Section]),
-  [Discovery run controller], [`operator/internal/controllers/deployment/operatorops_controller.go`],
-  [The whole run, and workers that are not usable], [OperatorOps `status.message`, events `OperationFailed`, `WorkerDeclined`, `DeviceInspectionFailed`], [3],
-  [Node probe], [`atlas-lib/blockdev/candidate.go`, run by `operator/internal/nodeprobe`],
-  [Devices that are not free on the machine], [probe ConfigMap `rejections[]`; events `DeviceDeclined` by rule `available`], [4],
-  [Discovery rules], [`operator/internal/discovery` (`rules.go`, `simplyblock.go`, `iscsi.go`, `netalign.go`, `placement.go`, `template.go`)],
-  [Devices this run does not want, workers left with no devices, workers off the shared networks, devices on a second NUMA node, drafts with no journal disk], [events `DeviceDeclined`, `WorkerDeclined`, `ConfigRefused`; the run's summary message], [5],
-  [CDC validation controller], [`operator/internal/controllers/deployment/validation.go`, `topology.go`, `erasurecoding.go`, `expansion.go`],
-  [Draft or approved documents that cannot be deployed], [CDC `status.phase` Draft or Failed, `status.message`, Warning events], [6],
-  [Admission], [`operator/internal/webhook/clusterdeploymentconfig_validator.go`, `operatorops_validator.go`, CRD CEL rules],
-  [API writes], [the `kubectl` request is denied], [7],
+Discovery runs in three steps: it *selects workers*, *inspects* each one with a short-lived probe Job,
+and *writes* the draft. The rejections are grouped by the stage that produces them:
+
+#grid((1.4fr, 2.6fr, 2.6fr, 0.5fr), ([Stage], [Rejects], [Where the customer sees it], [Section]),
+  [Discovery run], [The whole run, so no draft is written], [OperatorOps `status.message`], [2],
+  [Worker selection], [Workers that cannot be used at all], [OperatorOps events `WorkerDeclined`, `DeviceInspectionFailed`], [3],
+  [Disk inspection on the worker], [Disks that are in use, formatted, or not suitable hardware], [OperatorOps events `DeviceDeclined` (rule `available`), and the probe report], [4],
+  [Discovery filters], [Disks the run was told not to take, workers left with no disks, workers off the shared networks], [OperatorOps events `DeviceDeclined`, `WorkerDeclined`, `ConfigRefused`], [5],
+  [Draft document checks], [A draft or approved CDC that cannot be deployed], [CDC `status.message`, phase `Draft` or `Failed`, Warning events], [6],
+  [Approval and admission], [Changes to a CDC or OperatorOps that are not allowed], [The `kubectl apply` or `kubectl edit` is denied with the message], [7],
 )
 
-= Where to read the result
-
-#grid((1.2fr, 2.2fr), ([What], [Command]),
-  [Run phase and summary message],
-  [`kubectl get operatorops -n NS`, then `kubectl get operatorops RUN -n NS -o jsonpath='{.status.message}'`],
-  [Every refusal, one event each (reasons `DeviceDeclined`, `WorkerDeclined`, `DeviceInspectionFailed`, `ConfigRefused`, and so on)],
-  [`kubectl describe operatorops RUN -n NS`, or `kubectl get events -n NS --field-selector involvedObject.kind=OperatorOps,involvedObject.name=RUN`],
-  [Probe reports with the full detail of each rejection (`devices[].rejections[].reason` and `.detail`)],
-  [`kubectl get cm -n NS -l storage.simplyblock.io/nodeprobe-run=RUN -o yaml`],
-  [Probe Jobs and their logs (TTL 1 h, `backoffLimit` 2, deadline 300 s)],
-  [`kubectl get jobs,pods -n NS -l storage.simplyblock.io/nodeprobe-run=RUN`, then `kubectl logs`],
-  [CDC validation (`status.phase` Draft or Failed, `status.message`, Warning events)],
-  [`kubectl get cdc -n NS` and `kubectl describe cdc NAME -n NS`],
+#v(4pt)
+#grid((1.5fr, 3fr), ([What to collect], [Command]),
+  [Run status and summary], [`kubectl get operatorops -n <ns>` and `kubectl get operatorops <run> -n <ns> -o jsonpath='{.status.message}'`],
+  [Every refusal, one event each], [`kubectl describe operatorops <run> -n <ns>`],
+  [Probe reports, with the full detail of each disk refusal], [`kubectl get cm -n <ns> -l storage.simplyblock.io/nodeprobe-run=<run> -o yaml`],
+  [Probe Jobs and logs (kept for one hour)], [`kubectl get jobs,pods -n <ns> -l storage.simplyblock.io/nodeprobe-run=<run>`, then `kubectl logs <pod> -n <ns>`],
+  [Draft document status], [`kubectl get cdc -n <ns>` and `kubectl describe cdc <name> -n <ns>`],
 )
 
-#note[The `DeviceDeclined` event carries only the reason code, for example `declined by available because the
-probe refused it: NotBlank`. The detail (which mountpoint, which holder, which signature at which offset) is
-only in the probe report ConfigMap.]
+#note[A disk refusal event shows only the reason name, for example `sdb: declined by available because the
+probe refused it: NotBlank`. *What* was found (the mountpoint, the filesystem type, the holding device) is in
+the probe report ConfigMap under `devices[].rejections[].detail`. Ask the customer for it whenever the
+reason name alone does not settle the case.]
 
-#pagebreak()
-= Discovery run controller
+= Discovery run
 
-`operator/internal/controllers/deployment/operatorops_controller.go` drives the run. It fails the run when nothing can be drafted, and leaves out workers it cannot use before any probe runs.
+The run itself fails and no draft is written. The OperatorOps shows phase `Failed` and the message below.
 
-== Run failures (OperatorOps goes to Failed)
-
-#grid((1fr, 2fr, 1.6fr, 1.7fr), ([Failure], [Message], [When], [Fix]),
-  [Unknown action], [`action %q is not one this operator runs`], [`spec.action` is not `Discover`.], [Set `action: Discover`.],
-  [No probe image], [`no probe image: set <env> on the operator's deployment ...`],
-  [The probe image environment variable is missing on the manager Deployment.], [Set it, normally through the Helm chart.],
-  [Unreadable size range], [`spec.discover.deviceFilter.driveSizeRange is %q, which cannot be read` or `the size range %q counts backward`],
-  [Admission webhook, and the controller before probing and before writing.],
-  [Use `100G-2T`, `500G-`, `-2T`, or `1920G` (exact). Units T, G, M; a bare number is G.],
-  [No free worker], [`no worker is free: every node either carries a StorageNode already, is unschedulable, is reserved for the control plane ... or does not match the run's selector`],
-  [Nothing is left after `workers` or `nodeSelector`, after dropping nodes that already run a StorageNode, and after the usability check.],
-  [Uncordon or untaint nodes, fix `workers` or `nodeSelector`, or set `enableControlPlaneNodes`. Tolerations do not bypass the taint check.],
-  [All probes failed], [`no worker reported: every one of the %d probe Jobs failed`],
-  [Every probe Job used up its retries without writing a report.],
-  [Read the probe pod logs: image pull, ServiceAccount, privileges or SCC on OpenShift, host paths.],
-  [Reports gone], [`the probe reports are gone, so there is nothing to write`],
-  [The ConfigMaps were deleted between Probing and Writing.], [Run discovery again.],
-  [No usable device anywhere], [`no worker has a device this run would use: ...` followed by counts per rule, for example `4 device(s) across 4 worker(s), none usable: 4 declined by available: the probe refused it: NotBlank`],
-  [The plan produced no node set. The summary leaves out pre-filter refusals (`whole disk`, `device class`).],
-  [Fix per rule, sections 4 and 5. The events and the probe reports name each device.],
-  [Step deadline (`StepDeadlineExceeded`)], [`the cluster could not be read within 5m`, `the probes did not all finish within 15m ...`, or `the draft could not be written within 5m`],
-  [A step ran past its budget.], [Check API health. For Probing, find the stuck probe pod (missing toleration, image pull, PSA or SCC).],
-  [Run cannot resume], [`the run cannot be resumed: %v`, and graph errors],
-  [The status is corrupted or comes from an incompatible operator.], [Delete the OperatorOps and run again.],
+#grid(cols, head,
+  [No free worker], [`no worker is free: every node either carries a StorageNode already, is unschedulable, is reserved for the control plane or for infrastructure, or does not match the run's selector`],
+  [No worker is left after the selection in section 3.],
+  [Check the `WorkerDeclined` events for the individual reasons. Common causes: all workers cordoned or tainted; the run names `workers` or a `nodeSelector` that matches nothing; storage is meant to go on control-plane nodes (set `spec.discover.enableControlPlaneNodes: true`); every worker already runs a storage node.],
+  [No usable disk], [`no worker has a device this run would use: <count> device(s) across <count> worker(s), none usable: <count> declined by <rule>: <reason>; ...`],
+  [Every disk on every worker was refused.],
+  [The counts name the dominant reason. Look it up in sections 4 and 5. The two most common: the disks are virtio, SCSI, or SATA and the run is in the default NVMe mode (section 5, "Not NVMe"), or the disks carry old data (section 4).],
+  [All probes failed], [`no worker reported: every one of the <count> probe Jobs failed`],
+  [The probe Job failed three times on every worker.],
+  [Collect the probe pod logs. Usual causes: the image cannot be pulled (private registry, air gap), the probe is not allowed to run privileged (OpenShift SCC, Pod Security admission), or a taint keeps it off the nodes.],
+  [Probes timed out], [`the probes did not all finish within 15m; ...`],
+  [A probe pod did not finish within 15 minutes.],
+  [Find the pod that is still `Pending` or `Running` and ask for its `kubectl describe` output. Usually an image pull or a taint without a matching `spec.discover.tolerations` entry.],
+  [Cluster not readable], [`the cluster could not be read within 5m` or `the draft could not be written within 5m`],
+  [The Kubernetes API did not answer in time.],
+  [Check API server health and the operator logs, then run discovery again.],
+  [Invalid size range], [`spec.discover.deviceFilter.driveSizeRange is "<value>", which cannot be read` or `the size range "<value>" counts backward`],
+  [The customer's size filter is not understood. Usually refused right at `kubectl apply`.],
+  [Valid forms: `100G-2T`, `500G-` (at least), `-2T` (at most), `1920G` (exactly). Units T, G, M; a plain number means G.],
+  [Probe image missing], [`no probe image: set <variable> on the operator's deployment ...`],
+  [The operator was installed without the probe image setting.],
+  [Reinstall or upgrade the operator with the Helm chart, which sets it.],
+  [Reports deleted], [`the probe reports are gone, so there is nothing to write`],
+  [Someone deleted the probe ConfigMaps while the run was in progress.],
+  [Run discovery again.],
+  [Run cannot resume], [`the run cannot be resumed: ...`],
+  [The run's status was damaged, or it was started by a different operator version.],
+  [Delete the OperatorOps and run discovery again.],
 )
 
-== Worker selection (the run continues without the worker)
+= Worker selection
 
-#grid((1.1fr, 2fr, 1.6fr, 1.5fr), ([Refusal], [Message], [When], [Fix]),
-  [Cordoned or tainted (`WorkerDeclined`)], [`%s is not used: it is cordoned`, `it carries the taint K=V:Effect`, or `it is not schedulable`],
-  [`spec.unschedulable` is set, or the node has any NoSchedule or NoExecute taint.], [`kubectl uncordon`, remove the taint. Tolerations only let the probe run.],
-  [Control-plane or infrastructure node (`WorkerDeclined`)], [`%s is not used: it is <role>; set spec.discover.enableControlPlaneNodes to include it`],
-  [The node has a control-plane or infrastructure role.], [Set `enableControlPlaneNodes: true` (emits `ControlPlaneNodeIncluded`).],
-  [Unknown worker name (`WorkerDeclined`, Warning)], [`%s is named in spec.discover.workers and there is no node by that name`],
-  [Typo in `spec.discover.workers`.], [Fix the name.],
-  [Already a StorageNode, or not selected], [(no event)],
-  [A StorageNode already runs on the node, or it does not match `nodeSelector`.], [Intended. Remove the StorageNode or adjust the selector.],
-  [Probe failed (`DeviceInspectionFailed`)], [`the probe on %s failed, so it is not in the draft`],
-  [That worker's Job failed three times.], [`kubectl logs` of the probe pod, fix, run again.],
+Before anything is inspected, workers that cannot host storage are left out. The run continues with the
+rest. Each one is reported as a `WorkerDeclined` event.
+
+#grid(cols, head,
+  [Cordoned or tainted], [`<worker> is not used: it is cordoned`, `... it carries the taint <key>=<value>:<effect>`, or `... it is not schedulable`],
+  [The node is cordoned, or it has a `NoSchedule` or `NoExecute` taint.],
+  [Ask whether the node is meant for storage. If so, `kubectl uncordon <node>` or remove the taint. Adding tolerations to the run is not enough: a tainted node is still skipped.],
+  [Control-plane or infrastructure node], [`<worker> is not used: it is <role>; set spec.discover.enableControlPlaneNodes to include it`],
+  [The node is a control-plane or infrastructure node.],
+  [Ask whether storage is meant to run there (typical for three-node compact clusters). If so, set `spec.discover.enableControlPlaneNodes: true`.],
+  [Unknown worker name], [`<worker> is named in spec.discover.workers and there is no node by that name`],
+  [A name in the run's worker list does not exist.],
+  [Compare with `kubectl get nodes` and fix the name.],
+  [Already a storage node], [(nothing is reported)],
+  [The worker already runs a simplyblock storage node.],
+  [Expected. Discovery only proposes new workers.],
+  [Not selected], [(nothing is reported)],
+  [The worker does not match the run's `nodeSelector`.],
+  [Check the node labels against the selector.],
+  [Probe failed on this worker], [`the probe on <worker> failed, so it is not in the draft`],
+  [The probe Job failed three times on this worker only.],
+  [Collect that probe pod's logs and `kubectl describe` output.],
 )
 
-#pagebreak()
-= Node probe
+= Disk inspection on the worker
 
-`atlas-lib/blockdev/candidate.go`, run on each worker by the probe Job (`operator/internal/nodeprobe`). It answers whether a device is free on the machine, independent of what the run asked for.
+The probe looks at every block device on the worker and records every reason it cannot be handed to
+simplyblock. In the events these show as `declined by available because the probe refused it: <reason>,
+<reason>`. A disk can carry several reasons; resolve all of them.
 
-The probe checks, in order: kind, transport, size, removable, read-only, mounts, swap, holders, exclusive
-open, and partitions. Only a device that passed all of these, or failed only on partitions, is opened and its
-first bytes read. A device can carry several reasons. In events they show as
-`declined by available because the probe refused it: Reason, Reason`. On OpenShift, run the host commands
-below through `oc debug node/NODE` and then `chroot /host`.
+Before wiping anything, confirm with the customer that the data on the disk is not needed. Every command
+below destroys what is on the disk.
 
-#grid((0.9fr, 1.7fr, 1.3fr, 2.3fr), ([Reason], [When], [Detail in the report], [Fix]),
-  [`NotAWholeDisk`], [Partition, device-mapper node, md array, loop, RAM disk, nbd.], [`the device is a <kind>`],
-  [Nothing to fix; these are never candidates. Use the underlying whole disk.],
-  [`FabricNamespace`], [An NVMe namespace reached over a fabric: a simplyblock or other remote volume attached to this node.],
-  [`the namespace is reached over a fabric ...`], [Nothing; it is not local storage. `nvme disconnect` it if it is stale.],
-  [`UnknownTransport`], [A whole disk on a bus the scan cannot name.], [`the device sits on no bus this scan could name`],
-  [Not fixable by configuration. Report the device (driver, sysfs path) so support can be added.],
-  [`NoCapacity`], [Size 0: unbacked loop, empty card reader, unused nbd.], [`the device reports a size of zero`], [Nothing.],
-  [`Removable`], [The kernel flags it removable: optical drive, USB stick, card reader.], [`the kernel reports the device as removable ...`],
-  [Not usable as backend storage. Some hypervisors expose disks as removable; change the virtual disk type.],
-  [`ReadOnly`], [The kernel presents it read-only.], [`the kernel presents the device read-only`],
-  [Make it writable in the hypervisor or controller, or `blockdev --setrw /dev/X`.],
-  [`Mounted`], [The disk or one of its partitions is mounted.], [`mounted at [...]`],
-  [`umount`, and remove it from `/etc/fstab` and systemd mount units. Never for the boot disk.],
-  [`SwapArea`], [The disk or a partition is active swap.], [`the device is an active swap area`], [`swapoff /dev/X`, and remove it from `/etc/fstab`.],
-  [`Stacked`], [Another device is built on it: an active LVM logical volume, an md RAID member, dm-crypt, a multipath map.], [`held by [dm-0]`],
-  [Find the holder: `ls /sys/block/X/holders`, `dmsetup ls`. LVM: `vgchange -an VG`, `lvremove`, `vgremove`, `pvremove /dev/X`. md: `mdadm --stop`, `mdadm --zero-superblock /dev/X`. dm-crypt: `cryptsetup close`. Multipath: blacklist the disk.],
-  [`Busy`], [The kernel refused an exclusive open, and mounts, swap, and holders do not explain it.], [`the kernel refused an exclusive open, and gives no reason`],
-  [Find the opener: `fuser -vm /dev/X`, `lsof /dev/X`, multipathd, a VM, an iSCSI target. On the boot disk it appears together with `Mounted`.],
-  [`Unreadable`], [The exclusive-open check could not be made, the content read failed, or the reading came back empty.],
-  [`the kernel could not be asked: ...` or `the device could not be read: ...`],
-  [Check the probe pod's privileges and logs, and `dmesg` for I/O errors. Run discovery again.],
-  [`Partitioned`], [Partitions in sysfs, or a GPT or MBR table in the first bytes.], [`the device carries the partitions [...]` or `GPT header at ...`],
-  [`wipefs -a /dev/X` (and `sgdisk --zap-all /dev/X` for the backup GPT). If the table is stale and this is the only reason: `spec.discover.enablePartitionedDevices: true`.],
-  [`LVMPhysicalVolume`], [An LVM physical-volume label with no active logical volume, so `lsblk` shows a bare disk while `pvs` and `pvdisplay` list it. Before this reason existed it was reported as `NotBlank`.],
-  [`LVM2 physical-volume label at 512`],
-  [Confirm with `pvs /dev/X`. If it belongs to a volume group: `vgremove VG` (or `vgreduce VG /dev/X`). Then `pvremove /dev/X`. On RHEL-based hosts also drop it from the devices file: `lvmdevices --deldev /dev/X`.],
-  [`NotBlank`], [A filesystem (ext2/3/4, XFS, Btrfs, FAT, exFAT), a swap signature, LUKS, md, ZFS, bcache, or unrecognized bytes.],
-  [The signature and its offset, for example `XFS superblock at 0`],
-  [After confirming the data is not needed: `wipefs -a /dev/X`. md: `mdadm --zero-superblock /dev/X`. ZFS: `zpool labelclear -f /dev/X`.],
+#grid((1fr, 1.6fr, 1.7fr, 2.6fr), ([Reason], [When it happens], [Detail in the probe report], [How to resolve]),
+  [`Mounted`], [The disk or one of its partitions is mounted. Always the case for the boot disk.], [`mounted at [<paths>]`],
+  [If it is the boot or a system disk: expected, nothing to do. Otherwise unmount it and remove it from `/etc/fstab` or the systemd mount unit, so it is not mounted again after a reboot.],
+  [`SwapArea`], [The disk or a partition of it is in use as swap.], [`the device is an active swap area`],
+  [`swapoff /dev/<disk>` and remove it from `/etc/fstab`.],
+  [`Stacked`], [Another device is built on top of the disk: an active LVM volume, a software RAID array, an encrypted volume, or a multipath map. `lsblk` shows children under the disk.], [`held by [<device>]`],
+  [Ask what the disk is used for. To release it: LVM, `vgchange -an <vg>`, then `vgremove <vg>` and `pvremove /dev/<disk>`. Software RAID, `mdadm --stop /dev/<md>`, then `mdadm --zero-superblock /dev/<disk>`. Encryption, `cryptsetup close <name>`. Multipath, exclude the disk in the multipath configuration.],
+  [`LVMPhysicalVolume`], [The disk is an LVM physical volume, but no LVM volume on it is active. `lsblk` shows a bare disk; `pvs` or `pvdisplay` lists it.], [`LVM2 physical-volume label at 512`],
+  [Confirm with `pvs /dev/<disk>`. If it belongs to a volume group, `vgremove <vg>` (or `vgreduce <vg> /dev/<disk>` to keep the group). Then `pvremove /dev/<disk>`. On RHEL-based hosts also `lvmdevices --deldev /dev/<disk>`. Operator versions before this reason existed report the same disk as `NotBlank`.],
+  [`NotBlank`], [The disk carries a filesystem, swap signature, encryption header, RAID or ZFS label, or other data that is not recognized as empty.], [What was found, for example `XFS superblock at 0`],
+  [`wipefs -a /dev/<disk>`. For an old software RAID member, `mdadm --zero-superblock /dev/<disk>`. For ZFS, `zpool labelclear -f /dev/<disk>`.],
+  [`Partitioned`], [The disk has a partition table.], [`the device carries the partitions [<names>]` or `GPT header at <offset>`],
+  [If the partitions are not needed: `wipefs -a /dev/<disk>` (and `sgdisk --zap-all /dev/<disk>` to remove the backup GPT). If the table is left over and partitioning is the only reason on the disk, the customer can set `spec.discover.enablePartitionedDevices: true` instead of wiping.],
+  [`NotAWholeDisk`], [The device is a partition, an LVM volume, a RAID array, a loop device, a RAM disk, or a network block device (`nbd`). Every worker has many of these; they are expected.], [`the device is a <kind>`],
+  [Usually nothing: these are never proposed. If the customer expected a *partition* to be used: partitions can only be used in logical block device mode. Ask whether logical block devices are meant to be used (see section 5, "Not NVMe"). Otherwise use the whole disk.],
+  [`Busy`], [The kernel would not hand the disk over, and nothing visible (mount, swap, stacked device) explains why.], [`the kernel refused an exclusive open, and gives no reason`],
+  [Usually seen together with `Mounted` on the boot disk, which explains it. Alone: find out what holds the disk with `fuser -vm /dev/<disk>` or `lsof /dev/<disk>`. Typical holders: multipathd, a virtual machine, an iSCSI target, a backup agent.],
+  [`Unreadable`], [The probe could not establish whether the disk is in use or what is on it.], [`the kernel could not be asked: ...` or `the device could not be read: ...`],
+  [Check `dmesg` on the worker for I/O errors (failing disk) and the probe logs for permission errors. Run discovery again.],
+  [`ReadOnly`], [The disk is read-only.], [`the kernel presents the device read-only`],
+  [Change the setting in the hypervisor or the storage controller, or `blockdev --setrw /dev/<disk>` if it was set on the host.],
+  [`Removable`], [The device is removable: CD/DVD drive, USB stick, card reader.], [`the kernel reports the device as removable ...`],
+  [Not usable for storage. If a real disk shows up as removable (some hypervisors do this), change the virtual disk type.],
+  [`NoCapacity`], [The device reports a size of zero: an unused loop or network block device, an empty card reader.], [`the device reports a size of zero`],
+  [Nothing; expected.],
+  [`FabricNamespace`], [The disk is a remote NVMe volume attached over the network, for example a simplyblock volume in use on this worker.], [`the namespace is reached over a fabric ...`],
+  [Nothing; it is not a local disk. If the attachment is stale, `nvme disconnect` it.],
+  [`UnknownTransport`], [The disk sits on a controller type the probe does not recognize.], [`the device sits on no bus this scan could name`],
+  [Cannot be worked around by configuration. Escalate to engineering with the disk's driver and `/sys/block/<disk>` path.],
 )
 
-#note[Not rejections: a disk whose signature `wipefs` erased is reported as released and admitted. A disk carrying
-a simplyblock (alceml) superblock from an earlier deployment is admitted, and the report says so. Wipe it
-first if the old data must not be picked up.]
+#note[Not refused: a disk wiped with `wipefs` is taken, and the report notes the old format. A disk that still
+carries data from an earlier simplyblock deployment is also taken, and the report says so. If the old data
+must not be reused, wipe the disk before running discovery.]
 
-#pagebreak()
-= Discovery rules
+= Discovery filters
 
-`operator/internal/discovery` decides, from the probe reports, which free devices and which workers go into the draft. These refusals follow the run's own configuration rather than the state of the machine.
+After inspection, discovery applies the customer's own settings and the deployment's requirements. A disk
+gets only the first refusal that applies, in the order listed. Each one is reported as a `DeviceDeclined` or
+`WorkerDeclined` event.
 
-== Device rules
+== Disks
 
-Applied in this order; a device carries only the first refusal. Pre-filter refusals are sent as events but
-left out of the run's summary message.
-
-#grid((0.9fr, 2fr, 1.8fr, 1.5fr), ([Rule], [Message], [When], [Fix]),
-  [`whole disk` (pre-filter)], [`it is a <kind> rather than a whole disk`],
-  [Not a whole disk. The block class also accepts partitions.], [Use whole disks.],
-  [`simplyblock volume`], [`it is a simplyblock logical volume of cluster %s, which this fleet already serves`],
-  [The device's subsystem NQN is a simplyblock volume.], [Nothing. `nvme disconnect` it if it is stale.],
-  [`device class` (pre-filter)], [`this run scans NVMe devices and the device is on %s`, `... which is a volume something else exported ...`, or `it has no PCI address to name it by`],
-  [NVMe class (the default) and the disk is virtio, SCSI, SATA, and so on; or block class and the disk is a fabric namespace.],
-  [For non-NVMe disks set `spec.discover.enableLogicalBlockDevices: true`.],
-  [`available`], [`the probe refused it: Reason, ...` or `the probe did not report it as available and gave no reason`],
-  [The probe gave the device one or more reasons (section 4).], [Fix per reason. `enablePartitionedDevices` waives `Partitioned` only when it is the sole reason.],
-  [`iSCSI`], [`it is an iSCSI LUN ... so a run takes one only where the allow list names it and this one names %s`],
-  [An iSCSI LUN not named in the allow list.], [Add it to `deviceFilter.blockAllowList` (block class) or `pcieAllowList`.],
-  [`allow and deny lists`], [`it is in the deny list` or `it is not in the allow list`],
-  [`deviceFilter.pcieAllowList` and `pcieDenyList` (NVMe, PCI address), or `blockAllowList` and `blockDenyList` (block, kernel or `/dev/disk/...` path).], [Fix the lists.],
-  [`model`], [`its model %q does not contain %q`], [`deviceFilter.pcieModel` is set (NVMe class); case-insensitive substring.], [Fix or remove `pcieModel`.],
-  [`size range`], [`it is %s and the range %s starts above it` or `... ends below it`], [Outside `deviceFilter.driveSizeRange` (inclusive).], [Widen the range.],
+#grid(cols, head,
+  [Not a whole disk], [`<worker>/<device>: declined by whole disk because it is a <kind> rather than a whole disk`],
+  [A partition in NVMe mode, or any loop, RAID, or LVM device. Left out of the run's summary because every worker has these.],
+  [Same as `NotAWholeDisk` in section 4.],
+  [simplyblock volume], [`... because it is a simplyblock logical volume of cluster <id>, which this fleet already serves`],
+  [The disk is a simplyblock volume attached to this worker.],
+  [Nothing; it belongs to an existing cluster.],
+  [Not NVMe], [`... because this run scans NVMe devices and the device is on <bus>`],
+  [The run is in the default NVMe mode and the disk is virtio, SCSI, SAS, SATA, or similar. Left out of the run's summary, so a run that only finds such disks reports "no usable disk" with few details.],
+  [Ask whether logical block devices are meant to be used. Typical for virtual machines and cloud instances. If so, run discovery again with `spec.discover.enableLogicalBlockDevices: true`. In that mode disks are named by their `/dev/disk/by-id` path, and partitions are possible.],
+  [Remote volume in block mode], [`... because this run scans logical block devices and the device is on nvme-fabric ...`],
+  [Logical block device mode, and the disk is a remote NVMe volume.],
+  [Nothing; it is not a local disk.],
+  [Refused by inspection], [`... because the probe refused it: <reason>, ...`],
+  [The disk inspection gave one or more reasons.],
+  [Look up each reason in section 4.],
+  [iSCSI disk], [`... because it is an iSCSI LUN, which is storage on the other side of a network, so a run takes one only where the allow list names it ...`],
+  [The disk is attached over iSCSI and the customer did not list it explicitly.],
+  [Ask whether the iSCSI disk is meant to back simplyblock. If so, add it to `spec.discover.deviceFilter.blockAllowList`.],
+  [Deny or allow list], [`... because it is in the deny list` or `... because it is not in the allow list`],
+  [The customer's disk filters exclude it.],
+  [Check `spec.discover.deviceFilter`: `pcieAllowList` and `pcieDenyList` take PCI addresses (NVMe mode); `blockAllowList` and `blockDenyList` take `/dev/...` paths (block mode).],
+  [Model filter], [`... because its model "<model>" does not contain "<text>"`],
+  [The customer set `pcieModel` and this disk's model does not match.],
+  [Fix or remove `spec.discover.deviceFilter.pcieModel`.],
+  [Size filter], [`... because it is <size> and the range <range> starts above it` (or `ends below it`)],
+  [The disk is outside `spec.discover.deviceFilter.driveSizeRange`.],
+  [Widen or remove the range.],
 )
 
+== Workers
 
-== Worker rules (`rules.go`)
-
-A worker is dropped when nothing of it is left after the device rules.
-
-#grid((1.1fr, 2fr, 1.6fr, 1.5fr), ([Refusal], [Message], [When], [Fix]),
-  [`has devices`], [`no device of it survived the device rules`],
-  [Every device of the worker was refused.], [Read the device refusals of that worker (section 4).],
-  [`has devices`, NVMe on vfio, in use], [`it presents no usable block device, and %d of its NVMe controllers (%s) are bound to a userspace driver and in use ...`],
-  [The controllers are bound to `vfio-pci` or `uio_pci_generic` and something drives them (an old SPDK, a VM passthrough).], [Stop whatever drives them, then run again.],
-  [`has devices`, NVMe on vfio, unknown], [`... whether anything is driving %d of its NVMe controllers (%s) could not be established, so they are not offered`],
-  [The probe could not check the controllers.], [Check the probe logs and privileges; check the controllers by hand.],
-  [`has devices`, NVMe on vfio, free], [`... are bound to a userspace driver and nothing is using them, so the disks are there to be reclaimed`],
-  [Shown only when they were not picked up as claimable.], [Normally added automatically on the NVMe class; otherwise unbind them from `vfio-pci`.],
-  [`fully readable` (off by default)], [`the probe could not read %d of its readings: ...`],
-  [Only with the `WorkerWasReadable` rule enabled.], [Fix what the probe could not read (see the probe logs).],
+#grid(cols, head,
+  [No disk left], [`<worker>: declined by has devices because no device of it survived the device rules`],
+  [Every disk of this worker was refused.],
+  [Look at that worker's disk refusals.],
+  [NVMe disks in use by another driver], [`... it presents no usable block device, and <count> of its NVMe controllers (<addresses>) are bound to a userspace driver and in use, so something is driving its disks`],
+  [The NVMe disks are held by a userspace driver such as `vfio-pci`, and something is using them: a previous SPDK or simplyblock installation, or a virtual machine with the disks passed through.],
+  [Ask what runs on the worker. Stop the old installation or the virtual machine, then run discovery again.],
+  [NVMe disks, state unknown], [`... whether anything is driving <count> of its NVMe controllers (<addresses>) could not be established, so they are not offered`],
+  [The NVMe disks are on a userspace driver, and the probe could not check whether they are in use.],
+  [Collect the probe logs. Check on the host whether anything uses the controllers.],
+  [NVMe disks free to reclaim], [`... are bound to a userspace driver and nothing is using them, so the disks are there to be reclaimed`],
+  [Left over from an earlier installation and not in use.],
+  [Normally taken automatically. If not, unbind the controllers from `vfio-pci` and run again.],
+  [Management network], [`<worker>: declined by management network because <worker> is on <network>, and the fleet's management network is <network>, held by <n> of its <m> workers`],
+  [The worker's management address is on a different network than most workers.],
+  [Ask whether the worker is meant to be part of the cluster. Either connect it to the common management network or leave it out of the run.],
+  [Data network], [`... because it holds no data interface on <network>, and the fleet's data networks are <networks>, held by <n> of its <m> workers`],
+  [The worker is missing an interface on one of the networks most workers use for storage traffic.],
+  [Configure the missing interface on the worker, or leave it out of the run.],
+  [Second NUMA node], [`... declined by most available NUMA node because NUMA node <n> carries <count> unclaimed devices ... so it was chosen`],
+  [The worker has disks on more than one CPU socket. Only the disks of the socket with the most disks are proposed.],
+  [Expected. If the customer wants the other disks, they can edit the draft before approving it.],
+  [Not fully readable (optional)], [`... the probe could not read <count> of its readings: ...`],
+  [Only when this check is enabled; it is off by default.],
+  [Collect the probe logs.],
 )
 
-== Network alignment (`netalign.go`)
+== Journal disk (logical block device mode)
 
-Workers must share the management network and the data networks most of the fleet is on.
+In logical block device mode every worker needs one disk set aside for the journal. The run fails with
+`no document could be drafted: ...` and a `ConfigRefused` event.
 
-#grid((1.1fr, 2fr, 1.6fr, 1.5fr), ([Refusal], [Message], [When], [Fix]),
-  [`management network`], [`%s is on %s, and the fleet's management network is %s, held by %d of its %d workers`],
-  [The worker's management interface is not on the network most workers share.], [Move the worker onto that network, or leave it out of the run.],
-  [`data network`], [`it holds no data interface on %s, and the fleet's data networks are %s, held by %d of its %d workers`],
-  [The worker lacks an interface on one of the shared data networks.], [Configure the missing interface.],
+#grid(cols, head,
+  [Only one disk], [`<worker> hands over no disk that could carry the journal, and a block cluster has no other journal layout ... Give the worker a second disk, or deploy it as nvme`],
+  [A worker contributes fewer than two disks.],
+  [Add a second disk to the worker, leave the worker out, or deploy in NVMe mode if the disks are NVMe.],
+  [Equal disks], [`<worker> hands over no disk smaller than its others, so nothing says which one carries the journal ...`],
+  [All disks on a worker are the same size, so none is obviously the journal disk.],
+  [Set `spec.discover.forceJournalDevice: true`. One of the disks then becomes the journal; the message states how much capacity that costs.],
 )
 
-== NUMA placement (`placement.go`)
+= Draft document checks
 
-One NUMA node per worker is drafted; devices on the others are declined.
+The draft CDC is checked continuously. While a problem exists, the CDC stays in phase `Draft` with the
+first problem in its status message; an approved CDC moves to `Failed`. Every problem is also a Warning
+event on the CDC. A valid draft reports `the document is valid and is waiting for spec.approved`.
 
-#grid((1.1fr, 2fr, 1.6fr, 1.5fr), ([Refusal], [Message], [When], [Fix]),
-  [`most available NUMA node`], [`no memory node of it carries an unclaimed device`; per device: `NUMA node %d carries %d unclaimed devices ... so it was chosen`],
-  [Devices sit on more than one NUMA node, and only the best node's devices are drafted.], [By design. Edit the draft by hand to use the others.],
+#grid((1.2fr, 2.6fr, 2.2fr), ([Rejection], [What the customer sees], [How to resolve]),
+  [Unknown worker], [`<worker> is not a node of this Kubernetes cluster`], [A worker was renamed or removed after discovery, or the draft was edited. Fix the worker names, or run discovery again.],
+  [Worker listed twice], [`<worker> appears in more than one group ...`], [Each worker may appear in one group only.],
+  [Different network interfaces], [`the groups name different management interfaces (<names>) ...` (or data interfaces)], [All workers of one cluster must use the same interface names. Rename the interfaces on the hosts, or split the workers into separate clusters.],
+  [No management interface], [`group(s) <names> name no management interface ...`], [Set the management interface in the group.],
+  [Group without disks], [`group <name> names no devices ...`], [Add disks or remove the group.],
+  [Failure domain missing], [`the cluster has failure domains enabled and group <name> declares none ...`], [Label the workers with their failure domain, or set it in the group.],
+  [Too many failure domains], [`the document would bring the cluster to <n> failure domains, and a cluster maps at most <max>`], [Merge failure domains.],
+  [Mixed disk types], [`the groups name <class> devices and cluster <name> is built out of <class> ...`], [When adding to an existing cluster, use the same mode (NVMe or logical block devices) the cluster was built with.],
+  [Journal required], [`the groups name logical block devices, and the control plane runs those only with the journal on a device of its own ...`], [Set `spec.cluster.enableJournalDevice: true`.],
+  [Cluster too large], [`node set <name> makes <n> storage nodes, and a cluster holds at most <max> ...` or `the document adds <n> storage nodes to cluster <name> ...`], [Split the workers into several node sets (each becomes its own cluster), or add fewer nodes.],
+  [Name too long], [`node set <name> makes a member named like <name>, which a StorageCluster cannot be named ...`], [Shorten the cluster or node set name.],
+  [Sizing missing], [`spec.clusterRef names supercluster <name>, and the members the document adds have no sizing ...`], [Add the cluster settings (`spec.cluster`).],
+  [Spans regions], [`node set <name> lists workers in regions <names>, and a member stays within one region`], [Group the workers by region.],
+  [Uneven failure domains], [`node set <name> holds no worker in failure domain <name>, which another node set of its region holds ...`], [Rebalance the workers so each node set covers every failure domain of its region.],
+  [Unsupported erasure coding], [`<field> is <scheme>, which is not a scheme simplyblock supports ...`], [Pick a supported scheme.],
+  [Too few nodes, workers, or disks for the erasure coding], [`<field> is <scheme>, which needs at least <n> storage node(s) ...` (or workers, or devices)], [Add nodes, workers, or disks, or choose a smaller scheme.],
+  [Single-node mode], [`the cluster is a single-node cluster (clusterMode Single), which runs exactly one storage node ...`], [Use exactly one worker, or a different cluster mode.],
+  [Cluster exists or is missing (after approval)], [The CDC moves to `Failed` because the cluster to create already exists, or the cluster to extend does not.], [To extend an existing cluster, name it in `spec.clusterRef`. Check the name otherwise.],
 )
 
-== Draft template (`template.go`)
+= Approval and admission
 
-Refusals while the document is written. The run fails with `no document could be drafted: ...` and a `ConfigRefused` event.
+These are refused immediately: the `kubectl apply` or `kubectl edit` fails with the message.
 
-#grid((1fr, 2fr, 1.6fr, 1.7fr), ([Failure], [Message], [When], [Fix]),
-  [Block class, no journal disk (`ConfigRefused`)], [`%s hands over no disk that could carry the journal, and a block cluster has no other journal layout ... Give the worker a second disk, or deploy it as nvme`],
-  [Block class, and a worker has fewer than two disks or its disks report no size.], [Add a second disk, or run with the NVMe class.],
-  [Block class, journal tie (`ConfigRefused`)], [`%s hands over no disk smaller than its others, so nothing says which one carries the journal ...`],
-  [Block class, and the smallest disks of a worker are the same size.], [Set `spec.discover.forceJournalDevice: true`.],
+#grid((1.2fr, 2.8fr, 2fr), ([Rejection], [What the customer sees], [How to resolve]),
+  [Cannot approve], [`this document cannot be approved, and approving it is what makes it immutable: <problems>`. Problems include: a worker that does not exist; another approved CDC creating the same cluster; neither a cluster to create nor one to extend; the cluster to extend does not exist; a cluster with that name already exists; mixed disk types.],
+  [Fix each listed problem, then approve again.],
+  [Change after approval], [`spec.approved cannot be withdrawn` or `spec is immutable once spec.approved is true ...`],
+  [An approved CDC cannot be changed. To add workers, create a new CDC that names the cluster in `spec.clusterRef`, or run discovery again with `spec.discover.clusterRef`.],
+  [Invalid CDC contents], [For example: `a device selection names NVMe addresses or block devices, not both`, `every group of a node set must name the same device class`, `enableArbitration and arbitration are only valid when clusterMode is Dual`, `spec.cluster.openshift ... spec.environment has to be OpenShift`.],
+  [Fix the document as the message says.],
+  [Invalid discovery settings], [`the PCI filters select NVMe devices and cannot be combined with enableLogicalBlockDevices ...`, `blockAllowList and blockDenyList ... require enableLogicalBlockDevices`, `spec.discover names workers and also carries a nodeSelector ...`],
+  [Use the filters that match the chosen mode, and either `workers` or `nodeSelector`, not both.],
 )
 
-#pagebreak()
-= CDC validation controller
+= Discovery settings reference
 
-Checked on every reconcile. A draft stays `Draft` with the first finding in `status.message` (plus
-`and N other problems`); an approved CDC moves to `Failed`. Every finding is also a Warning event with the
-reason below.
+All under `spec.discover` of the OperatorOps.
 
-#grid((1.2fr, 3fr, 1.6fr), ([Reason], [Message], [Fix]),
-  [`WorkerNotFound`], [`%s is not a node of this Kubernetes cluster`], [Fix the group's `workers`.],
-  [`WorkerNotFound`], [`%s appears in more than one group ...`], [Put each worker into one group.],
-  [`WorkerNotFound`], [`the groups name different management interfaces (%s) ...` (the same for data interfaces)], [Use the same interface names in every group.],
-  [`NoManagementInterface`], [`group(s) %s name no management interface ...`], [Set `mgmtInterface`.],
-  [`DeviceNotFound`], [`group %s names no devices ...`], [Add devices to the group.],
-  [`DeviceNotFound`], [`the cluster has failure domains enabled and group %s declares none ...`], [Set the group's failure domain.],
-  [`DeviceClassMismatch`], [`the groups name %s devices and cluster %s is built out of %s ...`], [Use the class of the cluster named in `clusterRef`.],
-  [`JournalDeviceRequired`], [`the groups name logical block devices, and the control plane runs those only with the journal on a device of its own ...`], [Set `spec.cluster.enableJournalDevice: true`.],
-  [`TooManyFailureDomains`], [`the document would bring the cluster to %d failure domains, and a cluster maps at most %d`], [Use fewer failure domains.],
-  [`MemberTooLarge`], [`node set %s makes %d storage nodes, and a cluster holds at most %d ...` or `the document adds %d storage nodes to cluster %s ...`], [Split into smaller node sets (supercluster members), or add fewer nodes.],
-  [`MemberNameInvalid`], [`node set %s makes a member named like %s, which a StorageCluster cannot be named ...`], [Shorten the node set or cluster name.],
-  [`MemberSizingUnstated`], [`spec.clusterRef names supercluster %s, and the members the document adds have no sizing ...`], [Add `spec.cluster`.],
-  [`MemberSpansRegions`], [`node set %s lists workers in regions %s, and a member stays within one region`], [Group workers by region.],
-  [`MemberMissingFailureDomain`], [`node set %s holds no worker in failure domain %s, which another node set of its region holds ...`], [Rebalance workers across node sets.],
-  [`StripeUnsupported`], [`%s is %s, which is not a scheme simplyblock supports ...`], [Pick a supported erasure-coding scheme.],
-  [`StripeBelowMinimumNodes`, `...Workers`, `...Devices`], [`%s is %s, which needs at least %d storage node(s)`, or the same for workers and devices], [Add nodes, workers, or devices, or choose a smaller stripe.],
-  [`StripeSingleNodeCount`], [`the cluster is a single-node cluster (clusterMode Single), which runs exactly one storage node ...`], [Exactly one node in single mode.],
-  [`ClusterExists`, `ClusterNotFound` (after approval)], [The cluster to create already exists, or the one in `clusterRef` is missing.], [Use `clusterRef` for an existing cluster; fix the name.],
-)
-
-= Admission (webhook and CRD CEL rules)
-
-#grid((1fr, 3.4fr, 1.4fr), ([Rule], [Message], [Fix]),
-  [Approval check], [`this document cannot be approved, and approving it is what makes it immutable: <problems>`. Problems: an unknown worker; another approved CDC creates the same cluster; neither `spec.cluster` nor `spec.clusterRef`; `clusterRef` does not exist; `spec.cluster.name` already exists; a class mismatch.],
-  [Fix each listed problem, then approve.],
-  [After approval], [`spec.approved cannot be withdrawn` or `spec is immutable once spec.approved is true ...`], [Write a second CDC that names the cluster in `spec.clusterRef`.],
-  [CDC CEL rules], [NVMe addresses or block devices, not both; every group of a node set uses the same class; `enableArbitration` and `arbitration` only with `clusterMode: Dual`; node-set overrides need more than one node set or a `clusterRef`; `spec.cluster.openshift` needs `spec.environment: OpenShift`.],
-  [Fix the document.],
-  [OperatorOps CEL rules], [PCI filters cannot be combined with `enableLogicalBlockDevices`; `blockAllowList` and `blockDenyList` require it; `workers` and `nodeSelector` are exclusive.],
-  [Use the filters of the chosen class; state one worker selection.],
-)
-
-= `spec.discover` reference
-
-#grid((1.4fr, 4fr), ([Field], [Effect]),
-  [`configName`], [Name of the CDC to write (default: generated).],
-  [`workers`, `nodeSelector`], [Which nodes to probe; mutually exclusive.],
-  [`tolerations`], [Lets the probe Job run on tainted nodes and is copied into the draft. Does not make a tainted node usable.],
+#grid((1.5fr, 4fr), ([Setting], [Effect]),
+  [`enableLogicalBlockDevices`], [Logical block device mode: virtio, SCSI, SAS, SATA, and NVMe disks through the kernel, named by `/dev/disk/by-id` path. Required for virtual machines and most cloud instances. The default is NVMe mode, which takes only NVMe disks, named by PCI address.],
+  [`enablePartitionedDevices`], [Takes a disk whose only problem is a leftover partition table.],
+  [`forceJournalDevice`], [Logical block device mode: picks a journal disk among equal-sized disks.],
   [`enableControlPlaneNodes`], [Includes control-plane and infrastructure nodes.],
-  [`failureDomainLabel`], [Node label read as the failure domain.],
-  [`enableLogicalBlockDevices`], [Block class: devices named by `/dev/disk/...` path instead of NVMe PCI address. Needed for virtio, SCSI, and SATA disks.],
-  [`enablePartitionedDevices`], [Waives `Partitioned` when it is a device's only reason.],
-  [`forceJournalDevice`], [Dedicates one of several equal smallest disks to the journal.],
-  [`deviceFilter.pcieAllowList`, `pcieDenyList`, `pcieModel`], [NVMe class filters.],
-  [`deviceFilter.blockAllowList`, `blockDenyList`], [Block class filters; match the kernel or the stable path.],
-  [`deviceFilter.driveSizeRange`], [Inclusive size range, for example `500G-4T`.],
-  [`clusterRef`], [The draft adds nodes to an existing cluster.],
+  [`workers` or `nodeSelector`], [Which workers to inspect; use one or the other.],
+  [`tolerations`], [Lets the probe run on tainted nodes and carries over to the deployment. Does not make a tainted node usable.],
+  [`failureDomainLabel`], [The node label that names each worker's failure domain.],
+  [`deviceFilter.pcieAllowList`, `pcieDenyList`, `pcieModel`], [NVMe mode disk filters, by PCI address and model.],
+  [`deviceFilter.blockAllowList`, `blockDenyList`], [Logical block device mode disk filters, by `/dev/...` path.],
+  [`deviceFilter.driveSizeRange`], [Size range, for example `500G-4T`.],
+  [`clusterRef`], [The draft adds workers to an existing cluster.],
+  [`configName`], [Name of the draft CDC.],
 )
