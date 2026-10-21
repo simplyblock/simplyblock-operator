@@ -15,6 +15,7 @@ package deployment
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -395,5 +396,57 @@ func TestTheDeviceClassIsOnePerNodeSet(t *testing.T) {
 	err := apiClient.Update(context.Background(), config)
 	if err == nil || !strings.Contains(err.Error(), "device class") {
 		t.Errorf("a node set mixing device classes was admitted, or refused for another reason: %v", err)
+	}
+}
+
+// A node set overrides the cluster template only where the node set is a
+// member of its own: a document of one node set creating one cluster states
+// that cluster's sizing in the template (design-superclusters.md §5.8).
+func TestANodeSetOverridesTheTemplateOnlyWhenItIsAMember(t *testing.T) {
+	apiClient := apiServer(t)
+	group := simplyblockv1alpha2.NodeGroup{
+		Name: "g", Workers: []string{"worker-1"},
+		Devices: &simplyblockv1alpha2.DeviceSelection{NVMe: []string{"0000:00:02.0"}},
+	}
+	overrides := &simplyblockv1alpha2.NodeSetClusterOverrides{VCPUCount: ptr.To(int32(8))}
+
+	config := aStoredDocument(t, apiClient, "overrides")
+	config.Spec.NodeSets[0].Cluster = overrides
+	err := apiClient.Update(context.Background(), config)
+	if err == nil || !strings.Contains(err.Error(), "overrides the cluster template") {
+		t.Errorf("a single node set overriding the template was admitted, or refused for another reason: %v", err)
+	}
+
+	config = aStoredDocument(t, apiClient, "member-overrides")
+	config.Spec.NodeSets = append(config.Spec.NodeSets,
+		simplyblockv1alpha2.NodeSet{Name: "dense", Groups: []simplyblockv1alpha2.NodeGroup{group}, Cluster: overrides})
+	if err := apiClient.Update(context.Background(), config); err != nil {
+		t.Errorf("a member's node set overriding the template was refused: %v", err)
+	}
+}
+
+// An override is held to the floor the template is: four vCPUs.
+func TestANodeSetsVCPUOverrideIsHeldToTheTemplatesFloor(t *testing.T) {
+	apiClient := apiServer(t)
+	group := simplyblockv1alpha2.NodeGroup{
+		Name: "g", Workers: []string{"worker-1"},
+		Devices: &simplyblockv1alpha2.DeviceSelection{NVMe: []string{"0000:00:02.0"}},
+	}
+	for _, tc := range []struct {
+		vcpu  int32
+		admit bool
+	}{{4, true}, {3, false}} {
+		config := aStoredDocument(t, apiClient, fmt.Sprintf("vcpu-floor-%d", tc.vcpu))
+		config.Spec.NodeSets = append(config.Spec.NodeSets, simplyblockv1alpha2.NodeSet{
+			Name: "dense", Groups: []simplyblockv1alpha2.NodeGroup{group},
+			Cluster: &simplyblockv1alpha2.NodeSetClusterOverrides{VCPUCount: ptr.To(tc.vcpu)},
+		})
+		err := apiClient.Update(context.Background(), config)
+		if tc.admit && err != nil {
+			t.Errorf("vcpuCount %d was refused: %v", tc.vcpu, err)
+		}
+		if !tc.admit && (err == nil || !strings.Contains(err.Error(), "vcpuCount")) {
+			t.Errorf("vcpuCount %d was admitted, or refused for another reason: %v", tc.vcpu, err)
+		}
 	}
 }

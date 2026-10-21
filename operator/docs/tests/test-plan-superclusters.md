@@ -285,18 +285,19 @@ File: `operator/internal/controllers/pool/shares_test.go`
 
 ### Per-Node-Set Overrides and Name Limits (design §5.3, §5.8)
 
-File: `operator/internal/controllers/deployment/supercluster_members_test.go`
+Files: `operator/internal/controllers/deployment/supercluster_overrides_test.go`,
+and `cel_validation_test.go` beside it for the rows the API server decides.
 
-| #         | Scenario                                                                                                                                                                                           | Type                | Test |
-|-----------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|------|
-| U-124     | A node set's `vcpuCount` override reaches its member only, and the other members inherit the template                                                                                              | Positive            | —    |
-| U-125     | Slots are counted per node set: 16 workers at two slots in one set and 32 at one slot in another are both admitted                                                                                 | Boundary            | —    |
-| U-126     | Overrides on a document with one node set are refused                                                                                                                                              | Negative            | —    |
-| U-127     | An NVMe node set beside a logical block node set is admitted, and a node set mixing both is refused                                                                                                | Positive + Negative | —    |
-| U-128     | The erasure-coding minimum is checked against a node set's own `stripe` override                                                                                                                   | Boundary            | —    |
-| ~~U-129~~ | ~~A cluster name of 35 characters is admitted and 36 is refused, a node set name of 26 is admitted and 27 is refused~~ superseded by U-154: node set names are at most 23 characters (design §5.3) | Boundary            | —    |
-| ~~U-130~~ | ~~The generator cuts a node set base to 23 characters and appends `-1` to `-32`~~ superseded by U-151: members carry a random suffix (design §5.3)                                                 | Boundary            | —    |
-| U-194     | A node set's `vcpuCount` override of 4 is admitted and 3 is refused by the API server, as the template and `StorageClusterSpec` refuse it                                                          | Boundary            | —    |
+| #         | Scenario                                                                                                                                                                                           | Type                | Test                                                                         |
+|-----------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|------------------------------------------------------------------------------|
+| U-124     | A node set's `vcpuCount` override reaches its member only, and the other members inherit the template                                                                                              | Positive            | `TestAMemberIsCreatedWithItsNodeSetsOverrides`                               |
+| U-125     | Slots are counted per node set: 16 workers at two slots in one set and 32 at one slot in another are both admitted                                                                                 | Boundary            | `TestSlotsAreCountedPerNodeSet`, `TestTheSizeLimitCountsTheNodeSetsOwnSlots` |
+| U-126     | Overrides on a document with one node set are refused                                                                                                                                              | Negative            | `TestANodeSetOverridesTheTemplateOnlyWhenItIsAMember`                        |
+| U-127     | An NVMe node set beside a logical block node set is admitted, and a node set mixing both is refused                                                                                                | Positive + Negative | `TestTheDeviceClassIsOnePerNodeSet`                                          |
+| U-128     | The erasure-coding minimum is checked against a node set's own `stripe` override                                                                                                                   | Boundary            | `TestTheStripeMinimumIsCheckedAgainstTheMembersOwnScheme`                    |
+| ~~U-129~~ | ~~A cluster name of 35 characters is admitted and 36 is refused, a node set name of 26 is admitted and 27 is refused~~ superseded by U-154: node set names are at most 23 characters (design §5.3) | Boundary            | —                                                                            |
+| ~~U-130~~ | ~~The generator cuts a node set base to 23 characters and appends `-1` to `-32`~~ superseded by U-151: members carry a random suffix (design §5.3)                                                 | Boundary            | —                                                                            |
+| U-194     | A node set's `vcpuCount` override of 4 is admitted and 3 is refused by the API server, as the template and `StorageClusterSpec` refuse it                                                          | Boundary            | `TestANodeSetsVCPUOverrideIsHeldToTheTemplatesFloor`                         |
 
 ### Fan-Out Admission (design §9.6)
 
@@ -610,7 +611,7 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 184       | 73      | all others  |
+| Unit        | 184       | 79      | all others  |
 | Integration | 56        | 11      | all others  |
 | E2E         | 10        | 0       | E-01 … E-10 |
 | Manual      | 2         | 0       | M-01, M-02  |
@@ -619,7 +620,7 @@ Four covered unit rows are existing tests of behavior this design keeps: U-25,
 U-27, U-28, and U-81. The rest, and the six integration rows, are Phase 1's
 first two iterations: the API, admission, the supercluster reconciler, the
 refusals of U-195 to U-198, and the workload names and shared Services of §6 with U-203 to
-U-217, and the expansion into members of §5.1 to §5.4 with U-218 to U-222. The counts exclude struck rows, each superseded by
+U-217, and the expansion into members of §5.1 to §5.4 with U-218 to U-222, and the per-node-set overrides of §5.8 with U-124 to U-128 and U-194. The counts exclude struck rows, each superseded by
 the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-35, U-38 … U-46, U-55 … U-57, U-77, U-79, U-122, U-129 … U-130, U-163, and I-04 … I-06, I-09, I-11 … I-12, I-14, I-17 … I-20, I-26, I-28 … I-30, I-34, I-37, I-40 … I-41, I-43, I-46, I-52.
 
 ---
@@ -628,7 +629,7 @@ the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-3
 
 | #                                                                                                                                        | Gap                                                              | Reason                                                                                                                                                                                                                   |
 |------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| U-19, U-24, U-47 … U-54, U-58 … U-73, U-76, U-84, U-87 … U-113, U-116 … U-128, U-131, U-132, U-147 … U-158, U-165 … U-180, U-183 … U-194 | The remaining unit scenarios                                     | Feature not implemented (rest of Phase 1, Phases 2 to 5)                                                                                                                                                                 |
+| U-19, U-24, U-47 … U-54, U-58 … U-73, U-76, U-84, U-87 … U-113, U-116 … U-123, U-131, U-132, U-147 … U-158, U-165 … U-180, U-183 … U-193 | The remaining unit scenarios                                     | Feature not implemented (rest of Phase 1, Phases 2 to 5)                                                                                                                                                                 |
 | U-136, U-159                                                                                                                             | A member's agents' pod addresses, and two members on one worker  | The node agent runs on the host network until P0-3, so a member's slice lists worker addresses and a worker serves one member. The member's hostname suffix is covered by `TestAMembersEndpointsCarryItsNodeLabelSuffix` |
 | U-34                                                                                                                                     | Members on different `ControlPlane` objects                      | A `StorageCluster` names no `ControlPlane`: one operator reaches one control plane, so every member shares it. The rule is needed once a cluster can name its control plane                                              |
 | U-145 (member half)                                                                                                                      | Deleting a member whose pools report bound volumes               | Pools report no bound volumes yet. The rule arrives with `RemoveMember` (Phase 4)                                                                                                                                        |

@@ -36,15 +36,43 @@ func clustersBuilt(config *simplyblockv1alpha2.ClusterDeploymentConfig) int {
 	return 1
 }
 
-// memberView is the document as one member reads it: the same template and
-// images, and one node set. Every check and builder that spans a cluster runs
-// on it unchanged, so what spans a cluster spans a member.
+// memberView is the document as one member reads it: the same images, one node
+// set, and the template with that node set's overrides merged in (§5.8). Every
+// check and builder that spans a cluster runs on it unchanged, so what spans a
+// cluster spans a member, at the member's own sizing.
 func memberView(
 	config *simplyblockv1alpha2.ClusterDeploymentConfig, set simplyblockv1alpha2.NodeSet,
 ) *simplyblockv1alpha2.ClusterDeploymentConfig {
 	view := config.DeepCopy()
 	view.Spec.NodeSets = []simplyblockv1alpha2.NodeSet{*set.DeepCopy()}
+	if template, overrides := view.Spec.Cluster, set.Cluster; template != nil && overrides != nil {
+		applyOverrides(template, overrides.DeepCopy())
+	}
 	return view
+}
+
+// applyOverrides writes every field the node set states over the template's.
+func applyOverrides(
+	template *simplyblockv1alpha2.ClusterTemplate, overrides *simplyblockv1alpha2.NodeSetClusterOverrides,
+) {
+	if overrides.VCPUCount != nil {
+		template.VCPUCount = overrides.VCPUCount
+	}
+	if overrides.MaxSubsystemCount != nil {
+		template.MaxSubsystemCount = overrides.MaxSubsystemCount
+	}
+	if overrides.MinHugePagesSize != "" {
+		template.MinHugePagesSize = overrides.MinHugePagesSize
+	}
+	if len(overrides.SocketsToUse) > 0 {
+		template.SocketsToUse = overrides.SocketsToUse
+	}
+	if overrides.NodesPerSocket != nil {
+		template.NodesPerSocket = overrides.NodesPerSocket
+	}
+	if overrides.Stripe != nil {
+		template.Stripe = overrides.Stripe
+	}
 }
 
 // memberName is <cluster>-<nodeset>-<suffix> (§5.3).

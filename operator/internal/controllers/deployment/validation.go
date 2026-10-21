@@ -453,11 +453,12 @@ const maxStorageNodesPerCluster = 32
 // supercluster's document would name with something that is not a name.
 func memberLimits(config *simplyblockv1alpha2.ClusterDeploymentConfig) []finding {
 	var findings []finding
-	slots := int32(1)
-	if template := config.Spec.Cluster; template != nil {
-		slots = slotsOf(template.SocketsToUse, template.NodesPerSocket)
-	}
 	for _, set := range config.Spec.NodeSets {
+		// The node set's own layout, its overrides merged into the template.
+		slots := int32(1)
+		if template := memberView(config, set).Spec.Cluster; template != nil {
+			slots = slotsOf(template.SocketsToUse, template.NodesPerSocket)
+		}
 		workers := 0
 		for _, group := range set.Groups {
 			workers += len(group.Workers)

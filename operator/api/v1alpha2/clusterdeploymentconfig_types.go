@@ -312,6 +312,57 @@ type NodeSet struct {
 	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:Required
 	Groups []NodeGroup `json:"groups"`
+
+	// Cluster overrides the document's cluster template for the member cluster
+	// this node set becomes, for a node set whose hardware differs from the
+	// rest. A field left unset takes the template's value. Valid on a document
+	// with more than one node set, or one naming a cluster in clusterRef.
+	// +optional
+	Cluster *NodeSetClusterOverrides `json:"cluster,omitempty"`
+}
+
+// NodeSetClusterOverrides is the sizing a node set's member cluster takes in
+// place of the document's cluster template. A field left unset takes the
+// template's value.
+type NodeSetClusterOverrides struct {
+	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
+	// this member.
+	// +kubebuilder:validation:Minimum=4
+	// +optional
+	VCPUCount *int32 `json:"vcpuCount,omitempty"`
+
+	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
+	// node of this member serves.
+	// +kubebuilder:validation:Minimum=10
+	// +kubebuilder:validation:Maximum=75
+	// +optional
+	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
+
+	// MinHugePagesSize is the smallest huge-page allocation each storage node of
+	// this member makes: 100G or 1T, where a bare number is gigabytes.
+	// +kubebuilder:validation:MaxLength=32
+	// +optional
+	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
+
+	// SocketsToUse are the NUMA sockets that run storage nodes on this member's
+	// workers. With NodesPerSocket it decides how many storage nodes each worker
+	// runs.
+	// +kubebuilder:validation:items:MaxLength=16
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=set
+	// +optional
+	SocketsToUse []string `json:"socketsToUse,omitempty"`
+
+	// NodesPerSocket is how many storage nodes run per NUMA socket on this
+	// member's workers.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=8
+	// +optional
+	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
+
+	// Stripe is this member's erasure-coding layout.
+	// +optional
+	Stripe *StripeSpec `json:"stripe,omitempty"`
 }
 
 // ClusterTemplate is the StorageCluster the expansion creates, where it creates
@@ -680,6 +731,7 @@ type DeploymentImages struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval cannot be withdrawn"
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)) || s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group of a node set must name the same device class: all nvme or all block"
+// +kubebuilder:validation:XValidation:rule="size(self.nodeSets) > 1 || has(self.clusterRef) || self.nodeSets.all(s, !has(s.cluster))",message="a node set overrides the cluster template only when the document has more than one node set or names a cluster in clusterRef"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
