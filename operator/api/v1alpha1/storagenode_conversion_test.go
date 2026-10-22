@@ -317,3 +317,67 @@ func TestStorageNodeSpdkProxyPullPolicySurvivesTheTripDown(t *testing.T) {
 		t.Errorf("the config did not survive (-want +got):\n%s", diff)
 	}
 }
+
+// Regression: 2026-10-22-sync-site-dropped-through-v1alpha1. A node's site and
+// whether it is the other site's remote record are hub fields this version has
+// no home for. A node read once at v1alpha1 and written back would lose its
+// site, which a sync cluster requires at add time, and a remote record would
+// come back as a node of this site with no worker.
+func TestStorageNodeSiteAndRemoteSurviveTheTripDown(t *testing.T) {
+	hub := &v1alpha2.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "sb"},
+		Spec: v1alpha2.StorageNodeSpec{
+			ClusterRef: testCluster,
+			Config: v1alpha2.StorageNodeConfig{
+				Sizing: v1alpha2.StorageNodeSizing{VCPUCount: ptr.To(int32(8))},
+				Site:   "b",
+			},
+			Stretched: &v1alpha2.StretchedNodeSpec{Remote: true},
+		},
+	}
+
+	var stored StorageNode
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StorageNode
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if back.Spec.Config.Site != "b" {
+		t.Errorf("config.site = %q, want %q", back.Spec.Config.Site, "b")
+	}
+	if diff := cmp.Diff(hub.Spec.Stretched, back.Spec.Stretched); diff != "" {
+		t.Errorf("spec.stretched did not survive (-want +got):\n%s", diff)
+	}
+}
+
+// A node of a standalone cluster gains no stretched block and no notes.
+func TestStorageNodeWithoutASiteGainsNoStretchedBlock(t *testing.T) {
+	hub := &v1alpha2.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "sb"},
+		Spec: v1alpha2.StorageNodeSpec{
+			ClusterRef: testCluster,
+			WorkerNode: "worker-3",
+			Config:     v1alpha2.StorageNodeConfig{Sizing: v1alpha2.StorageNodeSizing{VCPUCount: ptr.To(int32(8))}},
+		},
+	}
+
+	var stored StorageNode
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	for key := range stored.Annotations {
+		if key == annoNodeSite || key == annoNodeStretched {
+			t.Errorf("a node with no site carries the note %s", key)
+		}
+	}
+	var back v1alpha2.StorageNode
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	if back.Spec.Stretched != nil || back.Spec.Config.Site != "" {
+		t.Errorf("a standalone node came back with site %q, stretched %v", back.Spec.Config.Site, back.Spec.Stretched)
+	}
+}

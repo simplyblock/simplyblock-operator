@@ -690,131 +690,400 @@ The regression focus is the gate and the fence: a node attaching a volume led fr
 
 ## Appendix A: `stretchedcluster_types.go`
 
-In `operator/api/v1alpha2/`, beside `StorageSiteDeployment`, the hub-side request kind it follows: a request named by `ManagedCluster`, carried by `ManifestWork`, answered through `ManagedClusterView`, and withdrawing nothing on deletion.
+In `operator/api/v1alpha2/`, beside `StorageSiteDeployment`, the hub-side request kind it follows. The type as it is written; the doc comments are the ones the shipped file carries. `StorageSiteSizing`, `StorageSiteDiscovery`, `StorageSiteDraft`, `StorageSiteCluster`, and `StorageSiteDeploymentPhase` are the types `storagesitedeployment_types.go` declares, reused unchanged. `.claude/skills/api-design/scripts/check-crds.py --design` audits this appendix.
+
+`status.sites` is bounded at two items because each item embeds the draft's cluster template, whose own CEL rules the apiserver costs per item: an unbounded list made the CRD's estimated rule cost exceed the budget, and the CRD was refused at install. A webhook refuses a role swap while either site's projected `StorageCluster` is not `Online`, so a swap never lands on a cluster mid-creation (U-23).
 
 ```go
-// StretchedCluster is one synchronously replicated backend cluster whose two
-// sites are two OCM ManagedClusters. It is the hub-side intent from which the
-// hub's operator runs two StorageSiteDeployment flows, one ManifestWork each:
-// discovery, sizing, and approval. The leader's draft creates the cluster and
-// the follower's joins it (design §5.1).
-type StretchedClusterSpec struct {
-	// ClusterName is the backend cluster's name on both sites.
-	// +kubebuilder:validation:Required
-	// +k8s:immutable
-	ClusterName string `json:"clusterName"`
+// StretchedRole is which of a stretched cluster's two sites owns the backend
+// cluster's cluster-wide operations.
+// +kubebuilder:validation:Enum=Leader;Follower
+type StretchedRole string
 
-	// Sites are the two managed clusters and the site each represents. Exactly
-	// one carries role Leader. The roles may be swapped after creation (design
-	// §11.1); the clusters and sites may not.
-	// +kubebuilder:validation:MinItems=2
-	// +kubebuilder:validation:MaxItems=2
-	Sites []StretchedSite `json:"sites"`
+const (
+	// StretchedRoleLeader is the site whose operator creates the backend
+	// cluster, activates it, and runs every cluster-wide operation.
+	StretchedRoleLeader StretchedRole = "Leader"
+	// StretchedRoleFollower is the site whose operator adopts the cluster the
+	// leader created and manages only its own site's nodes.
+	StretchedRoleFollower StretchedRole = "Follower"
+)
 
-	// Sizing is written onto both drafts' cluster templates once they exist:
-	// the fields no probe can read, in StorageSiteDeployment's shape.
-	// enableSyncReplication is forced true on both.
-	// +optional
-	Sizing *StorageSiteSizing `json:"sizing,omitempty"`
+// StretchedClusterPhase is the request's own progress across both sites.
+// +kubebuilder:validation:Enum=Pending;Discovering;Drafted;LeaderCreating;FollowerJoining;Ready;Degraded;Failed
+type StretchedClusterPhase string
 
-	// Approved is the review gate for both drafts. One-way: an approved
-	// stretched cluster cannot be un-approved. The follower's approval is
-	// delivered only once the leader's StorageCluster carries a cluster UUID.
-	// +kubebuilder:validation:XValidation:rule="!oldSelf || self",message="approval is one-way"
-	Approved bool `json:"approved"`
-}
+const (
+	// StretchedClusterPhasePending is a request no site has answered yet.
+	StretchedClusterPhasePending StretchedClusterPhase = "Pending"
+	// StretchedClusterPhaseDiscovering is at least one site still writing its
+	// draft.
+	StretchedClusterPhaseDiscovering StretchedClusterPhase = "Discovering"
+	// StretchedClusterPhaseDrafted is both drafts written and awaiting approval.
+	StretchedClusterPhaseDrafted StretchedClusterPhase = "Drafted"
+	// StretchedClusterPhaseLeaderCreating is the approved leader's draft
+	// expanding into the backend cluster.
+	StretchedClusterPhaseLeaderCreating StretchedClusterPhase = "LeaderCreating"
+	// StretchedClusterPhaseFollowerJoining is the backend cluster existing and
+	// the follower adopting it and adding its nodes.
+	StretchedClusterPhaseFollowerJoining StretchedClusterPhase = "FollowerJoining"
+	// StretchedClusterPhaseReady is both sites' StorageClusters Online on the
+	// same backend cluster.
+	StretchedClusterPhaseReady StretchedClusterPhase = "Ready"
+	// StretchedClusterPhaseDegraded is a ready cluster one of whose sites is
+	// unreachable from the hub, recorded out by the control plane, or not
+	// Online.
+	StretchedClusterPhaseDegraded StretchedClusterPhase = "Degraded"
+	// StretchedClusterPhaseFailed is a site that refused what the hub
+	// delivered, or a draft that failed.
+	StretchedClusterPhaseFailed StretchedClusterPhase = "Failed"
+)
 
+// StretchedSite is one of the two sites: a managed cluster, the backend site
+// its nodes join, and its role.
 type StretchedSite struct {
-	// Cluster is the OCM ManagedCluster hosting this site. The site's
-	// ManifestWork and views live in its namespace on the hub.
+	// Cluster is the OCM ManagedCluster hosting this site. Its namespace on the
+	// hub holds the site's ManifestWork and views. It identifies the entry, so
+	// it cannot change.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Cluster string `json:"cluster"`
+
+	// Site is the backend site name every storage node of this managed cluster
+	// joins with. Immutable: it is a property of the installation.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="cluster is immutable"
-	Cluster string `json:"cluster"`
-	// Site is the backend site name every node of the cluster joins with.
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
 	// +k8s:immutable
 	Site string `json:"site"`
-	// Role is Leader or Follower. Mutable, as one block with the other site's.
-	// +kubebuilder:validation:Enum=Leader;Follower
+
+	// Role is Leader or Follower. It may be swapped between the two sites after
+	// creation, as one change to both entries, once both sites' clusters are
+	// Ready.
+	// +kubebuilder:validation:Required
 	Role StretchedRole `json:"role"`
-	// Discover is the discovery this site runs, in StorageSiteDeployment's
-	// shape: which workers are inspected. Changing it runs another discovery,
-	// which rewrites this site's draft.
+
+	// SiteNamespace is the simplyblock operator's namespace on the site, where
+	// the discovery, the draft, and the StorageCluster live.
+	// +kubebuilder:default=simplyblock
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	SiteNamespace string `json:"siteNamespace,omitempty"`
+
+	// Discover is the discovery this site runs: which workers are inspected.
+	// Changing it before approval runs another discovery on this site only,
+	// which rewrites this site's draft; after approval it is refused.
 	// +optional
 	Discover StorageSiteDiscovery `json:"discover,omitempty"`
 }
 
+// StretchedClusterSpec is the request for one stretched cluster.
+// +kubebuilder:validation:XValidation:rule="self.sites.exists_one(s, s.role == 'Leader')",message="exactly one site must have role Leader"
+// +kubebuilder:validation:XValidation:rule="self.sites[0].site != self.sites[1].site",message="the two sites must name different backend sites"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.sites) || oldSelf.sites.all(o, self.sites.exists(s, s.cluster == o.cluster))",message="the managed clusters of a stretched cluster cannot be replaced"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval is one-way: an approved stretched cluster cannot be un-approved"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || oldSelf.sites.all(o, self.sites.exists(s, s.cluster == o.cluster && has(s.discover) == has(o.discover) && (!has(s.discover) || s.discover == o.discover)))",message="discover cannot change once the stretched cluster is approved"
+type StretchedClusterSpec struct {
+	// ClusterName is the backend cluster's name, and the name of the
+	// StorageCluster on both sites. Immutable.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +k8s:immutable
+	ClusterName string `json:"clusterName"`
+
+	// Sites are the two managed clusters and the site each represents. Exactly
+	// one has role Leader.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinItems=2
+	// +kubebuilder:validation:MaxItems=2
+	// +listType=map
+	// +listMapKey=cluster
+	Sites []StretchedSite `json:"sites"`
+
+	// Sizing is written onto both sites' drafts once they name nodes: the
+	// fields no discovery can read. Synchronous replication is enabled on both
+	// drafts whatever is written here.
+	// +optional
+	Sizing *StorageSiteSizing `json:"sizing,omitempty"`
+
+	// Approved is the review gate for both drafts. One-way. The leader's draft
+	// is approved as soon as this is set; the follower's only once the leader's
+	// cluster exists, so the follower never races the create.
+	// +kubebuilder:default=false
+	// +optional
+	Approved bool `json:"approved"`
+}
+
+// StretchedClusterSiteStatus is what one site reports back, projected.
+type StretchedClusterSiteStatus struct {
+	// Cluster is the managed cluster this entry reports.
+	Cluster string `json:"cluster"`
+
+	// Site is the backend site of this managed cluster.
+	// +optional
+	Site string `json:"site,omitempty"`
+
+	// Role is the role last delivered to this site.
+	// +optional
+	Role StretchedRole `json:"role,omitempty"`
+
+	// Phase is this site's own progress, in the phases a StorageSiteDeployment
+	// reports for one site.
+	// +optional
+	Phase StorageSiteDeploymentPhase `json:"phase,omitempty"`
+
+	// Message is the reason this site's phase is what it is.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// WorkName is the ManifestWork carrying the request to this site.
+	// +optional
+	WorkName string `json:"workName,omitempty"`
+
+	// Reachable reports whether the hub's last read of the managed cluster found
+	// it available. An unreachable API server is not a lost site: the control
+	// plane judges that from the storage nodes, not from the hub's connection.
+	// +optional
+	Reachable *bool `json:"reachable,omitempty"`
+
+	// SiteRecord is the control plane's record of this site, as this site's
+	// StorageCluster reports it: empty while the site is in service, otherwise
+	// the state of its drain or fence.
+	// +optional
+	SiteRecord string `json:"siteRecord,omitempty"`
+
+	// Draft is the site's draft as the site reports it.
+	// +optional
+	Draft *StorageSiteDraft `json:"draft,omitempty"`
+
+	// StorageCluster is the StorageCluster the site's approved draft produced.
+	// +optional
+	StorageCluster *StorageSiteCluster `json:"storageCluster,omitempty"`
+}
+
+// StretchedClusterStatus is what both sites report back, projected.
 type StretchedClusterStatus struct {
-	// ClusterUUID is the backend cluster, once the leader reports it.
+	// Phase is the request's own progress across both sites.
+	// +optional
+	Phase StretchedClusterPhase `json:"phase,omitempty"`
+
+	// Message is the reason the phase is what it is: one sentence, replaced as
+	// the request moves.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// ClusterUUID is the backend cluster, once the leader's StorageCluster
+	// reports it.
+	// +optional
 	ClusterUUID string `json:"clusterUUID,omitempty"`
-	// Sites reports, per site, what StorageSiteDeployment.status reports for
-	// one: the draft's phase, approval, and node names, the StorageCluster the
-	// draft expanded into, the role it confirmed, and the backend's site record.
-	Sites []StretchedSiteStatus `json:"sites,omitempty"`
-	// Phase: Pending, Discovering, Drafted, LeaderCreating, FollowerJoining,
-	// Ready, Degraded, Failed.
-	Phase StretchedPhase `json:"phase,omitempty"`
+
+	// Sites reports each site, keyed by its managed cluster.
+	// +optional
+	// +kubebuilder:validation:MaxItems=2
+	// +listType=map
+	// +listMapKey=cluster
+	Sites []StretchedClusterSiteStatus `json:"sites,omitempty"`
+
+	// Conditions: Delivered (both works are applied), Drafted (both drafts name
+	// nodes), Approved (both drafts are approved), Ready (both StorageClusters
+	// are Online on one backend cluster).
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ObservedGeneration is the generation the rest of this status was computed
+	// from.
+	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
-```
 
-`StorageSiteSizing` and `StorageSiteDiscovery` are the types `storagesitedeployment_types.go` already declares, reused unchanged. A CEL rule holds exactly one `Leader`. A webhook refuses a role swap while either site's `StorageCluster`, as its view reports it, is not `Ready`, so a swap never lands on a cluster mid-creation. Deleting the object withdraws nothing on the sites: the works are released with their resources orphaned, as `StorageSiteDeployment` does.
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:scope=Namespaced,shortName=sbstr
+// +kubebuilder:printcolumn:name="Cluster",type=string,JSONPath=".spec.clusterName"
+// +kubebuilder:printcolumn:name="Approved",type=boolean,JSONPath=".spec.approved"
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
+// +kubebuilder:printcolumn:name="UUID",type=string,JSONPath=".status.clusterUUID",priority=1
+// +kubebuilder:printcolumn:name="Message",type=string,JSONPath=".status.message",priority=1
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
-## Appendix B: `storagecluster_types.go` additions
+// StretchedCluster requests one synchronously replicated storage cluster whose
+// two sites are two OCM managed clusters: a discovery and a draft on each site,
+// the sizing of both drafts, and the approval that creates the cluster on the
+// leading site and joins it from the following one. The hub carries the request
+// through OCM and projects both sites into the status. Deleting the request
+// leaves both sites' storage alone.
+type StretchedCluster struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-In `operator/api/v1alpha1/`, on `StorageClusterSpec`.
+	Spec   StretchedClusterSpec   `json:"spec,omitempty"`
+	Status StretchedClusterStatus `json:"status,omitempty"`
+}
 
-```go
-// Stretched marks this StorageCluster as one site of a synchronously
-// replicated cluster spanning two Kubernetes clusters. Set by the delivered
-// ClusterDeploymentConfig; a person authoring a standalone cluster leaves it
-// unset. Requires enableSyncReplication.
-// +optional
-Stretched *StretchedSpec `json:"stretched,omitempty"`
+// +kubebuilder:object:root=true
 
-type StretchedSpec struct {
-	// Site is the backend site every node this StorageCluster adds belongs
-	// to. Immutable: a site is a property of the installation.
-	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
-	// +k8s:immutable
-	Site string `json:"site"`
-	// Role is Leader or Follower (design §5.2). Mutable; a change is a role
-	// swap delivered from the hub (design §11.1).
-	// +kubebuilder:validation:Enum=Leader;Follower
-	Role StretchedRole `json:"role"`
-	// PeerSite is the other site's name, so status and events can name it
-	// without reading the control plane.
-	// +k8s:immutable
-	PeerSite string `json:"peerSite"`
+// StretchedClusterList contains a list of StretchedCluster.
+type StretchedClusterList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []StretchedCluster `json:"items"`
 }
 ```
 
-On `StorageCluster.status`: `stretched.leaderSite` (what the cluster record says), `stretched.siteRecord` (`""`, `draining`, `down`, `fencing`, `done`), `stretched.peerNodesOnline`, and `stretched.linkUp`. The `ClusterDeploymentConfig` cluster template gains the same `stretched` block, expanded verbatim, and `clusterRef` on the document is what selects adoption (§5.2).
+## Appendix B: `storagecluster_types.go`, `storagenode_types.go`, and `clusterdeploymentconfig_types.go` additions
 
-Appendix B also adds, on `StorageNodeSpec` in `storagenode_types.go`:
+In `operator/api/v1alpha2/`, the storage version; `api/v1alpha1` round-trips every field below through its conversion annotations, so a v1alpha1 read-modify-write cannot drop a site or a role. `enableSyncReplication` on `StorageClusterSpec` and `ClusterTemplate`, `site` on `NodeGroup`, and `site` on `StorageNodeConfig` are carried from PR #673 unchanged; a node's site is `spec.config.site`, not a second field on the stretched block.
+
+On `StorageClusterSpec`, with two rules on the spec:
 
 ```go
-// Stretched marks a node of a stretched cluster (design §6.2). Unset on a
-// standalone cluster.
-// +optional
-Stretched *StretchedNodeSpec `json:"stretched,omitempty"`
+// +kubebuilder:validation:XValidation:rule="!has(self.stretched) || (has(self.enableSyncReplication) && self.enableSyncReplication)",message="stretched requires enableSyncReplication to be true"
+// +kubebuilder:validation:XValidation:rule="has(self.stretched) == has(oldSelf.stretched)",message="stretched cannot be added to or removed from an existing cluster"
+type StorageClusterSpec struct {
+	// ... the existing fields, then:
 
-type StretchedNodeSpec struct {
-	// Site is the backend site the node belongs to.
+	// Stretched marks this StorageCluster as one site of a synchronously
+	// replicated cluster whose two sites are two Kubernetes clusters. Every node
+	// this StorageCluster adds joins stretched.site. A leader creates the backend
+	// cluster; a follower adopts the one its leader created and never creates or
+	// deletes it. Delivered by the hub with the site's deployment; a standalone
+	// cluster leaves it unset. Requires enableSyncReplication, and cannot be added
+	// to or removed from an existing cluster.
+	// +optional
+	Stretched *StretchedSpec `json:"stretched,omitempty"`
+}
+
+// StretchedSpec is one site's part of a stretched cluster: the backend site its
+// nodes join, the other site's name, and the role it plays.
+// +kubebuilder:validation:XValidation:rule="self.site != self.peerSite",message="site and peerSite must differ"
+type StretchedSpec struct {
+	// Site is the backend site every node this StorageCluster adds belongs to.
+	// Immutable: a site is a property of the installation.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
 	// +k8s:immutable
 	Site string `json:"site"`
-	// Remote marks a node of the other site, projected here from the control
-	// plane for listing. A remote node runs no workload on this cluster,
-	// admits no StorageNodeOps, and is recreated if deleted. Immutable.
-	// +kubebuilder:default=false
+
+	// PeerSite is the other site's backend name. Nodes the control plane reports
+	// on it are listed here as remote StorageNodes. Immutable.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
+	// +k8s:immutable
+	PeerSite string `json:"peerSite"`
+
+	// Role is Leader or Follower. A leader creates and activates the backend
+	// cluster and runs every cluster-wide operation; a follower adopts the
+	// cluster and manages only its own site's nodes. A change is a role swap,
+	// delivered from the hub.
+	// +kubebuilder:validation:Required
+	Role StretchedRole `json:"role"`
+}
+
+// StretchedStatus is this site's view of its stretched cluster, read from the
+// control plane.
+type StretchedStatus struct {
+	// Role is the role this site's operator last acted on. It differs from
+	// spec.stretched.role only while a role swap is being taken up.
+	// +optional
+	Role StretchedRole `json:"role,omitempty"`
+
+	// LostSite is the site the control plane records as out of service, empty
+	// while both sites serve.
+	// +optional
+	LostSite string `json:"lostSite,omitempty"`
+
+	// SiteRecord is how far the control plane's handling of lostSite got, in the
+	// control plane's own words: draining, down, fencing, or done. Empty while
+	// both sites serve.
+	// +optional
+	SiteRecord string `json:"siteRecord,omitempty"`
+
+	// PeerNodes is the number of the other site's storage nodes the control
+	// plane lists.
+	// +optional
+	PeerNodes int32 `json:"peerNodes,omitempty"`
+
+	// PeerNodesOnline is how many of them are online.
+	// +optional
+	PeerNodesOnline int32 `json:"peerNodesOnline,omitempty"`
+}
+```
+
+On `StorageClusterStatus`:
+
+```go
+type StorageClusterStatus struct {
+	// ... the existing fields, then:
+
+	// Stretched is this site's view of its stretched cluster, read from the
+	// control plane; set only when spec.stretched is.
+	// +optional
+	Stretched *StretchedStatus `json:"stretched,omitempty"`
+}
+```
+
+On `ClusterTemplate`, expanded verbatim into the `StorageCluster`:
+
+```go
+type ClusterTemplate struct {
+	// ... the existing fields, then:
+
+	// Stretched makes the cluster one site of a stretched cluster, whose two
+	// sites are two Kubernetes clusters: the site this document's nodes join,
+	// the other site, and whether this site creates the cluster or adopts it.
+	// Written by the hub that manages both sites, and expanded verbatim into the
+	// StorageCluster. Requires enableSyncReplication; every node group's site
+	// must equal stretched.site.
+	// +optional
+	Stretched *StretchedSpec `json:"stretched,omitempty"`
+}
+```
+
+On `StorageNodeSpec`, `workerNode` widens from required to required-unless-remote, which admits everything it admitted before. The rule tests `size(self.workerNode) > 0` rather than comparing with an empty string literal, because gofmt rewrites a pair of single quotes in a doc comment into a typographic closing quote and the marker sits in the type's doc comment:
+
+```go
+// +kubebuilder:validation:XValidation:rule="(has(self.stretched) && self.stretched.remote) || (has(self.workerNode) && size(self.workerNode) > 0)",message="workerNode is required for a node of this site"
+// +kubebuilder:validation:XValidation:rule="has(self.stretched) == has(oldSelf.stretched)",message="stretched cannot be added to or removed from an existing node"
+type StorageNodeSpec struct {
+	// ... the existing fields, with workerNode now:
+
+	// WorkerNode is the Kubernetes worker hostname this node runs on. It is not
+	// immutable, because a migration re-points it, but a change made by anything
+	// outside the operator's namespace is rejected. Required for every node of
+	// this site; a remote node (stretched.remote) runs on no worker of this
+	// cluster and leaves it empty.
+	// +optional
+	WorkerNode string `json:"workerNode,omitempty"`
+
+	// ... and, last:
+
+	// Stretched marks a node of a stretched cluster that is listed here but
+	// belongs to the other site. Unset on every node of this site and on a
+	// standalone cluster. Cannot be added or removed after creation.
+	// +optional
+	Stretched *StretchedNodeSpec `json:"stretched,omitempty"`
+}
+
+// StretchedNodeSpec describes a node of a stretched cluster's other site.
+type StretchedNodeSpec struct {
+	// Remote marks a node of the other site, listed on this cluster from the
+	// control plane so that either site shows every node. A remote node runs no
+	// workload on this cluster, admits no StorageNodeOps, and is recreated from
+	// the control plane if deleted; its own site's operator manages it.
+	// Immutable.
+	// +optional
 	// +k8s:immutable
 	Remote bool `json:"remote,omitempty"`
 }
 ```
 
-Print columns on `StorageNode`: `SITE` from `.spec.stretched.site` and `MANAGED` as the negation of `.spec.stretched.remote`. `StorageDevice` needs no spec change: it is remote when its `spec.nodeRef` names a remote node, and its `SITE` and `MANAGED` columns are written into `status` by the device reconciler from that node.
+Print columns: `StorageNode` gains `Site` (`.spec.config.site`) and `Remote` (`.spec.stretched.remote`), and `StorageCluster` gains `Site`, `Role`, `Peer-Online`, and `Site-Record`, all at priority 1 so a standalone cluster's default listing is unchanged. `StorageDevice` needs no spec change: it is remote when its `spec.nodeRef` names a remote node. `SimplyblockDriver` gains no field: the node plugin reads its site from the CSI cluster-secret entry the `StorageCluster` controller composes (§5.3), since a spec field written by a controller would break the rule that spec is the user's.
 
 ## Appendix C: `site_link.proto`
 

@@ -574,6 +574,15 @@ type ClusterTemplate struct {
 	// +optional
 	EnableSyncReplication *bool `json:"enableSyncReplication,omitempty"`
 
+	// Stretched makes the cluster one site of a stretched cluster, whose two
+	// sites are two Kubernetes clusters: the site this document's nodes join,
+	// the other site, and whether this site creates the cluster or adopts it.
+	// Written by the hub that manages both sites, and expanded verbatim into the
+	// StorageCluster. Requires enableSyncReplication; every node group's site
+	// must equal stretched.site.
+	// +optional
+	Stretched *StretchedSpec `json:"stretched,omitempty"`
+
 	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
 	// from the local node's own devices where it can, before crossing the
 	// network.
