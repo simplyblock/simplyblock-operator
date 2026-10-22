@@ -1448,10 +1448,13 @@ is bounded by its lvstore's room, not by the supercluster's: a group whose pin i
 full fails the create in its member and is not spilled to another.
 
 **A label added later joins only within the member.** The membership watcher in
-the CSI controller resolves the group in the volume's own cluster. A volume in
-another member is refused with a Warning event on the PVC naming the member that
-holds the group. Relocating the volume into that member first (§8) is the remedy,
-after which the existing colocation path moves it onto the pin.
+the CSI controller resolves the group in the volume's own cluster. When that
+cluster has no group of the name, it asks the other clusters of its secret, and a
+volume whose group another member holds is refused with the Warning event
+`ConsistencyGroupInAnotherCluster` on the PVC, naming that member's cluster
+UUID, since the driver knows the members only by their entries in the secret.
+Relocating the volume into that member first (§8) is the remedy, after which the
+existing colocation path moves it onto the pin.
 
 **Relocation refuses a volume that belongs to a group**, because moving one
 member of a consistency group off its lvstore breaks the group.
