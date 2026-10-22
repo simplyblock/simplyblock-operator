@@ -60,11 +60,9 @@ jobs:
         with:
           go-version: stable
 
-      # On the 6.17 Azure kernel, nvmet-tcp and nvme-tcp are in the extra module
-      # package, which the runner does not install. The 7.0 kernels publish no
-      # such package and carry those modules in the main one, so a failed install
-      # warns instead of failing. The next step names any module the kernel
-      # still cannot load.
+      # nvme-tcp and nvmet-tcp are in linux-modules-extra on the 6.17 Azure kernel
+      # and in the main module package on 7.0, which publishes no extra package.
+      # A failed install warns, and the next step names any module still missing.
       - name: Install the extra modules for the running kernel
         run: |
           sudo apt-get update -qq
