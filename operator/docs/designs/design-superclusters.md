@@ -10,13 +10,13 @@
 
 ## Phasing Overview
 
-| Phase                   | Status   | Scope                                                                                                                              | Blocked by                                                                                                       |
-|-------------------------|----------|------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------|
-| **Phase 1** (§4–§6)     | Built    | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | A new cluster, on a control plane without P0-4. Workers shared between members, which are outside it: P0-3, P0-6 |
-| **Phase 2** (§7)        | Building | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | IOPS and throughput ceilings: P0-5                                                                               |
-| **Phase 3** (§8.1–§8.3) | Planned  | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                                                                                |
-| **Phase 4** (§8.4)      | Planned  | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3                                                                                                          |
-| **Phase 5** (§7.5)      | Planned  | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2, P0-5                                                                                                    |
+| Phase                   | Status  | Scope                                                                                                                              | Blocked by                                                                                                       |
+|-------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------|
+| **Phase 1** (§4–§6)     | Built   | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | A new cluster, on a control plane without P0-4. Workers shared between members, which are outside it: P0-3, P0-6 |
+| **Phase 2** (§7)        | Built   | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | IOPS and throughput ceilings: P0-5                                                                               |
+| **Phase 3** (§8.1–§8.3) | Planned | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                                                                                |
+| **Phase 4** (§8.4)      | Planned | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3                                                                                                          |
+| **Phase 5** (§7.5)      | Planned | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2, P0-5                                                                                                    |
 
 **Phase 1 is built:** the API of §4.1 and its status (§4.3), the admission rules
 of §4.2 and §4.4 except the deletion of a member holding volumes, the
@@ -33,18 +33,21 @@ supercluster or a member (§5.6), topology (§5.7), and per-node-set overrides
 whose agent half is on sbcli's branch, and on P0-6. A `StorageClusterOps` on a
 supercluster fails before any control-plane call until the walk of §9.6 exists.
 
-**Phase 2 is in progress.** Pools fan out to the members (§7.1): a pool on a
+**Phase 2 is built:** pools fan out to the members (§7.1): a pool on a
 supercluster is admitted and created in every member, the capacity ceiling is
 divided among the members accepting volumes, a member is placement-eligible
 once it holds every pool, and the supercluster has a default pool whose class
 names it. The operator places (§7.2, §7.3): `PlacementService` runs on the
 link, ranks the members by the strategy from the readings the supercluster
 reconciler hands it, records the member on the claim before answering, and
-keeps a consistency group in one member. The CSI controller asks it when a
-class's `cluster_id` names no cluster in its secret, sends a clone's source
-cluster with the request, and creates the volume in the member answered. Backup
-policies fan out per member, and a restore into a supercluster is placed among
-the members (§9.5).
+keeps a consistency group in one member (§9.3). The CSI controller asks it when
+a class's `cluster_id` names no cluster in its secret, sends a clone's source
+cluster with the request (§9.2), creates the volume in the member answered, and
+refuses a late group label whose group another member holds. Backup policies fan
+out per member, and a restore into a supercluster is placed among the members
+(§9.5). A site deployment mirrors the supercluster (§9.7), and a pNFS export
+serves the volume of the member it was placed in. The IOPS and throughput half
+of the pool ceiling waits on P0-5, as every pool's does.
 
 Each phase ships on its own. Phase 1 produces a supercluster that reports one
 status and lets an administrator name the members directly, which is already
