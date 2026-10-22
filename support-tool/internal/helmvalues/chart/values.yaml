@@ -2,16 +2,6 @@
 # Copyright (c) Arm Limited and Contributors
 # Copyright (c) Intel Corporation
 ---
-# The cluster's DNS domain: the suffix after <service>.<namespace>.svc. Change
-# it only on a cluster set up with a domain other than cluster.local. Every
-# in-cluster address and certificate name the operator and this chart build
-# uses it, and so does the FoundationDB cluster file, whose coordinators do not
-# resolve under the wrong domain.
-# -- DNS domain of the Kubernetes cluster, the suffix after `<service>.<namespace>.svc`. Every
-# in-cluster address and certificate name, and the FoundationDB cluster file, use it. Change it only
-# on a cluster set up with a domain other than `cluster.local`.
-clusterDnsDomain: cluster.local
-
 image:
   csiSnapshotterController:
     # -- CSI snapshot controller image, used when `snapshotcontroller.create` is `true`.
