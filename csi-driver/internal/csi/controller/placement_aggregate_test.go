@@ -242,3 +242,44 @@ func TestAClassWithAZoneMapNeverAsks(t *testing.T) {
 		t.Errorf("the operator was asked %d times, want none", len(got))
 	}
 }
+
+// recordingExports keeps the export records asked for.
+type recordingExports struct {
+	specs []ExportSpec
+}
+
+func (e *recordingExports) EnsureExport(_ context.Context, _ string, spec ExportSpec) (ExportRecord, error) {
+	e.specs = append(e.specs, spec)
+	return ExportRecord{Phase: "Ready", ServiceAddress: "10.0.0.9", ExportPath: spec.ExportPath}, nil
+}
+
+func (e *recordingExports) DeleteExport(context.Context, string) (bool, error) { return true, nil }
+
+func (e *recordingExports) SetExportSize(context.Context, string, int64) (bool, error) { return true, nil }
+
+// A pNFS claim through a supercluster class is exported from the member its
+// volume was placed in: the export names that member's volume, so its metadata
+// server serves a volume of one member, and nothing stripes across members.
+func TestAPNFSClaimIsExportedFromItsMember(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newTestControllerServer(t, mock)
+	cs.kubeClient = k8sfake.NewClientset(&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{
+		Name: "data", Namespace: "app",
+	}})
+	exports := &recordingExports{}
+	cs.exports = exports
+	cs.SetPlacer(&fakePlacer{member: sanityClusterID})
+	req := aggregateRequest()
+	req.VolumeCapabilities[0].AccessType = &csi.VolumeCapability_Mount{
+		Mount: &csi.VolumeCapability_MountVolume{FsType: pnfsFSType},
+	}
+
+	if _, err := cs.CreateVolume(context.Background(), req); err != nil {
+		t.Fatalf("CreateVolume: %v", err)
+	}
+
+	if len(exports.specs) != 1 || !strings.HasPrefix(exports.specs[0].VolumeRef, sanityClusterID+":") {
+		t.Errorf("exports = %+v, want one of the member's volume", exports.specs)
+	}
+}
