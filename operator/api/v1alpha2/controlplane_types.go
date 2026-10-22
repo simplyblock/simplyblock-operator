@@ -114,6 +114,15 @@ type FoundationDBSpec struct {
 	// takes more of them than the redundancy mode was configured to survive.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations are applied to the database's own processes, and nothing else
+	// the control plane runs. Unset leaves them with the control plane's
+	// tolerations, spec.source.local.tolerations. When set, they replace those
+	// for the database rather than adding to them, the rule NodeSelector
+	// follows: the database confined to tainted workers tolerates their taint,
+	// and the rest of the control plane does not follow it there.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 }
 
 // ControlPlaneTLSProvider is who issues the control plane's serving certificate.

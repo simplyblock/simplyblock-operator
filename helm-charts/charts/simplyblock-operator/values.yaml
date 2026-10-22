@@ -671,6 +671,19 @@ controlplane:
     #   nodeSelector:
     #     storage.simplyblock.io/foundationdb: ""
     nodeSelector: {}
+    # What the database's own processes tolerate. Empty leaves them with the
+    # tolerations the rest of the control plane has (controlplane.tolerations).
+    # Stated, these replace those for the database rather than adding to them,
+    # which is what workers reserved for the database by a taint need:
+    #
+    #   kubectl taint node <worker> storage.simplyblock.io/foundationdb=true:NoSchedule
+    #
+    #   tolerations:
+    #     - key: storage.simplyblock.io/foundationdb
+    #       operator: Equal
+    #       value: "true"
+    #       effect: NoSchedule
+    tolerations: []
     image:
       operator:
         repository: quay.io/simplyblock-io/fdb-kubernetes-operator
