@@ -57,7 +57,7 @@ func localEndpoint(cp *simplyblockv1alpha2.ControlPlane) string {
 		scheme = "https"
 	}
 	return fmt.Sprintf("%s://%s:%d",
-		scheme, utils.ServiceFQDN(ComponentWebAPI, cp.Namespace), webAPIPort)
+		scheme, utils.ServiceDNSName(ComponentWebAPI, cp.Namespace), webAPIPort)
 }
 
 // localAccess is where an installed control plane answers and what to reach it

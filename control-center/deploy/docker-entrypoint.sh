@@ -11,6 +11,47 @@
 #
 set -eu
 
+# qualify_svc_url appends the cluster DNS domain to a <service>.<ns>.svc host.
+#
+# Only the two upstreams nginx resolves per request need this: its resolver
+# queries the name verbatim, where every other client in this deployment gets
+# the pod's search list applied and resolves the suffix-free name as it stands.
+# The domain comes off the same resolver file the nameserver does, so no
+# deployment has to be told what the cluster's domain is. A URL whose host is
+# already qualified, an IP, or a bare name is returned untouched.
+qualify_svc_url() {
+  url=$1
+  case "${url}" in
+    "") echo ""; return ;;
+  esac
+
+  scheme=""
+  rest=${url}
+  case "${rest}" in
+    http://*)  scheme="http://";  rest=${rest#http://} ;;
+    https://*) scheme="https://"; rest=${rest#https://} ;;
+  esac
+
+  hostport=${rest%%/*}
+  path=""
+  case "${rest}" in */*) path="/${rest#*/}" ;; esac
+
+  host=${hostport%%:*}
+  port=""
+  case "${hostport}" in *:*) port=":${hostport#*:}" ;; esac
+
+  case "${host}" in
+    *.svc) ;;
+    *) echo "${url}"; return ;;
+  esac
+
+  domain=$(awk '/^search/ {for (i = 2; i <= NF; i++) if (index($i, "svc.") == 1) { sub(/^svc\./, "", $i); sub(/\.$/, "", $i); print $i; exit }}' \
+    /etc/resolv.conf 2>/dev/null)
+  [ -n "${domain}" ] || domain=cluster.local
+
+  echo "${scheme}${host}.${domain}${port}${path}"
+}
+
 # The root filesystem is read-only, so everything generated at start goes to the
 # writable scratch mount; nginx serves config.js from there by alias.
 RUNTIME_DIR=/tmp/nginx
@@ -180,9 +221,15 @@ if [ "${CP_ON}" = "true" ]; then
   # operator creates it after the chart is installed). That needs a fully
   # qualified name in SB_CONTROLPLANE_URL: the resolver does not apply the
   # pod's search domains.
+  #
+  # Everything else in this deployment is addressed as <service>.<ns>.svc,
+  # which resolves through those search domains on any cluster domain. This is
+  # the one consumer that cannot use that form, so it qualifies the name here
+  # from the same resolver file, rather than the domain being configured.
   RESOLVER=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf 2>/dev/null)
   case "${RESOLVER}" in *:*) RESOLVER="[${RESOLVER}]" ;; esac
   [ -n "${RESOLVER}" ] || RESOLVER=127.0.0.11
+  SB_CONTROLPLANE_URL=$(qualify_svc_url "${SB_CONTROLPLANE_URL}")
   # A control plane serving TLS (the chart's default): verify it against the
   # mounted CA and, where it requires client certificates, present the
   # console's own.
@@ -236,6 +283,7 @@ RESOLVER=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf 2>/dev/null)
 case "${RESOLVER}" in *:*) RESOLVER="[${RESOLVER}]" ;; esac
 [ -n "${RESOLVER}" ] || RESOLVER=127.0.0.11
 if [ "${GL_ON}" = "true" ]; then
+  SB_GRAYLOG_URL=$(qualify_svc_url "${SB_GRAYLOG_URL}")
   GL_TLS=""
   case "${SB_GRAYLOG_URL}" in
     https://*)

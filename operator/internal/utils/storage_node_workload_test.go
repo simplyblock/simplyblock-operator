@@ -13,7 +13,7 @@ import (
 
 func TestStorageNodeSetAPIAddress(t *testing.T) {
 	got := StorageNodeSetAPIAddress("worker-1", "simplyblock")
-	want := "worker-1.simplyblock-storage-node-api.simplyblock.svc.cluster.local:5000"
+	want := "worker-1.simplyblock-storage-node-api.simplyblock.svc:5000"
 	if got != want {
 		t.Fatalf("StorageNodeSetAPIAddress = %q, want %q", got, want)
 	}
