@@ -1,7 +1,9 @@
-// Consistency-group reads the csi-addons VolumeGroup service needs: resolving the
-// backend consistency group a set of member volumes already belongs to (design
-// design-csi-addons-replication.md §14.3). A group is formed at provisioning by
-// the storage.simplyblock.io/consistency-group label; this only reads it back.
+// Consistency-group reads: the backend consistency group a set of member
+// volumes already belongs to, which the csi-addons VolumeGroup service needs
+// (design-csi-addons-replication.md §14.3), and the group formed under a label,
+// which placement across a supercluster's members needs
+// (design-superclusters.md §7.2). A group is formed at provisioning by the
+// storage.simplyblock.io/consistency-group label; this only reads it back.
 package controlplane
 
 import (
@@ -263,4 +265,39 @@ func (c *Client) CreateGroupBackup(ctx context.Context, clusterID, groupID strin
 		return CreatedGroupBackup{}, err
 	}
 	return CreatedGroupBackup{ID: created.Id.String(), MemberCount: len(created.MemberBackupIds)}, nil
+}
+
+// ConsistencyGroup is a backend consistency group as the cluster lists it.
+type ConsistencyGroup struct {
+	ID   string
+	Name string
+	// MemberCount is the number of volumes in the group now.
+	MemberCount int
+}
+
+// ConsistencyGroupNamed resolves the group formed under a claim label in
+// clusterID, with its member count, and whether there is one. It is how a placement across the
+// members of a supercluster finds the member that already holds a group.
+func (c *Client) ConsistencyGroupNamed(
+	ctx context.Context, clusterID, name string,
+) (ConsistencyGroup, bool, error) {
+	cluster, err := parseUUID("cluster id", clusterID)
+	if err != nil {
+		return ConsistencyGroup{}, false, err
+	}
+	resp, err := c.api.ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGetWithResponse(
+		ctx, cluster, &cpapi.ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGetParams{Name: &name})
+	if err != nil {
+		return ConsistencyGroup{}, false, fmt.Errorf("find consistency group %q in cluster %s: %w", name, clusterID, err)
+	}
+	groups, err := payload("consistency groups in cluster "+clusterID, resp.JSON200, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return ConsistencyGroup{}, false, err
+	}
+	for _, g := range *groups {
+		if g.Name == name {
+			return ConsistencyGroup{ID: g.Id.String(), Name: g.Name, MemberCount: g.MemberCount}, true, nil
+		}
+	}
+	return ConsistencyGroup{}, false, nil
 }

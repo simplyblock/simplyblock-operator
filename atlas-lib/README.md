@@ -119,6 +119,7 @@ atlas/
 │   ├── volumes.go          create / clone / list / resize / delete / connection
 │   ├── pools.go            storage pools (incl. by-name lookup)
 │   ├── storagenodes.go     storage nodes + their data NICs
+│   ├── consistencygroups.go consistency groups: by members, by name, member handles
 │   └── migrations.go       subsystem migrations: create / get / list / continue / cancel, of a volume or a whole subsystem
 ├── link/                   gRPC operator ↔ CSI, over connections the CSI driver opens
 │   ├── doc.go              why the connection runs backwards, and how gRPC still works on it
