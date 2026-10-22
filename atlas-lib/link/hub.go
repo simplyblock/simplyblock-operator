@@ -64,7 +64,10 @@ type HubConfig struct {
 
 	// Register adds the services the hub serves *back* to its peers, for peers
 	// that call the operator as well as answer it. Nil registers none, and the
-	// link still works in the direction that matters.
+	// link still works in the direction that matters. A call to one of them
+	// from a session that has not completed Hello is refused with
+	// Unauthenticated, and an admitted call carries the caller's verified
+	// identity, read with [PeerFromContext].
 	Register func(grpc.ServiceRegistrar)
 
 	// Capabilities names those services in the Hello answer.
@@ -187,8 +190,9 @@ func (h *Hub) handle(raw net.Conn) {
 	hs := &handshake{hub: h, ready: make(chan struct{})}
 
 	sess, err := newSession(raw, false, sessionConfig{
-		name:  remote.String(),
-		yamux: h.cfg.Yamux,
+		name:          remote.String(),
+		yamux:         h.cfg.Yamux,
+		serverOptions: identifiedOnly(hs.identity),
 		register: func(srv grpc.ServiceRegistrar) {
 			linkv1.RegisterLinkServiceServer(srv, hs)
 			if h.cfg.Register != nil {

@@ -127,6 +127,7 @@ atlas/
 │   ├── agent.go            Agent: the CSI side; dials, identifies, serves, reconnects
 │   ├── registry.go         Registry: who is linked right now (ErrNoSession when not)
 │   ├── peer.go             PeerKind/PeerID/Claim/Identity/Peer
+│   ├── peercontext.go      hub services: refused before Hello, PeerFromContext names the caller
 │   ├── auth.go             Authenticator iface, bearer-token plumbing, TokenSource
 │   ├── kubeauth.go         KubeAuthenticator: TokenReview → the pod's node, not the peer's word
 │   ├── dial.go             TLSFileDialer / TLSDialer / InsecureDialer
