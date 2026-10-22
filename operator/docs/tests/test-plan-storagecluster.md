@@ -42,16 +42,18 @@ involved.
 
 ### Entity Reconciler: Deletion and Finalizer (design §4.5)
 
-File: `operator/internal/controllers/cluster/storagecluster_controller_test.go`
+File: `operator/internal/controllers/cluster/storagecluster_controller_test.go`,
+and `teardown_force_test.go` beside it for U-519
 
-| #    | Scenario                                                                             | Type     | Test                                                       |
-|------|--------------------------------------------------------------------------------------|----------|------------------------------------------------------------|
-| U-01 | No deletion timestamp: the deletion branch is a pass-through                         | Negative | `TestTheFinalizerIsAddedOnTheFirstReconcile`               |
-| U-02 | Backend unreachable while `status.uuid` is set: requeue, finalizer kept              | Negative | `TestARefusedDeleteKeepsTheFinalizer`                      |
-| U-03 | Backend `DELETE` succeeds: finalizer removed                                         | Positive | `TestDeletionRemovesBothFinalizerSpellings`                |
-| U-04 | Finalizer absent: added on first reconcile                                           | Positive | `TestTheFinalizerIsAddedOnTheFirstReconcile`               |
-| U-05 | Deleting a CR that never got a `status.uuid`: finalizer removed with no backend call | Boundary | `TestDeletingAnUncreatedClusterAsksTheControlPlaneNothing` |
-| U-68 | An object carrying the older `cluster-finalizer`: both spellings removed             | Boundary | `TestDeletionRemovesBothFinalizerSpellings`                |
+| #     | Scenario                                                                                                                | Type     | Test                                                       |
+|-------|-------------------------------------------------------------------------------------------------------------------------|----------|------------------------------------------------------------|
+| U-01  | No deletion timestamp: the deletion branch is a pass-through                                                            | Negative | `TestTheFinalizerIsAddedOnTheFirstReconcile`               |
+| U-02  | Backend unreachable while `status.uuid` is set: requeue, finalizer kept                                                 | Negative | `TestARefusedDeleteKeepsTheFinalizer`                      |
+| U-03  | Backend `DELETE` succeeds: finalizer removed                                                                            | Positive | `TestDeletionRemovesBothFinalizerSpellings`                |
+| U-04  | Finalizer absent: added on first reconcile                                                                              | Positive | `TestTheFinalizerIsAddedOnTheFirstReconcile`               |
+| U-05  | Deleting a CR that never got a `status.uuid`: finalizer removed with no backend call                                    | Boundary | `TestDeletingAnUncreatedClusterAsksTheControlPlaneNothing` |
+| U-68  | An object carrying the older `cluster-finalizer`: both spellings removed                                                | Boundary | `TestDeletionRemovesBothFinalizerSpellings`                |
+| U-519 | The backend cluster is deleted with `force=true`, so a cluster with nodes and pools is brought down rather than refused | Positive | `TestTheBackendClusterIsDeletedWithForce`                  |
 
 `U-68` is the row the finalizer rename creates, and it is the one change in the
 migration that wedges rather than degrades: an operator removing only the new key
@@ -483,7 +485,7 @@ against a real API server under real concurrency.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 185       | 169     | 16          |
+| Unit        | 186       | 170     | 16          |
 | Integration | 32        | 13      | 19          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |

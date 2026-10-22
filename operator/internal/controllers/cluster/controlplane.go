@@ -59,8 +59,10 @@ type ControlPlane interface {
 	// reads them.
 	Clusters(ctx context.Context) ([]atlascp.Cluster, error)
 
-	// DeleteCluster is retried until it succeeds, and the finalizer is not
-	// removed before it does.
+	// DeleteCluster brings the cluster down completely: its storage nodes are
+	// shut down and deleted without migration, and its pools deleted with
+	// their volumes. It is retried until it succeeds, and the finalizer is
+	// not removed before it does.
 	DeleteCluster(ctx context.Context, clusterID string) error
 
 	// The four cluster-level actions. Each must tolerate a repeat, because a
@@ -195,8 +197,12 @@ func (c *httpControlPlane) atlasFor(ctx context.Context) (*atlascp.Client, error
 	return api, nil
 }
 
+// DeleteCluster sends the delete with force. Without it the control plane
+// refuses a cluster that still has nodes or pools, and its node removal is an
+// online drain onto the other nodes, which a cluster being deleted, and the
+// one node of a single-node cluster, cannot do.
 func (c *httpControlPlane) DeleteCluster(ctx context.Context, clusterID string) error {
-	_, err := c.call(ctx, http.MethodDelete, "/api/v2/clusters/"+clusterID, nil)
+	_, err := c.call(ctx, http.MethodDelete, "/api/v2/clusters/"+clusterID+"?force=true", nil)
 	return err
 }
 

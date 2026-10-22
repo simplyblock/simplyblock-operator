@@ -859,9 +859,21 @@ entry deleted or corrupted out of band is restored without intervention.
 The finalizer is `storage.simplyblock.io/storagecluster-finalizer`, which is the
 group's `<lowercased kind>-finalizer` spelling and a rename of the one that ships
 (§12). On deletion the
-controller issues `DELETE /clusters/{cluster}`, and on any non-2xx response requeues
-after 20 seconds and retries rather than removing the finalizer, so a backend
-that is unreachable blocks the object instead of orphaning the cluster behind it.
+controller issues `DELETE /clusters/{cluster}?force=true`, and on any non-2xx
+response requeues after 20 seconds and retries rather than removing the
+finalizer, so a backend that is unreachable blocks the object instead of
+orphaning the cluster behind it.
+
+**Deleting a cluster brings it down completely.** Without `force` the control
+plane refuses a cluster that still has storage nodes or pools, and its node
+removal is an online drain onto the other nodes, which a cluster being deleted
+has no use for and the one node of a single-node cluster cannot do. So the
+delete is forced: the control plane shuts down and deletes every node without
+migration and deletes every pool with its volumes. The cluster's `StorageNode`
+objects are deleted after it, by their owner reference, and release without a
+removal (design-storagenode.md §4.5). Its pools are deleted the same way, and a
+pool still holds while a class is assigned or a claim is bound, though the data
+behind it is gone.
 The CSI credentials entry is removed next, and the finalizer last.
 
 A CR with no `status.uuid` has nothing to delete, and its finalizer is removed
