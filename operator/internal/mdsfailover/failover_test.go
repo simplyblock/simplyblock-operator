@@ -708,10 +708,10 @@ func TestAStateVolumeWhoseHostsAreNotAllowedHoldsThePromotion(t *testing.T) {
 	}
 }
 
-func countOf(reasons []string, reason string) int {
+func promotedCount(reasons []string) int {
 	n := 0
 	for _, r := range reasons {
-		if r == reason {
+		if r == "MDSPromoted" {
 			n++
 		}
 	}
@@ -726,7 +726,7 @@ func TestATakeoverIsAnnouncedOnceAndNotOnEveryPassAfterIt(t *testing.T) {
 	s.tick()
 	s.clock.advance(21 * time.Second)
 	runUntilQuiet(t, s, 6)
-	announced := countOf(s.reasons(), "MDSPromoted")
+	announced := promotedCount(s.reasons())
 	if announced != 2 {
 		t.Fatalf("MDSPromoted events = %d, want one on the driver and one on the exports", announced)
 	}
@@ -736,7 +736,7 @@ func TestATakeoverIsAnnouncedOnceAndNotOnEveryPassAfterIt(t *testing.T) {
 		s.clock.advance(5 * time.Second)
 	}
 
-	if got := countOf(s.reasons(), "MDSPromoted"); got != announced {
+	if got := promotedCount(s.reasons()); got != announced {
 		t.Errorf("MDSPromoted events = %d after 20 settled passes, want %d", got, announced)
 	}
 	if got := metricValue(t, s.reg, "simplyblock_pnfs_mds_failovers_total",
@@ -752,7 +752,7 @@ func TestARestartOnASettledClusterAnnouncesNothing(t *testing.T) {
 	s.tick()
 	s.clock.advance(21 * time.Second)
 	runUntilQuiet(t, s, 6)
-	before := countOf(s.reasons(), "MDSPromoted")
+	before := promotedCount(s.reasons())
 
 	s.restart()
 	for i := 0; i < 10; i++ {
@@ -760,7 +760,7 @@ func TestARestartOnASettledClusterAnnouncesNothing(t *testing.T) {
 		s.clock.advance(5 * time.Second)
 	}
 
-	if got := countOf(s.reasons(), "MDSPromoted"); got != before {
+	if got := promotedCount(s.reasons()); got != before {
 		t.Errorf("MDSPromoted events = %d after a restart, want %d", got, before)
 	}
 }

@@ -143,11 +143,11 @@ func Ordinal(pod string) int {
 	if i < 0 {
 		return -1
 	}
-	n, err := strconv.Atoi(pod[i+1:])
+	n, err := strconv.ParseInt(pod[i+1:], 10, 32)
 	if err != nil {
 		return -1
 	}
-	return n
+	return int(n)
 }
 
 func sortGuests(gs []Guest) {

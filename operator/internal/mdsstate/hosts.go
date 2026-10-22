@@ -55,7 +55,7 @@ func (s *HostSync) Sync(
 	ctx context.Context, sts *appsv1.StatefulSet, volumes []lvol.VolumeHandle, ordinals int32,
 ) (HostResult, error) {
 	recorded := ordinals
-	if v, err := strconv.Atoi(sts.Annotations[HostOrdinalsAnnotation]); err == nil && int32(v) > recorded {
+	if v, err := strconv.ParseInt(sts.Annotations[HostOrdinalsAnnotation], 10, 32); err == nil && int32(v) > recorded {
 		recorded = int32(v)
 	}
 	allow, err := hostNQNs(sts, 0, ordinals)
