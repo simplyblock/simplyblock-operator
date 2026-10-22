@@ -21,8 +21,8 @@ fi
 CHART="$1"
 TAG="$2"
 # The operator image is pushed under the release tag verbatim, the simplyblock
-# image under the version without its leading "v."
-VERSION="${TAG#v}"
+# image without the "v" and with a hotfix dash as a dot (26.3.2.1).
+VERSION="$(printf '%s' "${TAG#v}" | sed -E 's/-([0-9]+)$/.\1/')"
 VALUES="$CHART/values.yaml"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
