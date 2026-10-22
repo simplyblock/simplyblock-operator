@@ -10,6 +10,7 @@ on:
         description: "Image tag to publish (defaults to the branch ref)"
         required: false
         type: string
+  workflow_dispatch:
 
 jobs:
   build-and-push:
