@@ -42,6 +42,7 @@ type PlacementServiceClient interface {
 	// for the same claim answers the recorded member.
 	//
 	// Errors: NotFound for an aggregate that names no supercluster,
+	// InvalidArgument for a clone whose source is not in a member,
 	// FailedPrecondition for a request without its claim or a consistency group
 	// whose member cannot take it, ResourceExhausted when no member has room,
 	// and Unavailable when the answer cannot be recorded or a member cannot be
@@ -78,6 +79,7 @@ type PlacementServiceServer interface {
 	// for the same claim answers the recorded member.
 	//
 	// Errors: NotFound for an aggregate that names no supercluster,
+	// InvalidArgument for a clone whose source is not in a member,
 	// FailedPrecondition for a request without its claim or a consistency group
 	// whose member cannot take it, ResourceExhausted when no member has room,
 	// and Unavailable when the answer cannot be recorded or a member cannot be

@@ -113,6 +113,7 @@ func aRequest() Request {
 		ClaimName:        "data",
 		ClaimNamespace:   "app",
 		ConsistencyGroup: "orders",
+		SourceClusterID:  "9b210000-0000-4000-8000-00000000000b",
 	}
 }
 

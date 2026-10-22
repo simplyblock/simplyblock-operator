@@ -98,8 +98,13 @@ type PlaceRequest struct {
 	// consistency_group is the claim's consistency-group label, empty when it
 	// carries none.
 	ConsistencyGroup string `protobuf:"bytes,9,opt,name=consistency_group,json=consistencyGroup,proto3" json:"consistency_group,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// source_cluster_id is the backend cluster of the snapshot or volume a
+	// clone or restore is made from, empty for a new volume. The control plane
+	// clones only within one cluster, so the answer is that cluster, and a
+	// source outside the supercluster is InvalidArgument.
+	SourceClusterId string `protobuf:"bytes,10,opt,name=source_cluster_id,json=sourceClusterId,proto3" json:"source_cluster_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *PlaceRequest) Reset() {
@@ -195,6 +200,13 @@ func (x *PlaceRequest) GetConsistencyGroup() string {
 	return ""
 }
 
+func (x *PlaceRequest) GetSourceClusterId() string {
+	if x != nil {
+		return x.SourceClusterId
+	}
+	return ""
+}
+
 // PlaceResponse names the chosen member.
 type PlaceResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -251,7 +263,7 @@ const file_placement_proto_rawDesc = "" +
 	"\bsegments\x18\x01 \x03(\v2*.atlas.placement.v1.Topology.SegmentsEntryR\bsegments\x1a;\n" +
 	"\rSegmentsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xfb\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa7\x03\n" +
 	"\fPlaceRequest\x12!\n" +
 	"\faggregate_id\x18\x01 \x01(\tR\vaggregateId\x12\x1b\n" +
 	"\tpool_name\x18\x02 \x01(\tR\bpoolName\x12\x1f\n" +
@@ -264,7 +276,9 @@ const file_placement_proto_rawDesc = "" +
 	"\n" +
 	"claim_name\x18\a \x01(\tR\tclaimName\x12'\n" +
 	"\x0fclaim_namespace\x18\b \x01(\tR\x0eclaimNamespace\x12+\n" +
-	"\x11consistency_group\x18\t \x01(\tR\x10consistencyGroup\".\n" +
+	"\x11consistency_group\x18\t \x01(\tR\x10consistencyGroup\x12*\n" +
+	"\x11source_cluster_id\x18\n" +
+	" \x01(\tR\x0fsourceClusterId\".\n" +
 	"\rPlaceResponse\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId2`\n" +

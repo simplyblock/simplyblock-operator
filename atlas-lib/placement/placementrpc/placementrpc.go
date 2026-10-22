@@ -59,6 +59,9 @@ type Request struct {
 	ClaimNamespace string
 	// ConsistencyGroup is the claim's consistency-group label, or empty.
 	ConsistencyGroup string
+	// SourceClusterID is the backend cluster a clone or restore is made from,
+	// or empty for a new volume.
+	SourceClusterID string
 }
 
 // Placer chooses a member, answering its backend cluster UUID. An error that
@@ -135,6 +138,7 @@ func requestToProto(req Request) *placementv1.PlaceRequest {
 		ClaimName:        req.ClaimName,
 		ClaimNamespace:   req.ClaimNamespace,
 		ConsistencyGroup: req.ConsistencyGroup,
+		SourceClusterId:  req.SourceClusterID,
 	}
 }
 
@@ -149,6 +153,7 @@ func requestFromProto(req *placementv1.PlaceRequest) Request {
 		ClaimName:        req.GetClaimName(),
 		ClaimNamespace:   req.GetClaimNamespace(),
 		ConsistencyGroup: req.GetConsistencyGroup(),
+		SourceClusterID:  req.GetSourceClusterId(),
 	}
 }
 
