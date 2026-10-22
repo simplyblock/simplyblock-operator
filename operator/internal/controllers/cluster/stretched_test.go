@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/ptr"
+	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -362,5 +363,70 @@ func reconcileOnce(t *testing.T, r *StorageClusterReconciler) {
 	key := types.NamespacedName{Namespace: testNamespace, Name: testClusterName}
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
+	}
+}
+
+// U-08: a role swap that made this site a follower ends an in-flight
+// cluster-wide operation that can still be stopped, because the cluster's
+// cluster-wide operations now belong to the other site.
+func TestARoleSwapEndsAStoppableClusterWideOperation(t *testing.T) {
+	ops := newTestOps(simplyblockv1alpha2.StorageClusterOpsActionActivate,
+		func(o *simplyblockv1alpha2.StorageClusterOps) {
+			o.Status.Phase = simplyblockv1alpha2.StorageClusterOpsPhaseRunning
+			o.Status.Step = statemachine.KubeSnapshot{State: string(stepRequesting)}
+		})
+	rec := &recorder{}
+	r := newOpsReconciler(t, &fakeControlPlane{}, rec,
+		newTestCluster(asSite(simplyblockv1alpha2.StretchedRoleFollower)), ops)
+
+	got, _ := reconcileOps(t, r, 1)
+	if got.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseFailed {
+		t.Fatalf("phase = %q, want Failed on a follower", got.Status.Phase)
+	}
+	if !rec.has(RoleLost) {
+		t.Error("the operation ended by a role swap emitted no RoleLost")
+	}
+}
+
+// An operation the control plane is part-way through runs on after a role swap:
+// failing the record would not stop the work, it would only stop accounting
+// for it.
+func TestARoleSwapLeavesAnUnstoppableOperationRunning(t *testing.T) {
+	api := &fakeControlPlane{cluster: func(string) (webapi.ClusterResponse, error) {
+		return activeCluster(), nil
+	}}
+	ops := newTestOps(simplyblockv1alpha2.StorageClusterOpsActionShutdown,
+		func(o *simplyblockv1alpha2.StorageClusterOps) {
+			o.Status.Phase = simplyblockv1alpha2.StorageClusterOpsPhaseRunning
+			o.Status.Step = statemachine.KubeSnapshot{State: string(stepAwaiting)}
+		})
+	rec := &recorder{}
+	r := newOpsReconciler(t, api, rec,
+		newTestCluster(asSite(simplyblockv1alpha2.StretchedRoleFollower)), ops)
+
+	got, _ := reconcileOps(t, r, 1)
+	if got.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseRunning {
+		t.Errorf("phase = %q, want the operation still Running", got.Status.Phase)
+	}
+	if rec.has(RoleLost) {
+		t.Error("an operation that cannot be stopped was reported as ended by the role swap")
+	}
+}
+
+// A task cancel is not cluster-wide, so a follower runs it on.
+func TestARoleSwapLeavesATaskCancelAlone(t *testing.T) {
+	ops := newTestOps(simplyblockv1alpha2.StorageClusterOpsActionCancelTask,
+		func(o *simplyblockv1alpha2.StorageClusterOps) {
+			o.Spec.Abort = true // ends it at the first abortable step, a sign it was not RoleLost
+			o.Status.Phase = simplyblockv1alpha2.StorageClusterOpsPhaseRunning
+			o.Status.Step = statemachine.KubeSnapshot{State: string(stepRequesting)}
+		})
+	rec := &recorder{}
+	r := newOpsReconciler(t, &fakeControlPlane{}, rec,
+		newTestCluster(asSite(simplyblockv1alpha2.StretchedRoleFollower)), ops)
+
+	reconcileOps(t, r, 1)
+	if rec.has(RoleLost) {
+		t.Error("a task cancel on a follower was ended as RoleLost")
 	}
 }

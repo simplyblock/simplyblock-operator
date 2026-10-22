@@ -32,12 +32,13 @@ import (
 	"net/http"
 
 	admissionv1 "k8s.io/api/admission/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagenodeops,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=storagenodeops,verbs=delete,versions=v1alpha2,name=vstoragenodeops.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagenodeops,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=storagenodeops,verbs=create;delete,versions=v1alpha2,name=vstoragenodeops.simplyblock.io,admissionReviewVersions=v1
 
 // StorageNodeOpsValidator refuses a delete that would strand a node operation
 // mid-flight.
@@ -49,7 +50,11 @@ import (
 // It holds no client. Everything the decision rests on is in the object being
 // deleted, which is what makes the answer the same on every replica and immune
 // to a stale cache.
-type StorageNodeOpsValidator struct{}
+type StorageNodeOpsValidator struct {
+	// Client reads the target node on CREATE, to refuse an operation on a
+	// stretched cluster's remote node. The DELETE guard never uses it.
+	Client client.Reader
+}
 
 // undeletableNodeSteps says what each step with no abort edge is in the middle
 // of. Which steps those are is node.UnabortableSteps's answer, and a test holds
@@ -89,11 +94,27 @@ var undeletableNodeSteps = map[simplyblockv1alpha2.StorageNodeOpsStep]string{
 		"maintenance put in place are being taken back",
 }
 
-func (v *StorageNodeOpsValidator) Handle(_ context.Context, req admission.Request) admission.Response {
-	if req.Operation != admissionv1.Delete {
+func (v *StorageNodeOpsValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
+	switch req.Operation {
+	case admissionv1.Create:
+		return v.admitCreate(ctx, req)
+	case admissionv1.Delete:
+		return v.admitDelete(req)
+	default:
 		return admission.Allowed("")
 	}
-	return v.admitDelete(req)
+}
+
+// admitCreate refuses an operation on a stretched cluster's remote node: it is
+// the other site's node, listed here for visibility, and its own site's
+// operator runs its operations. A node that cannot be read is admitted, for the
+// operation's controller to fail with a reason of its own.
+func (v *StorageNodeOpsValidator) admitCreate(ctx context.Context, req admission.Request) admission.Response {
+	var ops simplyblockv1alpha2.StorageNodeOps
+	if err := json.Unmarshal(req.Object.Raw, &ops); err != nil {
+		return admission.Errored(http.StatusBadRequest, err)
+	}
+	return refuseRemoteNode(ctx, v.Client, ops.Namespace, ops.Spec.NodeRef, "StorageNodeOps")
 }
 
 // admitDelete reads the object from req.OldObject, which is what the API server

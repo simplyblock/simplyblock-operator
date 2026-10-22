@@ -74,6 +74,11 @@ const (
 
 	// AbortRefused says spec.abort arrived at a step that cannot be stopped.
 	AbortRefused = "AbortRefused"
+	// RoleLost is a cluster-wide operation ended because a role swap made its
+	// cluster a stretched cluster's follower site, whose leader now runs the
+	// cluster's cluster-wide operations. Raised only where the operation can
+	// still be stopped; one the control plane is part-way through runs on.
+	RoleLost = "RoleLost"
 
 	// StepDeadlineExceeded distinguishes an operation still working from one
 	// that stopped, which is the distinction status.message cannot express.

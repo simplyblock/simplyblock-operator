@@ -26,3 +26,17 @@ func (c *StorageCluster) StretchedSite() string {
 func (n *StorageNode) IsRemote() bool {
 	return n.Spec.Stretched != nil && n.Spec.Stretched.Remote
 }
+
+// IsClusterWide reports whether the action acts on the backend cluster as a
+// whole, which on a stretched cluster only its leader site runs. A task cancel
+// targets one control-plane task the backend owns, so it is not cluster-wide.
+func (a StorageClusterOpsAction) IsClusterWide() bool {
+	switch a {
+	case StorageClusterOpsActionActivate, StorageClusterOpsActionExpand,
+		StorageClusterOpsActionShutdown, StorageClusterOpsActionStart,
+		StorageClusterOpsActionRestart, StorageClusterOpsActionRollingRestart:
+		return true
+	default:
+		return false
+	}
+}

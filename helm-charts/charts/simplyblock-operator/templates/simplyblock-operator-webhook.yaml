@@ -323,6 +323,7 @@ webhooks:
     apiVersions:
     - v1alpha2
     operations:
+    - CREATE
     - DELETE
     resources:
     - storageclusterops
@@ -345,6 +346,25 @@ webhooks:
     - DELETE
     resources:
     - storagedevices
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-storage-simplyblock-io-v1alpha2-storagedeviceops
+  failurePolicy: Fail
+  name: vstoragedeviceops.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    resources:
+    - storagedeviceops
   sideEffects: None
 - admissionReviewVersions:
   - v1
@@ -382,6 +402,7 @@ webhooks:
     apiVersions:
     - v1alpha2
     operations:
+    - CREATE
     - DELETE
     resources:
     - storagenodeops

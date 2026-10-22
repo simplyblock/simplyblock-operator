@@ -1136,7 +1136,7 @@ func main() {
 		setupLog.Info("registered controlplaneops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storageclusterops",
-			&webhook.Admission{Handler: &internalwebhook.StorageClusterOpsValidator{}})
+			&webhook.Admission{Handler: &internalwebhook.StorageClusterOpsValidator{Client: mgr.GetClient()}})
 		setupLog.Info("registered storageclusterops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-operatorops",
@@ -1144,8 +1144,12 @@ func main() {
 		setupLog.Info("registered operatorops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagenodeops",
-			&webhook.Admission{Handler: &internalwebhook.StorageNodeOpsValidator{}})
+			&webhook.Admission{Handler: &internalwebhook.StorageNodeOpsValidator{Client: mgr.GetClient()}})
 		setupLog.Info("registered storagenodeops validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagedeviceops",
+			&webhook.Admission{Handler: &internalwebhook.StorageDeviceOpsValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered storagedeviceops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-persistentvolumeops",
 			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeOpsValidator{
