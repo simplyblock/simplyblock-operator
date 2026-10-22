@@ -53,9 +53,12 @@ func (cs *Server) CreateVolume(
 		}
 	}
 
-	selection, err := cs.resolveClusterSelection(req)
+	selection, err := cs.resolveClusterSelection(ctx, req)
 	if err != nil {
 		klog.Errorf("failed to resolve cluster selection for volume %s: %v", volumeID, err)
+		if _, isStatus := status.FromError(err); isStatus {
+			return nil, err
+		}
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 

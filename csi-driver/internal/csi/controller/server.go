@@ -36,6 +36,9 @@ type Server struct {
 	// cluster and when the CRD is unavailable, in which case a pNFS claim is
 	// refused with a clear message rather than the driver failing to start.
 	exports ExportRegistry
+	// placer asks the operator which member of a supercluster a volume goes
+	// to, over the link. Nil when the link is not enabled.
+	placer Placer
 }
 
 //nolint:unparam // error return kept for constructor symmetry / future use

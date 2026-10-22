@@ -40,8 +40,9 @@ once it holds every pool, and the supercluster has a default pool whose class
 names it. The operator places (§7.2, §7.3): `PlacementService` runs on the
 link, ranks the members by the strategy from the readings the supercluster
 reconciler hands it, records the member on the claim before answering, and
-keeps a consistency group in one member. The CSI controller's branch that calls
-it is next.
+keeps a consistency group in one member. The CSI controller asks it when a
+class's `cluster_id` names no cluster in its secret, sends a clone's source
+cluster with the request, and creates the volume in the member answered.
 
 Each phase ships on its own. Phase 1 produces a supercluster that reports one
 status and lets an administrator name the members directly, which is already
