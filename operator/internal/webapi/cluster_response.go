@@ -60,6 +60,9 @@ func ParseClusterResponse(body []byte) (ClusterResponse, error) {
 		NDCS:              payload.NDCS,
 		NPCS:              payload.NPCS,
 		MaxFaultTolerance: payload.MaxFaultTolerance,
+		SyncReplication:   payload.SyncReplication,
+		LostSite:          payload.LostSite,
+		LostSiteState:     payload.LostSiteState,
 	}, nil
 }
 
