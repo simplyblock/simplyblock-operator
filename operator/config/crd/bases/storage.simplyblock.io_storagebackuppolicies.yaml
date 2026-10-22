@@ -241,6 +241,35 @@ spec:
                   policy, and it is what an age alert is computed from.
                 format: date-time
                 type: string
+              members:
+                description: |-
+                  Members is the policy in each member, when spec.clusterRef names a
+                  supercluster: one control-plane policy per member, each covering the
+                  claims whose volumes are in that member. ClusterID and PolicyID stay
+                  empty for such a policy.
+                items:
+                  description: |-
+                    BackupPolicyMemberStatus is the policy in one member cluster of a
+                    supercluster.
+                  properties:
+                    cluster:
+                      description: Cluster is the member StorageCluster.
+                      type: string
+                    clusterID:
+                      description: ClusterID is the member's backend cluster.
+                      type: string
+                    policyID:
+                      description: |-
+                        PolicyID is the control plane's identifier for the policy in that
+                        member.
+                      type: string
+                  required:
+                  - cluster
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - cluster
+                x-kubernetes-list-type: map
               message:
                 description: |-
                   Message is the reason the phase is what it is: one sentence, replaced as
