@@ -177,6 +177,8 @@ func TestTheApiserverStampsAndPolicesTheImageSlots(t *testing.T) {
 		mirrored := []string{
 			"registry.airgap.local:5000/simplyblock/simplyblock:main",
 			"registry.simplyblock.ai/simplyblock/simplyblock-operator:latest",
+			"[fd00::1]:5000/simplyblock/ultra:main",
+			"[::1]/simplyblock/ultra@sha256:" + strings.Repeat("b", 64),
 			"mirror.example.com/a/b/c/spdk:v1.2.3@sha256:" + strings.Repeat("a", 64),
 			"localhost/ultra@sha256:" + strings.Repeat("0", 64),
 			"ultra:main-latest",
@@ -200,6 +202,8 @@ func TestTheApiserverStampsAndPolicesTheImageSlots(t *testing.T) {
 			"docker.io/simplyblock/ultra:main@sha256:abc",
 			"https://docker.io/simplyblock/ultra:main",
 			"docker.io/simplyblock/ultra main",
+			"[fd00::1/simplyblock/ultra:main",
+			"[fd00::g]:5000/simplyblock/ultra:main",
 		}
 		for _, image := range malformed {
 			config.Spec.Images = &simplyblockv1alpha2.DeploymentImages{
