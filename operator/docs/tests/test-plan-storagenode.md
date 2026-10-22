@@ -322,6 +322,13 @@ name the cluster instead.
 | U-308 | The config generator mounts `/dev` and `/sys`, which the init container reads                             | Positive   | `TestBuildStorageNodeDaemonSetConfigGeneratorMountsDevAndSys`    |
 | U-309 | A conflict on the DaemonSet write is retried against a fresh read                                         | Regression | `TestTheDaemonSetWriteRetriesAConflict`                          |
 | U-515 | A node agent that stops answering is restarted, with and without (mutual) TLS (2026-10-06)                | Regression | `TestTheStorageNodeAgentIsRestartedWhenItStopsAnswering`         |
+| U-527 | A migration target is published into the API EndpointSlice before its node moves (2026-10-13)             | Regression | `TestAMigrationTargetIsPublishedBeforeTheNodeMoves`              |
+| U-528 | A finished or queued migration, another action, or another cluster's migration publishes no target        | Negative   | `TestOnlyAnUnfinishedMigrationOfThisClusterPublishesATarget`     |
+| U-529 | A new migration wakes its cluster's workload pass; any other action wakes nothing                         | Positive   | `TestAMigrationWakesItsClustersWorkloadPass`                     |
+| U-530 | A migration queued behind the running one does not displace the running one's target (2026-10-22)         | Regression | `TestAQueuedMigrationDoesNotDisplaceTheRunningOnesTarget`        |
+| U-531 | The migration holding the node's lock publishes its target before its phase moves to Running              | Positive   | `TestTheMigrationHoldingTheLockPublishesItsTarget`               |
+| U-532 | Only a migration's creation, deletion, or phase change wakes the pass; a step's status write does not     | Negative   | `TestOnlyAMigrationsLifecycleWakesTheWorkloadPass`               |
+| U-533 | A StorageNode on its way out does not keep its worker in the API EndpointSlice (2026-10-22)               | Regression | `TestADeletingNodesWorkerIsNotPublished`                         |
 
 ### Workload: Storage-Plane Labels (design §5.2)
 
