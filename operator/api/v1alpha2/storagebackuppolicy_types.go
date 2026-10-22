@@ -119,6 +119,11 @@ type AttachedClaim struct {
 	// +optional
 	LvolID string `json:"lvolID,omitempty"`
 
+	// ClusterID is the backend cluster the claim's volume is in, whose policy
+	// it is attached to.
+	// +optional
+	ClusterID string `json:"clusterID,omitempty"`
+
 	// AttachedAt is when the claim started matching the selector.
 	// +optional
 	AttachedAt *metav1.Time `json:"attachedAt,omitempty"`

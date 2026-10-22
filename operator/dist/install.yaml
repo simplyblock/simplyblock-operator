@@ -6067,6 +6067,11 @@ spec:
                         selector.
                       format: date-time
                       type: string
+                    clusterID:
+                      description: |-
+                        ClusterID is the backend cluster the claim's volume is in, whose policy
+                        it is attached to.
+                      type: string
                     lvolID:
                       description: |-
                         LvolID is the logical volume the control plane attached the policy to. It

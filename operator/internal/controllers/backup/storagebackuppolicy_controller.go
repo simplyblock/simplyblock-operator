@@ -369,6 +369,7 @@ func (r *StorageBackupPolicyReconciler) selectedClaims(
 			Name:                 claim.Name,
 			PersistentVolumeName: volume,
 			LvolID:               lvolID,
+			ClusterID:            clusterID,
 		})
 	}
 	return selected, nil
