@@ -213,6 +213,30 @@ func TestCandidatesNamesAPartitionTableSeparatelyFromAFilesystem(t *testing.T) {
 	}
 }
 
+func TestCandidatesNamesAnLVMPhysicalVolumeSeparatelyFromOtherContent(t *testing.T) {
+	// A physical volume whose volume group has no active logical volume has no
+	// holder and nothing mounted, so lsblk shows a bare disk. The label is the
+	// only evidence, and NotBlank sends the administrator looking for a
+	// filesystem that is not there; the fix is pvremove, so the reason says LVM.
+	pv := blank(3750748848 * 512)
+	pv.bytes[512] = []byte("LABELONE")
+	pv.bytes[512+24] = []byte("LVM2 001")
+
+	in := inspectorOver(t, map[string]sparse{"sdb": pv}, nil)
+	cands, err := in.Candidates(context.Background())
+	if err != nil {
+		t.Fatalf("collect the candidates: %v", err)
+	}
+
+	got := found(t, cands, "sdb")
+	if got.Available() {
+		t.Fatal("handed over a disk carrying an LVM physical-volume label")
+	}
+	if !got.OnlyRejectedFor(ReasonLVMPhysicalVolume) {
+		t.Errorf("rejected it for %v, want %s alone", got.Rejections, ReasonLVMPhysicalVolume)
+	}
+}
+
 func TestCandidatesRejectsADiskWhoseContentItCouldNotRead(t *testing.T) {
 	// A device that could not be read is not a device that was read and found
 	// empty. This is the defect the content reading exists to remove, and it is
@@ -373,5 +397,72 @@ func TestCandidatesRejectsADiskTheKernelWillNotHandOver(t *testing.T) {
 	}
 	if got.OnlyRejectedFor(ReasonPartitioned) {
 		t.Error("a busy device must not be accepted by any override")
+	}
+}
+
+// Regression: 2026-10-22-block-mode-partitions-never-proposed. A partition was
+// refused as NotAWholeDisk before its bytes were read, so a logical block
+// device run, which may take a partition, had no reading to decide on and
+// never proposed one. A partition nothing uses is now read like a disk: its
+// only structural ground stays NotAWholeDisk, which the run waives, and what it
+// carries decides the rest.
+func TestCandidatesReadsAPartitionNothingUses(t *testing.T) {
+	pv := blank(1048576 * 512)
+	pv.bytes[512] = []byte("LABELONE")
+	pv.bytes[512+24] = []byte("LVM2 001")
+
+	for _, tc := range []struct {
+		name    string
+		content sparse
+		want    []Reason
+		reading Content
+	}{
+		{"blank", blank(1048576 * 512), []Reason{ReasonNotAWholeDisk}, ContentBlank},
+		{"carrying a physical volume", pv, []Reason{ReasonNotAWholeDisk, ReasonLVMPhysicalVolume}, ContentStackLayer},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Only the root partition is mounted here, so the EFI partition
+			// beside it is one nothing uses.
+			h := storageHost()
+			h.files["self/mountinfo"] = "25 1 259:4 / / rw,relatime shared:1 - ext4 /dev/nvme1n1p2 rw"
+			h.files["swaps"] = swapOnVirtio
+			root := h.write(t)
+			in := Inspector{
+				Config: ScanConfig{SysfsRoot: root, ProcRoot: root},
+				Prober: NewProberWithOpener(contentOpener(map[string]sparse{"nvme1n1p1": tc.content}),
+					WithRegionSize(MinRegionSize)),
+				Exclusive: free,
+			}
+
+			cands, err := in.Candidates(context.Background())
+			if err != nil {
+				t.Fatalf("collect the candidates: %v", err)
+			}
+
+			got := found(t, cands, "nvme1n1p1")
+			if got.Reading.Content != tc.reading {
+				t.Errorf("the partition reads as %v, want %v", got.Reading.Content, tc.reading)
+			}
+			if !got.OnlyRejectedFor(tc.want...) || len(got.Rejections) != len(tc.want) {
+				t.Errorf("rejected it for %v, want exactly %v", got.Rejections, tc.want)
+			}
+		})
+	}
+}
+
+// A partition that is mounted is still refused before anything is opened,
+// exactly as a mounted disk is.
+func TestCandidatesDoesNotReadAMountedPartition(t *testing.T) {
+	in := inspectorOver(t, map[string]sparse{}, nil)
+	cands, err := in.Candidates(context.Background())
+	if err != nil {
+		t.Fatalf("collect the candidates: %v", err)
+	}
+	got := found(t, cands, "nvme1n1p2")
+	if got.Reading.Content != ContentUnknown {
+		t.Errorf("a mounted partition was read: %v", got.Reading)
+	}
+	if got.RejectedFor(ReasonUnreadable) {
+		t.Errorf("a mounted partition was opened: %v", got.Rejections)
 	}
 }

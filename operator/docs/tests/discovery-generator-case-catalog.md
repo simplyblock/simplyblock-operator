@@ -110,6 +110,7 @@ constructing one directly.
 | DEV-18 | The same worker with the allow list naming the LUN          | Both disks. Naming it is the decision a run cannot make for a fleet                         | `CM`    |
 | DEV-19 | An iSCSI LUN on an NVMe run                                 | Refused for being the other class, before the iSCSI rule is reached                         | `CM`    |
 | DEV-20 | 4 equal virtio disks, block run, forceJournalDevice unset   | Refused: nothing says which disk carries the journal, and the class has no partitioned one  | `CM`    |
+| DEV-21 | Blank, formatted, and unread partitions, block run          | Regression: the blank one only. `TestPlanProposesABlankPartitionInABlockRun`                | `GO`    |
 
 ## 3. NUMA topology
 
