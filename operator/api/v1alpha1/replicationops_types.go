@@ -44,12 +44,14 @@ const (
 
 // ReplicationOpsResult holds the outcome for a single volume in a ReplicationOps.
 type ReplicationOpsResult struct {
-	// SlotRef is the name of the ReplicationSlot CR. It is empty for a
+	// SlotRef is the name of the ReplicationSlot CR, as "<namespace>/<name>"
+	// when it lives outside this operation's namespace. It is empty for a
 	// PersistentVolumeClaim that a cluster-scoped migration did not enroll.
 	SlotRef string `json:"slotRef"`
 
 	// PVCRef is the name of the PersistentVolumeClaim, when the operation
-	// resolved one.
+	// resolved one, as "<namespace>/<name>" when it lives outside this
+	// operation's namespace.
 	// +optional
 	PVCRef string `json:"pvcRef,omitempty"`
 
@@ -153,7 +155,7 @@ type ReplicationOpsSpec struct {
 	// target: all volumes across every policy that uses the named ReplicationPair.
 	// policy: all volumes managed by the named ReplicationPolicy CR.
 	// volume: a single ReplicationSlot (planned or unplanned per-volume operation).
-	// cluster: every PersistentVolumeClaim in this namespace whose volume lives
+	// cluster: every PersistentVolumeClaim, in any namespace, whose volume lives
 	//          on the named source storage cluster (migration only). Claims that
 	//          are not replicated yet are enrolled under spec.policyRef.
 	// +kubebuilder:validation:Enum=target;policy;volume;cluster

@@ -114,8 +114,12 @@ type migrationPlan struct {
 // migrationVolume is one volume an operation migrates, with the Kubernetes
 // objects it was resolved from.
 type migrationVolume struct {
-	slot     *simplyblockv1alpha1.ReplicationSlot
+	slot *simplyblockv1alpha1.ReplicationSlot
+	// pvcName and slotRef are what the results report: bare names in the
+	// operation's namespace, "<namespace>/<name>" for a cluster-scoped
+	// migration's claims elsewhere.
 	pvcName  string
+	slotRef  string
 	volumeID string
 }
 
@@ -190,10 +194,7 @@ func (r *ReplicationOpsReconciler) runMigration(
 	var ready []migrationVolume
 	waiting := scope.enrolling
 	for _, v := range scope.volumes {
-		res := simplyblockv1alpha1.ReplicationOpsResult{PVCRef: v.pvcName}
-		if v.slot != nil {
-			res.SlotRef = v.slot.Name
-		}
+		res := simplyblockv1alpha1.ReplicationOpsResult{PVCRef: v.pvcName, SlotRef: v.slotRef}
 		if ops.Spec.DryRun {
 			// A dry run forecasts the scope as it stands: the plan itself
 			// starts replication for a volume that has none yet.
@@ -350,13 +351,17 @@ func (r *ReplicationOpsReconciler) trackMigrationPlan(
 		return ctrl.Result{RequeueAfter: replOpsPlanPoll}, nil
 	}
 
-	slots, err := r.slotsByVolumeID(ctx, ops.Namespace)
+	slots, err := r.slotsByVolumeID(ctx, slotNamespaceOf(ops))
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	var known []migrationVolume
 	for id, slot := range slots {
-		known = append(known, migrationVolume{slot: slot, pvcName: slot.Spec.PVCRef, volumeID: id})
+		known = append(known, migrationVolume{
+			slot: slot, volumeID: id,
+			pvcName: utils.RefFrom(slot.Namespace, slot.Spec.PVCRef, ops.Namespace),
+			slotRef: utils.RefFrom(slot.Namespace, slot.Name, ops.Namespace),
+		})
 	}
 	results := mergePlanResults(keptResults(ops.Status.Results), &plan, known)
 	forecast := forecastFromPlan(plan.Forecast)
@@ -394,10 +399,7 @@ func (r *ReplicationOpsReconciler) commitPerVolume(
 	log := logf.FromContext(ctx)
 	anyQueued := false
 	for _, v := range ready {
-		res := simplyblockv1alpha1.ReplicationOpsResult{PVCRef: v.pvcName}
-		if v.slot != nil {
-			res.SlotRef = v.slot.Name
-		}
+		res := simplyblockv1alpha1.ReplicationOpsResult{PVCRef: v.pvcName, SlotRef: v.slotRef}
 		_, poolID, volumeID, ok := splitVolumeHandle(v.slot.Spec.VolumeID)
 		if !ok {
 			res.Status = string(simplyblockv1alpha1.ReplicationOpsResultFailed)
@@ -460,7 +462,8 @@ func (r *ReplicationOpsReconciler) trackCommittedSlots(
 			continue
 		}
 		var slot simplyblockv1alpha1.ReplicationSlot
-		err := r.Get(ctx, types.NamespacedName{Name: res.SlotRef, Namespace: ops.Namespace}, &slot)
+		slotNS, slotName := utils.SplitRef(res.SlotRef, ops.Namespace)
+		err := r.Get(ctx, types.NamespacedName{Name: slotName, Namespace: slotNS}, &slot)
 		switch {
 		case apierrors.IsNotFound(err):
 			res.Status = string(simplyblockv1alpha1.ReplicationOpsResultFailed)
@@ -528,15 +531,18 @@ func (r *ReplicationOpsReconciler) resolveMigrationScope(
 		if !ok {
 			return nil, fmt.Sprintf("invalid VolumeID %q on slot %s", slot.Spec.VolumeID, slot.Name), nil
 		}
-		scope.volumes = append(scope.volumes, migrationVolume{slot: slot, pvcName: slot.Spec.PVCRef, volumeID: volumeID})
+		scope.volumes = append(scope.volumes, migrationVolume{
+			slot: slot, pvcName: slot.Spec.PVCRef, slotRef: slot.Name, volumeID: volumeID})
 	}
 	return scope, "", nil
 }
 
-// resolveClusterScope collects every bound claim in the namespace whose volume
-// lives on the source cluster, and enrolls those that are not replicated yet
-// under spec.policyRef by annotating the claim. The PVC annotation watcher
-// then creates the slot, exactly as for a claim a user annotated.
+// resolveClusterScope collects every bound claim, in every namespace, whose
+// volume lives on the source cluster, and enrolls those that are not
+// replicated yet under spec.policyRef by annotating the claim -- with
+// "<namespace>/<name>" when the claim lives outside the policy's namespace.
+// The PVC annotation watcher then creates the slot beside the claim, exactly
+// as for a claim a user annotated.
 func (r *ReplicationOpsReconciler) resolveClusterScope(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.ReplicationOps,
@@ -557,19 +563,22 @@ func (r *ReplicationOpsReconciler) resolveClusterScope(
 			policy.Name, policy.Spec.Mode, utils.ReplicationPolicyModeMigration), nil
 	}
 
+	// A workload's claim lives in its own namespace, not the storage one: the
+	// scope is every namespace, and a slot is found beside its claim.
 	var slotList simplyblockv1alpha1.ReplicationSlotList
-	if err := r.List(ctx, &slotList, client.InNamespace(ops.Namespace)); err != nil {
+	if err := r.List(ctx, &slotList); err != nil {
 		return "", fmt.Errorf("list ReplicationSlots: %w", err)
 	}
 	slotByPVC := make(map[string]*simplyblockv1alpha1.ReplicationSlot, len(slotList.Items))
 	for i := range slotList.Items {
-		if slotList.Items[i].Spec.PVCRef != "" {
-			slotByPVC[slotList.Items[i].Spec.PVCRef] = &slotList.Items[i]
+		if s := &slotList.Items[i]; s.Spec.PVCRef != "" {
+			slotByPVC[s.Namespace+"/"+s.Spec.PVCRef] = s
 		}
 	}
+	policyRef := policy.Namespace + "/" + policy.Name
 
 	var pvcs corev1.PersistentVolumeClaimList
-	if err := r.List(ctx, &pvcs, client.InNamespace(ops.Namespace)); err != nil {
+	if err := r.List(ctx, &pvcs); err != nil {
 		return "", fmt.Errorf("list PersistentVolumeClaims: %w", err)
 	}
 	for i := range pvcs.Items {
@@ -592,17 +601,21 @@ func (r *ReplicationOpsReconciler) resolveClusterScope(
 			continue
 		}
 
+		pvcRef := utils.RefFrom(pvc.Namespace, pvc.Name, ops.Namespace)
 		skip := func(detail string) {
 			scope.skipped = append(scope.skipped, simplyblockv1alpha1.ReplicationOpsResult{
-				PVCRef: pvc.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultSkipped), Detail: detail,
+				PVCRef: pvcRef, Status: string(simplyblockv1alpha1.ReplicationOpsResultSkipped), Detail: detail,
 			})
 		}
-		if slot, ok := slotByPVC[pvc.Name]; ok {
-			if slot.Spec.PolicyRef != policy.Name {
+		if slot, ok := slotByPVC[pvc.Namespace+"/"+pvc.Name]; ok {
+			if utils.CanonicalRef(slot.Spec.PolicyRef, slot.Namespace) != policyRef {
 				skip(fmt.Sprintf("follows replication policy %q", slot.Spec.PolicyRef))
 				continue
 			}
-			scope.volumes = append(scope.volumes, migrationVolume{slot: slot, pvcName: pvc.Name, volumeID: volumeID})
+			scope.volumes = append(scope.volumes, migrationVolume{
+				slot: slot, pvcName: pvcRef, volumeID: volumeID,
+				slotRef: utils.RefFrom(slot.Namespace, slot.Name, ops.Namespace),
+			})
 			continue
 		}
 
@@ -610,11 +623,11 @@ func (r *ReplicationOpsReconciler) resolveClusterScope(
 		if err != nil {
 			return "", err
 		}
-		if assigned != "" && assigned != policy.Name {
+		if assigned != "" && utils.CanonicalRef(assigned, pvc.Namespace) != policyRef {
 			skip(fmt.Sprintf("assigned replication policy %q", assigned))
 			continue
 		}
-		scope.volumes = append(scope.volumes, migrationVolume{pvcName: pvc.Name, volumeID: volumeID})
+		scope.volumes = append(scope.volumes, migrationVolume{pvcName: pvcRef, volumeID: volumeID})
 		if ops.Spec.DryRun {
 			continue
 		}
@@ -624,9 +637,9 @@ func (r *ReplicationOpsReconciler) resolveClusterScope(
 			if pvc.Annotations == nil {
 				pvc.Annotations = map[string]string{}
 			}
-			pvc.Annotations[utils.AnnotationReplicationPolicy] = policy.Name
+			pvc.Annotations[utils.AnnotationReplicationPolicy] = utils.RefFrom(policy.Namespace, policy.Name, pvc.Namespace)
 			if err := r.Patch(ctx, pvc, patch); err != nil {
-				return "", fmt.Errorf("annotate PersistentVolumeClaim %q: %w", pvc.Name, err)
+				return "", fmt.Errorf("annotate PersistentVolumeClaim %s: %w", pvcRef, err)
 			}
 		}
 	}
@@ -675,7 +688,17 @@ func (r *ReplicationOpsReconciler) findMigrationPlan(
 	return nil
 }
 
-// slotsByVolumeID maps each slot in the namespace by its lvol UUID.
+// slotNamespaceOf is where an operation's slots live: every namespace for a
+// cluster-scoped migration, the operation's own otherwise.
+func slotNamespaceOf(ops *simplyblockv1alpha1.ReplicationOps) string {
+	if ops.Spec.Scope == utils.ReplicationOpsScopeCluster {
+		return ""
+	}
+	return ops.Namespace
+}
+
+// slotsByVolumeID maps each slot in the namespace ("" for every namespace) by
+// its lvol UUID.
 func (r *ReplicationOpsReconciler) slotsByVolumeID(
 	ctx context.Context,
 	namespace string,
@@ -802,8 +825,8 @@ func mergePlanResults(
 	inPlan := make(map[string]bool, len(plan.Volumes))
 	for _, pv := range plan.Volumes {
 		if v, ok := byID[pv.LvolID]; ok {
-			if v.slot != nil {
-				inPlan[v.slot.Name] = true
+			if v.slotRef != "" {
+				inPlan[v.slotRef] = true
 			}
 			inPlan["pvc/"+v.pvcName] = true
 		}
@@ -829,9 +852,7 @@ func mergePlanResults(
 		}
 		if v, ok := byID[pv.LvolID]; ok {
 			res.PVCRef = v.pvcName
-			if v.slot != nil {
-				res.SlotRef = v.slot.Name
-			}
+			res.SlotRef = v.slotRef
 		} else if res.Detail == "" {
 			res.Detail = "volume " + pv.LvolID
 		}

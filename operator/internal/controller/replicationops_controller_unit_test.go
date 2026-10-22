@@ -36,9 +36,7 @@ func newOpsReplReconciler(t *testing.T, objects ...client.Object) (*ReplicationO
 			&simplyblockv1alpha1.ReplicationPair{},
 		).
 		WithObjects(allObjects...).
-		WithIndex(&simplyblockv1alpha1.ReplicationSlot{}, "spec.policyRef", func(obj client.Object) []string {
-			return []string{obj.(*simplyblockv1alpha1.ReplicationSlot).Spec.PolicyRef}
-		}).
+		WithIndex(&simplyblockv1alpha1.ReplicationSlot{}, "spec.policyRef", slotPolicyRefIndex).
 		WithIndex(&simplyblockv1alpha1.ReplicationOps{}, "spec.ref", func(obj client.Object) []string {
 			return []string{obj.(*simplyblockv1alpha1.ReplicationOps).Spec.Ref}
 		}).
