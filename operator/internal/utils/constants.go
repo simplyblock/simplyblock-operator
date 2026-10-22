@@ -11,7 +11,8 @@ const (
 	FinalizerReplicationSlot   = "storage.simplyblock.io/replicationslot-finalizer"
 
 	// AnnotationReplicationPolicy is the annotation key on StorageClass or PVC that
-	// opts volumes into a named ReplicationPolicy CR.
+	// opts volumes into a named ReplicationPolicy CR: its name in the claim's own
+	// namespace, or "<namespace>/<name>" for a policy in another namespace.
 	AnnotationReplicationPolicy = "storage.simplyblock.io/replication-policy"
 
 	// ReplicationOps scope values.
