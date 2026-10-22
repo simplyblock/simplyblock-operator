@@ -18,49 +18,49 @@ Pure functions, fake clients, and a mock control plane answering the sync routes
 
 File: `operator/internal/controllers/cluster/storagecluster_stretched_test.go`
 
-| #    | Scenario                                                                                                                                                            | Type     | Test |
-|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-01 | A `Leader` with no `clusterRef` runs the create path: one `POST /clusters/` with `sync_replication: true` and `leader_site` set to its site                         | Positive | —    |
-| U-02 | A `Follower` with `clusterRef` runs adoption: no create is posted, `simplyblock-cluster-{name}` is written with the UUID the listing returns, status is populated   | Positive | —    |
-| U-03 | A `Follower` whose adoption finds no cluster of that name holds in `CheckingControlPlane` with reason `PeerClusterMissing` and requeues                             | Negative | —    |
-| U-04 | A `Follower` whose adoption finds a cluster without `sync_replication` refuses with a terminal condition naming the mismatch                                        | Negative | —    |
-| U-05 | A `Follower` whose adoption finds `leader_site` equal to its own site refuses with `RoleConflict`                                                                   | Negative | —    |
-| U-06 | The `Leader`'s activation holds with `WaitingForPeerSite` while the listing shows fewer than `ndcs + npcs` online nodes on the peer site, and proceeds once it does | Boundary | —    |
-| U-07 | Exactly `ndcs + npcs` online peer nodes passes the hold; one fewer does not                                                                                         | Boundary | —    |
-| U-08 | A role swap from `Leader` to `Follower` fails an in-flight cluster-scoped `StorageClusterOps` with `RoleLost` and emits `RoleChanged`                               | Positive | —    |
-| U-09 | A role swap from `Follower` to `Leader` admits the next cluster-scoped `StorageClusterOps` and emits `RoleChanged`                                                  | Positive | —    |
-| U-10 | `spec.stretched` set without `enableSyncReplication` is refused by the webhook                                                                                      | Negative | —    |
-| U-11 | `spec.stretched.site` and `spec.stretched.peerSite` are immutable; a change is refused                                                                              | Negative | —    |
-| U-12 | Every `StorageNode` the cluster adds carries `site` from `spec.stretched.site` in its add body                                                                      | Positive | —    |
-| U-13 | A `NodeGroup` in the delivered config whose `site` differs from the cluster's is refused                                                                            | Negative | —    |
+| #    | Scenario                                                                                                                                                            | Type     | Test                                                                                                                                         |
+|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------------------------------------------------------------------------------------------------|
+| U-01 | A `Leader` with no `clusterRef` runs the create path: one `POST /clusters/` with `sync_replication: true` (`leader_site` waits on P0-2)                             | Positive | `TestALeaderCreatesASyncReplicationCluster`                                                                                                  |
+| U-02 | A `Follower` adopts through the delivered `simplyblock-{name}-upgrade` Secret: no create is posted, `simplyblock-cluster-{name}` is written, status is populated    | Positive | `TestAFollowerAdoptsThroughTheDeliveredCredentials`                                                                                          |
+| U-03 | A `Follower` whose adoption finds no cluster of that name holds in `CheckingControlPlane` with reason `PeerClusterMissing` and requeues                             | Negative | `TestAFollowerWaitsForItsLeaderInsteadOfCreating`, `TestAFollowerWaitsForItsCredentialsWhenTheClusterExists`                                 |
+| U-04 | A `Follower` whose adoption finds a cluster without `sync_replication` refuses with a terminal condition naming the mismatch                                        | Negative | `TestAFollowerRefusesAClusterThatIsNotASyncCluster`                                                                                          |
+| U-05 | A `Follower` whose adoption finds `leader_site` equal to its own site refuses with `RoleConflict`                                                                   | Negative | —                                                                                                                                            |
+| U-06 | The `Leader`'s activation holds with `WaitingForPeerSite` while the listing shows fewer than `ndcs + npcs` online nodes on the peer site, and proceeds once it does | Boundary | `TestALeaderWaitsForThePeerSiteBeforeActivating`                                                                                             |
+| U-07 | Exactly `ndcs + npcs` online peer nodes passes the hold; one fewer does not                                                                                         | Boundary | `TestALeaderWaitsForThePeerSiteBeforeActivating`                                                                                             |
+| U-08 | A role swap from `Leader` to `Follower` fails an in-flight cluster-scoped `StorageClusterOps` with `RoleLost` and emits `RoleChanged`                               | Positive | `TestARoleSwapEndsAStoppableClusterWideOperation`, `TestARoleSwapLeavesAnUnstoppableOperationRunning`, `TestARoleSwapIsRecordedAndAnnounced` |
+| U-09 | A role swap from `Follower` to `Leader` admits the next cluster-scoped `StorageClusterOps` and emits `RoleChanged`                                                  | Positive | `TestALeaderAndAStandaloneClusterAdmitEveryAction`, `TestARoleSwapIsRecordedAndAnnounced`                                                    |
+| U-10 | `spec.stretched` set without `enableSyncReplication` is refused by the schema (CEL)                                                                                 | Negative | `TestStorageClusterStretchedRequiresSyncReplication`                                                                                         |
+| U-11 | `spec.stretched.site` and `spec.stretched.peerSite` are immutable; a change is refused                                                                              | Negative | `TestStorageClusterStretchedSitesAreImmutableAndTheRoleIsNot`                                                                                |
+| U-12 | Every `StorageNode` the cluster adds carries `site` from `spec.stretched.site` in its add body                                                                      | Positive | `TestAGroupWithoutASiteTakesTheStretchedClustersSite`                                                                                        |
+| U-13 | A `NodeGroup` in the delivered config whose `site` differs from the cluster's is refused                                                                            | Negative | `TestANodeGroupOnAnotherSiteIsRefused`, `TestANodeGroupAddedToAStretchedClusterMustBeOnItsSite`                                              |
 
 ### `StorageClusterOps` admission on a follower (§5.2)
 
 File: `operator/internal/webhook/storageclusterops_stretched_test.go`
 
-| #    | Scenario                                                                                                       | Type       | Test |
-|------|----------------------------------------------------------------------------------------------------------------|------------|------|
-| U-14 | `Activate`, `Expand`, `RollingRestart`, and `Shutdown` on a follower's cluster are refused with `FollowerSite` | Negative   | —    |
-| U-15 | The same actions on a leader's cluster are admitted                                                            | Positive   | —    |
-| U-16 | A `StorageNodeOps` on a follower's own node is admitted                                                        | Positive   | —    |
-| U-17 | A standalone cluster (no `spec.stretched`) is admitted for every action, unchanged                             | Regression | —    |
+| #    | Scenario                                                                                                       | Type       | Test                                                                                             |
+|------|----------------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------------------------------------------------|
+| U-14 | `Activate`, `Expand`, `RollingRestart`, and `Shutdown` on a follower's cluster are refused with `FollowerSite` | Negative   | `TestAFollowerRefusesClusterWideOperations`                                                      |
+| U-15 | The same actions on a leader's cluster are admitted                                                            | Positive   | `TestALeaderAndAStandaloneClusterAdmitEveryAction`                                               |
+| U-16 | A `StorageNodeOps` on a follower's own node is admitted                                                        | Positive   | `TestAnOperationOnARemoteNodeIsRefused`                                                          |
+| U-17 | A standalone cluster (no `spec.stretched`) is admitted for every action, unchanged                             | Regression | `TestALeaderAndAStandaloneClusterAdmitEveryAction`, `TestAStandaloneClusterHasNoStretchedStatus` |
 
 ### `StretchedCluster` expansion on the hub (§5.1, Appendix A)
 
 File: `operator/internal/controller/stretchedcluster_controller_unit_test.go`
 
-| #    | Scenario                                                                                                                                                                                     | Type                | Test |
-|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|------|
-| U-18 | One `StretchedCluster` produces two `ManifestWork`s, one per managed cluster, each carrying an `OperatorOps` discovery scoped by that site's `discover`                                      | Positive            | —    |
-| U-19 | Once a site's view shows a draft with nodes, its work carries the sizing: the shared `sizing`, `enableSyncReplication: true`, `stretched.site` and `.role`; the follower's also `clusterRef` | Positive            | —    |
-| U-20 | `enableSyncReplication` is forced `true` on both drafts whatever the sizing says                                                                                                             | Positive            | —    |
-| U-21 | `approved: true` on the hub delivers the leader's approval at once and the follower's only after the leader's view carries a cluster UUID                                                    | Boundary            | —    |
-| U-22 | Two `Leader` entries are refused by CEL; zero `Leader` entries are refused                                                                                                                   | Negative            | —    |
-| U-23 | A role swap while either site's `StorageCluster` view is not `Ready` is refused by the webhook; a swap on a ready pair re-delivers both works                                                | Negative + Positive | —    |
-| U-24 | `cluster` and `site` are immutable after creation                                                                                                                                            | Negative            | —    |
-| U-25 | Every node group in each draft carries that site's `site` after sizing                                                                                                                       | Positive            | —    |
-| U-93 | `approved` cannot go from true to false                                                                                                                                                      | Negative            | —    |
-| U-94 | A change to a site's `discover` runs another discovery on that site only, rewriting its draft while unapproved; refused once approved                                                        | Boundary            | —    |
+| #    | Scenario                                                                                                                                                                                               | Type                | Test                                                                                                 |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|------------------------------------------------------------------------------------------------------|
+| U-18 | One `StretchedCluster` produces two `ManifestWork`s, one per managed cluster, each carrying an `OperatorOps` discovery scoped by that site's `discover`                                                | Positive            | `TestAStretchedClusterDeliversADiscoveryToEachSite`                                                  |
+| U-19 | Once a site's view shows a draft with nodes, its work carries the sizing: the shared `sizing`, `enableSyncReplication: true`, `stretched.site`, `.peerSite`, and `.role`; neither names a `clusterRef` | Positive            | `TestEachDraftIsSizedAsOneSiteOfASyncCluster`                                                        |
+| U-20 | `enableSyncReplication` is forced `true` on both drafts whatever the sizing says                                                                                                                       | Positive            | `TestEachDraftIsSizedAsOneSiteOfASyncCluster`                                                        |
+| U-21 | `approved: true` on the hub delivers the leader's approval at once and the follower's only after the leader's view carries a cluster UUID                                                              | Boundary            | `TestTheFollowerIsApprovedOnlyOnceTheLeadersClusterExists`                                           |
+| U-22 | Two `Leader` entries are refused by CEL; zero `Leader` entries are refused                                                                                                                             | Negative            | `TestStretchedClusterNeedsExactlyOneLeader`                                                          |
+| U-23 | A role swap while either site's `StorageCluster` view is not `Ready` is refused by the webhook; a swap on a ready pair re-delivers both works                                                          | Negative + Positive | `TestARoleSwapIsRefusedUntilBothSitesAreOnline`, `TestARoleSwapOnAReadyPairIsAdmitted`               |
+| U-24 | `cluster` and `site` are immutable after creation                                                                                                                                                      | Negative            | `TestStretchedClusterClustersAndSitesAreImmutable`                                                   |
+| U-25 | A node group without a site takes its cluster's `stretched.site` in the nodes it expands into, and is not held as `MissingSites`                                                                       | Positive            | `TestAGroupWithoutASiteTakesTheStretchedClustersSite`                                                |
+| U-93 | `approved` cannot go from true to false                                                                                                                                                                | Negative            | `TestStretchedClusterApprovalIsOneWayAndFreezesDiscovery`                                            |
+| U-94 | A change to a site's `discover` runs another discovery on that site only, rewriting its draft while unapproved; refused once approved                                                                  | Boundary            | `TestStretchedClusterApprovalIsOneWayAndFreezesDiscovery`, `TestAChangedDiscoveryReRunsThatSiteOnly` |
 
 ### The node plugin's determination (§9.2, §9.4)
 
@@ -107,30 +107,30 @@ File: `csi-driver/internal/csi/controller/volume_sync_test.go`
 
 File: `operator/internal/controllers/cluster/storagecluster_stretched_events_test.go`
 
-| #    | Scenario                                                                                                                                                           | Type     | Test |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-78 | A `storage-nodes` event for a node of the other site reconciles its remote `StorageNode`: status updated, no workload objects created, `peerNodesOnline` refreshed | Positive | —    |
-| U-79 | A `clusters` event with `lost_site` set emits `SiteRecordChanged` on both sites' `StorageCluster`s and calls no backend route                                      | Positive | —    |
-| U-80 | A `tasks` event for a cluster-wide task on the follower updates status and drives no ops                                                                           | Negative | —    |
-| U-81 | A `volumes` event showing the move complete resolves a pending `SwitchoverService.Move` without a status poll                                                      | Positive | —    |
-| U-82 | A `clusters` event changing `leader_site` to the other site drops the role on this operator with `RoleChanged`                                                     | Positive | —    |
+| #    | Scenario                                                                                                                                                           | Type     | Test                                                                                          |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|-----------------------------------------------------------------------------------------------|
+| U-78 | A `storage-nodes` event for a node of the other site reconciles its remote `StorageNode`: status updated, no workload objects created, `peerNodesOnline` refreshed | Positive | `TestARemoteNodesStatusComesFromTheControlPlane`, `TestPeerNodesAreCountedFromTheRemoteNodes` |
+| U-79 | A `clusters` event with `lost_site` set emits `SiteRecordChanged` on both sites' `StorageCluster`s and calls no backend route                                      | Positive | `TestTheSiteRecordIsProjectedAndAnnouncedOnce`                                                |
+| U-80 | A `tasks` event for a cluster-wide task on the follower updates status and drives no ops                                                                           | Negative | —                                                                                             |
+| U-81 | A `volumes` event showing the move complete resolves a pending `SwitchoverService.Move` without a status poll                                                      | Positive | —                                                                                             |
+| U-82 | A `clusters` event changing `leader_site` to the other site drops the role on this operator with `RoleChanged`                                                     | Positive | —                                                                                             |
 
 ### Remote `StorageNode`s (§6.2)
 
 File: `operator/internal/controllers/node/storagenode_remote_test.go`
 
-| #    | Scenario                                                                                                                                                               | Type       | Test |
-|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|------|
-| U-83 | A node of the peer site appears in the stream's snapshot: a `StorageNode` with `stretched.remote: true` and the node's site is created                                 | Positive   | —    |
-| U-84 | A remote `StorageNode` is deleted by a user: it is recreated on the next reconcile, nothing is called on the control plane                                             | Negative   | —    |
-| U-85 | The node leaves the cluster (stream `deleted`, or missing from a reconnect snapshot): the remote CR is removed                                                         | Positive   | —    |
-| U-86 | `StorageNodeOps` on a remote node is refused at admission with `RemoteNode` naming the owning site                                                                     | Negative   | —    |
-| U-87 | A remote node never produces workload objects, whatever its status                                                                                                     | Negative   | —    |
-| U-88 | `spec.stretched.remote` and `spec.stretched.site` are immutable                                                                                                        | Negative   | —    |
-| U-89 | A standalone cluster (no `spec.stretched` on the `StorageCluster`) creates no remote nodes, unchanged                                                                  | Regression | —    |
-| U-90 | A remote node's device stream is opened; each device becomes a `StorageDevice` with `nodeRef` naming the remote node and `status.site`, `status.managed=false` from it | Positive   | —    |
-| U-91 | `StorageDeviceOps` on a device of a remote node is refused at admission with `RemoteNode`                                                                              | Negative   | —    |
-| U-92 | The remote node is removed: its `StorageDevice`s go with it through the owner reference                                                                                | Positive   | —    |
+| #    | Scenario                                                                                                                                                                | Type       | Test                                                                                                          |
+|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|---------------------------------------------------------------------------------------------------------------|
+| U-83 | A node of the peer site appears in the stream's snapshot: a `StorageNode` with `stretched.remote: true` and the node's site is created                                  | Positive   | `TestARemoteNodeIsListedForEveryPeerSiteNode`                                                                 |
+| U-84 | A remote `StorageNode` is deleted by a user: it is recreated on the next reconcile, nothing is called on the control plane                                              | Negative   | `TestADeletedRemoteNodeComesBack`, `TestDeletingARemoteNodeRemovesNothingFromTheControlPlane`                 |
+| U-85 | The node leaves the cluster (stream `deleted`, or missing from a reconnect snapshot): the remote CR is removed                                                          | Positive   | `TestARemoteNodeWhoseNodeLeftIsRemoved`                                                                       |
+| U-86 | `StorageNodeOps` on a remote node is refused at admission with `RemoteNode` naming the owning site                                                                      | Negative   | `TestAnOperationOnARemoteNodeIsRefused`, `TestAnOperationOnARemoteNodeFailsWithoutABackendCall`               |
+| U-87 | A remote node never produces workload objects, whatever its status                                                                                                      | Negative   | —                                                                                                             |
+| U-88 | `spec.stretched.remote` and `spec.stretched.site` are immutable                                                                                                         | Negative   | `TestStorageNodeRemoteIsImmutable`                                                                            |
+| U-89 | A standalone cluster (no `spec.stretched` on the `StorageCluster`) creates no remote nodes, unchanged                                                                   | Regression | `TestAStandaloneClusterListsNoRemoteNodes`                                                                    |
+| U-90 | A remote node's device stream is opened; each device becomes a `StorageDevice` with `nodeRef` naming the remote node and `status.site` and `status.remote=true` from it | Positive   | `TestARemoteNodesDevicesSayTheyAreRemote`                                                                     |
+| U-91 | `StorageDeviceOps` on a device of a remote node is refused at admission with `RemoteNode`                                                                               | Negative   | `TestAnOperationOnARemoteNodesDeviceIsRefused`, `TestAnOperationOnARemoteNodesDeviceFailsWithoutABackendCall` |
+| U-92 | The remote node is removed: its `StorageDevice`s go with it through the owner reference                                                                                 | Positive   | —                                                                                                             |
 
 ### `SwitchoverService` in the operator (§9.3)
 
@@ -316,7 +316,7 @@ The lab of design Appendix D: a hub cluster running OCM, `ramen-hub`, the fleet 
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 94        | 0       | 94          |
+| Unit        | 94        | 36      | 58          |
 | Integration | 19        | 0       | 19          |
 | E2E         | 19        | 0       | 19          |
 | Manual      | 3         | 0       | 3           |
@@ -336,4 +336,14 @@ The lab of design Appendix D: a hub cluster running OCM, `ramen-hub`, the fleet 
 
 ## 7. What Is Not Yet Covered
 
-Every row above is `—`: the design is a draft and nothing is built. The rows that must be green before Phase 3 is called safe are U-53 (a fence never answers success early), U-29 (a stage never attaches on a stale status), and U-75 (a recreate never deletes a volume whose site is down), both of which are written red first against a mock that answers wrong, as the design's §15 requires.
+Phase 1 is built and its unit rows are covered, with these left open:
+
+| Rows       | Why                                                                                                                                                          |
+|------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-05, U-82 | The cluster record has no `leader_site` yet (P0-2), so neither a role conflict at adoption nor a role dropped on a record change can be observed             |
+| U-63–U-66  | The preflight of §5.4 waits on the `reachability` route (P0-2); without it the only check would be a probe the operator cannot run from a site               |
+| U-80       | A follower drives no cluster-wide operation by admission (U-14) and on a role swap (U-08); no test reads a cluster-wide task event on a follower directly    |
+| U-87       | A remote node has no worker, and the workload's node set has always skipped one; the guard is structural, and no test drives the workload with a remote node |
+| U-92       | A remote node's devices are owned by it like any node's, so the existing owner-reference cascade removes them; no test deletes a remote node with devices    |
+
+The Phase 2 to 4 rows, and every integration, E2E, and manual row, are `—`. The rows that must be green before Phase 3 is called safe are U-53 (a fence never answers success early), U-29 (a stage never attaches on a stale status), and U-75 (a recreate never deletes a volume whose site is down), both of which are written red first against a mock that answers wrong, as the design's §15 requires.
