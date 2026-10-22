@@ -1,0 +1,901 @@
+// The migration action of ReplicationOps: a planned online move of volumes to
+// the target cluster of a ReplicationPair. It lives apart from the failover and
+// failback actions because it is the only action that runs for hours. It hands
+// every affected volume to one migration plan in the storage control plane,
+// then follows that plan's progress and forecast until each volume has cut
+// over. The per-volume cutover itself (preconnect, cutover-proceed) stays with
+// the ReplicationSlot reconciler, which reacts to the backend's cutover_pending.
+
+package controller
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"math"
+	"net/http"
+	"strconv"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+
+	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
+)
+
+const (
+	// replOpsPlanPoll is how often a running plan's progress is read back. A
+	// migration runs for minutes to hours, and the forecast moves slowly.
+	replOpsPlanPoll = 30 * time.Second
+	// replOpsWaitPoll is how often the operation re-checks slots it is waiting
+	// on before the plan exists: enrollment and the first attach.
+	replOpsWaitPoll = 15 * time.Second
+
+	// The persisted sub-phases of a migration. A later pass decides what to do
+	// from these and status.planID alone.
+	replOpsSubphaseEnrolling           = "Enrolling"
+	replOpsSubphaseAwaitingReplication = "AwaitingReplication"
+	replOpsSubphaseCreatingPlan        = "CreatingPlan"
+	replOpsSubphaseTrackingPlan        = "TrackingPlan"
+	// replOpsSubphaseAwaitingCutover marks the per-volume commit path, used
+	// when the control plane has no migration plans.
+	replOpsSubphaseAwaitingCutover = "AwaitingCutover"
+
+	// Migration plan statuses, as the control plane reports them.
+	migrationPlanRunning  = "running"
+	migrationPlanDone     = "done"
+	migrationPlanPartial  = "partial"
+	migrationPlanFailed   = "failed"
+	migrationPlanCanceled = "canceled"
+
+	// Per-volume plan states that end a volume's migration.
+	migrationVolumeDone     = "done"
+	migrationVolumeFailed   = "failed"
+	migrationVolumeCanceled = "canceled"
+	migrationVolumeSkipped  = "skipped"
+)
+
+// migrationPlanRequest is the body of POST .../migration-plans.
+type migrationPlanRequest struct {
+	TargetClusterID string   `json:"target_cluster_id,omitempty"`
+	LvolIDs         []string `json:"lvol_ids"`
+	DeleteSource    bool     `json:"delete_source"`
+	DryRun          bool     `json:"dry_run,omitempty"`
+	// Name identifies the plan as this operation's, so a pass that died
+	// between creating the plan and recording its ID adopts it instead of
+	// creating a second one.
+	Name string `json:"name,omitempty"`
+}
+
+// migrationPlanVolume is one volume of a MigrationPlanDTO.
+type migrationPlanVolume struct {
+	LvolID         string   `json:"lvol_id"`
+	Name           string   `json:"name"`
+	State          string   `json:"state"`
+	TargetNodeID   string   `json:"target_node_id"`
+	Error          string   `json:"error"`
+	BytesTotal     float64  `json:"bytes_total"`
+	BytesRemaining float64  `json:"bytes_remaining"`
+	ETASeconds     *float64 `json:"eta_seconds"`
+}
+
+// migrationPlanForecast is the forecast block of a MigrationPlanDTO.
+type migrationPlanForecast struct {
+	BytesRemaining        float64         `json:"bytes_remaining"`
+	ETASeconds            *float64        `json:"eta_seconds"`
+	CompletesAt           json.RawMessage `json:"completes_at"`
+	ThroughputBytesPerSec float64         `json:"throughput_bytes_per_sec"`
+	ThroughputMeasured    bool            `json:"throughput_measured"`
+}
+
+// migrationPlan is the MigrationPlanDTO the control plane returns.
+type migrationPlan struct {
+	ID       *string                `json:"id"`
+	Name     string                 `json:"name"`
+	Status   string                 `json:"status"`
+	Volumes  []migrationPlanVolume  `json:"volumes"`
+	Forecast *migrationPlanForecast `json:"forecast"`
+}
+
+// migrationVolume is one volume an operation migrates, with the Kubernetes
+// objects it was resolved from.
+type migrationVolume struct {
+	slot     *simplyblockv1alpha1.ReplicationSlot
+	pvcName  string
+	volumeID string
+}
+
+// migrationScope is what an operation resolved its scope to.
+type migrationScope struct {
+	sourceUUID string
+	targetUUID string
+	volumes    []migrationVolume
+	// skipped are claims a cluster-scoped migration leaves alone, already as
+	// results.
+	skipped []simplyblockv1alpha1.ReplicationOpsResult
+	// enrolling is true while a claim the operation annotated has no slot yet.
+	enrolling bool
+}
+
+// reconcileMigration drives a planned online migration for scope=policy,
+// scope=volume, and scope=cluster. The policy is the ops lock holder: the
+// named policy, the slot's policy, or spec.policyRef.
+func (r *ReplicationOpsReconciler) reconcileMigration(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+	policy *simplyblockv1alpha1.ReplicationPolicy,
+	apiClient *webapi.Client,
+) (ctrl.Result, error) {
+	var pair simplyblockv1alpha1.ReplicationPair
+	if err := r.Get(ctx, types.NamespacedName{Name: policy.Spec.PairRef, Namespace: policy.Namespace}, &pair); err != nil {
+		return r.failOps(ctx, ops, fmt.Sprintf("get ReplicationPair %q: %v", policy.Spec.PairRef, err))
+	}
+	return r.runMigration(ctx, ops, &pair, policy, apiClient)
+}
+
+// reconcileTargetMigration drives a migration of every slot on the pair.
+func (r *ReplicationOpsReconciler) reconcileTargetMigration(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+	pair *simplyblockv1alpha1.ReplicationPair,
+	apiClient *webapi.Client,
+) (ctrl.Result, error) {
+	return r.runMigration(ctx, ops, pair, nil, apiClient)
+}
+
+// runMigration is the migration state machine. Each pass reads where the
+// operation is from status (planID, subphase) and does the next step.
+func (r *ReplicationOpsReconciler) runMigration(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+	pair *simplyblockv1alpha1.ReplicationPair,
+	policy *simplyblockv1alpha1.ReplicationPolicy,
+	apiClient *webapi.Client,
+) (ctrl.Result, error) {
+	sourceUUID, err := utils.ResolveClusterUUID(ctx, r.Client, ops.Namespace, pair.Spec.SourceCluster)
+	if err != nil {
+		return r.failOps(ctx, ops, fmt.Sprintf("resolve cluster UUID: %v", err))
+	}
+
+	if ops.Status.PlanID != "" {
+		return r.trackMigrationPlan(ctx, ops, sourceUUID, apiClient)
+	}
+	if ops.Status.Subphase == replOpsSubphaseAwaitingCutover {
+		return r.trackCommittedSlots(ctx, ops)
+	}
+
+	scope, failure, err := r.resolveMigrationScope(ctx, ops, pair, policy, sourceUUID)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if failure != "" {
+		return r.failOps(ctx, ops, failure)
+	}
+
+	results := append([]simplyblockv1alpha1.ReplicationOpsResult{}, scope.skipped...)
+	var ready []migrationVolume
+	waiting := scope.enrolling
+	for _, v := range scope.volumes {
+		res := simplyblockv1alpha1.ReplicationOpsResult{PVCRef: v.pvcName}
+		if v.slot != nil {
+			res.SlotRef = v.slot.Name
+		}
+		if ops.Spec.DryRun {
+			// A dry run forecasts the scope as it stands: the plan itself
+			// starts replication for a volume that has none yet.
+			ready = append(ready, v)
+			continue
+		}
+		if v.slot == nil {
+			res.Status = string(simplyblockv1alpha1.ReplicationOpsResultPending)
+			res.Detail = "enrolled; waiting for its replication slot"
+			results = append(results, res)
+			waiting = true
+			continue
+		}
+		switch simplyblockv1alpha1.ReplicationSlotState(v.slot.Status.State) {
+		case simplyblockv1alpha1.ReplicationSlotStateReplicating:
+			ready = append(ready, v)
+			continue
+		case simplyblockv1alpha1.ReplicationSlotStateCutoverDone:
+			res.Status = string(simplyblockv1alpha1.ReplicationOpsResultSkipped)
+			res.Detail = "already cut over"
+		case simplyblockv1alpha1.ReplicationSlotStateError:
+			res.Status = string(simplyblockv1alpha1.ReplicationOpsResultFailed)
+			res.Detail = fmt.Sprintf("replication slot is in error: %s", v.slot.Status.Message)
+		case simplyblockv1alpha1.ReplicationSlotStateFailedOver:
+			res.Status = string(simplyblockv1alpha1.ReplicationOpsResultSkipped)
+			res.Detail = "volume is failed over; fail it back before migrating"
+		default:
+			res.Status = string(simplyblockv1alpha1.ReplicationOpsResultPending)
+			res.Detail = fmt.Sprintf("waiting for replication to start (slot state %q)", v.slot.Status.State)
+			waiting = true
+		}
+		results = append(results, res)
+	}
+
+	if waiting && !ops.Spec.DryRun {
+		subphase := replOpsSubphaseAwaitingReplication
+		if scope.enrolling {
+			subphase = replOpsSubphaseEnrolling
+		}
+		r.patchMigrationStatus(ctx, ops, subphase, "Waiting for every volume to replicate before the plan is created", results, nil)
+		return ctrl.Result{RequeueAfter: replOpsWaitPoll}, nil
+	}
+
+	if len(ready) == 0 {
+		return r.finishMigration(ctx, ops, results, "No volume left to migrate")
+	}
+
+	req := migrationPlanRequest{
+		TargetClusterID: scope.targetUUID,
+		DeleteSource:    ops.Spec.DeleteSource,
+		DryRun:          ops.Spec.DryRun,
+		Name:            migrationPlanName(ops),
+	}
+	for _, v := range ready {
+		req.LvolIDs = append(req.LvolIDs, v.volumeID)
+	}
+
+	if !ops.Spec.DryRun {
+		// Write ahead: a pass that dies after the POST finds CreatingPlan and
+		// looks for the plan by name before creating another one.
+		if ops.Status.Subphase == replOpsSubphaseCreatingPlan {
+			if plan := r.findMigrationPlan(ctx, apiClient, sourceUUID, req.Name); plan != nil {
+				return r.adoptMigrationPlan(ctx, ops, plan, ready, results)
+			}
+		}
+		r.setSubphase(ctx, ops, replOpsSubphaseCreatingPlan)
+	}
+
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/migration-plans/", sourceUUID)
+	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, req)
+	if err == nil && status == http.StatusNotFound {
+		if ops.Spec.DryRun {
+			return r.failOps(ctx, ops, "the storage control plane has no migration plans, so it cannot forecast a migration")
+		}
+		return r.commitPerVolume(ctx, ops, sourceUUID, ready, results, apiClient)
+	}
+	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("status %d: %s", status, string(body))
+		}
+		return r.failOps(ctx, ops, fmt.Sprintf("create migration plan: %v", err))
+	}
+
+	var plan migrationPlan
+	if err := json.Unmarshal(body, &plan); err != nil {
+		return r.failOps(ctx, ops, fmt.Sprintf("decode migration plan: %v", err))
+	}
+
+	if ops.Spec.DryRun {
+		merged := mergePlanResults(results, &plan, ready)
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "MigrationForecast", "MigrationForecast",
+			"Dry run: %d volume(s), %s", len(plan.Volumes), describeForecast(plan.Forecast))
+		return r.completeMigration(ctx, ops, simplyblockv1alpha1.ReplicationOpsPhaseSucceeded,
+			fmt.Sprintf("Dry run: %d volume(s), %s", len(plan.Volumes), describeForecast(plan.Forecast)),
+			merged, forecastFromPlan(plan.Forecast))
+	}
+	return r.adoptMigrationPlan(ctx, ops, &plan, ready, results)
+}
+
+// adoptMigrationPlan records a created plan as this operation's and mirrors
+// its first progress report.
+func (r *ReplicationOpsReconciler) adoptMigrationPlan(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+	plan *migrationPlan,
+	ready []migrationVolume,
+	results []simplyblockv1alpha1.ReplicationOpsResult,
+) (ctrl.Result, error) {
+	if plan.ID == nil || *plan.ID == "" {
+		return r.failOps(ctx, ops, "the storage control plane returned a migration plan without an ID")
+	}
+	patch := client.MergeFrom(ops.DeepCopy())
+	ops.Status.PlanID = *plan.ID
+	ops.Status.Subphase = replOpsSubphaseTrackingPlan
+	ops.Status.Message = fmt.Sprintf("Migration plan %s created for %d volume(s)", *plan.ID, len(plan.Volumes))
+	ops.Status.Results = mergePlanResults(results, plan, ready)
+	ops.Status.Forecast = forecastFromPlan(plan.Forecast)
+	if err := r.Status().Patch(ctx, ops, patch); err != nil {
+		// The plan exists either way. CreatingPlan stays recorded, so the next
+		// pass adopts it by name rather than creating another.
+		return ctrl.Result{Requeue: true}, nil
+	}
+	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "MigrationPlanCreated", "MigrationPlanCreated",
+		"Migration plan %s: %d volume(s), %s", *plan.ID, len(plan.Volumes), describeForecast(plan.Forecast))
+	return ctrl.Result{RequeueAfter: replOpsPlanPoll}, nil
+}
+
+// trackMigrationPlan reads the plan back and mirrors it until it ends.
+func (r *ReplicationOpsReconciler) trackMigrationPlan(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+	sourceUUID string,
+	apiClient *webapi.Client,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/migration-plans/%s", sourceUUID, ops.Status.PlanID)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
+	if err == nil && status == http.StatusNotFound {
+		return r.failOps(ctx, ops, fmt.Sprintf("migration plan %s no longer exists in the storage control plane", ops.Status.PlanID))
+	}
+	if err != nil || status >= 300 {
+		// A transient read failure says nothing about the migration, which
+		// keeps running in the control plane: try again later.
+		log.Info("Could not read migration plan; retrying", "plan", ops.Status.PlanID, "status", status, "err", err)
+		return ctrl.Result{RequeueAfter: replOpsPlanPoll}, nil
+	}
+	var plan migrationPlan
+	if err := json.Unmarshal(body, &plan); err != nil {
+		log.Info("Could not decode migration plan; retrying", "plan", ops.Status.PlanID, "err", err)
+		return ctrl.Result{RequeueAfter: replOpsPlanPoll}, nil
+	}
+
+	slots, err := r.slotsByVolumeID(ctx, ops.Namespace)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	var known []migrationVolume
+	for id, slot := range slots {
+		known = append(known, migrationVolume{slot: slot, pvcName: slot.Spec.PVCRef, volumeID: id})
+	}
+	results := mergePlanResults(keptResults(ops.Status.Results), &plan, known)
+	forecast := forecastFromPlan(plan.Forecast)
+
+	switch plan.Status {
+	case migrationPlanDone:
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "MigrationComplete", "MigrationComplete",
+			"Migration plan %s complete (%d volume(s))", ops.Status.PlanID, len(plan.Volumes))
+		return r.finishMigration(ctx, ops, results, fmt.Sprintf("Migration complete; plan %s", ops.Status.PlanID))
+	case migrationPlanPartial, migrationPlanFailed, migrationPlanCanceled:
+		return r.completeMigration(ctx, ops, simplyblockv1alpha1.ReplicationOpsPhaseFailed,
+			fmt.Sprintf("Migration plan %s ended %s: %d of %d volume(s) did not migrate; see results",
+				ops.Status.PlanID, plan.Status, countUnmigrated(&plan), len(plan.Volumes)),
+			results, forecast)
+	default:
+		r.patchMigrationStatus(ctx, ops, replOpsSubphaseTrackingPlan,
+			fmt.Sprintf("Migrating %d volume(s): %s", len(plan.Volumes), describeForecast(plan.Forecast)),
+			results, forecast)
+		return ctrl.Result{RequeueAfter: replOpsPlanPoll}, nil
+	}
+}
+
+// commitPerVolume is the path for a control plane without migration plans:
+// one commit per volume, as before plans existed, followed by tracking the
+// slots until each has cut over.
+func (r *ReplicationOpsReconciler) commitPerVolume(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+	sourceUUID string,
+	ready []migrationVolume,
+	results []simplyblockv1alpha1.ReplicationOpsResult,
+	apiClient *webapi.Client,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	anyQueued := false
+	for _, v := range ready {
+		res := simplyblockv1alpha1.ReplicationOpsResult{PVCRef: v.pvcName}
+		if v.slot != nil {
+			res.SlotRef = v.slot.Name
+		}
+		_, poolID, volumeID, ok := splitVolumeHandle(v.slot.Spec.VolumeID)
+		if !ok {
+			res.Status = string(simplyblockv1alpha1.ReplicationOpsResultFailed)
+			res.Detail = "invalid VolumeID"
+			results = append(results, res)
+			continue
+		}
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication/commit",
+			sourceUUID, poolID, volumeID)
+		var commitBody interface{}
+		if ops.Spec.DeleteSource {
+			commitBody = map[string]interface{}{"delete_source": true}
+		}
+		_, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, commitBody)
+		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("status %d", status)
+			}
+			log.Error(err, "POST replication/commit failed", "slot", v.slot.Name)
+			res.Status = string(simplyblockv1alpha1.ReplicationOpsResultFailed)
+			res.Detail = fmt.Sprintf("commit failed: %v", err)
+			results = append(results, res)
+			continue
+		}
+		// Without a plan nothing reports per-volume progress, and the slot only
+		// polls the backend for cutover_pending while it is in that state, so
+		// it is put there now, as the commit path always did.
+		slotPatch := client.MergeFrom(v.slot.DeepCopy())
+		v.slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending)
+		v.slot.Status.Message = fmt.Sprintf("Cutover commit queued via ReplicationOps %s", ops.Name)
+		if err := r.Status().Patch(ctx, v.slot, slotPatch); err != nil {
+			log.Error(err, "failed to update slot status to cutover_pending", "slot", v.slot.Name)
+		}
+		res.Status = string(simplyblockv1alpha1.ReplicationOpsResultPending)
+		res.Detail = "cutover commit queued"
+		results = append(results, res)
+		anyQueued = true
+	}
+	if !anyQueued {
+		return r.completeMigration(ctx, ops, simplyblockv1alpha1.ReplicationOpsPhaseFailed,
+			"Migration commit failed for every volume; see results for details", results, nil)
+	}
+	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "MigrationCommitQueued", "MigrationCommitQueued",
+		"Cutover commit queued per volume (the control plane has no migration plans)")
+	r.patchMigrationStatus(ctx, ops, replOpsSubphaseAwaitingCutover,
+		"Cutover commits queued; waiting for every volume to cut over", results, nil)
+	return ctrl.Result{RequeueAfter: replOpsPlanPoll}, nil
+}
+
+// trackCommittedSlots follows the per-volume commit path through slot states.
+func (r *ReplicationOpsReconciler) trackCommittedSlots(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+) (ctrl.Result, error) {
+	results := make([]simplyblockv1alpha1.ReplicationOpsResult, 0, len(ops.Status.Results))
+	pending := 0
+	for _, res := range ops.Status.Results {
+		if res.Status != string(simplyblockv1alpha1.ReplicationOpsResultPending) || res.SlotRef == "" {
+			results = append(results, res)
+			continue
+		}
+		var slot simplyblockv1alpha1.ReplicationSlot
+		err := r.Get(ctx, types.NamespacedName{Name: res.SlotRef, Namespace: ops.Namespace}, &slot)
+		switch {
+		case apierrors.IsNotFound(err):
+			res.Status = string(simplyblockv1alpha1.ReplicationOpsResultFailed)
+			res.Detail = "replication slot was deleted during the migration"
+		case err != nil:
+			return ctrl.Result{}, fmt.Errorf("get ReplicationSlot %q: %w", res.SlotRef, err)
+		case slot.Status.State == string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone):
+			res.Status = string(simplyblockv1alpha1.ReplicationOpsResultSucceeded)
+			res.Detail = ""
+			res.State = migrationVolumeDone
+			res.TargetLvolID = slot.Status.TargetLvolID
+		case slot.Status.State == string(simplyblockv1alpha1.ReplicationSlotStateError):
+			res.Status = string(simplyblockv1alpha1.ReplicationOpsResultFailed)
+			res.Detail = slot.Status.Message
+		default:
+			pending++
+		}
+		results = append(results, res)
+	}
+	if pending > 0 {
+		r.patchMigrationStatus(ctx, ops, replOpsSubphaseAwaitingCutover,
+			fmt.Sprintf("Waiting for %d volume(s) to cut over", pending), results, nil)
+		return ctrl.Result{RequeueAfter: replOpsPlanPoll}, nil
+	}
+	return r.finishMigration(ctx, ops, results, "Migration complete")
+}
+
+// resolveMigrationScope turns the operation's scope into volumes. The returned
+// failure string is a terminal reason; the error is a transient one.
+func (r *ReplicationOpsReconciler) resolveMigrationScope(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+	pair *simplyblockv1alpha1.ReplicationPair,
+	policy *simplyblockv1alpha1.ReplicationPolicy,
+	sourceUUID string,
+) (*migrationScope, string, error) {
+	log := logf.FromContext(ctx)
+	scope := &migrationScope{sourceUUID: sourceUUID}
+	if target, err := utils.ResolveClusterUUID(ctx, r.Client, ops.Namespace, pair.Spec.TargetCluster); err == nil {
+		scope.targetUUID = target
+	} else {
+		// The plan can still resolve the target from the volumes' own
+		// replication, which already points at it.
+		log.Info("Target cluster UUID not resolvable locally; leaving it to the control plane",
+			"target", pair.Spec.TargetCluster, "err", err)
+	}
+
+	var slots []simplyblockv1alpha1.ReplicationSlot
+	var err error
+	switch ops.Spec.Scope {
+	case utils.ReplicationOpsScopeCluster:
+		failure, err := r.resolveClusterScope(ctx, ops, pair, policy, scope)
+		return scope, failure, err
+	case utils.ReplicationOpsScopeTarget:
+		slots, err = r.collectSlotsForPair(ctx, pair.Name, ops.Namespace)
+	default:
+		slots, err = r.collectAffectedSlots(ctx, ops, policy)
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	for i := range slots {
+		slot := &slots[i]
+		_, _, volumeID, ok := splitVolumeHandle(slot.Spec.VolumeID)
+		if !ok {
+			return nil, fmt.Sprintf("invalid VolumeID %q on slot %s", slot.Spec.VolumeID, slot.Name), nil
+		}
+		scope.volumes = append(scope.volumes, migrationVolume{slot: slot, pvcName: slot.Spec.PVCRef, volumeID: volumeID})
+	}
+	return scope, "", nil
+}
+
+// resolveClusterScope collects every bound claim in the namespace whose volume
+// lives on the source cluster, and enrolls those that are not replicated yet
+// under spec.policyRef by annotating the claim. The PVC annotation watcher
+// then creates the slot, exactly as for a claim a user annotated.
+func (r *ReplicationOpsReconciler) resolveClusterScope(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+	pair *simplyblockv1alpha1.ReplicationPair,
+	policy *simplyblockv1alpha1.ReplicationPolicy,
+	scope *migrationScope,
+) (string, error) {
+	refUUID, err := utils.ResolveClusterUUID(ctx, r.Client, ops.Namespace, ops.Spec.Ref)
+	if err != nil {
+		return fmt.Sprintf("resolve StorageCluster %q: %v", ops.Spec.Ref, err), nil
+	}
+	if refUUID != scope.sourceUUID {
+		return fmt.Sprintf("spec.policyRef %q replicates from cluster %s, not from %q",
+			policy.Name, scope.sourceUUID, ops.Spec.Ref), nil
+	}
+	if policy.Spec.Mode != utils.ReplicationPolicyModeMigration {
+		return fmt.Sprintf("spec.policyRef %q is in mode %q; a cluster migration needs mode %q",
+			policy.Name, policy.Spec.Mode, utils.ReplicationPolicyModeMigration), nil
+	}
+
+	var slotList simplyblockv1alpha1.ReplicationSlotList
+	if err := r.List(ctx, &slotList, client.InNamespace(ops.Namespace)); err != nil {
+		return "", fmt.Errorf("list ReplicationSlots: %w", err)
+	}
+	slotByPVC := make(map[string]*simplyblockv1alpha1.ReplicationSlot, len(slotList.Items))
+	for i := range slotList.Items {
+		if slotList.Items[i].Spec.PVCRef != "" {
+			slotByPVC[slotList.Items[i].Spec.PVCRef] = &slotList.Items[i]
+		}
+	}
+
+	var pvcs corev1.PersistentVolumeClaimList
+	if err := r.List(ctx, &pvcs, client.InNamespace(ops.Namespace)); err != nil {
+		return "", fmt.Errorf("list PersistentVolumeClaims: %w", err)
+	}
+	for i := range pvcs.Items {
+		pvc := &pvcs.Items[i]
+		if pvc.Status.Phase != corev1.ClaimBound || pvc.Spec.VolumeName == "" || !pvc.DeletionTimestamp.IsZero() {
+			continue
+		}
+		var pv corev1.PersistentVolume
+		if err := r.Get(ctx, types.NamespacedName{Name: pvc.Spec.VolumeName}, &pv); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return "", fmt.Errorf("get PersistentVolume %q: %w", pvc.Spec.VolumeName, err)
+		}
+		if pv.Spec.CSI == nil {
+			continue
+		}
+		clusterID, _, volumeID, ok := splitVolumeHandle(pv.Spec.CSI.VolumeHandle)
+		if !ok || clusterID != scope.sourceUUID {
+			continue
+		}
+
+		skip := func(detail string) {
+			scope.skipped = append(scope.skipped, simplyblockv1alpha1.ReplicationOpsResult{
+				PVCRef: pvc.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultSkipped), Detail: detail,
+			})
+		}
+		if slot, ok := slotByPVC[pvc.Name]; ok {
+			if slot.Spec.PolicyRef != policy.Name {
+				skip(fmt.Sprintf("follows replication policy %q", slot.Spec.PolicyRef))
+				continue
+			}
+			scope.volumes = append(scope.volumes, migrationVolume{slot: slot, pvcName: pvc.Name, volumeID: volumeID})
+			continue
+		}
+
+		assigned, err := r.assignedPolicy(ctx, pvc)
+		if err != nil {
+			return "", err
+		}
+		if assigned != "" && assigned != policy.Name {
+			skip(fmt.Sprintf("assigned replication policy %q", assigned))
+			continue
+		}
+		scope.volumes = append(scope.volumes, migrationVolume{pvcName: pvc.Name, volumeID: volumeID})
+		if ops.Spec.DryRun {
+			continue
+		}
+		scope.enrolling = true
+		if assigned == "" {
+			patch := client.MergeFrom(pvc.DeepCopy())
+			if pvc.Annotations == nil {
+				pvc.Annotations = map[string]string{}
+			}
+			pvc.Annotations[utils.AnnotationReplicationPolicy] = policy.Name
+			if err := r.Patch(ctx, pvc, patch); err != nil {
+				return "", fmt.Errorf("annotate PersistentVolumeClaim %q: %w", pvc.Name, err)
+			}
+		}
+	}
+	return "", nil
+}
+
+// assignedPolicy is the replication policy a claim follows by annotation: its
+// own, else its StorageClass's.
+func (r *ReplicationOpsReconciler) assignedPolicy(ctx context.Context, pvc *corev1.PersistentVolumeClaim) (string, error) {
+	if p := pvc.Annotations[utils.AnnotationReplicationPolicy]; p != "" {
+		return p, nil
+	}
+	if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName == "" {
+		return "", nil
+	}
+	var sc storagev1.StorageClass
+	if err := r.Get(ctx, types.NamespacedName{Name: *pvc.Spec.StorageClassName}, &sc); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("get StorageClass %q: %w", *pvc.Spec.StorageClassName, err)
+	}
+	return sc.Annotations[utils.AnnotationReplicationPolicy], nil
+}
+
+// findMigrationPlan returns the plan this operation created, by name, or nil.
+func (r *ReplicationOpsReconciler) findMigrationPlan(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	sourceUUID, name string,
+) *migrationPlan {
+	body, status, err := apiClient.Do(ctx, http.MethodGet,
+		fmt.Sprintf("/api/v2/clusters/%s/migration-plans/", sourceUUID), nil)
+	if err != nil || status >= 300 {
+		return nil
+	}
+	var plans []migrationPlan
+	if err := json.Unmarshal(body, &plans); err != nil {
+		return nil
+	}
+	for i := range plans {
+		if plans[i].Name == name && plans[i].ID != nil {
+			return &plans[i]
+		}
+	}
+	return nil
+}
+
+// slotsByVolumeID maps each slot in the namespace by its lvol UUID.
+func (r *ReplicationOpsReconciler) slotsByVolumeID(
+	ctx context.Context,
+	namespace string,
+) (map[string]*simplyblockv1alpha1.ReplicationSlot, error) {
+	var list simplyblockv1alpha1.ReplicationSlotList
+	if err := r.List(ctx, &list, client.InNamespace(namespace)); err != nil {
+		return nil, fmt.Errorf("list ReplicationSlots: %w", err)
+	}
+	out := make(map[string]*simplyblockv1alpha1.ReplicationSlot, len(list.Items))
+	for i := range list.Items {
+		if _, _, id, ok := splitVolumeHandle(list.Items[i].Spec.VolumeID); ok {
+			out[id] = &list.Items[i]
+		}
+	}
+	return out, nil
+}
+
+// patchMigrationStatus writes progress without ending the operation.
+func (r *ReplicationOpsReconciler) patchMigrationStatus(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+	subphase, message string,
+	results []simplyblockv1alpha1.ReplicationOpsResult,
+	forecast *simplyblockv1alpha1.ReplicationOpsForecast,
+) {
+	patch := client.MergeFrom(ops.DeepCopy())
+	ops.Status.Subphase = subphase
+	ops.Status.Message = message
+	ops.Status.Results = results
+	if forecast != nil {
+		ops.Status.Forecast = forecast
+	}
+	if err := r.Status().Patch(ctx, ops, patch); err != nil {
+		logf.FromContext(ctx).Error(err, "failed to record migration progress", "ops", ops.Name)
+	}
+}
+
+// finishMigration ends the operation: Succeeded when no volume failed, and
+// Failed, with the results kept, when any did.
+func (r *ReplicationOpsReconciler) finishMigration(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+	results []simplyblockv1alpha1.ReplicationOpsResult,
+	message string,
+) (ctrl.Result, error) {
+	failed := 0
+	for _, res := range results {
+		if res.Status == string(simplyblockv1alpha1.ReplicationOpsResultFailed) {
+			failed++
+		}
+	}
+	if failed > 0 {
+		return r.completeMigration(ctx, ops, simplyblockv1alpha1.ReplicationOpsPhaseFailed,
+			fmt.Sprintf("%d volume(s) did not migrate; see results", failed), results, ops.Status.Forecast)
+	}
+	return r.completeMigration(ctx, ops, simplyblockv1alpha1.ReplicationOpsPhaseSucceeded, message, results, ops.Status.Forecast)
+}
+
+// completeMigration writes the terminal phase together with the results and
+// forecast, which succeedOps and failOps do not carry, then releases the lock.
+func (r *ReplicationOpsReconciler) completeMigration(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+	phase simplyblockv1alpha1.ReplicationOpsPhase,
+	message string,
+	results []simplyblockv1alpha1.ReplicationOpsResult,
+	forecast *simplyblockv1alpha1.ReplicationOpsForecast,
+) (ctrl.Result, error) {
+	now := metav1.Now()
+	patch := client.MergeFrom(ops.DeepCopy())
+	ops.Status.Phase = string(phase)
+	ops.Status.Subphase = ""
+	ops.Status.Message = message
+	ops.Status.CompletedAt = &now
+	ops.Status.Results = results
+	ops.Status.Forecast = forecast
+	if err := r.Status().Patch(ctx, ops, patch); err != nil {
+		return ctrl.Result{Requeue: true}, nil
+	}
+	if phase == simplyblockv1alpha1.ReplicationOpsPhaseFailed {
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "Failed", "Failed",
+			"ReplicationOps %s failed: %s", ops.Name, message)
+	}
+	r.releaseLock(ctx, ops)
+	return ctrl.Result{}, nil
+}
+
+// migrationPlanName is the name a plan carries so that it can be found again.
+func migrationPlanName(ops *simplyblockv1alpha1.ReplicationOps) string {
+	return fmt.Sprintf("replicationops/%s/%s/%s", ops.Namespace, ops.Name, ops.UID)
+}
+
+// keptResults are the results a plan does not report: claims the operation
+// skipped before the plan existed.
+func keptResults(results []simplyblockv1alpha1.ReplicationOpsResult) []simplyblockv1alpha1.ReplicationOpsResult {
+	var kept []simplyblockv1alpha1.ReplicationOpsResult
+	for _, res := range results {
+		if res.SlotRef == "" && res.Status == string(simplyblockv1alpha1.ReplicationOpsResultSkipped) {
+			kept = append(kept, res)
+		}
+	}
+	return kept
+}
+
+// mergePlanResults is the results list for a plan: the results the plan does
+// not cover, then one per plan volume, named by its slot and claim where known.
+func mergePlanResults(
+	base []simplyblockv1alpha1.ReplicationOpsResult,
+	plan *migrationPlan,
+	volumes []migrationVolume,
+) []simplyblockv1alpha1.ReplicationOpsResult {
+	byID := make(map[string]migrationVolume, len(volumes))
+	for _, v := range volumes {
+		byID[v.volumeID] = v
+	}
+	inPlan := make(map[string]bool, len(plan.Volumes))
+	for _, pv := range plan.Volumes {
+		if v, ok := byID[pv.LvolID]; ok {
+			if v.slot != nil {
+				inPlan[v.slot.Name] = true
+			}
+			inPlan["pvc/"+v.pvcName] = true
+		}
+	}
+	out := make([]simplyblockv1alpha1.ReplicationOpsResult, 0, len(base)+len(plan.Volumes))
+	for _, res := range base {
+		// A volume waiting for its slot before the plan existed is reported by
+		// the plan now.
+		if inPlan[res.SlotRef] || (res.PVCRef != "" && inPlan["pvc/"+res.PVCRef]) {
+			continue
+		}
+		out = append(out, res)
+	}
+	for _, pv := range plan.Volumes {
+		res := simplyblockv1alpha1.ReplicationOpsResult{
+			State:          pv.State,
+			TargetNodeID:   pv.TargetNodeID,
+			Detail:         pv.Error,
+			BytesRemaining: int64(math.Round(pv.BytesRemaining)),
+		}
+		if pv.ETASeconds != nil {
+			res.ETASeconds = int64(math.Ceil(*pv.ETASeconds))
+		}
+		if v, ok := byID[pv.LvolID]; ok {
+			res.PVCRef = v.pvcName
+			if v.slot != nil {
+				res.SlotRef = v.slot.Name
+			}
+		} else if res.Detail == "" {
+			res.Detail = "volume " + pv.LvolID
+		}
+		switch pv.State {
+		case migrationVolumeDone:
+			res.Status = string(simplyblockv1alpha1.ReplicationOpsResultSucceeded)
+		case migrationVolumeFailed, migrationVolumeCanceled:
+			res.Status = string(simplyblockv1alpha1.ReplicationOpsResultFailed)
+		case migrationVolumeSkipped:
+			res.Status = string(simplyblockv1alpha1.ReplicationOpsResultSkipped)
+		default:
+			res.Status = string(simplyblockv1alpha1.ReplicationOpsResultPending)
+		}
+		out = append(out, res)
+	}
+	return out
+}
+
+// countUnmigrated counts the plan volumes that did not reach done.
+func countUnmigrated(plan *migrationPlan) int {
+	n := 0
+	for _, v := range plan.Volumes {
+		if v.State != migrationVolumeDone {
+			n++
+		}
+	}
+	return n
+}
+
+// forecastFromPlan converts the plan's forecast into status form.
+func forecastFromPlan(f *migrationPlanForecast) *simplyblockv1alpha1.ReplicationOpsForecast {
+	if f == nil {
+		return nil
+	}
+	out := &simplyblockv1alpha1.ReplicationOpsForecast{
+		BytesRemaining:        int64(math.Round(f.BytesRemaining)),
+		ThroughputBytesPerSec: int64(math.Round(f.ThroughputBytesPerSec)),
+		ThroughputMeasured:    f.ThroughputMeasured,
+	}
+	if f.ETASeconds != nil {
+		out.ETASeconds = int64(math.Ceil(*f.ETASeconds))
+	}
+	if t := parsePlanTime(f.CompletesAt); t != nil {
+		out.CompletesAt = &metav1.Time{Time: *t}
+	}
+	return out
+}
+
+// parsePlanTime reads a timestamp the control plane wrote either as RFC 3339
+// text or as epoch seconds.
+func parsePlanTime(raw json.RawMessage) *time.Time {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			return &t
+		}
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			t := time.Unix(int64(f), 0).UTC()
+			return &t
+		}
+		return nil
+	}
+	var f float64
+	if err := json.Unmarshal(raw, &f); err == nil {
+		t := time.Unix(int64(f), 0).UTC()
+		return &t
+	}
+	return nil
+}
+
+// describeForecast is the one-line forecast used in messages and events.
+func describeForecast(f *migrationPlanForecast) string {
+	if f == nil || f.ETASeconds == nil {
+		return "no forecast yet"
+	}
+	basis := "measured throughput"
+	if !f.ThroughputMeasured {
+		basis = "assumed throughput"
+	}
+	return fmt.Sprintf("%.1f GiB to copy, about %s left (%s)",
+		f.BytesRemaining/(1<<30), (time.Duration(*f.ETASeconds) * time.Second).Round(time.Second), basis)
+}

@@ -2,8 +2,6 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
-	"io"
 	"net/http"
 	"testing"
 
@@ -504,88 +502,7 @@ func TestOps_SucceedOps_ReleasesLock(t *testing.T) {
 	}
 }
 
-// ---------- migration action ----------
-
-func TestOps_Migration_ScopePolicy_Success(t *testing.T) {
-	pol := readyPolicyForOps("pol")
-	slot := slotForPolicy()
-	ops := &simplyblockv1alpha1.ReplicationOps{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
-			Finalizers: []string{finalizerReplicationOps},
-		},
-		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
-			Action: "migration", Scope: utils.ReplicationOpsScopePolicy, Ref: "pol",
-		},
-	}
-	r, cl := newOpsReplReconciler(t, readyPairForOps(), pol, slot, ops)
-
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
-		if req.Method == http.MethodPost {
-			w.WriteHeader(http.StatusAccepted) // 202 = commit accepted
-			return
-		}
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	})
-	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
-
-	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	got := getOps(t, cl)
-	if got.Status.Phase != string(simplyblockv1alpha1.ReplicationOpsPhaseSucceeded) {
-		t.Errorf("phase = %q, want Succeeded", got.Status.Phase)
-	}
-	if len(got.Status.Results) != 1 || got.Status.Results[0].Status != string(simplyblockv1alpha1.ReplicationOpsResultSucceeded) {
-		t.Errorf("results = %+v, want 1 Succeeded result", got.Status.Results)
-	}
-
-	// reconcileMigration immediately patches the slot to cutover_pending once commit is accepted.
-	gotSlot := &simplyblockv1alpha1.ReplicationSlot{}
-	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "pol-pvc1"}, gotSlot); err != nil {
-		t.Fatalf("get slot: %v", err)
-	}
-	if gotSlot.Status.State != string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending) {
-		t.Errorf("slot state = %q, want CutoverPending after commit accepted", gotSlot.Status.State)
-	}
-}
-
-func TestOps_Migration_DeleteSource_PassedInBody(t *testing.T) {
-	pol := readyPolicyForOps("pol")
-	slot := slotForPolicy()
-	ops := &simplyblockv1alpha1.ReplicationOps{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
-			Finalizers: []string{finalizerReplicationOps},
-		},
-		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
-			Action: "migration", Scope: utils.ReplicationOpsScopePolicy, Ref: "pol",
-			DeleteSource: true,
-		},
-	}
-	r, _ := newOpsReplReconciler(t, readyPairForOps(), pol, slot, ops)
-
-	var gotBody map[string]interface{}
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
-		if req.Method == http.MethodPost {
-			raw, _ := io.ReadAll(req.Body)
-			_ = json.Unmarshal(raw, &gotBody)
-			w.WriteHeader(http.StatusAccepted)
-			return
-		}
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	})
-	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
-
-	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if v, ok := gotBody["delete_source"]; !ok || v != true {
-		t.Errorf("commit body = %v, want delete_source=true", gotBody)
-	}
-}
+// ---------- migration action (see replicationops_migration_test.go for the plan flow) ----------
 
 func TestOps_Migration_PairNotFound_Fails(t *testing.T) {
 	// readyPolicyForOps references "pair1" but no ReplicationPair CR is provided.

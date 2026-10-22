@@ -18,6 +18,13 @@ const (
 	ReplicationOpsScopeTarget = "target"
 	ReplicationOpsScopePolicy = "policy"
 	ReplicationOpsScopeVolume = "volume"
+	// ReplicationOpsScopeCluster selects every claim whose volume lives on one
+	// source storage cluster. Only the migration action accepts it.
+	ReplicationOpsScopeCluster = "cluster"
+
+	// ReplicationPolicyModeMigration is the ReplicationPolicy mode for a
+	// planned online move to the target cluster.
+	ReplicationPolicyModeMigration = "migration"
 
 	// ReplicationBackendStateReplicating is the backend API state string for a
 	// volume that is actively replicating snapshots to the target cluster.
