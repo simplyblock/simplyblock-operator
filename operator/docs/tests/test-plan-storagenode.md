@@ -394,6 +394,8 @@ Files: `operator/internal/controllers/node/rotation_test.go`, `migrate_test.go`,
 | U-524 | No domain configured: the cluster DNS domain is `cluster.local`                    | Boundary   | `TestTheClusterDNSDomainDefaultsToClusterLocal`            |
 | U-525 | A domain given with a trailing dot is stored without it                            | Boundary   | `TestATrailingDotIsDropped`                                |
 | U-526 | A value that is not a DNS subdomain is refused and leaves the domain unchanged     | Negative   | `TestANonDomainIsRefused`                                  |
+| U-534 | A Node wakes the pass of each cluster running on it, and no other (2026-10-22)     | Regression | `TestAWorkersNodeObjectWakesTheClustersRunningOnIt`        |
+| U-535 | Only a Node appearing, leaving, or changing its IP wakes the pass, not a heartbeat | Negative   | `TestOnlyAChangedAddressWakesThePassOnANodeUpdate`         |
 
 ### Operation: Lifecycle and Lock (design §7.1, §11)
 

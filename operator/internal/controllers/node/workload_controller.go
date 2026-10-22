@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -92,6 +93,11 @@ func (r *StorageNodeWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error
 		Owns(&discoveryv1.EndpointSlice{}).
 		Watches(&simplyblockv1alpha2.StorageNode{},
 			handler.EnqueueRequestsFromMapFunc(r.clusterOf)).
+		// The slice skips a worker whose Node has no internal IP yet, so the Node
+		// registering late, or moving to another address, is what makes it wrong.
+		Watches(&corev1.Node{},
+			handler.EnqueueRequestsFromMapFunc(r.clusterOfWorker),
+			builder.WithPredicates(workerAddressChanged())).
 		// The spdk-proxy EndpointSlices are built from the pod list, so a pod
 		// appearing -- or reappearing on a different RPC port -- is the event that
 		// makes them wrong. Without this watch the pass only reruns when something
@@ -122,6 +128,63 @@ func (r *StorageNodeWorkloadReconciler) clusterOf(
 		Name:      node.Spec.ClusterRef,
 		Namespace: node.Namespace,
 	}}}
+}
+
+// clusterOfWorker maps a Kubernetes node to the clusters that have a StorageNode
+// on it.
+//
+// A Node is cluster-scoped, so the StorageNodes are listed across namespaces and
+// each match is enqueued under its own.
+func (r *StorageNodeWorkloadReconciler) clusterOfWorker(
+	ctx context.Context, object client.Object,
+) []reconcile.Request {
+	var nodes simplyblockv1alpha2.StorageNodeList
+	if err := r.List(ctx, &nodes); err != nil {
+		return nil
+	}
+
+	seen := map[types.NamespacedName]struct{}{}
+	var requests []reconcile.Request
+	for i := range nodes.Items {
+		node := &nodes.Items[i]
+		if node.Spec.WorkerNode != object.GetName() || node.Spec.ClusterRef == "" {
+			continue
+		}
+		key := types.NamespacedName{Name: node.Spec.ClusterRef, Namespace: node.Namespace}
+		if _, already := seen[key]; already {
+			continue
+		}
+		seen[key] = struct{}{}
+		requests = append(requests, reconcile.Request{NamespacedName: key})
+	}
+	return requests
+}
+
+// workerAddressChanged is the Node watch's filter: a Node appearing, going away,
+// or changing the internal IP the slice carries.
+//
+// A Node's status is rewritten on every kubelet heartbeat, and none of that
+// changes what reconcileEndpointSlice publishes.
+func workerAddressChanged() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldNode, oldOK := e.ObjectOld.(*corev1.Node)
+			newNode, newOK := e.ObjectNew.(*corev1.Node)
+			return !oldOK || !newOK || internalIP(oldNode) != internalIP(newNode)
+		},
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
+}
+
+// internalIP is the address an endpoint carries for a worker, or "" while the
+// Node has none.
+func internalIP(node *corev1.Node) string {
+	for _, address := range node.Status.Addresses {
+		if address.Type == corev1.NodeInternalIP {
+			return address.Address
+		}
+	}
+	return ""
 }
 
 // isSpdkProxyPod is the watch's filter: only an spdk-proxy pod can change what
@@ -496,12 +559,7 @@ func (r *StorageNodeWorkloadReconciler) workerAddress(
 	if err := r.Get(ctx, types.NamespacedName{Name: worker}, &object); err != nil {
 		return "", client.IgnoreNotFound(err)
 	}
-	for _, address := range object.Status.Addresses {
-		if address.Type == corev1.NodeInternalIP {
-			return address.Address, nil
-		}
-	}
-	return "", nil
+	return internalIP(&object), nil
 }
 
 // reconcileRBAC applies the ServiceAccount the storage-node pods run as and the
