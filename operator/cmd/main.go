@@ -694,6 +694,8 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("controlplane-controller"),
+
+		NUMAPluginImage: os.Getenv(controlplanecontroller.NUMAPluginImageEnv),
 	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlane")
 		os.Exit(1)

@@ -20,6 +20,8 @@
 # cluster's CRDs against them, and the StorageCluster webhook reads the
 # schema defaults out of them (internal/upgrade/crds).
 !operator/internal/upgrade/crds/manifests/*.yaml
+# Re-include the manifest the manager embeds (go:embed in controlplane/numaplugin.go)
+!operator/internal/controllers/controlplane/manifests/numa-resource-plugin.yaml
 
 # Re-include LICENSE file
 !LICENSE
