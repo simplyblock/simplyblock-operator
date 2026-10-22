@@ -220,6 +220,19 @@ func (s *Service) place(
 			req.ClaimNamespace, req.ClaimName, recorded, supercluster.Name)
 	}
 
+	// A clone or restore lands in its source's cluster, which the control
+	// plane clones within, so the source decides and the ranking does not.
+	if req.SourceClusterID != "" {
+		for i := range members {
+			if members[i].Status.UUID == req.SourceClusterID {
+				return s.record(ctx, &pvc, &members[i], req, resultClone)
+			}
+		}
+		return nil, resultFailed, status.Errorf(codes.InvalidArgument,
+			"the clone's source is in cluster %s, which is not a member of supercluster %s, "+
+				"and a clone stays in its source's cluster", req.SourceClusterID, supercluster.Name)
+	}
+
 	holder, err := s.holderOf(ctx, supercluster, members, req)
 	if err != nil {
 		return nil, resultFailed, err

@@ -225,10 +225,11 @@ func request(volume, claimName string) placementrpc.Request {
 	}
 }
 
-func recorded(t *testing.T, c client.Client, name string) string {
+// recordedOnTheClaim is the member the claim named data records.
+func recordedOnTheClaim(t *testing.T, c client.Client) string {
 	t.Helper()
 	var pvc corev1.PersistentVolumeClaim
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app", Name: name}, &pvc); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app", Name: "data"}, &pvc); err != nil {
 		t.Fatal(err)
 	}
 	return pvc.Annotations[AnnotationPlacementMember]
@@ -256,7 +257,7 @@ func TestTheChoiceIsRecordedOnTheClaimBeforeTheAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := recorded(t, f.client, "data"); got != member {
+	if got := recordedOnTheClaim(t, f.client); got != member {
 		t.Errorf("the claim records %q, want the answer %q", got, member)
 	}
 }
@@ -332,7 +333,7 @@ func TestAVolumeAMemberHoldsIsAnsweredWithThatMember(t *testing.T) {
 	if err != nil || member != uuidA {
 		t.Fatalf("Place = %q, %v; want %s, which holds the volume", member, err, uuidA)
 	}
-	if got := recorded(t, f.client, "data"); got != uuidA {
+	if got := recordedOnTheClaim(t, f.client); got != uuidA {
 		t.Errorf("the claim records %q, want %s", got, uuidA)
 	}
 }
@@ -348,7 +349,7 @@ func TestAMemberThatCannotBeAskedFailsTheCall(t *testing.T) {
 	if status.Code(err) != codes.Unavailable || !strings.Contains(err.Error(), memberB) {
 		t.Errorf("Place = %v, want Unavailable naming %s", err, memberB)
 	}
-	if got := recorded(t, f.client, "data"); got != "" {
+	if got := recordedOnTheClaim(t, f.client); got != "" {
 		t.Errorf("the claim records %q, want nothing", got)
 	}
 }
@@ -571,5 +572,41 @@ func TestAMembersCriticalThresholdIsItsOwn(t *testing.T) {
 
 	if err != nil || member != uuidA {
 		t.Errorf("Place = %q, %v; want %s, with %s past its own 40%%", member, err, uuidA, memberB)
+	}
+}
+
+// U-62, the operator's half: a clone through a supercluster class is answered
+// with its source's member, whatever the ranking says, and recorded.
+func TestACloneLandsInItsSourcesMember(t *testing.T) {
+	f := newFixture(t, nil, standardObjects(claim("data", nil))...)
+	f.service.Observe(uuidB, prometheus.Capacity{Total: 100 * gib, Used: 0, SampledAt: epoch})
+	req := request("pvc-1", "data")
+	req.SourceClusterID = uuidA
+
+	member, err := f.service.Place(context.Background(), req)
+
+	if err != nil || member != uuidA {
+		t.Fatalf("Place = %q, %v; want the source's member %s", member, err, uuidA)
+	}
+	if got := recordedOnTheClaim(t, f.client); got != uuidA {
+		t.Errorf("the claim records %q, want %s", got, uuidA)
+	}
+}
+
+// U-63, the operator's half: a clone whose source is in no member of the
+// class's supercluster is refused, because a clone cannot leave its source's
+// cluster and the class promises the supercluster.
+func TestACloneFromOutsideTheSuperclusterIsRefused(t *testing.T) {
+	f := newFixture(t, nil, standardObjects(claim("data", nil))...)
+	req := request("pvc-1", "data")
+	req.SourceClusterID = "11111111-1111-4111-8111-111111111111"
+
+	_, err := f.service.Place(context.Background(), req)
+
+	if status.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "prod") {
+		t.Errorf("Place = %v, want InvalidArgument naming the supercluster", err)
+	}
+	if got := recordedOnTheClaim(t, f.client); got != "" {
+		t.Errorf("the claim records %q, want nothing", got)
 	}
 }

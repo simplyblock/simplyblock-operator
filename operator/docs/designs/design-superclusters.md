@@ -1422,9 +1422,10 @@ The control plane places a clone on its snapshot's node, logical volume store,
 and pool, and has no cross-cluster clone except through replication. A clone
 therefore lands in its source member whatever the class says, which the driver
 already does (`clone.go` uses the snapshot's cluster). When the class names a
-supercluster, the driver checks that the source member belongs to it and refuses
-the clone with `InvalidArgument` otherwise, so that a clone cannot leave the
-aggregate its class promises. A clone into a full member fails with
+supercluster, the driver sends the source's cluster with `Place`, and the
+operator answers that cluster when it is a member, recording it on the claim
+like any placement, and refuses the clone with `InvalidArgument` otherwise, so
+that a clone cannot leave the aggregate its class promises. A clone into a full member fails with
 `ResourceExhausted` and the source member named.
 
 ### 9.3 Groups need one lvstore

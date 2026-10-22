@@ -21,6 +21,7 @@ const (
 	resultRecorded  = "recorded"
 	resultExisting  = "existing"
 	resultGroup     = "group"
+	resultClone     = "clone"
 	resultExhausted = "exhausted"
 	resultFailed    = "failed"
 )
