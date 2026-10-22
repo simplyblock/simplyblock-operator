@@ -81,8 +81,10 @@ type CreateClusterParams struct {
 	InlineChecksum      bool
 	Atomic4K            bool
 	DeviceMode          string
-	SingleNode          bool
-	WorkloadNames       ClusterWorkloadNames
+	// SingleNode creates a cluster of one storage node, which is also created
+	// without HA.
+	SingleNode    bool
+	WorkloadNames ClusterWorkloadNames
 }
 
 // ClusterCapacityReading is one capacity sample of a cluster, in bytes.
@@ -231,6 +233,12 @@ func clusterParamsOf(p CreateClusterParams) cpapi.ClusterParams {
 	}
 	if p.DeviceMode != "" {
 		body.DeviceMode = ptr.To(cpapi.ClusterParamsDeviceMode(p.DeviceMode))
+	}
+	// A single-node cluster has no second node to place a secondary on. Left
+	// to the control plane's default, 'ha', every volume of it would ask for
+	// one.
+	if p.SingleNode {
+		body.HaType = ptr.To(cpapi.ClusterParamsHaTypeSingle)
 	}
 	return body
 }

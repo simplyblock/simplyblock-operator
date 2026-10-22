@@ -194,3 +194,33 @@ func TestClientClusterCapacityWithNoSampleIsNone(t *testing.T) {
 		t.Errorf("ClusterCapacity = %+v, %v, want none", got, err)
 	}
 }
+
+// A single-node cluster is created without HA: it has no second node to place
+// a secondary on, and the control plane's default 'ha' would make every
+// volume ask for one. A cluster of several nodes leaves ha_type to the
+// control plane's default.
+func TestASingleNodeClusterIsCreatedWithoutHA(t *testing.T) {
+	for _, tc := range []struct {
+		single bool
+		want   any
+	}{{true, "single"}, {false, nil}} {
+		var body map[string]any
+		c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			raw, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(raw, &body)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(clusterDTO))
+		})
+
+		if _, err := c.CreateCluster(context.Background(), CreateClusterParams{
+			Name: "prod", MaxSubsys: 20, SpdkVCPUCount: 8, SingleNode: tc.single,
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		if body["ha_type"] != tc.want {
+			t.Errorf("single=%v: ha_type = %v, want %v", tc.single, body["ha_type"], tc.want)
+		}
+	}
+}
