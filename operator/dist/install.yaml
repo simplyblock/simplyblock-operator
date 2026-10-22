@@ -12754,6 +12754,10 @@ spec:
                   reference, so deleting the cluster deletes its pools, held behind each
                   pool's own finalizer while classes are assigned or volumes are bound.
 
+                  A supercluster may be named: the pool is then created in every member
+                  under this pool's name, and spec.limits.capacity is divided evenly among
+                  the members that accept new volumes.
+
                   Immutable from creation: which cluster a pool is in is its identity.
 
                   The maximum is what a StorageCluster name may be rather than what a
@@ -12996,6 +13000,84 @@ spec:
                         type: integer
                     type: object
                 type: object
+              members:
+                description: |-
+                  Members is the pool in each member, when spec.clusterRef names a
+                  supercluster. The pool is Ready once every member that accepts new
+                  volumes holds it.
+                items:
+                  description: PoolMemberStatus is the pool in one member cluster
+                    of a supercluster.
+                  properties:
+                    cluster:
+                      description: Cluster is the member StorageCluster.
+                      type: string
+                    limits:
+                      description: |-
+                        Limits are what the member's control plane enforces for its pool. Its
+                        capacity is this member's share of spec.limits.capacity.
+                      properties:
+                        capacity:
+                          description: |-
+                            Capacity is the capacity limit the control plane is enforcing, written
+                            as a quantity. Empty is unlimited.
+                          type: string
+                        host:
+                          description: Host is the backend host enforcing the pool's
+                            QoS.
+                          type: string
+                        iops:
+                          description: IOPS is the combined ceiling the control plane
+                            is enforcing.
+                          format: int32
+                          type: integer
+                        throughput:
+                          description: Throughput is the throughput ceiling the control
+                            plane is enforcing.
+                          properties:
+                            read:
+                              description: Read is the read-only ceiling, written
+                                as max_read_mbytes_per_sec.
+                              format: int32
+                              minimum: 0
+                              type: integer
+                            readWrite:
+                              description: |-
+                                ReadWrite is the ceiling on both directions together, written as
+                                max_mbytes_per_sec. It is not an access mode, which is the confusion the
+                                older class key qos_rw_mbytes invited.
+                              format: int32
+                              minimum: 0
+                              type: integer
+                            write:
+                              description: Write is the write-only ceiling, written
+                                as max_write_mbytes_per_sec.
+                              format: int32
+                              minimum: 0
+                              type: integer
+                          type: object
+                      type: object
+                    message:
+                      description: Message says why the phase is what it is.
+                      type: string
+                    phase:
+                      description: Phase is this member's pool's phase.
+                      enum:
+                      - Pending
+                      - Ready
+                      - Deleting
+                      type: string
+                    uuid:
+                      description: UUID is the backend pool UUID in that member, empty
+                        until it is created.
+                      type: string
+                  required:
+                  - cluster
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - cluster
+                x-kubernetes-list-type: map
               message:
                 description: |-
                   Message is the reason the phase is what it is: one sentence, replaced as
@@ -13033,8 +13115,9 @@ spec:
                 x-kubernetes-list-type: set
               uuid:
                 description: |-
-                  UUID is the backend pool UUID. Empty means the pool has not been created,
-                  and it is the field the controller branches on.
+                  UUID is the backend pool UUID. Empty means the pool has not been created.
+                  A pool of a supercluster has one backend pool in each member and none of
+                  its own, so its UUID stays empty and Members carries each member's.
                 type: string
             type: object
         type: object

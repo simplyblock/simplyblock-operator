@@ -16,6 +16,8 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -119,6 +121,7 @@ func (r *SuperclusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					Namespace: obj.GetNamespace(), Name: refs[0],
 				}}}
 			})).
+		Watches(&simplyblockv1alpha2.StoragePool{}, handler.EnqueueRequestsFromMapFunc(superclusterOfPool)).
 		Owns(&corev1.Service{}).
 		Named("supercluster").
 		Complete(r)
@@ -146,18 +149,26 @@ func (r *SuperclusterReconciler) Reconcile(
 		return ctrl.Result{}, fmt.Errorf("list the members of %s: %w", supercluster.Name, err)
 	}
 
+	pools, err := r.superclusterPools(ctx, &supercluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	readings := make([]memberReading, 0, len(members.Items))
+	missing := make(map[string][]string, len(members.Items))
 	for i := range members.Items {
 		member := &members.Items[i]
-		readings = append(readings, memberReading{
-			Cluster:  member,
-			Capacity: r.memberCapacity(ctx, &supercluster, member),
-		})
+		reading := memberReading{
+			Cluster:      member,
+			Capacity:     r.memberCapacity(ctx, &supercluster, member),
+			MissingPools: missingPools(pools, member.Name),
+		}
+		missing[member.Name] = reading.MissingPools
+		readings = append(readings, reading)
 	}
 	rollup := rollUp(readings)
 
 	previous := supercluster.Status.DeepCopy()
-	err := writeClusterStatus(ctx, r.Client, &supercluster,
+	err = writeClusterStatus(ctx, r.Client, &supercluster,
 		func(fresh *simplyblockv1alpha2.StorageCluster, status *simplyblockv1alpha2.StorageClusterStatus) {
 			status.UUID = string(fresh.UID)
 			status.Role = simplyblockv1alpha2.StorageClusterRoleSupercluster
@@ -192,7 +203,11 @@ func (r *SuperclusterReconciler) Reconcile(
 		return ctrl.Result{}, err
 	}
 
-	r.announceMembership(&supercluster, previous.Members, rollup.Members)
+	// The supercluster's own pool, which its generated class is written for
+	// (§7.1). Its members are clusters with default pools of their own.
+	ensureDefaultPool(ctx, r.Client, r.Scheme, &supercluster)
+
+	r.announceMembership(&supercluster, previous.Members, rollup.Members, missing)
 	r.announceThreshold(&supercluster, previous.Capacity, rollup.Capacity)
 	observeSupercluster(&supercluster, rollup)
 	return ctrl.Result{RequeueAfter: superclusterResync}, nil
@@ -236,6 +251,7 @@ func (r *SuperclusterReconciler) memberCapacity(
 func (r *SuperclusterReconciler) announceMembership(
 	supercluster *simplyblockv1alpha2.StorageCluster,
 	before, after []simplyblockv1alpha2.SuperclusterMemberStatus,
+	missing map[string][]string,
 ) {
 	known := make(map[string]simplyblockv1alpha2.SuperclusterMemberStatus, len(before))
 	for _, row := range before {
@@ -259,19 +275,79 @@ func (r *SuperclusterReconciler) announceMembership(
 		}
 		r.Recorder.Eventf(supercluster, nil, corev1.EventTypeNormal,
 			MemberPlacementChanged, MemberPlacementChanged,
-			"Member %s left placement: %s", row.Name, ineligibleReason(row))
+			"Member %s left placement: %s", row.Name, ineligibleReason(row, missing[row.Name]))
 	}
 }
 
 // ineligibleReason says why a member's row is not placement-eligible.
-func ineligibleReason(row simplyblockv1alpha2.SuperclusterMemberStatus) string {
-	if isServing(row.Phase) {
-		return "placement is disabled on it"
-	}
-	if row.Phase == "" {
+func ineligibleReason(row simplyblockv1alpha2.SuperclusterMemberStatus, missingPools []string) string {
+	switch {
+	case row.Phase == "":
 		return "it has not reported a phase"
+	case !isServing(row.Phase):
+		return fmt.Sprintf("it is %s", row.Phase)
+	case len(missingPools) > 0:
+		return fmt.Sprintf("it does not hold pools %s yet", strings.Join(missingPools, ", "))
 	}
-	return fmt.Sprintf("it is %s", row.Phase)
+	return "placement is disabled on it"
+}
+
+// superclusterPools lists the pools naming the supercluster.
+func (r *SuperclusterReconciler) superclusterPools(
+	ctx context.Context, supercluster *simplyblockv1alpha2.StorageCluster,
+) ([]simplyblockv1alpha2.StoragePool, error) {
+	var list simplyblockv1alpha2.StoragePoolList
+	if err := r.List(ctx, &list, client.InNamespace(supercluster.Namespace)); err != nil {
+		return nil, fmt.Errorf("list the pools of %s: %w", supercluster.Name, err)
+	}
+	pools := make([]simplyblockv1alpha2.StoragePool, 0, len(list.Items))
+	for i := range list.Items {
+		if list.Items[i].Spec.ClusterRef == supercluster.Name {
+			pools = append(pools, list.Items[i])
+		}
+	}
+	return pools, nil
+}
+
+// missingPools are the pools whose row for the member does not report the pool
+// Ready, in name order. A pool being deleted is not required of anyone, and
+// neither is one the pool controller has not reached yet, so that creating a
+// pool does not take every member out of placement for the moment before its
+// first pass.
+func missingPools(pools []simplyblockv1alpha2.StoragePool, member string) []string {
+	var missing []string
+	for i := range pools {
+		p := &pools[i]
+		if !p.DeletionTimestamp.IsZero() || len(p.Status.Members) == 0 {
+			continue
+		}
+		held := false
+		for _, row := range p.Status.Members {
+			if row.Cluster == member && row.Phase == simplyblockv1alpha2.StoragePoolPhaseReady {
+				held = true
+				break
+			}
+		}
+		if !held {
+			missing = append(missing, p.Name)
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
+// superclusterOfPool maps a pool to the cluster it names, so a pool reaching a
+// member, or created, re-decides that member's placement. A pool of an
+// ordinary cluster maps to that cluster, which the predicate-free reconcile
+// returns from at once.
+func superclusterOfPool(_ context.Context, obj client.Object) []reconcile.Request {
+	p, ok := obj.(*simplyblockv1alpha2.StoragePool)
+	if !ok || p.Spec.ClusterRef == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Namespace: p.Namespace, Name: p.Spec.ClusterRef,
+	}}}
 }
 
 // capacityLevel is how far the combined capacity is into the supercluster's

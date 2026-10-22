@@ -10,13 +10,13 @@
 
 ## Phasing Overview
 
-| Phase                   | Status  | Scope                                                                                                                              | Blocked by                                                                                                       |
-|-------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------|
-| **Phase 1** (§4–§6)     | Built   | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | A new cluster, on a control plane without P0-4. Workers shared between members, which are outside it: P0-3, P0-6 |
-| **Phase 2** (§7)        | Planned | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | IOPS and throughput ceilings: P0-5                                                                               |
-| **Phase 3** (§8.1–§8.3) | Planned | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                                                                                |
-| **Phase 4** (§8.4)      | Planned | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3                                                                                                          |
-| **Phase 5** (§7.5)      | Planned | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2, P0-5                                                                                                    |
+| Phase                   | Status   | Scope                                                                                                                              | Blocked by                                                                                                       |
+|-------------------------|----------|------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------|
+| **Phase 1** (§4–§6)     | Built    | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | A new cluster, on a control plane without P0-4. Workers shared between members, which are outside it: P0-3, P0-6 |
+| **Phase 2** (§7)        | Building | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | IOPS and throughput ceilings: P0-5                                                                               |
+| **Phase 3** (§8.1–§8.3) | Planned  | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                                                                                |
+| **Phase 4** (§8.4)      | Planned  | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3                                                                                                          |
+| **Phase 5** (§7.5)      | Planned  | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2, P0-5                                                                                                    |
 
 **Phase 1 is built:** the API of §4.1 and its status (§4.3), the admission rules
 of §4.2 and §4.4 except the deletion of a member holding volumes, the
@@ -30,10 +30,14 @@ into a supercluster and its members, one member's first node adds at a time
 (§5.1 to §5.4), the discovery generator's split (§5.5), growth into a
 supercluster or a member (§5.6), topology (§5.7), and per-node-set overrides
 (§5.8). Workers shared between members are outside Phase 1: they wait on P0-3,
-whose agent half is on sbcli's branch, and on P0-6. Until Phase 2 lands, two
-rules hold in its place. A `StoragePool` naming a supercluster is refused at
-admission until pools fan out (§7.1). A `StorageClusterOps` on a supercluster
-fails before any control-plane call until the walk of §9.6 exists.
+whose agent half is on sbcli's branch, and on P0-6. A `StorageClusterOps` on a
+supercluster fails before any control-plane call until the walk of §9.6 exists.
+
+**Phase 2 is in progress.** Pools fan out to the members (§7.1): a pool on a
+supercluster is admitted and created in every member, the capacity ceiling is
+divided among the members accepting volumes, a member is placement-eligible
+once it holds every pool, and the supercluster has a default pool whose class
+names it.
 
 Each phase ships on its own. Phase 1 produces a supercluster that reports one
 status and lets an administrator name the members directly, which is already
@@ -981,8 +985,15 @@ of its supercluster before it is placement-eligible (§10.1).
 pool across every member, so a pool limited to 100k IOPS delivers at most 100k
 IOPS however many members it spans. The control plane enforces QoS per backend
 pool, so the operator writes each member's backend pool a share of the ceiling.
-Phase 2 splits the ceiling evenly over the placement-eligible members, and §7.5
-specifies the demand-driven shares that replace the even split.
+Phase 2 splits the ceiling evenly over the members that accept volumes, which
+are serving and not `disablePlacement`, and §7.5 specifies the demand-driven
+shares that replace the even split. The remainder of the division goes one unit
+at a time to the first members in name order, so the shares sum to the ceiling.
+A member that accepts no volumes keeps the share its backend pool enforces,
+because its volumes stay and may grow, so while a member is out of placement
+the applied shares sum to more than the ceiling by that member's share. A
+member without the pool yet is created with the share it would have once it
+accepts volumes, because a share of zero is the control plane's unlimited.
 
 **Only the capacity ceiling is split until P0-5 holds.** `PoolLimits` refuses
 `iops` and `throughput` on every pool today, after SPDK failed to enforce them
@@ -995,10 +1006,21 @@ names the Kubernetes nodes that consume the pool, not the workers that serve it:
 `syncAllowedHosts` in `storagepool_controller.go` derives each node's host NQN
 from its UID. A volume of the pool may be placed in any member and consumed from
 any allowed node, so each member's backend pool admits the full resolved list,
-including nodes that run no storage node at all.
+including nodes that run no storage node at all. The allowed-node label a class
+turns into node affinity carries the pool's object UID rather than a backend
+UUID, because the pool has one backend pool per member and one class serves
+all of them.
 
-**The generated StorageClass names the supercluster in `cluster_id`.** The pool
-controller writes the supercluster's `status.uuid` there, as it writes a
+**A pool counts toward eligibility once the pool controller has reached it.**
+A member lacks a pool when the pool reports rows for its members and the
+member's row is not `Ready`. A pool with no rows yet, created a moment ago, is
+required of no member, so creating a pool does not take every member out of
+placement until its first pass.
+
+**The generated StorageClass names the supercluster in `cluster_id`.** The
+supercluster reconciler creates the supercluster's default pool once, as the
+cluster reconciler does a cluster's, and the pool controller writes the class
+for it with the supercluster's `status.uuid`, as it writes a
 cluster's UUID for an ordinary cluster, so a class names a supercluster and a
 cluster the same way, and a hub-side class does too (§9.7). Every member is an
 ordinary entry in `simplyblock-csi-secret-v2`, where the cluster controller
@@ -2009,11 +2031,25 @@ type PoolMemberStatus struct {
 	// +optional
 	Phase StoragePoolPhase `json:"phase,omitempty"`
 
-	// Limits are the share of the pool's ceiling this member's backend pool
-	// currently enforces. The shares of all members sum to the pool's limits.
+	// Limits are what the member's control plane enforces for its pool. Its
+	// capacity is this member's share of spec.limits.capacity.
 	// +optional
 	Limits *PoolLimitsStatus `json:"limits,omitempty"`
+
+	// Message says why the phase is what it is.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
+```
+
+`PoolLimitsStatus` gains the capacity the control plane enforces, read from the
+pool's `max_size`, which is how a member's applied share is read back:
+
+```go
+	// Capacity is the capacity limit the control plane is enforcing, written
+	// as a quantity. Empty is unlimited.
+	// +optional
+	Capacity string `json:"capacity,omitempty"`
 ```
 
 ```go

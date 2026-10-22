@@ -186,12 +186,10 @@ func TestStoragePoolValidatorFallsBackToTheRequestNamespace(t *testing.T) {
 	}
 }
 
-// A pool on a supercluster is one backend pool per member, and that fan-out
-// is not built yet (design-superclusters.md §7.1, Phase 2). Until it is, the
-// pool controller would resolve the supercluster, receive ErrAggregateCluster,
-// and retry for good, so the pool is refused at the only point the refusal is
-// cheap. The refusal names the members as what a pool may name instead.
-func TestAPoolOnASuperclusterIsRefusedUntilPoolsFanOut(t *testing.T) {
+// U-196 is superseded: a pool on a supercluster is one backend pool per member
+// (design-superclusters.md §7.1), so a pool naming a supercluster is admitted
+// like one naming a cluster.
+func TestAPoolOnASuperclusterIsAdmitted(t *testing.T) {
 	scheme := newPoolScheme(t)
 	supercluster := testStorageCluster("sb", "0d6f1b2e-1f0a-4c71-9a0e-5b7d2c3e4f50")
 	supercluster.Spec.Supercluster = &simplyblockv1alpha2.SuperclusterSpec{}
@@ -206,12 +204,7 @@ func TestAPoolOnASuperclusterIsRefusedUntilPoolsFanOut(t *testing.T) {
 		Object:    poolRaw(t, testStoragePool("sb")),
 	}})
 
-	if resp.Allowed {
-		t.Fatal("a pool naming a supercluster was admitted")
-	}
-	for _, want := range []string{testValidatorCluster, "supercluster", "member"} {
-		if !strings.Contains(resp.Result.Message, want) {
-			t.Errorf("the refusal does not mention %q: %s", want, resp.Result.Message)
-		}
+	if !resp.Allowed {
+		t.Fatalf("a pool naming a supercluster was refused: %s", resp.Result.Message)
 	}
 }

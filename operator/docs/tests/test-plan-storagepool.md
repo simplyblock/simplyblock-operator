@@ -164,13 +164,13 @@ storage version.
 
 File: `operator/api/v1alpha1/storagepool_stash_test.go`
 
-Ten hub fields have no `v1alpha1` spelling, and while `v1alpha1` is the storage
+Eleven hub fields have no `v1alpha1` spelling, and while `v1alpha1` is the storage
 version each is lost on *every write* rather than once at upgrade time. These are
 the rows that say it does not happen.
 
 | #     | Scenario                                                                                  | Type       | Test                                              |
 |-------|-------------------------------------------------------------------------------------------|------------|---------------------------------------------------|
-| U-96  | All ten survive hub → spoke → hub through their annotations                               | Regression | `TestStoragePoolHubOnlyFieldsAreStashed`          |
+| U-96  | All eleven survive hub → spoke → hub through their annotations                            | Regression | `TestStoragePoolHubOnlyFieldsAreStashed`          |
 | U-97  | A toggle stashed as `false` is restored as `false` rather than as absent                  | Boundary   | `TestStoragePoolHubOnlyFieldsAreStashed`          |
 | U-98  | The annotations are taken back out on the way up                                          | Positive   | `TestStoragePoolStashIsRemovedOnTheWayUp`         |
 | U-99  | A pool stating none of them gains no metadata                                             | Negative   | `TestStoragePoolStashesNothingForAnEmptyHub`      |

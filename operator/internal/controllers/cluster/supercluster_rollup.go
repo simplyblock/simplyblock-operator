@@ -16,6 +16,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // memberReading is one member as the supercluster reconciler found it.
@@ -25,6 +26,9 @@ type memberReading struct {
 	// Capacity is the member's latest capacity sample, nil when the control
 	// plane had none to give.
 	Capacity *simplyblockv1alpha2.AggregateCapacity
+
+	// MissingPools are the supercluster's pools the member does not hold yet.
+	MissingPools []string
 }
 
 // superclusterRollup is everything the supercluster's status reports about its
@@ -58,7 +62,7 @@ func rollUp(members []memberReading) superclusterRollup {
 			Name:              m.Cluster.Name,
 			UUID:              m.Cluster.Status.UUID,
 			Phase:             phase,
-			PlacementEligible: placementEligible(m.Cluster),
+			PlacementEligible: placementEligible(m),
 			Capacity:          m.Capacity,
 		})
 		out.Capacity = addCapacity(out.Capacity, m.Capacity)
@@ -70,25 +74,15 @@ func rollUp(members []memberReading) superclusterRollup {
 
 // isServing reports whether a member's phase is one in which it serves I/O.
 func isServing(phase simplyblockv1alpha2.StorageClusterPhase) bool {
-	switch phase {
-	case simplyblockv1alpha2.StorageClusterPhaseOnline,
-		simplyblockv1alpha2.StorageClusterPhaseDegraded,
-		simplyblockv1alpha2.StorageClusterPhaseRebalancing,
-		simplyblockv1alpha2.StorageClusterPhaseShrinking:
-		return true
-	}
-	return false
+	return utils.IsServingPhase(phase)
 }
 
 // placementEligible reports whether new volumes may be placed in a member:
-// it is serving and has not been taken out of placement. The two further
-// conditions of design-superclusters.md §10.1, no removal running and holding
-// every pool of the supercluster, arrive with removal and with pool fan-out.
-func placementEligible(member *simplyblockv1alpha2.StorageCluster) bool {
-	if member.Spec.DisablePlacement != nil && *member.Spec.DisablePlacement {
-		return false
-	}
-	return isServing(member.Status.Phase)
+// it is serving, has not been taken out of placement, and holds every pool of
+// the supercluster. The fourth condition of design-superclusters.md §10.1, no
+// removal running, arrives with removal.
+func placementEligible(m memberReading) bool {
+	return utils.AcceptsPlacement(m.Cluster) && len(m.MissingPools) == 0
 }
 
 // rollUpPhase is the phase table, and the sentence explaining the row it

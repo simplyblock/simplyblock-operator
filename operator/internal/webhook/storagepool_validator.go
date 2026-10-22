@@ -91,14 +91,6 @@ func (v *StoragePoolValidator) Handle(ctx context.Context, req admission.Request
 			pool.Spec.ClusterRef, namespace))
 	case err != nil:
 		return admission.Errored(http.StatusInternalServerError, err)
-	case cluster.Spec.Supercluster != nil:
-		// A pool on a supercluster is one backend pool in every member, and
-		// nothing creates those yet: the controller would resolve the
-		// supercluster, find no backend cluster, and retry for good.
-		return admission.Denied(fmt.Sprintf(
-			"spec.clusterRef names StorageCluster %q, which is a supercluster, and pools on a "+
-				"supercluster are not supported yet. Name one of its member clusters instead",
-			pool.Spec.ClusterRef))
 	}
 
 	// The cluster exists. Whether it is finished is the controller's question:

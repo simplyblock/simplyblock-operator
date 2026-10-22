@@ -74,6 +74,7 @@ func newClient(t *testing.T, objects ...client.Object) client.Client {
 		WithStatusSubresource(
 			&simplyblockv1alpha2.StorageCluster{},
 			&simplyblockv1alpha2.StorageClusterOps{},
+			&simplyblockv1alpha2.StoragePool{},
 		).
 		WithObjects(objects...).
 		WithIndex(&simplyblockv1alpha2.StorageCluster{}, superclusterRefIndex, superclusterRefOf).

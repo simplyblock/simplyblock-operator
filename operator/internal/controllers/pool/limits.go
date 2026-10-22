@@ -127,6 +127,18 @@ func capacityString(bytes int64) string {
 	return resource.NewQuantity(bytes, resource.DecimalSI).String()
 }
 
+// capacityBytes reads a quantity capacityString wrote back as a byte count.
+func capacityBytes(quantity string) int64 {
+	if quantity == "" {
+		return 0
+	}
+	q, err := resource.ParseQuantity(quantity)
+	if err != nil {
+		return 0
+	}
+	return q.Value()
+}
+
 func nodeNames(nodes []corev1.Node) []string {
 	if len(nodes) == 0 {
 		return nil

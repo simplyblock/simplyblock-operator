@@ -209,6 +209,14 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// A pool of a supercluster is one backend pool in each member, and has
+	// none of its own (design-superclusters.md §7.1).
+	if supercluster, err := r.superclusterOf(ctx, p); err != nil {
+		return ctrl.Result{}, err
+	} else if supercluster != nil {
+		return r.reconcileSuperclusterPool(ctx, p, supercluster)
+	}
+
 	cluster, clusterUUID, err := r.resolveCluster(ctx, p)
 	switch {
 	case errors.Is(err, utils.ErrClusterNotFound), errors.Is(err, utils.ErrClusterUUIDNotReady):
@@ -276,11 +284,11 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	resolved := r.resolveAllowedNodes(ctx, p)
-	if err := r.syncNodeLabels(ctx, p, resolved); err != nil {
+	if err := r.syncNodeLabels(ctx, poolLabelID(p), resolved); err != nil {
 		log.Error(err, "syncing the pool's node labels")
 		return ctrl.Result{RequeueAfter: requeueNotReady}, nil
 	}
-	if err := r.syncAllowedHosts(ctx, api, clusterUUID, p, resolved); err != nil {
+	if err := r.syncAllowedHosts(ctx, api, clusterUUID, p.Status.UUID, resolved); err != nil {
 		log.Error(err, "syncing the pool's allowed hosts")
 		return ctrl.Result{RequeueAfter: requeueBackend}, nil
 	}
@@ -558,13 +566,13 @@ func (r *StoragePoolReconciler) resolveAllowedNodes(
 
 // syncNodeLabels puts the pool's allowed-node label on every resolved node and
 // takes it off every node that is no longer in the set. The key carries the
-// pool's UUID, so this is only reachable once the pool exists in the control
-// plane.
+// pool's label ID, which poolLabelID derives, so this is only reachable once
+// the pool exists in the control plane.
 func (r *StoragePoolReconciler) syncNodeLabels(
-	ctx context.Context, p *simplyblockv1alpha2.StoragePool, resolved []corev1.Node,
+	ctx context.Context, labelID string, resolved []corev1.Node,
 ) error {
 	log := logf.FromContext(ctx)
-	labelKey := kube.PoolNodeLabelKey(p.Status.UUID)
+	labelKey := kube.PoolNodeLabelKey(labelID)
 
 	var labeled corev1.NodeList
 	if err := r.List(ctx, &labeled, client.MatchingLabels{labelKey: kube.LabelPoolAllowed}); err != nil {
@@ -616,8 +624,7 @@ func (r *StoragePoolReconciler) syncNodeLabels(
 func (r *StoragePoolReconciler) syncAllowedHosts(
 	ctx context.Context,
 	api *webapi.Client,
-	clusterUUID string,
-	p *simplyblockv1alpha2.StoragePool,
+	clusterUUID, poolUUID string,
 	resolved []corev1.Node,
 ) error {
 	log := logf.FromContext(ctx)
@@ -627,7 +634,7 @@ func (r *StoragePoolReconciler) syncAllowedHosts(
 		want[nqn.Host(string(resolved[i].UID))] = struct{}{}
 	}
 
-	dto, err := r.readPool(ctx, api, clusterUUID, p.Status.UUID)
+	dto, err := r.readPool(ctx, api, clusterUUID, poolUUID)
 	if err != nil {
 		return err
 	}
@@ -639,7 +646,7 @@ func (r *StoragePoolReconciler) syncAllowedHosts(
 		return nil
 	}
 
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/host", clusterUUID, p.Status.UUID)
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/host", clusterUUID, poolUUID)
 	for host := range want {
 		if _, ok := have[host]; ok {
 			continue
@@ -889,6 +896,7 @@ func (r *StoragePoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha2.StoragePool{}).
 		Watches(&storagev1.StorageClass{}, handler.EnqueueRequestsFromMapFunc(poolForClass)).
+		Watches(&simplyblockv1alpha2.StorageCluster{}, handler.EnqueueRequestsFromMapFunc(r.poolsOfMember)).
 		Named("storagepool").
 		Complete(r)
 }
