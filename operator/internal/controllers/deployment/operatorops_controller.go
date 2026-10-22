@@ -149,12 +149,6 @@ type OperatorOpsReconciler struct {
 	// version out of step with the operator that created it.
 	ProbeImage string
 
-	// ProbeServiceAccount is the account the probe writes its report as. It
-	// needs create and update on ConfigMaps in the operator's namespace and
-	// nothing else. Empty is DefaultNodeProbeServiceAccount, which is what the
-	// chart creates.
-	ProbeServiceAccount string
-
 	// Namespace is the operator's own, which is where the installation's
 	// bootstrap ConfigMap lives. A run may be anywhere -- a cluster managing this
 	// one raises runs in the namespace it chooses -- so the configuration is not
@@ -501,6 +495,11 @@ func (r *OperatorOpsReconciler) probe(
 		return false, err
 	}
 
+	account, err := r.ensureProbeIdentity(ctx, ops.Namespace, ops.Name, owner)
+	if err != nil {
+		return false, err
+	}
+
 	waiting, failed := 0, []string{}
 	for _, worker := range ops.Status.Workers {
 		if _, arrived := reports[worker]; arrived {
@@ -512,7 +511,7 @@ func (r *OperatorOpsReconciler) probe(
 			Run:                ops.Name,
 			Node:               worker,
 			Image:              r.ProbeImage,
-			ServiceAccountName: r.probeServiceAccount(),
+			ServiceAccountName: account,
 			Owner:              owner,
 			// A probe is pinned with spec.nodeName, which bypasses the
 			// scheduler and not the taints: a tainted worker keeps the pod off
@@ -928,15 +927,6 @@ func (r *OperatorOpsReconciler) reportsFor(
 		reports[report.Node] = report
 	}
 	return reports, nil
-}
-
-// probeServiceAccount is the account the probes run as, defaulted to the one
-// the chart creates.
-func (r *OperatorOpsReconciler) probeServiceAccount() string {
-	if r.ProbeServiceAccount != "" {
-		return r.ProbeServiceAccount
-	}
-	return nodeProbeServiceAccount()
 }
 
 // abort stops a run at its next step.
