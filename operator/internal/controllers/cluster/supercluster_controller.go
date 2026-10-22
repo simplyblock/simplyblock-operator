@@ -85,6 +85,10 @@ type SuperclusterReconciler struct {
 	// exporter. Nil leaves the supercluster's capacity unreported.
 	Capacity MemberCapacitySource
 
+	// Readings receives each member's capacity reading, which placement
+	// answers from (§7.2). Nil hands them nowhere.
+	Readings ReadingObserver
+
 	// TLSEnabled and TLSProvider decide the serving certificate of the
 	// Services the members share (§6.2), as they do a standalone cluster's.
 	TLSEnabled  bool
@@ -95,6 +99,12 @@ type SuperclusterReconciler struct {
 // there is one. It is satisfied by atlas-lib's prometheus.Provider.
 type MemberCapacitySource interface {
 	ClusterCapacity(ctx context.Context, clusterUUID string) (prometheus.Capacity, bool, error)
+}
+
+// ReadingObserver takes a member's capacity reading. The placement service
+// satisfies it.
+type ReadingObserver interface {
+	Observe(memberUUID string, reading prometheus.Capacity)
 }
 
 // SetupWithManager registers the index the members are listed through, the
@@ -238,6 +248,9 @@ func (r *SuperclusterReconciler) memberCapacity(
 	}
 	if !ok || sample.SampledAt.IsZero() {
 		return nil
+	}
+	if r.Readings != nil {
+		r.Readings.Observe(member.Status.UUID, sample)
 	}
 	return &simplyblockv1alpha2.AggregateCapacity{
 		TotalBytes:       &sample.Total,

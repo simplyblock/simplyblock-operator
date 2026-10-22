@@ -37,7 +37,11 @@ supercluster fails before any control-plane call until the walk of §9.6 exists.
 supercluster is admitted and created in every member, the capacity ceiling is
 divided among the members accepting volumes, a member is placement-eligible
 once it holds every pool, and the supercluster has a default pool whose class
-names it.
+names it. The operator places (§7.2, §7.3): `PlacementService` runs on the
+link, ranks the members by the strategy from the readings the supercluster
+reconciler hands it, records the member on the claim before answering, and
+keeps a consistency group in one member. The CSI controller's branch that calls
+it is next.
 
 Each phase ships on its own. Phase 1 produces a supercluster that reports one
 status and lets an administrator name the members directly, which is already
@@ -1041,7 +1045,10 @@ sets on the provisioner it deploys (`operator/internal/controllers/driver/worklo
 A request without them fails with `FailedPrecondition`, as a pNFS volume does
 today (`csi-driver/internal/csi/controller/pnfs.go`). The service is declared in
 `atlas-lib/placement/placementrpc/placementv1/placement.proto`, beside the
-link's other services, and is the first one the operator serves to a peer.
+link's other services, and is the first one the operator serves to a peer. The
+hub answers it only on a session that has completed Hello, and the service
+refuses every peer that is not a CSI controller with `PermissionDenied`,
+because a placement writes a record on a claim.
 
 The operator answers from the supercluster reconciler's readings:
 
@@ -1065,7 +1072,9 @@ The operator answers from the supercluster reconciler's readings:
    read from its workers' `Node` labels. When the request carries a preferred
    topology, candidates narrow to members in the preferred segment's region,
    then to the requisite segments' regions, and fall back to every eligible
-   member only when neither leaves a candidate with room.
+   member only when neither leaves a candidate with room. A member whose
+   workers carry no region, or disagree, matches any region, as an unlabeled
+   worker does at approval (§5.7).
 6. Take each member's free capacity from the latest reading, less the sizes the
    operator has placed in it since that reading, so a burst of provisions spreads
    instead of landing on the member that was emptiest a minute ago. A reading
@@ -1106,7 +1115,10 @@ volume is visible there yet or not, so a create whose outcome is unknown is
 retried in the member it was sent to and nowhere else. The record lives as long
 as the PVC and survives an operator restart. A recorded member that has since
 left placement is still returned: the retry succeeds there or keeps failing
-there, and is never moved to another member.
+there, and is never moved to another member. A record naming a cluster that is
+no longer a member of the supercluster fails the call with
+`FailedPrecondition`, because the volume may exist there and placing it again
+would make a second one.
 
 **Without a record, the operator looks for the name in every member of the
 aggregate**, including members not eligible for placement, through the control

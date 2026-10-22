@@ -27,6 +27,7 @@ import (
 
 	"github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/link"
+	"github.com/simplyblock/atlas/placement/placementrpc"
 	atlasprom "github.com/simplyblock/atlas/prometheus"
 
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
@@ -72,6 +73,7 @@ import (
 	twonodecp "github.com/simplyblock/simplyblock-operator/internal/controllers/twonode/cpadapter"
 	volumecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/volume"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
+	"github.com/simplyblock/simplyblock-operator/internal/placement"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -394,6 +396,19 @@ func main() {
 	// configured, plaintext when none is, and mutual TLS when a client CA
 	// bundle is configured as well.
 	var csiPeers *link.Registry
+	// Placement for superclusters is served on the link (design-superclusters.md
+	// §7.2): the CSI controller asks which member a new volume goes to. Its
+	// control-plane lookups and capacity source are set below, beside the
+	// supercluster reconciler that feeds it readings.
+	placementService := &placement.Service{
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorder("placement"),
+	}
+	placementServer, err := placementrpc.NewServer(placementService)
+	if err != nil {
+		setupLog.Error(err, "unable to build the placement service")
+		os.Exit(1)
+	}
 	if csiLinkEnabled {
 		var certFile, keyFile string
 		if csiLinkCertPath != "" {
@@ -414,6 +429,8 @@ func main() {
 			NodeServiceAccount:       "simplyblock-csi-node-sa",
 			ControllerServiceAccount: "simplyblock-csi-controller-sa",
 			MDSServiceAccount:        "simplyblock-csi-mds-sa",
+			Register:                 placementServer.Register,
+			Capabilities:             placementrpc.Capabilities(),
 		})
 		if err != nil {
 			setupLog.Error(err, "unable to set up the CSI link")
@@ -948,12 +965,20 @@ func main() {
 		setupLog.Error(err, "supercluster capacity will be absent", "prometheusURL", prometheusURL)
 	} else {
 		memberCapacity = provider
+		placementService.Capacity = provider
 	}
+	placementLookupConfig, err := webapi.ControlPlaneConfig()
+	if err != nil {
+		setupLog.Error(err, "unable to resolve the control plane placement asks")
+		os.Exit(1)
+	}
+	placementService.Lookup = placement.ControlPlaneLookup{Reader: mgr.GetClient(), Config: placementLookupConfig}
 	if err := (&clustercontroller.SuperclusterReconciler{
 		Client:      mgr.GetClient(),
 		Scheme:      mgr.GetScheme(),
 		Recorder:    mgr.GetEventRecorder("supercluster-controller"),
 		Capacity:    memberCapacity,
+		Readings:    placementService,
 		TLSEnabled:  tlsEnabled,
 		TLSProvider: tlsProvider,
 	}).SetupWithManager(mgr); err != nil {

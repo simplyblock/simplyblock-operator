@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/simplyblock/atlas/prometheus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -134,5 +135,28 @@ func TestASuperclusterIsCreatedWithADefaultPool(t *testing.T) {
 	reconcileSupercluster(t, r)
 	if err := r.Get(context.Background(), key, &p); err == nil {
 		t.Error("a deleted default pool was written again")
+	}
+}
+
+// observedReadings remembers the readings handed to placement.
+type observedReadings map[string]prometheus.Capacity
+
+func (o observedReadings) Observe(uuid string, reading prometheus.Capacity) { o[uuid] = reading }
+
+// §10.1 step 5: each member's capacity reading is handed to placement, which
+// answers from it.
+func TestEachMembersReadingIsHandedToPlacement(t *testing.T) {
+	readings := observedReadings{}
+	r := newSuperclusterReconciler(t, nil, &recorder{},
+		newTestSupercluster(), newTestMember("prod-dense-kqv", "uuid-a"), newTestMember("prod-fast-mzt", "uuid-b"))
+	r.Capacity = exporterSamples{samples: map[string]prometheus.Capacity{
+		"uuid-a": sample(100, 10, 20), "uuid-b": sample(200, 20, 40),
+	}}
+	r.Readings = readings
+
+	reconcileSupercluster(t, r)
+
+	if readings["uuid-a"].Total != 100 || readings["uuid-b"].Total != 200 {
+		t.Errorf("readings handed to placement = %+v, want both members'", readings)
 	}
 }
