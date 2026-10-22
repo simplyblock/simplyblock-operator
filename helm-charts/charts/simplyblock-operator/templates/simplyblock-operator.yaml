@@ -105,6 +105,10 @@ spec:
             - name: SB_EXTRA_ADMIN_SERVICE_ACCOUNTS
               value: {{ . | quote }}
             {{- end }}
+            # The NUMA device plugin the operator runs beside the storage nodes. The
+            # chart no longer renders it, so its image comes from here.
+            - name: SB_NUMA_PLUGIN_IMAGE
+              value: "{{ .Values.image.numaResource.repository }}:{{ .Values.image.numaResource.tag }}"
             {{- include "simplyblock.tlsEnv" . | nindent 12 }}
           resources:
             limits:

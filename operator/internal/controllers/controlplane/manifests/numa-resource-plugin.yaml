@@ -1,27 +1,19 @@
----
+# The NUMA device plugin the ControlPlane's owner runs beside the storage workers.
+#
+# The plugin advertises numa-align/numa-<socket> on each storage worker, and the
+# storage pods request one. The operator embeds this file (numaplugin.go), sets the
+# namespace to its own, and applies it owned by the ControlPlane, which is what
+# gives a CRD-only (OLM) install the plugin without the Helm chart. The image is
+# replaced from SB_NUMA_PLUGIN_IMAGE when that is set.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: simplyblock-numa-resource-plugin
-  namespace: kube-system
-
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: simplyblock-numa-resource-plugin-config
-  namespace: kube-system
-data:
-  # Capacity per NUMA node (default: 100)
-  # Higher values allow more pods to request the same NUMA node
-  NUMA_CAPACITY: "100"
-
 ---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: simplyblock-numa-resource-plugin
-  namespace: kube-system
   labels:
     app: simplyblock-numa-resource-plugin
 spec:
@@ -41,23 +33,20 @@ spec:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
-            # The operator labels every storage-plane worker it enrolls with the
-            # StorageNodeSet the worker belongs to, so the key's presence marks
-            # the storage plane. It replaced io.simplyblock.node-type, which
-            # marked exactly the same nodes.
-            - matchExpressions:
-              - key: io.simplyblock.storagenodeset
-                operator: Exists
+              # Every worker a StorageCluster enrolled: the operator labels it so.
+              - matchExpressions:
+                  - key: io.simplyblock.storagenodeset
+                    operator: Exists
       tolerations:
-        # Run on all nodes including control plane
+        # Every taint, control-plane nodes included: a storage worker may be one.
         - operator: Exists
           effect: NoSchedule
         - operator: Exists
           effect: NoExecute
       containers:
         - name: numa-plugin
-          image: "{{ .Values.image.numaResource.repository }}:{{ .Values.image.numaResource.tag }}"
-          imagePullPolicy: {{ .Values.image.numaResource.pullPolicy }}
+          image: quay.io/simplyblock-io/numa-resource-plugin:latest
+          imagePullPolicy: Always
           securityContext:
             privileged: false
             readOnlyRootFilesystem: true
@@ -66,10 +55,11 @@ spec:
               drop: ["ALL"]
             seLinuxOptions:
               type: container_device_plugin_t
-
-          envFrom:
-            - configMapRef:
-                name: simplyblock-numa-resource-plugin-config
+          env:
+            # Not a setting: the node bootstrap waits for allocatable to read
+            # exactly this.
+            - name: NUMA_CAPACITY
+              value: "100"
           resources:
             requests:
               cpu: 10m
@@ -86,10 +76,8 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 30
           volumeMounts:
-            # Standard kubelet device-plugins directory
             - name: device-plugin-kubelet
               mountPath: /var/lib/kubelet/device-plugins
-            # Read NUMA topology from /sys
             - name: sys
               mountPath: /sys
               readOnly: true

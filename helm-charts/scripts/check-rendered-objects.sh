@@ -457,6 +457,21 @@ checkClusterStorageClasses() {
   fi
 }
 
+# checkNUMAPlugin asserts that the chart does not render the NUMA device plugin.
+#
+# The operator runs it, owned by the ControlPlane. A chart-rendered copy beside it
+# is a second plugin on every worker, registering the same resource.
+checkNUMAPlugin() {
+  local present
+  present="$(render standalone)"
+  if grep -qxF "DaemonSet/simplyblock-numa-resource-plugin" <<<"$present"; then
+    echo "  numa plugin: the chart renders a DaemonSet the ControlPlane already owns"
+    fail=1
+  else
+    echo "  numa plugin: left to the operator"
+  fi
+}
+
 check standalone "${COMMON[@]}"
 check managed "${COMMON[@]}"
 check empty "${OPERATOR[@]}"
@@ -465,5 +480,6 @@ checkVendoredCRDs
 checkLogCollector
 checkDriverPNFS
 checkClusterStorageClasses
+checkNUMAPlugin
 
 exit "$fail"
