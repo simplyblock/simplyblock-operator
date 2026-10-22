@@ -269,6 +269,47 @@ func TestTheFollowerIsApprovedOnlyOnceTheLeadersClusterExists(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-22-follower-approval-withdrawn: once the leader's draft
+// failed, the hub's reading of the leader stopped before its StorageCluster, the
+// leader's UUID read as empty, and the hub put approved: false and no
+// credentials into the follower's work. The site refused the withdrawal of an
+// approved draft, the work stopped applying, and the follower could neither
+// adopt nor be re-run.
+func TestTheFollowersApprovalAndCredentialsOutliveALostReadOfTheLeader(t *testing.T) {
+	sc := newStretched(func(s *simplyblockv1alpha2.StretchedCluster) { s.Spec.Approved = true })
+	r, cl, _ := newStretchedReconciler(t, sc)
+	got := reconcileStretched(t, r, cl, 2)
+	for _, site := range got.Spec.Sites {
+		project(t, cl, got, site.Cluster, site.Site, "draft", stretchedDraft(got, true))
+	}
+	got = reconcileStretched(t, r, cl, 1)
+	project(t, cl, got, strLeaderMC, strLeaderSite, "cluster",
+		projectedCluster(simplyblockv1alpha2.StorageClusterPhaseProvisioning, ""))
+	got = reconcileStretched(t, r, cl, 2)
+	if spec := draftApply(t, siteWork(t, cl, got, strFollowerMC, strFollowerSit)); spec["approved"] != true {
+		t.Fatalf("precondition: the follower was not approved once the leader's cluster existed: %v", spec)
+	}
+
+	// The leader's draft fails, so the hub no longer reads the leader's
+	// StorageCluster.
+	failed := stretchedDraft(got, true)
+	failed.Status.Phase = simplyblockv1alpha2.ClusterDeploymentConfigPhaseFailed
+	failed.Status.Message = "step Activating outlived its deadline"
+	project(t, cl, got, strLeaderMC, strLeaderSite, "draft", failed)
+	got = reconcileStretched(t, r, cl, 2)
+
+	follower := siteWork(t, cl, got, strFollowerMC, strFollowerSit)
+	if spec := draftApply(t, follower); spec["approved"] != true {
+		t.Errorf("the follower's approval was withdrawn: %v", spec)
+	}
+	if _, has := workManifests(t, follower)["Secret"]; !has {
+		t.Error("the follower's credentials to adopt the leader's cluster were withdrawn")
+	}
+	if got.Status.ClusterUUID != strUUID {
+		t.Errorf("status.clusterUUID = %q, want the leader's %s kept", got.Status.ClusterUUID, strUUID)
+	}
+}
+
 // The phase walks LeaderCreating -> FollowerJoining -> Ready as the two sites'
 // clusters come online, and Ready turns Degraded when the control plane records
 // a site as out.

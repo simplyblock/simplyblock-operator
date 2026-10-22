@@ -9,6 +9,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
@@ -17,6 +18,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/simplyblock/atlas/ptr"
+	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -300,4 +302,80 @@ func TestASyncClustersGroupsStillNeedASite(t *testing.T) {
 		}
 	}
 	t.Fatalf("a standalone sync document's groups without a site passed validation (findings %+v)", findings)
+}
+
+// withActivatingStep puts the document on the Activating step with the given
+// deadline, as a pass that entered the step earlier left it.
+func withActivatingStep(t *testing.T, r *ClusterDeploymentConfigReconciler, config *simplyblockv1alpha2.ClusterDeploymentConfig, deadline time.Time) *simplyblockv1alpha2.ClusterDeploymentConfig {
+	t.Helper()
+	ctx := context.Background()
+	var fresh simplyblockv1alpha2.ClusterDeploymentConfig
+	if err := r.Get(ctx, client.ObjectKeyFromObject(config), &fresh); err != nil {
+		t.Fatalf("reading the document: %v", err)
+	}
+	when := metav1.NewTime(deadline)
+	fresh.Status.Phase = simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanding
+	fresh.Status.Step = statemachine.KubeSnapshot{State: string(stepActivating), Deadline: &when}
+	if err := r.Status().Update(ctx, &fresh); err != nil {
+		t.Fatalf("writing the step: %v", err)
+	}
+	return &fresh
+}
+
+func reread(t *testing.T, r *ClusterDeploymentConfigReconciler, config *simplyblockv1alpha2.ClusterDeploymentConfig) *simplyblockv1alpha2.ClusterDeploymentConfig {
+	t.Helper()
+	var fresh simplyblockv1alpha2.ClusterDeploymentConfig
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(config), &fresh); err != nil {
+		t.Fatalf("reading the document: %v", err)
+	}
+	return &fresh
+}
+
+// Regression: 2026-10-22-leader-activation-deadline: the leader's Activating step
+// counted the time it spent waiting for the other site's nodes against its own
+// deadline. The follower joins only after the leader has created the cluster, so
+// a follower that took an hour to adopt failed the leader's draft (step
+// Activating outlived its deadline) and the StretchedCluster with it, while the
+// leader's own nodes had been online all along.
+func TestALeaderWaitingForThePeerSiteDoesNotRunOutItsDeadline(t *testing.T) {
+	ctx := context.Background()
+	config, r := anExpandedStretchedDocument(t, simplyblockv1alpha2.StretchedRoleLeader, 0, 0)
+	config = withActivatingStep(t, r, config, time.Now().Add(-time.Minute))
+
+	if _, err := r.expand(ctx, config); err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+	held := reread(t, r, config)
+	if held.Status.Phase == simplyblockv1alpha2.ClusterDeploymentConfigPhaseFailed {
+		t.Fatalf("the leader failed while waiting for its peer site: %s", held.Status.Message)
+	}
+	if deadline, has := held.Status.Step.KubeDeadline(); !has || !deadline.After(time.Now()) {
+		t.Errorf("the wait for the peer site left the step's deadline at %v; it must not run while the leader waits", deadline)
+	}
+	if !emitted(r, WaitingForPeerSite) {
+		t.Error("a leader holding for its peer site emitted no WaitingForPeerSite")
+	}
+}
+
+// The deadline still bounds the leader's own work: its own nodes not coming
+// online is not a wait on the other site.
+func TestALeaderWhoseOwnNodesAreNotOnlineStillRunsOutItsDeadline(t *testing.T) {
+	ctx := context.Background()
+	config, r := anExpandedStretchedDocument(t, simplyblockv1alpha2.StretchedRoleLeader, 0, 0)
+	var node simplyblockv1alpha2.StorageNode
+	if err := r.Get(ctx, client.ObjectKey{Namespace: theNamespace, Name: config.Status.NodeRefs[0]}, &node); err != nil {
+		t.Fatalf("reading the node: %v", err)
+	}
+	node.Status.Phase = simplyblockv1alpha2.StorageNodePhaseProvisioning
+	if err := r.Update(ctx, &node); err != nil {
+		t.Fatalf("writing the node: %v", err)
+	}
+	config = withActivatingStep(t, r, config, time.Now().Add(-time.Minute))
+
+	if _, err := r.expand(ctx, config); err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+	if got := reread(t, r, config); got.Status.Phase != simplyblockv1alpha2.ClusterDeploymentConfigPhaseFailed {
+		t.Errorf("phase = %q, want Failed when the leader's own nodes outlive the deadline", got.Status.Phase)
+	}
 }

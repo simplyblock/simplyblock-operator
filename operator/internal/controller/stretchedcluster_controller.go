@@ -107,6 +107,13 @@ func (r *StretchedClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if leaderReading.StorageCluster != nil {
 		uuid = leaderReading.StorageCluster.UUID
 	}
+	// The leader's backend cluster keeps its UUID for life, so the one recorded
+	// stands when this pass could not read it: a failed leader draft is read no
+	// further than the draft, and a lost read must not take the follower's
+	// approval and credentials with it.
+	if uuid == "" {
+		uuid = sc.Status.ClusterUUID
+	}
 	if uuid != "" && r.ControlPlane != nil {
 		found, err := r.ControlPlane.GetCluster(ctx, uuid)
 		if err != nil {
@@ -179,6 +186,11 @@ func (r *StretchedClusterReconciler) runSite(
 	approved := sc.Spec.Approved
 	if site.Role == simplyblockv1alpha2.StretchedRoleFollower {
 		approved = approved && uuid != ""
+	}
+	// Approval is one-way on the site, which refuses an apply that withdraws it
+	// and then applies nothing else in the work.
+	if previous := previousDraft(sc, site.Cluster); previous != nil && previous.Approved {
+		approved = true
 	}
 	template := sizingTemplate(sc.Spec.Sizing)
 	template["name"] = sc.Spec.ClusterName

@@ -194,6 +194,26 @@ func (r *ClusterDeploymentConfigReconciler) expand(
 	}
 
 	current := machine.CurrentState()
+	if current == stepActivating {
+		waiting, err := r.awaitingPeerSite(ctx, config)
+		if err != nil {
+			return ctrl.Result{RequeueAfter: configRetry}, r.note(ctx, config,
+				simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanding, err.Error())
+		}
+		if waiting {
+			// The deadline is moved rather than ignored, so it bounds the step
+			// again from the moment the other site's nodes are online. It is
+			// written only once half of it is spent, not on every pass.
+			if deadline, has := config.Status.Step.KubeDeadline(); !has ||
+				time.Until(deadline) < activatingDeadline/2 {
+				rearmed := metav1.NewTime(time.Now().Add(activatingDeadline))
+				if err := r.recordStep(ctx, config, current, &rearmed); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+			return ctrl.Result{RequeueAfter: configRetry}, nil
+		}
+	}
 	if machine.TimeoutReached() {
 		r.emit(config, corev1.EventTypeWarning, StepDeadlineExceeded,
 			fmt.Sprintf("Step %s outlived its deadline", current))

@@ -206,23 +206,12 @@ func (r *ClusterDeploymentConfigReconciler) activateCluster(
 			"the document records no cluster to activate")
 	}
 
-	for _, name := range config.Status.NodeRefs {
-		var node simplyblockv1alpha2.StorageNode
-		key := client.ObjectKey{Namespace: config.Namespace, Name: name}
-		if err := r.Get(ctx, key, &node); err != nil {
-			if apierrors.IsNotFound(err) {
-				// A node the document created and somebody has since removed is
-				// not one to wait for. The deployment it described is what it
-				// built, and this is no longer part of it.
-				continue
-			}
-			return false, fmt.Errorf("reading StorageNode %s: %w", name, err)
-		}
-		if node.Status.Phase != simplyblockv1alpha2.StorageNodePhaseOnline {
-			r.emit(config, corev1.EventTypeNormal, AwaitingNodes, fmt.Sprintf(
-				"StorageNode %s is %s rather than Online", name, node.Status.Phase))
-			return false, nil
-		}
+	if name, phase, err := r.firstNodeNotOnline(ctx, config); err != nil {
+		return false, err
+	} else if name != "" {
+		r.emit(config, corev1.EventTypeNormal, AwaitingNodes, fmt.Sprintf(
+			"StorageNode %s is %s rather than Online", name, phase))
+		return false, nil
 	}
 
 	// A stretched cluster's activation is its leader's. The follower asks for
@@ -852,6 +841,47 @@ func (r *ClusterDeploymentConfigReconciler) recordNodes(
 		func(status *simplyblockv1alpha2.ClusterDeploymentConfigStatus) {
 			status.NodeRefs = names
 		})
+}
+
+// firstNodeNotOnline names a node the document created that is not Online, with
+// its phase, or "" when every one is.
+func (r *ClusterDeploymentConfigReconciler) firstNodeNotOnline(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) (string, simplyblockv1alpha2.StorageNodePhase, error) {
+	for _, name := range config.Status.NodeRefs {
+		var node simplyblockv1alpha2.StorageNode
+		key := client.ObjectKey{Namespace: config.Namespace, Name: name}
+		if err := r.Get(ctx, key, &node); err != nil {
+			if apierrors.IsNotFound(err) {
+				// A node the document created and somebody has since removed is
+				// not one to wait for. The deployment it described is what it
+				// built, and this is no longer part of it.
+				continue
+			}
+			return "", "", fmt.Errorf("reading StorageNode %s: %w", name, err)
+		}
+		if node.Status.Phase != simplyblockv1alpha2.StorageNodePhaseOnline {
+			return name, node.Status.Phase, nil
+		}
+	}
+	return "", "", nil
+}
+
+// awaitingPeerSite reports a stretched leader whose own nodes are all online
+// and which holds its activation only for the other site's nodes. That wait is
+// on another site rather than on work of this step's, so it does not count
+// against the step's deadline, as a follower's wait for its leader does not.
+func (r *ClusterDeploymentConfigReconciler) awaitingPeerSite(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) (bool, error) {
+	if config.Status.ClusterRef == "" {
+		return false, nil
+	}
+	if name, _, err := r.firstNodeNotOnline(ctx, config); err != nil || name != "" {
+		return false, err
+	}
+	held, done, err := r.stretchedActivation(ctx, config)
+	return held && !done, err
 }
 
 // stretchedActivation decides the activation of one site of a stretched
