@@ -42,6 +42,13 @@ func TestStoragePoolHubOnlyFieldsAreStashed(t *testing.T) {
 			ActiveOpsRef:            "rebalance-1",
 			Message:                 "ready",
 			ObservedGeneration:      3,
+			Limits: &v1alpha2.PoolLimitsStatus{
+				Capacity: "100G",
+				IOPS:     ptr.To(int32(0)),
+				Throughput: &v1alpha2.ThroughputLimits{
+					Read: ptr.To(int32(0)), Write: ptr.To(int32(0)), ReadWrite: ptr.To(int32(0)),
+				},
+			},
 		},
 	}
 
@@ -57,6 +64,7 @@ func TestStoragePoolHubOnlyFieldsAreStashed(t *testing.T) {
 		annoEnableReplication, annoPriorityClass,
 		annoStatusPhase, annoStatusClassNames, annoStatusDefaultClassName,
 		annoStatusActiveOpsRef, annoStatusMessage, annoStatusObservedGeneraton,
+		annoStatusLimitsCapacity,
 	} {
 		if _, ok := stored.Annotations[key]; !ok {
 			t.Errorf("nothing was stashed under %q, so the field is lost on this write", key)

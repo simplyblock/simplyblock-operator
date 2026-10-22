@@ -516,6 +516,11 @@ spec:
                 limits:
                   description: Limits is what the control plane reports the ceilings to be.
                   properties:
+                    capacity:
+                      description: |-
+                        Capacity is the capacity limit the control plane is enforcing, written
+                        as a quantity. Empty is unlimited.
+                      type: string
                     host:
                       description: Host is the backend host enforcing the pool's QoS.
                       type: string

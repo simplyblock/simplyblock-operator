@@ -119,6 +119,7 @@ type poolDTO struct {
 	ClusterID    string   `json:"cluster_id"`
 	Name         string   `json:"name"`
 	Status       string   `json:"status"`
+	MaxSize      int64    `json:"max_size"`
 	MaxRwIOPS    int64    `json:"max_rw_iops"`
 	MaxRwMbytes  int64    `json:"max_rw_mbytes"`
 	MaxRMbytes   int64    `json:"max_r_mbytes"`

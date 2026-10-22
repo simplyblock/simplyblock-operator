@@ -229,6 +229,11 @@ type PoolLimitsStatus struct {
 	// +optional
 	Host string `json:"host,omitempty"`
 
+	// Capacity is the capacity limit the control plane is enforcing, written
+	// as a quantity. Empty is unlimited.
+	// +optional
+	Capacity string `json:"capacity,omitempty"`
+
 	// IOPS is the combined ceiling the control plane is enforcing.
 	// +optional
 	IOPS *int32 `json:"iops,omitempty"`

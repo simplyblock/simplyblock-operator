@@ -48,16 +48,17 @@ File: `operator/internal/controllers/pool/assignment_test.go`
 
 File: `operator/internal/controllers/pool/storagepool_controller_test.go`
 
-| #    | Scenario                                                                 | Type     | Test                                           |
-|------|--------------------------------------------------------------------------|----------|------------------------------------------------|
-| U-07 | No `status.uuid`: the pool is created and the UUID recorded              | Positive | TestCreatesThePoolAndRecordsItsUUID            |
-| U-08 | The claim is persisted before the `POST` is issued                       | Positive | TestTheClaimIsPersistedBeforeTheCreateIsIssued |
-| U-09 | A second reconciler at the same `resourceVersion`: 409, no second `POST` | Negative | TestOnlyOneOfTwoReconcilersClaimsTheCreation   |
-| U-10 | The `POST` returns 5xx: retried, the UUID stays empty                    | Negative | —                                              |
-| U-11 | The `POST` returns 4xx: `PoolCreationFailed` with the body in the event  | Negative | TestReportsACreationRefusal                    |
-| U-12 | The cluster has no `status.uuid` yet: held with `ClusterNotReady`        | Negative | TestHoldsWhileTheClusterIsNotReady             |
-| U-13 | The cluster does not exist: held, not failed                             | Negative | TestHoldsWhenTheClusterDoesNotExist            |
-| U-14 | `status.uuid` present: creation is not attempted again                   | Negative | TestDoesNotCreateAPoolThatAlreadyHasAUUID      |
+| #     | Scenario                                                                        | Type     | Test                                           |
+|-------|---------------------------------------------------------------------------------|----------|------------------------------------------------|
+| U-07  | No `status.uuid`: the pool is created and the UUID recorded                     | Positive | TestCreatesThePoolAndRecordsItsUUID            |
+| U-08  | The claim is persisted before the `POST` is issued                              | Positive | TestTheClaimIsPersistedBeforeTheCreateIsIssued |
+| U-09  | A second reconciler at the same `resourceVersion`: 409, no second `POST`        | Negative | TestOnlyOneOfTwoReconcilersClaimsTheCreation   |
+| U-10  | The `POST` returns 5xx: retried, the UUID stays empty                           | Negative | —                                              |
+| U-11  | The `POST` returns 4xx: `PoolCreationFailed` with the body in the event         | Negative | TestReportsACreationRefusal                    |
+| U-12  | The cluster has no `status.uuid` yet: held with `ClusterNotReady`               | Negative | TestHoldsWhileTheClusterIsNotReady             |
+| U-13  | The cluster does not exist: held, not failed                                    | Negative | TestHoldsWhenTheClusterDoesNotExist            |
+| U-14  | `status.uuid` present: creation is not attempted again                          | Negative | TestDoesNotCreateAPoolThatAlreadyHasAUUID      |
+| U-116 | The capacity the control plane enforces is reported in `status.limits.capacity` | Positive | TestTheEnforcedCapacityIsReported              |
 
 ### The StorageClass (design §5)
 
@@ -163,19 +164,20 @@ storage version.
 
 File: `operator/api/v1alpha1/storagepool_stash_test.go`
 
-Nine hub fields have no `v1alpha1` spelling, and while `v1alpha1` is the storage
+Ten hub fields have no `v1alpha1` spelling, and while `v1alpha1` is the storage
 version each is lost on *every write* rather than once at upgrade time. These are
 the rows that say it does not happen.
 
-| #     | Scenario                                                                         | Type       | Test                                              |
-|-------|----------------------------------------------------------------------------------|------------|---------------------------------------------------|
-| U-96  | All nine survive hub → spoke → hub through their annotations                     | Regression | `TestStoragePoolHubOnlyFieldsAreStashed`          |
-| U-97  | A toggle stashed as `false` is restored as `false` rather than as absent         | Boundary   | `TestStoragePoolHubOnlyFieldsAreStashed`          |
-| U-98  | The annotations are taken back out on the way up                                 | Positive   | `TestStoragePoolStashIsRemovedOnTheWayUp`         |
-| U-99  | A pool stating none of them gains no metadata                                    | Negative   | `TestStoragePoolStashesNothingForAnEmptyHub`      |
-| U-100 | A value the hub stops stating is cleared rather than restored from a stale stash | Negative   | `TestStoragePoolStaleStashIsCleared`              |
-| U-101 | A hand-edited annotation costs its own field and no other                        | Negative   | `TestStoragePoolAnUndecodableStashIsDropped`      |
-| U-102 | An annotation a user wrote is left alone                                         | Negative   | `TestStoragePoolStashLeavesOtherAnnotationsAlone` |
+| #     | Scenario                                                                                  | Type       | Test                                              |
+|-------|-------------------------------------------------------------------------------------------|------------|---------------------------------------------------|
+| U-96  | All ten survive hub → spoke → hub through their annotations                               | Regression | `TestStoragePoolHubOnlyFieldsAreStashed`          |
+| U-97  | A toggle stashed as `false` is restored as `false` rather than as absent                  | Boundary   | `TestStoragePoolHubOnlyFieldsAreStashed`          |
+| U-98  | The annotations are taken back out on the way up                                          | Positive   | `TestStoragePoolStashIsRemovedOnTheWayUp`         |
+| U-99  | A pool stating none of them gains no metadata                                             | Negative   | `TestStoragePoolStashesNothingForAnEmptyHub`      |
+| U-100 | A value the hub stops stating is cleared rather than restored from a stale stash          | Negative   | `TestStoragePoolStaleStashIsCleared`              |
+| U-101 | A hand-edited annotation costs its own field and no other                                 | Negative   | `TestStoragePoolAnUndecodableStashIsDropped`      |
+| U-102 | An annotation a user wrote is left alone                                                  | Negative   | `TestStoragePoolStashLeavesOtherAnnotationsAlone` |
+| U-117 | `status.limits.capacity`, which `status.qos` has no field for, survives hub → spoke → hub | Regression | `TestStoragePoolHubOnlyFieldsAreStashed`          |
 
 ### What the Review on #525 Found (design §5, §6, §11)
 
@@ -387,11 +389,11 @@ warning of.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 115       | 106     | 9           |
+| Unit        | 117       | 108     | 9           |
 | Integration | 19        | 0       | 19          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **150**   | **106** | **44**      |
+| **Total**   | **152**   | **108** | **44**      |
 
 **The unit class carries what it can, and the nine it does not are three
 kinds of gap.** Five are `Rebalance`, which design §7 marks provisional and the
