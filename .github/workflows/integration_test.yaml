@@ -62,15 +62,14 @@ jobs:
 
       # On the 6.17 Azure kernel, nvmet-tcp and nvme-tcp are in the extra module
       # package, which the runner does not install. The 7.0 kernels publish no
-      # such package and carry those modules in the main one, so the install
-      # runs only where the archive has it. The next step names any module the
-      # kernel still cannot load.
+      # such package and carry those modules in the main one, so a failed install
+      # warns instead of failing. The next step names any module the kernel
+      # still cannot load.
       - name: Install the extra modules for the running kernel
         run: |
           sudo apt-get update -qq
-          if apt-cache show "linux-modules-extra-$(uname -r)" >/dev/null 2>&1; then
-            sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
-          fi
+          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" \
+            || echo "::warning::no linux-modules-extra for $(uname -r); relying on the main module package"
 
       # Named one by one, so that a kernel missing one of them says which, and
       # the run reads as a kernel the job cannot use rather than as a stack that
