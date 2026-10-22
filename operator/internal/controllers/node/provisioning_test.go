@@ -125,6 +125,33 @@ func TestAnUpgradeAdoptionDivertsBeforeTheHostIsProbed(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-22-follower-nodes-held-in-adopting: the hub hands a
+// stretched follower site the upgrade Secret to adopt the leader's backend
+// cluster, and every new StorageNode on that site took the Secret as a wholesale
+// takeover, diverted to Adopting, and waited there for a backend node nobody had
+// added. The follower's nodes are new; only its cluster is adopted.
+func TestAFollowersUpgradeSecretAdoptsTheClusterNotItsNodes(t *testing.T) {
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name:      "simplyblock-" + opsCluster + "-upgrade",
+		Namespace: opsNamespace,
+	}}
+	cluster := anOpsCluster()
+	cluster.Spec.EnableSyncReplication = ptr.To(true)
+	cluster.Spec.Stretched = &simplyblockv1alpha2.StretchedSpec{
+		Site: "b", PeerSite: "a", Role: simplyblockv1alpha2.StretchedRoleFollower,
+	}
+	r, _ := aSteadyNode(t, aControlPlane(), secret)
+
+	next, _, err := r.checkHost(context.Background(), anUnprovisionedNode(stepCheckingHost), cluster)
+	var blocked *blockedStepError
+	if err != nil && !errors.As(err, &blocked) {
+		t.Fatalf("checking the host: %v", err)
+	}
+	if next == stepAdopting {
+		t.Error("a new node on a follower site was diverted to adoption by the cluster's upgrade Secret")
+	}
+}
+
 // The add carries what the node says about itself, and the cluster contributes
 // only what belongs to the fleet.
 func TestTheAddCarriesWhatTheNodeSaysAboutItself(t *testing.T) {

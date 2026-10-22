@@ -544,7 +544,12 @@ func (r *StorageNodeReconciler) checkHost(
 	// which is the migration route off a Helm deployment. It diverts before the
 	// host check, because an adopted node is already running and its API answering
 	// is not this operator's precondition to establish.
-	if r.upgradeAdoption(ctx, node.Namespace, cluster.Name) {
+	//
+	// A stretched follower carries the same Secret for another purpose: the hub
+	// delivers it to adopt the leader's backend cluster, and the follower's own
+	// nodes are new and are added. A follower node that is already in the backend
+	// is still found by its address below.
+	if !cluster.IsStretchedFollower() && r.upgradeAdoption(ctx, node.Namespace, cluster.Name) {
 		return stepAdopting, true, nil
 	}
 
