@@ -255,7 +255,9 @@ func (e *recordingExports) EnsureExport(_ context.Context, _ string, spec Export
 
 func (e *recordingExports) DeleteExport(context.Context, string) (bool, error) { return true, nil }
 
-func (e *recordingExports) SetExportSize(context.Context, string, int64) (bool, error) { return true, nil }
+func (e *recordingExports) SetExportSize(context.Context, string, int64) (bool, error) {
+	return true, nil
+}
 
 // A pNFS claim through a supercluster class is exported from the member its
 // volume was placed in: the export names that member's volume, so its metadata
