@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -92,6 +93,10 @@ func (r *StorageNodeWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error
 		Owns(&discoveryv1.EndpointSlice{}).
 		Watches(&simplyblockv1alpha2.StorageNode{},
 			handler.EnqueueRequestsFromMapFunc(r.clusterOf)).
+		// A migration's target is published before any node runs there.
+		Watches(&simplyblockv1alpha2.StorageNodeOps{},
+			handler.EnqueueRequestsFromMapFunc(r.clusterOfOperation),
+			builder.WithPredicates(migrationOpsChanged())).
 		// The spdk-proxy EndpointSlices are built from the pod list, so a pod
 		// appearing -- or reappearing on a different RPC port -- is the event that
 		// makes them wrong. Without this watch the pass only reruns when something
@@ -224,7 +229,11 @@ func (r *StorageNodeWorkloadReconciler) workloadSteps(
 		{"the service account and its role", r.reconcileRBAC},
 		{"the serving certificates", r.reconcileCertificates},
 		{"the headless service", r.reconcileService},
-		{"the endpoint slice", r.reconcileEndpointSlice},
+		{"the endpoint slice", func(
+			ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+		) error {
+			return r.reconcileEndpointSlice(ctx, cluster, nodes)
+		}},
 		{"the spdk-proxy endpoints", r.reconcileSpdkProxyEndpoints},
 		{"the worker enrollment", func(
 			ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
@@ -438,37 +447,40 @@ func (r *StorageNodeWorkloadReconciler) reconcileService(
 }
 
 // reconcileEndpointSlice publishes one per-pod DNS name per worker the cluster's
-// nodes run on.
+// nodes run on, plus the target of each migration that is running.
 //
-// The slice is built from the StorageNode objects rather than from a list on the
-// cluster, because the nodes are what say which workers are in the storage plane
-// now: a relocation adds the target before the node's own spec.workerNode moves.
+// The slice is built from the pass's one reading of the cluster's StorageNodes
+// (clusterNodes), so a node on its way out drops its worker here exactly where the
+// ConfigMap and the enrollment drop it. The nodes are what say which workers are
+// in the storage plane now: a relocation adds the target before the node's own spec.workerNode moves,
+// so the Migrate operations are read as well.
 func (r *StorageNodeWorkloadReconciler) reconcileEndpointSlice(
-	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+	ctx context.Context,
+	cluster *simplyblockv1alpha2.StorageCluster,
+	nodes []simplyblockv1alpha2.StorageNode,
 ) error {
 	log := logf.FromContext(ctx)
 
-	var nodes simplyblockv1alpha2.StorageNodeList
-	if err := r.List(ctx, &nodes, client.InNamespace(cluster.Namespace)); err != nil {
-		return fmt.Errorf("list the cluster's nodes: %w", err)
+	targets, err := r.migrationTargets(ctx, cluster.Namespace, nodes)
+	if err != nil {
+		return err
 	}
 
 	addresses := map[string]string{}
-	for i := range nodes.Items {
-		node := &nodes.Items[i]
-		if node.Spec.ClusterRef != cluster.Name {
-			continue
+	for i := range nodes {
+		node := &nodes[i]
+		for _, worker := range []string{node.Spec.WorkerNode, targets[node.Name]} {
+			if _, known := addresses[worker]; known || worker == "" {
+				continue
+			}
+			address, err := r.workerAddress(ctx, worker)
+			if err != nil || address == "" {
+				log.V(1).Info("a worker has no internal address yet and is not published",
+					"worker", worker)
+				continue
+			}
+			addresses[worker] = address
 		}
-		if _, known := addresses[node.Spec.WorkerNode]; known {
-			continue
-		}
-		address, err := r.workerAddress(ctx, node.Spec.WorkerNode)
-		if err != nil || address == "" {
-			log.V(1).Info("a worker has no internal address yet and is not published",
-				"worker", node.Spec.WorkerNode)
-			continue
-		}
-		addresses[node.Spec.WorkerNode] = address
 	}
 
 	desired := utils.BuildStorageNodeEndpointSlice(cluster, addresses)
@@ -477,7 +489,7 @@ func (r *StorageNodeWorkloadReconciler) reconcileEndpointSlice(
 	}
 
 	var existing discoveryv1.EndpointSlice
-	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
+	err = r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
 	if apierrors.IsNotFound(err) {
 		return r.Create(ctx, desired)
 	}
@@ -486,6 +498,72 @@ func (r *StorageNodeWorkloadReconciler) reconcileEndpointSlice(
 	}
 	desired.ResourceVersion = existing.ResourceVersion
 	return r.Update(ctx, desired)
+}
+
+// migrationTargets maps each node whose lock a Migrate holds to the worker the
+// migration moves it to.
+//
+// A Migrate queued behind another operation is Pending and holds no lock yet, so
+// it publishes nothing: it would otherwise replace the running one's target and
+// name a worker no pod is starting on. The lock is written before the phase moves
+// to Running, which is why holding it counts as well as Running.
+func (r *StorageNodeWorkloadReconciler) migrationTargets(
+	ctx context.Context, namespace string, nodes []simplyblockv1alpha2.StorageNode,
+) (map[string]string, error) {
+	var operations simplyblockv1alpha2.StorageNodeOpsList
+	if err := r.List(ctx, &operations, client.InNamespace(namespace)); err != nil {
+		return nil, fmt.Errorf("list the node operations: %w", err)
+	}
+	holder := make(map[string]string, len(nodes))
+	for i := range nodes {
+		holder[nodes[i].Name] = nodes[i].Status.ActiveOpsRef
+	}
+
+	targets := map[string]string{}
+	for i := range operations.Items {
+		op := &operations.Items[i]
+		if op.Spec.Action != simplyblockv1alpha2.StorageNodeOpsActionMigrate {
+			continue
+		}
+		running := op.Status.Phase == simplyblockv1alpha2.StorageNodeOpsPhaseRunning
+		if running || holder[op.Spec.NodeRef] == op.Name {
+			targets[op.Spec.NodeRef] = op.Spec.MigrateParams().TargetWorkerNode
+		}
+	}
+	return targets, nil
+}
+
+// migrationOpsChanged is the StorageNodeOps watch's filter: an operation
+// appearing, disappearing, or changing phase.
+//
+// Those are the events that change what migrationTargets returns. A step writes
+// its status about every retry while it waits, and none of that changes the slice.
+func migrationOpsChanged() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldOp, oldOK := e.ObjectOld.(*simplyblockv1alpha2.StorageNodeOps)
+			newOp, newOK := e.ObjectNew.(*simplyblockv1alpha2.StorageNodeOps)
+			return !oldOK || !newOK || oldOp.Status.Phase != newOp.Status.Phase
+		},
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
+}
+
+// clusterOfOperation maps a Migrate to its node's cluster, so a new migration
+// reaches the pass that publishes the name its first step waits for.
+func (r *StorageNodeWorkloadReconciler) clusterOfOperation(
+	ctx context.Context, object client.Object,
+) []reconcile.Request {
+	op, ok := object.(*simplyblockv1alpha2.StorageNodeOps)
+	if !ok || op.Spec.Action != simplyblockv1alpha2.StorageNodeOpsActionMigrate {
+		return nil
+	}
+	var node simplyblockv1alpha2.StorageNode
+	key := types.NamespacedName{Namespace: op.Namespace, Name: op.Spec.NodeRef}
+	if err := r.Get(ctx, key, &node); err != nil {
+		return nil
+	}
+	return r.clusterOf(ctx, &node)
 }
 
 // workerAddress is the worker's internal IP, which is what an endpoint carries.
