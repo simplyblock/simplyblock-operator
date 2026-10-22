@@ -114,7 +114,7 @@ func TestHostFencingAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := rec.HostFences["b"]
-	if !rec.HostFencing || f.State != HostFenceRevoked || f.On != "a" || !f.InForce() || rec.ClientHosts["b"][0] != "nqn.x" {
+	if !rec.HostFencing || f.State != HostFenceRevoked || f.On != "a" || !f.Effective() || rec.ClientHosts["b"][0] != "nqn.x" {
 		t.Fatalf("record %+v", rec)
 	}
 	if err := c.SetArbitrationClientHosts(ctx, "c1", "b", []string{"nqn.x", "nqn.y"}); err != nil {

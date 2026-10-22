@@ -37,8 +37,9 @@ func remediationSetup(t *testing.T, api *fakeAPI, s remSetup) (*RemediationRecon
 	cluster.Spec.ClusterMode = simplyblockv1alpha2.ClusterModeDual
 	cluster.Spec.EnableArbitration = ptr.To(true)
 	cluster.Spec.Arbitration = &simplyblockv1alpha2.ArbitrationSpec{HostFencing: ptr.To(s.hostFencing)}
-	objs := []client.Object{cluster,
-		&simplyblockv1alpha2.StorageFenceRemediation{ObjectMeta: metav1.ObjectMeta{Name: workerB, Namespace: ns}}}
+	objs := make([]client.Object, 0, 6+len(s.extra))
+	objs = append(objs, cluster,
+		&simplyblockv1alpha2.StorageFenceRemediation{ObjectMeta: metav1.ObjectMeta{Name: workerB, Namespace: ns}})
 	for _, w := range []struct{ sn, worker, id string }{{"sn-a", workerA, "id-a"}, {"sn-b", workerB, "id-b"}} {
 		objs = append(objs, &simplyblockv1alpha2.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{Name: w.sn, Namespace: ns},

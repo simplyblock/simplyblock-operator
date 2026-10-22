@@ -167,7 +167,7 @@ func (r *RemediationReconciler) fenced(ctx context.Context, node *corev1.Node) (
 		return 0, "cannot confirm the fence with the control plane", nil
 	}
 	fence, ok := rec.HostFences[sn.Status.UUID]
-	if !ok || !fence.InForce() {
+	if !ok || !fence.Effective() {
 		return 0, "the control plane holds no host fence for the node", nil
 	}
 	return fence.Epoch, "", nil
@@ -176,12 +176,12 @@ func (r *RemediationReconciler) fenced(ctx context.Context, node *corev1.Node) (
 // foreignVolumes lists the VolumeAttachments on the node that belong to another
 // CSI driver.
 func (r *RemediationReconciler) foreignVolumes(ctx context.Context, nodeName string) ([]string, error) {
-	var vas storagev1.VolumeAttachmentList
-	if err := r.List(ctx, &vas); err != nil {
+	var attachments storagev1.VolumeAttachmentList
+	if err := r.List(ctx, &attachments); err != nil {
 		return nil, err
 	}
 	var out []string
-	for _, va := range vas.Items {
+	for _, va := range attachments.Items {
 		if va.Spec.NodeName == nodeName && va.Spec.Attacher != kube.DriverName {
 			out = append(out, fmt.Sprintf("%s (%s)", va.Name, va.Spec.Attacher))
 		}

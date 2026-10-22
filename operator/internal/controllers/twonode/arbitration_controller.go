@@ -62,9 +62,9 @@ const (
 	HostFenceRestoring  = "restoring"
 )
 
-// InForce reports whether the node's host is cut off: revoked, and kept so
+// Effective reports whether the node's host is cut off: revoked, and kept so
 // until the release has run.
-func (f HostFence) InForce() bool {
+func (f HostFence) Effective() bool {
 	return f.State == HostFenceRevoked || f.State == HostFenceReleasable || f.State == HostFenceRestoring
 }
 

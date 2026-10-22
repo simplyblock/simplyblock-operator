@@ -95,12 +95,12 @@ func (r *ArbitrationReconciler) followHostFences(
 			}
 		}
 		fence, ok := rec.HostFences[sn.Status.UUID]
-		inForce := on && ok && fence.InForce()
+		cutOff := on && ok && fence.Effective()
 		msg := ""
-		if inForce {
+		if cutOff {
 			msg = fmt.Sprintf("epoch %d: the node's NVMe hosts are revoked on %s", fence.Epoch, workerOf[fence.On])
 		}
-		if err := r.setStorageFenced(ctx, &node, inForce, msg); err != nil {
+		if err := r.setStorageFenced(ctx, &node, cutOff, msg); err != nil {
 			return nil, false, err
 		}
 		if !ok {
