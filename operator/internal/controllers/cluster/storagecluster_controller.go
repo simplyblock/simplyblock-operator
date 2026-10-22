@@ -953,6 +953,25 @@ func (r *StorageClusterReconciler) reportedTasks(
 	return r.API.Tasks(ctx, clusterID)
 }
 
+// backendClusterGone reports whether the control plane, asked as the operator,
+// no longer lists the cluster. A forced delete can finish after the client gave
+// up, and the retry, sent with the cluster's own secret, which went with the
+// cluster, is answered 401 rather than with the cluster missing. A list that
+// cannot be read says nothing, and the delete is retried.
+func (r *StorageClusterReconciler) backendClusterGone(ctx context.Context, uuid string) bool {
+	clusters, err := r.API.Clusters(ctx)
+	if err != nil {
+		return false
+	}
+	for _, c := range clusters {
+		if c.ID == uuid {
+			return false
+		}
+	}
+	logf.FromContext(ctx).Info("the backend cluster is already gone", "uuid", uuid)
+	return true
+}
+
 // teardown deletes the backend cluster and then lets the object go.
 //
 // On any refusal it requeues and retries rather than removing the finalizer,
@@ -983,7 +1002,7 @@ func (r *StorageClusterReconciler) teardown(
 		if secret, err := r.clusterSecret(ctx, cluster); err == nil && secret != "" {
 			deleteCtx = webapi.WithBearerToken(ctx, secret)
 		}
-		if err := r.API.DeleteCluster(deleteCtx, uuid); err != nil {
+		if err := r.API.DeleteCluster(deleteCtx, uuid); err != nil && !r.backendClusterGone(ctx, uuid) {
 			log.Error(err, "the cluster could not be deleted; retrying",
 				"cluster", cluster.Name, "uuid", uuid)
 			return ctrl.Result{RequeueAfter: clusterRetry}, nil

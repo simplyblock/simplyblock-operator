@@ -608,7 +608,11 @@ func TestTheEffectiveRestartLimitIsClampedToTheFaultTolerance(t *testing.T) {
 // orphaning the cluster behind it.
 func TestARefusedDeleteKeepsTheFinalizer(t *testing.T) {
 	api := &fakeControlPlane{
-		deleteCall: func(string) error { return errors.New("the control plane is unreachable") },
+		deleteCall: func(string) error { return errors.New("the control plane refused") },
+		// The cluster is still there, so the refusal is a refusal.
+		clusters: func() ([]atlascp.Cluster, error) {
+			return []atlascp.Cluster{{ID: testClusterUUID}}, nil
+		},
 	}
 	now := metav1.Now()
 	deleting := newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
@@ -622,6 +626,50 @@ func TestARefusedDeleteKeepsTheFinalizer(t *testing.T) {
 	}
 	if api.deleteCalls != 1 {
 		t.Errorf("the control plane was asked to delete %d times, want 1", api.deleteCalls)
+	}
+}
+
+// A delete that cannot be answered, by a control plane that cannot list its
+// clusters either, keeps the finalizer: nothing says the cluster is gone.
+func TestAnUnreachableControlPlaneKeepsTheFinalizer(t *testing.T) {
+	api := &fakeControlPlane{
+		deleteCall: func(string) error { return errors.New("the control plane is unreachable") },
+		clusters:   func() ([]atlascp.Cluster, error) { return nil, errors.New("unreachable") },
+	}
+	now := metav1.Now()
+	deleting := newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.DeletionTimestamp = &now
+	})
+	r := newClusterReconciler(t, api, &recorder{}, deleting)
+
+	if cluster := reconcileCluster(t, r, 1); len(cluster.Finalizers) == 0 {
+		t.Fatal("the finalizer was removed while nothing said the backend cluster is gone")
+	}
+}
+
+// A delete refused after the cluster is gone releases the object. The forced
+// delete can finish after the client gave up, and the retry, sent as the
+// cluster whose secret went with it, is answered 401: the control plane's own
+// list, read as the operator, is what says the cluster is gone.
+func TestADeleteRefusedForAClusterAlreadyGoneReleasesTheObject(t *testing.T) {
+	api := &fakeControlPlane{
+		deleteCall: func(string) error { return errors.New(`the control plane answered 401: {"detail":"Invalid token"}`) },
+		clusters:   func() ([]atlascp.Cluster, error) { return []atlascp.Cluster{{ID: "another-cluster"}}, nil },
+	}
+	now := metav1.Now()
+	deleting := newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.DeletionTimestamp = &now
+	})
+	r := newClusterReconciler(t, api, &recorder{}, deleting)
+
+	ctx := context.Background()
+	key := types.NamespacedName{Namespace: testNamespace, Name: testClusterName}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var cluster simplyblockv1alpha2.StorageCluster
+	if err := r.Get(ctx, key, &cluster); err == nil && len(cluster.Finalizers) > 0 {
+		t.Errorf("finalizers = %v, want them released for a cluster already gone", cluster.Finalizers)
 	}
 }
 

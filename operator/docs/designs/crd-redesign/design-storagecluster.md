@@ -874,6 +874,14 @@ objects are deleted after it, by their owner reference, and release without a
 removal (design-storagenode.md §4.5). Its pools are deleted the same way, and a
 pool still holds while a class is assigned or a claim is bound, though the data
 behind it is gone.
+
+**A cluster already gone is a cluster deleted.** A forced delete shuts every node
+down before it removes the cluster, which can outlast the client's timeout. The
+retry then finds the cluster gone: answered 404, or 401, because it authenticates
+with the cluster's own secret, which went with the cluster. So a delete that is
+refused is followed by a read of the control plane's cluster list as the
+operator, and a cluster the list no longer carries releases the object. A list
+that cannot be read says nothing, and the delete is retried.
 The CSI credentials entry is removed next, and the finalizer last.
 
 A CR with no `status.uuid` has nothing to delete, and its finalizer is removed
