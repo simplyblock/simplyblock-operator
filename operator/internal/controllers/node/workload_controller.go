@@ -443,6 +443,7 @@ func (r *StorageNodeWorkloadReconciler) reconcileService(
 // The slice is built from the StorageNode objects rather than from a list on the
 // cluster, because the nodes are what say which workers are in the storage plane
 // now: a relocation adds the target before the node's own spec.workerNode moves.
+// A remote node is the peer site's, runs on no worker here, and is not published.
 func (r *StorageNodeWorkloadReconciler) reconcileEndpointSlice(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
@@ -456,7 +457,7 @@ func (r *StorageNodeWorkloadReconciler) reconcileEndpointSlice(
 	addresses := map[string]string{}
 	for i := range nodes.Items {
 		node := &nodes.Items[i]
-		if node.Spec.ClusterRef != cluster.Name {
+		if node.Spec.ClusterRef != cluster.Name || node.IsRemote() {
 			continue
 		}
 		if _, known := addresses[node.Spec.WorkerNode]; known {

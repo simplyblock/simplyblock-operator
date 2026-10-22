@@ -291,6 +291,8 @@ func (r *StorageNodeOpsReconciler) Reconcile(
 		case err != nil:
 			return ctrl.Result{}, err
 		case node.Status.ActiveOpsRef == ops.Name:
+		case node.IsRemote():
+			// The lock refuses a remote node's operation; the gate does not hold it.
 		default:
 			ready, reason, err := r.clusterReady(ctx, node)
 			if err != nil {
@@ -660,6 +662,15 @@ func (r *StorageNodeOpsReconciler) acquireLock(
 		return false, err
 	}
 
+	// A remote node is the peer site's, managed by that site's operator.
+	// Admission refuses an operation on one; this is the refusal for an
+	// operation admitted while the webhook was down or on a failed read.
+	if node.IsRemote() {
+		_, err := r.finish(ctx, ops, simplyblockv1alpha2.StorageNodeOpsPhaseFailed,
+			remoteNodeRefusal(node))
+		return false, err
+	}
+
 	if held := node.Status.ActiveOpsRef; held != "" && held != ops.Name {
 		r.emit(ctx, ops, corev1.EventTypeNormal, OperationQueued, fmt.Sprintf(
 			"Node %s is held by operation %s; this one is waiting", node.Name, held))
@@ -736,6 +747,14 @@ func (r *StorageNodeOpsReconciler) releaseLock(
 	}
 	operationActiveState.WithLabelValues(node.Spec.ClusterRef, node.Name).Set(0)
 	return nil
+}
+
+// remoteNodeRefusal is the terminal message for an operation whose target is a
+// remote node of a stretched cluster.
+func remoteNodeRefusal(node *simplyblockv1alpha2.StorageNode) string {
+	return fmt.Sprintf("RemoteNode: node %s belongs to site %q of the stretched cluster "+
+		"and is managed by that site's operator; run the operation there",
+		node.Name, node.Spec.Config.Site)
 }
 
 // node reads the operation's target.
@@ -923,6 +942,7 @@ func readingFromDTO(dto subscriptions.NodeDTO) NodeReading {
 		LvolPort:      dto.LvolPort,
 		NVMeOFPort:    dto.NVMeOFPort,
 		FailureDomain: dto.FailureDomain,
+		Site:          dto.Site,
 
 		SecondaryNodeID: dto.SecondaryNodeID,
 		TertiaryNodeID:  dto.TertiaryNodeID,

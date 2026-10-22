@@ -821,6 +821,16 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
 	}
+	if err := (&nodecontroller.RemoteNodeReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagenode-remote-controller"),
+		API:      nodecontroller.NewControlPlane(controlPlaneEndpoint),
+		Nodes:    nodeSubscription,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeRemote")
+		os.Exit(1)
+	}
 	if err := (&nodecontroller.StorageNodeOpsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),

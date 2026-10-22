@@ -279,7 +279,8 @@ func plannedFootprint(
 	return planned
 }
 
-// existingFootprint is every storage node a cluster already has.
+// existingFootprint is every storage node a cluster already has on this site.
+// A remote node is the peer site's node of a stretched cluster and is skipped.
 func existingFootprint(
 	ctx context.Context, reader client.Reader, namespace, cluster string,
 ) (footprint, error) {
@@ -290,7 +291,7 @@ func existingFootprint(
 	held := newFootprint()
 	for i := range nodes.Items {
 		node := &nodes.Items[i]
-		if node.Spec.ClusterRef != cluster {
+		if node.Spec.ClusterRef != cluster || node.IsRemote() {
 			continue
 		}
 		slot := int32(0)

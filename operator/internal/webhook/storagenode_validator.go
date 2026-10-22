@@ -93,6 +93,16 @@ func (v *StorageNodeValidator) Handle(
 func (v *StorageNodeValidator) admitCreate(
 	ctx context.Context, node *simplyblockv1alpha2.StorageNode, byOperator bool,
 ) admission.Response {
+	// A remote node is the other site's node, which the operator lists from the
+	// control plane. One written by anyone else is a record of a node no site
+	// manages, and migration and placement would resolve a peer-site UUID to it.
+	if node.IsRemote() && !byOperator {
+		return admission.Denied(fmt.Sprintf(
+			"RemoteNode: StorageNode %s is marked spec.stretched.remote, and only the operator lists "+
+				"the other site's nodes; create a node of this site without the mark instead",
+			node.Name))
+	}
+
 	// The reference is immutable from creation, which is what makes admission the
 	// right place. A node naming a cluster that is not there can never be
 	// corrected — the field cannot be edited, so the only remedy is to delete the

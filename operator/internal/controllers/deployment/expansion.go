@@ -537,7 +537,8 @@ type slotKey struct {
 	slot   int32
 }
 
-// nodesOfCluster indexes the cluster's existing nodes by the slot each fills.
+// nodesOfCluster indexes the cluster's existing nodes on this site by the slot
+// each fills. A remote node is the peer site's and fills no slot here.
 func (r *ClusterDeploymentConfigReconciler) nodesOfCluster(
 	ctx context.Context, namespace, cluster string,
 ) (map[slotKey]string, error) {
@@ -548,7 +549,7 @@ func (r *ClusterDeploymentConfigReconciler) nodesOfCluster(
 	filled := map[slotKey]string{}
 	for i := range nodes.Items {
 		node := &nodes.Items[i]
-		if node.Spec.ClusterRef != cluster {
+		if node.Spec.ClusterRef != cluster || node.IsRemote() {
 			continue
 		}
 		slot := int32(0)

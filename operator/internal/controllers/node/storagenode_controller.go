@@ -253,6 +253,13 @@ func (r *StorageNodeReconciler) Reconcile(
 		ctx = authenticatedContext(ctx, secret, err)
 	}
 
+	// A stretched cluster's other-site node is listed here as a record: it runs
+	// no workload on this cluster, holds no finalizer, and its deletion removes
+	// nothing from the control plane (remote_controller.go).
+	if node.IsRemote() {
+		return r.reconcileRemote(ctx, &node, cluster)
+	}
+
 	if !node.DeletionTimestamp.IsZero() {
 		return r.teardown(ctx, &node)
 	}
