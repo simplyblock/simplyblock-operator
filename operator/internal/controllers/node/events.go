@@ -26,6 +26,7 @@ const (
 	// controller, and the event is the only thing that distinguishes them.
 	ClusterNotReady      = "ClusterNotReady"
 	FailureDomainMissing = "FailureDomainMissing"
+	SiteMissing          = "SiteMissing"
 	HostUnreachable      = "HostUnreachable"
 	AwaitingSlot         = "AwaitingSlot"
 

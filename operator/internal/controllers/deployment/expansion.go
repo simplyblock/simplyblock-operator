@@ -290,6 +290,7 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 			Arbitration:              template.Arbitration,
 			FabricType:               template.FabricType,
 			EnableFailureDomains:     template.EnableFailureDomains,
+			EnableSyncReplication:    template.EnableSyncReplication,
 			EnableNodeAffinity:       template.EnableNodeAffinity,
 			NvmfBasePort:             ports.NVMf,
 			RpcBasePort:              ports.Rpc,
@@ -625,6 +626,7 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 				Expand:           expansionOf(config),
 				DeviceNames:      devicesOf(group),
 				FailureDomain:    group.FailureDomain,
+				Site:             group.Site,
 				SpdkSystemMemory: group.SpdkSystemMemory,
 				// The core ids this group's machines hold back. It reaches the
 				// node's own entry in the per-node ConfigMap, which is where a

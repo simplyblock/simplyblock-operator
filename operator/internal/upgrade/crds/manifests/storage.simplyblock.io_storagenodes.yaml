@@ -588,6 +588,18 @@ spec:
                       maxLength: 63
                       pattern: ^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$
                       type: string
+                    site:
+                      description: |-
+                        Site is the replication site this node belongs to, one of the cluster's two
+                        sites, copied from the ClusterDeploymentConfig node group that produced the
+                        node. Required when the cluster has enableSyncReplication=true. Immutable: a
+                        host sits entirely on one site for the cluster's life.
+                      maxLength: 63
+                      pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
+                      type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     sizing:
                       description: |-
                         Sizing is what this node's huge pages and core layout were sized from.
@@ -670,6 +682,8 @@ spec:
                       rule: '!has(oldSelf.driveSizeRange) || has(self.driveSizeRange)'
                     - message: field failureDomain is immutable once set
                       rule: '!has(oldSelf.failureDomain) || has(self.failureDomain)'
+                    - message: field site is immutable once set
+                      rule: '!has(oldSelf.site) || has(self.site)'
                     - message: field expand is immutable once set
                       rule: '!has(oldSelf.expand) || has(self.expand)'
                 nodeIndex:
