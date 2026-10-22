@@ -407,6 +407,7 @@ rules:
   - storagepoolops/finalizers
   - storagepools/finalizers
   - storagesitedeployments/finalizers
+  - stretchedclusters/finalizers
   - tasks/finalizers
   - testfailovers/finalizers
   - volumemigrations/finalizers
@@ -442,6 +443,7 @@ rules:
   - storagepoolops/status
   - storagepools/status
   - storagesitedeployments/status
+  - stretchedclusters/status
   - tasks/status
   - testfailovers/status
   - volumegroupsnapshotops/status
@@ -469,6 +471,16 @@ rules:
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - stretchedclusters
+  verbs:
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - view.open-cluster-management.io

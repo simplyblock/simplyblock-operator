@@ -1043,6 +1043,16 @@ func main() {
 		}).SetupWithManager(mgr); err != nil {
 			return fmt.Errorf("controller StorageSiteDeployment: %w", err)
 		}
+		// A stretched cluster is two site deployments joined on the hub, which
+		// also runs the control plane the follower's credentials are read from.
+		if err := (&controller.StretchedClusterReconciler{
+			Client:       mgr.GetClient(),
+			Scheme:       mgr.GetScheme(),
+			Recorder:     mgr.GetEventRecorder("stretchedcluster-controller"),
+			ControlPlane: webapi.NewClient(),
+		}).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("controller StretchedCluster: %w", err)
+		}
 		return nil
 	}
 	if hasManifestWork {
@@ -1053,8 +1063,8 @@ func main() {
 	} else {
 		// OCM may be installed after the operator (the DR stack brings it): keep
 		// looking, and start the controllers once ManifestWork is served.
-		setupLog.Info("OCM ManifestWork resource not served yet; the TestFailover and "+
-			"StorageSiteDeployment controllers start once it is (hub-only)",
+		setupLog.Info("OCM ManifestWork resource not served yet; the TestFailover, "+
+			"StorageSiteDeployment, and StretchedCluster controllers start once it is (hub-only)",
 			"groupVersion", ocmWorkGroupVersion, "resource", ocmManifestWorkResource)
 		if err := mgr.Add(&ocmLateStart{log: setupLog, disc: workDiscovery, register: registerOCMControllers}); err != nil {
 			setupLog.Error(err, "unable to add the OCM ManifestWork watcher")

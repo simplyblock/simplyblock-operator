@@ -1,8 +1,10 @@
 package webapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 )
 
 type ClusterResponse struct {
@@ -59,4 +61,20 @@ func ParseClusterResponse(body []byte) (ClusterResponse, error) {
 		NPCS:              payload.NPCS,
 		MaxFaultTolerance: payload.MaxFaultTolerance,
 	}, nil
+}
+
+// GetCluster reads one cluster by its id, with the cluster secret the control
+// plane returns to an administrator: the hub of a stretched cluster reads it to
+// hand the follower site the credentials that adopt the cluster its leader
+// created.
+func (c *Client) GetCluster(ctx context.Context, clusterUUID string) (ClusterResponse, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/", clusterUUID)
+	body, status, err := c.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return ClusterResponse{}, fmt.Errorf("get cluster %s: %w", clusterUUID, err)
+	}
+	if status >= 300 {
+		return ClusterResponse{}, fmt.Errorf("get cluster %s: status %d: %s", clusterUUID, status, string(body))
+	}
+	return ParseClusterResponse(body)
 }
