@@ -24,8 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
-	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
-	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/mdsfailover"
 )
 
 // resyncAfterRestart reassembles a Ready export whose metadata server pod is
@@ -143,14 +142,7 @@ func (r *NFSExportReconciler) assemblingInstance(ctx context.Context, export *si
 // with no mounts and no exports. The container's ID is new every time it
 // starts. A pod with no running runner yet is named by its UID alone, which
 // matches no assembled instance, so the export is reassembled once it runs.
-func mdsInstance(pod *corev1.Pod) string {
-	for _, c := range pod.Status.ContainerStatuses {
-		if c.Name == driver.MDSContainerName && c.ContainerID != "" {
-			return string(pod.UID) + "/" + c.ContainerID
-		}
-	}
-	return string(pod.UID)
-}
+func mdsInstance(pod *corev1.Pod) string { return mdsfailover.Instance(pod) }
 
 // exportsBoundToPod maps a metadata server pod to the exports bound to it.
 // Exports are few, so they are listed rather than indexed.
@@ -233,7 +225,7 @@ func (r *NFSExportReconciler) exportServiceIP(ctx context.Context, export *simpl
 		return ""
 	}
 	var svc corev1.Service
-	key := client.ObjectKey{Namespace: r.OperatorNamespace, Name: utils.MDSServiceName(export.Status.MDSPodName)}
+	key := client.ObjectKey{Namespace: r.OperatorNamespace, Name: mdsServiceNameOf(export.Status.MDSPodName)}
 	if err := r.Get(ctx, key, &svc); err != nil {
 		return ""
 	}

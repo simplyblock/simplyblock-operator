@@ -1868,6 +1868,30 @@ class StaleReservations(unittest.TestCase):
         self.assertEqual({f.severity for f in self.found(reservations_post=post)},
                          {Severity.INFO})
 
+    def test_the_key_of_a_guest_epoch_is_never_a_client_or_stale(self):
+        """A warm-standby guest registers 0x01 << 56 | tag24 << 32 | epoch. Read as a client
+        key it was 'from the boot at 1970-11-20' (pnfs-1792608253)."""
+        epoch_key = 0x01A9EA4300000008
+        post = [resv("lv1", ("host-a", NEW_BOOT))]
+        post[0] = NamespaceReservation(
+            node="w1", device="nvme3n1", uuid="lv1", rtype=4, generation=4,
+            registrants=(*post[0].registrants,
+                         Registrant(hostid="mds-epoch", rkey=epoch_key, holder=False)))
+        found = self.found(reservations_post=post)
+        self.assertEqual({f.severity for f in found}, {Severity.INFO})
+        self.assertEqual(found[0].evidence["clients"], ["host-a"])
+
+    def test_a_client_key_from_an_earlier_boot_beside_a_guest_epoch_key_is_reported(self):
+        epoch_key = 0x01A9EA4300000008
+        base = resv("lv1", ("host-a", NEW_BOOT), ("host-b", OLD_BOOT))
+        post = [NamespaceReservation(
+            node="w1", device="nvme3n1", uuid="lv1", rtype=4, generation=4,
+            registrants=(*base.registrants,
+                         Registrant(hostid="mds-epoch", rkey=epoch_key, holder=False)))]
+        crit = [f for f in self.found(reservations_post=post) if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(crit), 1)
+        self.assertEqual(crit[0].evidence["stale"], ["host-b"])
+
     def test_clients_registered_with_no_holder_is_a_warning(self):
         post = [resv("lv1", ("host-a", NEW_BOOT), holder=False)]
         self.assertEqual([f.severity for f in self.found(reservations_post=post)

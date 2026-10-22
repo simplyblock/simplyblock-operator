@@ -13,6 +13,8 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -32,7 +34,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/simplyblock/atlas/lvol"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/mdsstate"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 const (
@@ -71,6 +76,12 @@ const (
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=daemonsets;statefulsets,verbs=get;list;watch;create;update;patch;delete
+// The metadata server's coordinator reads the exports of a storage cluster to
+// name its volumes and the pods of the StatefulSet to tell whether a standby is
+// ready. It writes only the StatefulSet's replicas, annotations, and finalizer,
+// which the statefulsets rule above already allows (update and patch).
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=nfsexports,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=serviceaccounts;configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete;escalate;bind
 // rbac-justified: rbac.go's csiAddonsRole/csiAddonsRoleBinding are a
@@ -102,6 +113,15 @@ type SimplyblockDriverReconciler struct {
 	// decides both whether a VolumeSnapshotClass is applied and what
 	// status.snapshotSupport records (§4.1).
 	Snapshots SnapshotAPI
+
+	// MDSState runs the metadata server's state volume, allowed hosts, and
+	// scale for each storage cluster. Nil leaves them to nobody, which is the
+	// state of an operator that has no control-plane client wired for it.
+	MDSState *mdsstate.Coordinator
+
+	// OnHosts receives each pass's allowed-hosts result, which the takeover
+	// reads to hold a promotion for a volume whose hosts are not all allowed.
+	OnHosts func(mdsstate.HostResult)
 }
 
 func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -202,7 +222,8 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	logger.V(1).Info("applied the driver deployment", "driver", names(&d).csiDriver, "adopted", met)
 
-	if err := r.refreshMDS(ctx, &d); err != nil {
+	mdsRetry, err := r.refreshMDS(ctx, &d)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -235,7 +256,16 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{RequeueAfter: driverResyncInterval}, nil
+	return ctrl.Result{RequeueAfter: soonest(driverResyncInterval, mdsRetry)}, nil
+}
+
+// soonest is the shorter of the resync interval and a retry, where zero means
+// no retry was asked for.
+func soonest(resync, wait time.Duration) time.Duration {
+	if wait > 0 && wait < resync {
+		return wait
+	}
+	return resync
 }
 
 // refreshMDS brings every metadata server StatefulSet of this driver to the
@@ -244,16 +274,21 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 // which on a cluster nothing is provisioning on is the next workload's first
 // volume. It never creates one: that is the export's. Resources the runner
 // would refuse leave the running guest as it is, and say why.
-func (r *SimplyblockDriverReconciler) refreshMDS(ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver) error {
+//
+// It then runs the coordinator for each StatefulSet, and returns the shortest
+// retry any of them asked for.
+func (r *SimplyblockDriverReconciler) refreshMDS(
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
+) (time.Duration, error) {
 	if d.Spec.PNFS.MDS == nil {
-		return nil
+		return 0, nil
 	}
 	var list appsv1.StatefulSetList
 	if err := r.List(ctx, &list, client.InNamespace(d.Namespace), client.HasLabels{MDSClusterLabel}); err != nil {
-		return fmt.Errorf("listing the metadata server StatefulSets: %w", err)
+		return 0, fmt.Errorf("listing the metadata server StatefulSets: %w", err)
 	}
 	if len(list.Items) == 0 {
-		return nil
+		return 0, nil
 	}
 	data, err := EnsureMDSDataNetwork(ctx, r.Client, d)
 	var fallback *MDSDataNetworkFallback
@@ -261,26 +296,113 @@ func (r *SimplyblockDriverReconciler) refreshMDS(ctx context.Context, d *simplyb
 	case stderrors.As(err, &fallback):
 		r.event(d, corev1.EventTypeWarning, fallback.Reason, fallback.Message)
 	case err != nil:
-		return err
+		return 0, err
 	}
+	var wait time.Duration
 	for i := range list.Items {
 		sts := &list.Items[i]
+		if !sts.DeletionTimestamp.IsZero() {
+			if err := r.finalizeMDS(ctx, sts); err != nil {
+				r.event(d, corev1.EventTypeWarning, mdsstate.ReasonStateUnavailable,
+					fmt.Sprintf("cannot delete the state volume of %s: %v", sts.Name, err))
+				wait = shorter(wait, mdsRetryInterval)
+			}
+			continue
+		}
 		if problem := MDSResourcesProblem(d.Spec.PNFS.MDS); problem != "" {
 			r.event(d, corev1.EventTypeWarning, reasonMDSResourcesInvalid,
 				fmt.Sprintf("cannot update the metadata server StatefulSet %s: %s", sts.Name, problem))
-			return nil
+			return wait, nil
 		}
 		updated, err := UpdateMDS(ctx, r.Client, d, sts, data)
 		if err != nil {
-			return err
+			return wait, err
 		}
 		if updated {
 			r.event(d, corev1.EventTypeNormal, reasonMDSUpdated,
 				fmt.Sprintf("updated the metadata server StatefulSet %s to this release's pod template, "+
 					"which restarts its guest", sts.Name))
 		}
+		again, err := r.coordinateMDS(ctx, d, sts)
+		if err != nil {
+			return wait, err
+		}
+		wait = shorter(wait, again)
 	}
-	return nil
+	return wait, nil
+}
+
+// mdsRetryInterval is how long a refused state volume deletion waits.
+const mdsRetryInterval = 30 * time.Second
+
+// shorter is the smaller of two retries, where zero means none.
+func shorter(a, b time.Duration) time.Duration {
+	if a == 0 || (b != 0 && b < a) {
+		return b
+	}
+	return a
+}
+
+// finalizeMDS releases a deleted StatefulSet's state volume.
+func (r *SimplyblockDriverReconciler) finalizeMDS(ctx context.Context, sts *appsv1.StatefulSet) error {
+	if r.MDSState == nil {
+		return nil
+	}
+	return r.MDSState.Finalize(ctx, sts, sts.Labels[MDSClusterLabel])
+}
+
+// coordinateMDS runs the state volume, allowed hosts, and scale for one
+// StatefulSet, with the storage cluster's exports and the StatefulSet's pods.
+func (r *SimplyblockDriverReconciler) coordinateMDS(
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver, sts *appsv1.StatefulSet,
+) (time.Duration, error) {
+	if r.MDSState == nil {
+		return 0, nil
+	}
+	clusterID := sts.Labels[MDSClusterLabel]
+	exports, err := r.clusterExports(ctx, clusterID)
+	if err != nil {
+		return 0, err
+	}
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(sts.Namespace),
+		client.MatchingLabels{"app": sts.Name}); err != nil {
+		return 0, fmt.Errorf("listing the pods of %s: %w", sts.Name, err)
+	}
+	coordinator := *r.MDSState
+	coordinator.Events = func(eventType, reason, message string) { r.event(d, eventType, reason, message) }
+	res, err := coordinator.Reconcile(ctx, mdsstate.Input{
+		StatefulSet: sts, ClusterID: clusterID, Standbys: MDSStandbys(d.Spec.PNFS.MDS),
+		Exports: exports, Pods: pods.Items,
+	})
+	if r.OnHosts != nil {
+		r.OnHosts(res.Hosts)
+	}
+	return res.RequeueAfter, err
+}
+
+// clusterExports are the volume handles of the storage cluster's exports, the
+// oldest export first, since the first one's pool holds the state volume.
+func (r *SimplyblockDriverReconciler) clusterExports(ctx context.Context, clusterID string) ([]lvol.VolumeHandle, error) {
+	var list simplyblockv1alpha2.NFSExportList
+	if err := r.List(ctx, &list); err != nil {
+		return nil, fmt.Errorf("listing the NFS exports: %w", err)
+	}
+	items := slices.DeleteFunc(slices.Clone(list.Items), func(e simplyblockv1alpha2.NFSExport) bool {
+		h, ok := lvol.ParseHandle(lvol.VolumeHandle(e.Spec.VolumeRef))
+		return !ok || h.ClusterID != clusterID || !e.DeletionTimestamp.IsZero()
+	})
+	slices.SortFunc(items, func(a, b simplyblockv1alpha2.NFSExport) int {
+		if c := a.CreationTimestamp.Compare(b.CreationTimestamp.Time); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Namespace+"/"+a.Name, b.Namespace+"/"+b.Name)
+	})
+	out := make([]lvol.VolumeHandle, 0, len(items))
+	for _, e := range items {
+		out = append(out, lvol.VolumeHandle(e.Spec.VolumeRef))
+	}
+	return out, nil
 }
 
 // observe reads the two workloads and the registration back, which is what §4.2
@@ -333,7 +455,7 @@ func (r *SimplyblockDriverReconciler) event(
 	// The action is the reason, as every other recorder call in this operator
 	// passes it. It is a required field, and the phase would be empty on the
 	// first event an object ever emits.
-	r.Recorder.Eventf(d, nil, eventType, reason, reason, "%s", message)
+	r.Recorder.Eventf(d, nil, eventType, reason, reason, "%s", utils.EventNote(message))
 }
 
 // desired is every object this deployment owns, in the order it is applied:

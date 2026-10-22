@@ -7,13 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/simplyblock/atlas/nfsexport/nfsexportrpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
 func healthy() Health {
 	return Health{
-		StateDir: "/var/lib/nfs",
+		StateDir: stateDir,
 		Mounted:  func(string) (bool, error) { return true, nil },
 		NFSD:     func() error { return nil },
 	}
@@ -34,7 +35,7 @@ func TestAGuestWithoutItsStateDiskIsUnhealthy(t *testing.T) {
 	if err := h.Check(); err == nil {
 		t.Error("Check passed with the state disk not mounted")
 	}
-	if asked != "/var/lib/nfs" {
+	if asked != stateDir {
 		t.Errorf("checked %q, want the state directory", asked)
 	}
 
@@ -91,4 +92,47 @@ func TestReportFollowsTheCheck(t *testing.T) {
 	waitStatus(t, s, healthpb.HealthCheckResponse_NOT_SERVING)
 	failing.Store(false)
 	waitStatus(t, s, healthpb.HealthCheckResponse_SERVING)
+}
+
+func roleOf(r nfsexportrpc.Role) func() nfsexportrpc.Role {
+	return func() nfsexportrpc.Role { return r }
+}
+
+// U-21: a standby has no state volume and no nfsd, and is still ready.
+func TestHealthU21ABootedStandbyServesWithoutTheStateVolumeOrNFSD(t *testing.T) {
+	h := Health{
+		StateDir: stateDir,
+		Role:     roleOf(nfsexportrpc.RoleStandby),
+		Mounted:  func(string) (bool, error) { return false, nil },
+		NFSD:     func() error { return errors.New("nfsd has no threads") },
+	}
+	if err := h.Check(); err != nil {
+		t.Errorf("Check = %v, want a standby to serve", err)
+	}
+}
+
+func TestHealthU21AnActiveGuestNeedsTheStateVolumeAndNFSD(t *testing.T) {
+	h := healthy()
+	h.Role = roleOf(nfsexportrpc.RoleActive)
+	if err := h.Check(); err != nil {
+		t.Errorf("Check = %v, want an active guest with both to serve", err)
+	}
+	h.Mounted = func(string) (bool, error) { return false, nil }
+	if err := h.Check(); err == nil {
+		t.Error("an active guest without its state volume served")
+	}
+	h = healthy()
+	h.Role = roleOf(nfsexportrpc.RoleActive)
+	h.NFSD = func() error { return errors.New("nfsd has no threads") }
+	if err := h.Check(); err == nil {
+		t.Error("an active guest without nfsd threads served")
+	}
+}
+
+func TestHealthAGuestInTheMiddleOfAPromotionIsNotServing(t *testing.T) {
+	h := healthy()
+	h.Role = roleOf(nfsexportrpc.RolePromoting)
+	if err := h.Check(); err == nil {
+		t.Error("a promoting guest served")
+	}
 }

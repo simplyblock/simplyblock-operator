@@ -12,7 +12,8 @@ that fencing did not happen.
 A key is stale when its boot time is older than the newest boot among the namespace's
 client keys, or older than an MDS restart the run recorded (`chaos.restart`): after a
 restart no client may have managed to register at all, and then every key is from the
-earlier boot. The metadata server's own key carries no boot time and is never judged.
+earlier boot. The metadata server's own key (the constant one, or a guest's epoch key) carries no boot
+time and is never judged.
 """
 
 from __future__ import annotations
@@ -39,12 +40,19 @@ from ..core import (
 MDS_KEY = 0x0100000000000000
 
 
+def is_mds_key(key: int) -> bool:
+    """Whether `key` is a metadata server's, not a client's. A warm-standby guest registers
+    `0x01 << 56 | tag24 << 32 | epoch`, and the constant key above is in the same range. A
+    client's key leads with its nfsd boot time, which has a top byte of 0x01 only in 1970."""
+    return key >> 56 == 0x01
+
+
 def _boot(key: int) -> int:
     return key >> 32
 
 
 def _clients(ns: NamespaceReservation) -> list[Registrant]:
-    return [r for r in ns.registrants if r.rkey not in (0, MDS_KEY)]
+    return [r for r in ns.registrants if r.rkey != 0 and not is_mds_key(r.rkey)]
 
 
 def _stale(ns: NamespaceReservation, restarted: int = 0) -> list[Registrant]:

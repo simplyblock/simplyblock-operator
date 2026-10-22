@@ -39,9 +39,10 @@ import (
 
 	"github.com/simplyblock/atlas/link"
 	exportpkg "github.com/simplyblock/atlas/nfsexport"
-	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/mdsfailover"
+	"github.com/simplyblock/simplyblock-operator/internal/mdsstate"
 )
 
 // phase is an alias so the graph below reads as a table.
@@ -114,6 +115,11 @@ type NFSExportReconciler struct {
 	// server address the export no longer uses. Nil skips it, so the kind
 	// works without csi-link (design-pnfs-mds-vm.md §8.1).
 	Flows FlowForgetter
+
+	// Serving holds a binding until the active metadata server serves. Nil binds
+	// to the StatefulSet's first pod at once, which is what a deployment with no
+	// csi-link and the tests that predate the takeover rely on.
+	Serving MDSServingGate
 
 	// withdrawn is each export's address withdrawn while its pod went away,
 	// until the replacement's address replaces it.
@@ -488,7 +494,9 @@ func (r *NFSExportReconciler) exportHost(
 		return host
 	}
 	if owner := metav1.GetControllerOf(&pod); owner != nil && owner.Kind == "StatefulSet" {
-		host.HostNQN = nqn.Host(string(owner.UID))
+		if n, err := mdsstate.HostNQN(owner.UID, int32(mdsfailover.Ordinal(name))); err == nil {
+			host.HostNQN = n
+		}
 	}
 	return host
 }
