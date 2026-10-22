@@ -332,9 +332,9 @@ and `volumeAutoPlacement` (above), not on the migration itself.
 
 Singleton, **one per namespace, named `simplyblock`**, created by the Helm
 chart, must not be created or deleted by hand. `spec.image` is pattern-checked
-against three trusted registries (`quay.io/simplyblock-io`,
-`docker.io/simplyblock`, `public.ecr.aws/simply-block`) with optional digest
-pinning; StorageNodeSets omitting `spec.clusterImage` inherit it.
+as a well-formed image reference from any registry, mirrors included, carrying
+a tag, a digest, or both. StorageNodeSets omitting `spec.clusterImage` inherit
+it.
 `status.phase` enum `[Initializing Ready]` — Ready once the FDB health check
 passes — plus `message` and `lastChecked`.
 

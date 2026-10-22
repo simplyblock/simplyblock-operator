@@ -176,6 +176,7 @@ func TestTheApiserverStampsAndPolicesTheImageSlots(t *testing.T) {
 		config := aStoredDocument(t, apiClient, "images-mirror")
 		mirrored := []string{
 			"registry.airgap.local:5000/simplyblock/simplyblock:main",
+			"registry.simplyblock.ai/simplyblock/simplyblock-operator:latest",
 			"mirror.example.com/a/b/c/spdk:v1.2.3@sha256:" + strings.Repeat("a", 64),
 			"localhost/ultra@sha256:" + strings.Repeat("0", 64),
 			"ultra:main-latest",
