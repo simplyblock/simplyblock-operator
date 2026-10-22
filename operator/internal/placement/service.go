@@ -639,3 +639,33 @@ func describe(reasons map[string]string) string {
 	}
 	return strings.Join(parts, "; ")
 }
+
+// Choose places a volume the operator creates itself, such as a restore, by
+// the same ranking as Place, and answers the member's backend UUID. There is no
+// claim to record the choice on yet, so the caller records it, in its own
+// status, before acting on it.
+func (s *Service) Choose(
+	ctx context.Context, supercluster *simplyblockv1alpha2.StorageCluster, poolName, volumeName string, size int64,
+) (string, error) {
+	start := s.now()
+	lock := s.lockFor(supercluster.UID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	members, err := s.members(ctx, supercluster)
+	if err != nil {
+		return "", err
+	}
+	req := placementrpc.Request{PoolName: poolName, VolumeName: volumeName, SizeBytes: size}
+	chosen, err := s.rankMembers(ctx, supercluster, members, req)
+	if err != nil {
+		observeDecision(supercluster, nil, resultExhausted, s.now().Sub(start))
+		return "", err
+	}
+	s.mu.Lock()
+	l := s.ledgerOf(chosen.Status.UUID)
+	l.placed = append(l.placed, placed{volume: volumeName, size: size, at: s.now()})
+	s.mu.Unlock()
+	observeDecision(supercluster, chosen, resultPlaced, s.now().Sub(start))
+	return chosen.Status.UUID, nil
+}

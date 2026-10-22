@@ -780,10 +780,11 @@ func main() {
 			"spec.backupRef and spec.clusterRef. Delete them and restart the operator",
 			"operations", legacyOps)
 	} else if err := (&backupcontrollers.StorageBackupOpsReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("storagebackupops-controller"),
-		API:      backupAPI,
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorder("storagebackupops-controller"),
+		API:       backupAPI,
+		Placement: placementService,
 	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupOps")
 		os.Exit(1)

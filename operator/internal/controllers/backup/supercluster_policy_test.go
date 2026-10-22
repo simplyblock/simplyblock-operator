@@ -244,3 +244,57 @@ func TestAPolicyOnASuperclusterWithoutMembersWaits(t *testing.T) {
 		t.Errorf("phase = %s (%q), want Pending naming the supercluster", policy.Status.Phase, policy.Status.Message)
 	}
 }
+
+// fakeChooser answers Choose with a fixed member and remembers the requests.
+type fakeChooser struct {
+	member string
+	asked  []string // pool/volume/size
+}
+
+func (c *fakeChooser) Choose(
+	_ context.Context, _ *simplyblockv1alpha2.StorageCluster, pool, volume string, size int64,
+) (string, error) {
+	c.asked = append(c.asked, fmt.Sprintf("%s/%s/%d", pool, volume, size))
+	return c.member, nil
+}
+
+// A restore into a supercluster is placed among the members (design §9.5):
+// the member chosen and that member's backend pool are recorded before the
+// control plane is asked for anything, so a restart restores into the same
+// member.
+func TestARestoreIntoASuperclusterIsPlacedAmongTheMembers(t *testing.T) {
+	objects := backupSuperclusterObjects()[:3]
+	superclusterPool := &simplyblockv1alpha2.StoragePool{
+		ObjectMeta: objectMeta(testPoolCR),
+		Spec:       simplyblockv1alpha2.StoragePoolSpec{ClusterRef: backupSupercluster},
+		Status: simplyblockv1alpha2.StoragePoolStatus{Members: []simplyblockv1alpha2.PoolMemberStatus{
+			{Cluster: memberAName, UUID: "pool-in-a", Phase: simplyblockv1alpha2.StoragePoolPhaseReady},
+			{Cluster: memberBName, UUID: "pool-in-b", Phase: simplyblockv1alpha2.StoragePoolPhaseReady},
+		}},
+	}
+	ops := restoreOps(testOpsName)
+	ops.Spec.ClusterRef.Name = backupSupercluster
+	objects = append(objects, superclusterPool, availableBackup(), ops)
+	api := &fakeControlPlane{restoredID: testRestoreID}
+	r := opsReconciler(t, api, objects...)
+	chooser := &fakeChooser{member: memberBID}
+	r.Placement = chooser
+
+	for range 3 {
+		if _, err := r.Reconcile(context.Background(), opsRequest(testOpsName)); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+	}
+
+	var got simplyblockv1alpha2.StorageBackupOps
+	if err := r.Get(context.Background(), opsRequest(testOpsName).NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.ClusterID != memberBID || got.Status.PoolUUID != "pool-in-b" {
+		t.Errorf("status records cluster %q and pool %q, want %s and pool-in-b (message %q)",
+			got.Status.ClusterID, got.Status.PoolUUID, memberBID, got.Status.Message)
+	}
+	if len(chooser.asked) != 1 || chooser.asked[0] != fmt.Sprintf("%s/restored-claim/%d", testPoolCR, 1<<30) {
+		t.Errorf("placement was asked %v, want once for the backup's size", chooser.asked)
+	}
+}

@@ -610,3 +610,35 @@ func TestACloneFromOutsideTheSuperclusterIsRefused(t *testing.T) {
 		t.Errorf("the claim records %q, want nothing", got)
 	}
 }
+
+// Choose places a volume the operator creates itself, a restore, among the
+// members by the same ranking, and counts it against the member chosen, so a
+// restore and a CreateVolume in one burst see each other.
+func TestChooseRanksAndCountsTheVolume(t *testing.T) {
+	f := newFixture(t, nil, standardObjects(claim("data", nil))...)
+	sc := supercluster(simplyblockv1alpha2.PlacementMostAvailableCapacity)
+
+	first, err := f.service.Choose(context.Background(), sc, thePool, "restored-1", 40*gib)
+	if err != nil {
+		t.Fatalf("Choose: %v", err)
+	}
+	req := request("pvc-1", "data")
+	req.SizeBytes = 40 * gib
+	second, err := f.service.Place(context.Background(), req)
+
+	if err != nil || first == "" || second == first {
+		t.Errorf("Choose = %q, then Place = %q (%v); want two different members", first, second, err)
+	}
+}
+
+// Choose with no member with room is ResourceExhausted, as Place is.
+func TestChooseWithoutRoomIsExhausted(t *testing.T) {
+	f := newFixture(t, nil, standardObjects()...)
+
+	_, err := f.service.Choose(context.Background(), supercluster(simplyblockv1alpha2.PlacementMostAvailableCapacity),
+		thePool, "restored-1", 60*gib)
+
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Errorf("Choose = %v, want ResourceExhausted", err)
+	}
+}

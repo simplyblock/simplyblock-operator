@@ -43,7 +43,8 @@ reconciler hands it, records the member on the claim before answering, and
 keeps a consistency group in one member. The CSI controller asks it when a
 class's `cluster_id` names no cluster in its secret, sends a clone's source
 cluster with the request, and creates the volume in the member answered. Backup
-policies fan out per member (§9.5).
+policies fan out per member, and a restore into a supercluster is placed among
+the members (§9.5).
 
 Each phase ships on its own. Phase 1 produces a supercluster that reports one
 status and lets an administrator name the members directly, which is already
@@ -1502,7 +1503,10 @@ is in, which `status.attachedClaims[].clusterID` records. A member added later
 receives the policy on the next pass. Backup identifiers are
 not scoped by cluster in the control plane, so a backup taken in one member can
 be restored into another, and a restore through a supercluster class places the
-new volume by §7.2. A backup store is one per cluster, and the template writes
+new volume by §7.2. A `StorageBackupOps` restore whose `clusterRef` names a
+supercluster is placed by the same ranking in `Validating`, which records the
+member and that member's backend pool of the target pool before the control
+plane is asked for the copy, so a restart restores into the member chosen first. A backup store is one per cluster, and the template writes
 the same store to every member.
 
 ### 9.6 Cluster operations
