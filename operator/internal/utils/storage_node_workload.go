@@ -557,7 +557,7 @@ func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 // the cluster control-plane uses to reach a storage-node-api pod backing the
 // given worker node, in the Service the cluster's workload names name.
 func StorageNodeSetAPIAddress(workerNode, namespace string, names kube.WorkloadNames) string {
-	return fmt.Sprintf("%s.%s:5000", names.Hostname(workerNode), ServiceFQDN(names.NodeAPIService, namespace))
+	return fmt.Sprintf("%s.%s:5000", names.Hostname(workerNode), ServiceDNSName(names.NodeAPIService, namespace))
 }
 
 // BuildStorageNodeService is the headless Service the storage-node API pods'

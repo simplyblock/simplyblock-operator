@@ -399,9 +399,12 @@ Files: `operator/internal/controllers/node/rotation_test.go`, `migrate_test.go`,
 | U-106 | The certificate Secret changes: every affected object in the namespace is enqueued | Positive   | —                                                          |
 | U-107 | Certificates and Services are reconciled together for the cert-manager provider    | Positive   | —                                                          |
 | U-314 | TLS disabled: nothing is stamped, so no pod is rolled by the absence               | Boundary   | `TestWithoutTLSNothingIsStampedOnTheTemplate`              |
-| U-522 | The per-pod address is under the cluster DNS domain, not `cluster.local`           | Regression | `TestTheStorageNodeAPIAddressFollowsTheClusterDNSDomain`   |
-| U-523 | The serving certificate names the service under the cluster DNS domain only        | Positive   | `TestTheServingCertificateNamesTheClusterDNSDomain`        |
-| U-524 | No domain configured: the cluster DNS domain is `cluster.local`                    | Boundary   | `TestTheClusterDNSDomainDefaultsToClusterLocal`            |
+| U-522 | The per-pod address carries no cluster DNS domain                                  | Regression | `TestTheStorageNodeAPIAddressCarriesNoClusterDomain`       |
+| U-523 | The serving certificate names the service in both spellings                        | Positive   | `TestTheServingCertificateNamesBothSpellings`              |
+| U-524 | Nothing detected: the cluster DNS domain is `cluster.local`                        | Boundary   | `TestTheClusterDNSDomainDefaultsToClusterLocal`            |
+| U-525 | The cluster DNS domain is read from the resolver's search list                     | Positive   | `TestTheDomainIsReadFromTheResolverSearchList`             |
+| U-526 | A resolver with no `svc` entry is reported rather than guessed                     | Negative   | `TestAResolverWithoutAClusterSearchPathIsReported`         |
+| U-527 | A failed detection leaves the default domain in place                              | Boundary   | `TestDetectionFallsBackToTheDefaultDomain`                 |
 | U-525 | A domain given with a trailing dot is stored without it                            | Boundary   | `TestATrailingDotIsDropped`                                |
 | U-526 | A value that is not a DNS subdomain is refused and leaves the domain unchanged     | Negative   | `TestANonDomainIsRefused`                                  |
 

@@ -25,7 +25,7 @@ true
 {{- if .Values.csiConfig.simplybk.ip -}}
 {{ .Values.csiConfig.simplybk.ip }}
 {{- else -}}
-http://simplyblock-webappapi.{{ .Release.Namespace }}.svc.{{ .Values.clusterDnsDomain }}:5000
+http://simplyblock-webappapi.{{ .Release.Namespace }}.svc:5000
 {{- end -}}
 {{- end -}}
 
