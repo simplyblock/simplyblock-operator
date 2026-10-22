@@ -65,7 +65,7 @@ func TestMDSImageDefaultsToTheOperatorsBuildInTheDriversRepository(t *testing.T)
 	}
 
 	d.Spec.PNFS.MDS.Image = "docker.io/simplyblock/spdkcsi:pnfs-mds-pinned"
-	if got, err := mdsImage(d); err != nil || got != d.Spec.PNFS.MDS.Image {
+	if got, err := mdsImage(d); err != nil || got != string(d.Spec.PNFS.MDS.Image) {
 		t.Errorf("mdsImage = %q, %v, want the spec's", got, err)
 	}
 }
@@ -125,7 +125,7 @@ func TestMDSPodRunsTheRunnerPrivilegedOnAKVMNode(t *testing.T) {
 	pod := sts.Spec.Template.Spec
 	c := runnerContainer(t, sts)
 
-	if c.Image != d.Spec.PNFS.MDS.Image {
+	if c.Image != string(d.Spec.PNFS.MDS.Image) {
 		t.Errorf("image = %q, want %q", c.Image, d.Spec.PNFS.MDS.Image)
 	}
 	if c.SecurityContext == nil || c.SecurityContext.Privileged == nil || !*c.SecurityContext.Privileged {

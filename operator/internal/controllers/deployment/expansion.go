@@ -664,7 +664,7 @@ func imageOf(
 	slot func(*simplyblockv1alpha2.DeploymentImages) *simplyblockv1alpha2.ImageSpec,
 ) string {
 	if spec := imageSlot(config, slot); spec != nil {
-		return spec.Image
+		return string(spec.Image)
 	}
 	return ""
 }

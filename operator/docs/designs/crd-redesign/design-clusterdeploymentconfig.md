@@ -1822,9 +1822,8 @@ type ImageSpec struct {
 	// Image is the repository and tag, optionally digest-pinned. An empty value
 	// is not written downstream, so the field it would fill keeps its own
 	// default rather than being overridden with nothing.
-	// +kubebuilder:validation:Pattern=`^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$`
 	// +optional
-	Image string `json:"image,omitempty"`
+	Image crdtypes.ImageReference `json:"image,omitempty"`
 
 	// ImagePullPolicy is when that image is pulled, and defaults to Always
 	// because every image this product ships by default is a moving tag.

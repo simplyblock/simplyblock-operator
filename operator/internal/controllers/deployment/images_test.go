@@ -15,6 +15,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/simplyblock/atlas/crdtypes"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -185,7 +186,7 @@ func TestTheApiserverStampsAndPolicesTheImageSlots(t *testing.T) {
 		}
 		for _, image := range mirrored {
 			config.Spec.Images = &simplyblockv1alpha2.DeploymentImages{
-				NodeAgent: &simplyblockv1alpha2.ImageSpec{Image: image},
+				NodeAgent: &simplyblockv1alpha2.ImageSpec{Image: crdtypes.ImageReference(image)},
 			}
 			if err := apiClient.Update(ctx, config); err != nil {
 				t.Errorf("a mirrored image %q was refused: %v", image, err)
@@ -207,7 +208,7 @@ func TestTheApiserverStampsAndPolicesTheImageSlots(t *testing.T) {
 		}
 		for _, image := range malformed {
 			config.Spec.Images = &simplyblockv1alpha2.DeploymentImages{
-				NodeAgent: &simplyblockv1alpha2.ImageSpec{Image: image},
+				NodeAgent: &simplyblockv1alpha2.ImageSpec{Image: crdtypes.ImageReference(image)},
 			}
 			err := apiClient.Update(ctx, config)
 			if err == nil {

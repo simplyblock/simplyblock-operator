@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
+	"github.com/simplyblock/atlas/crdtypes"
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -356,10 +357,10 @@ func (c *Config) DraftImages() *simplyblockv1alpha2.DeploymentImages {
 
 	images := &simplyblockv1alpha2.DeploymentImages{}
 	if reference := strings.TrimSpace(c.Draft.Images.SPDK); reference != "" {
-		images.SPDK = &simplyblockv1alpha2.ImageSpec{Image: reference}
+		images.SPDK = &simplyblockv1alpha2.ImageSpec{Image: crdtypes.ImageReference(reference)}
 	}
 	if reference := strings.TrimSpace(c.Draft.Images.SPDKProxy); reference != "" {
-		images.SPDKProxy = &simplyblockv1alpha2.ImageSpec{Image: reference}
+		images.SPDKProxy = &simplyblockv1alpha2.ImageSpec{Image: crdtypes.ImageReference(reference)}
 	}
 
 	if images.SPDK == nil && images.SPDKProxy == nil {

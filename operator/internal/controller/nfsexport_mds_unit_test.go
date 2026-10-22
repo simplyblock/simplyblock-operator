@@ -402,7 +402,7 @@ func TestPendingPodHostedUpdatesAnOutdatedMDSStatefulSet(t *testing.T) {
 	reconcileExport(t, r)
 
 	sts := loadMDSStatefulSet(t, cl)
-	if got, want := sts.Spec.Template.Spec.Containers[0].Image, mdsDriver().Spec.PNFS.MDS.Image; got != want {
+	if got, want := sts.Spec.Template.Spec.Containers[0].Image, string(mdsDriver().Spec.PNFS.MDS.Image); got != want {
 		t.Errorf("runner image = %q, want %q", got, want)
 	}
 	if got, want := sts.Annotations[mdsTemplateHashKey], currentMDSHash(t); got != want {
@@ -460,7 +460,7 @@ func TestReadyExportUpdatesAnOutdatedMDSStatefulSet(t *testing.T) {
 	reconcileExport(t, r)
 
 	sts := loadMDSStatefulSet(t, cl)
-	if got, want := sts.Spec.Template.Spec.Containers[0].Image, mdsDriver().Spec.PNFS.MDS.Image; got != want {
+	if got, want := sts.Spec.Template.Spec.Containers[0].Image, string(mdsDriver().Spec.PNFS.MDS.Image); got != want {
 		t.Errorf("runner image = %q, want %q", got, want)
 	}
 	if got, want := sts.Annotations[mdsTemplateHashKey], currentMDSHash(t); got != want {

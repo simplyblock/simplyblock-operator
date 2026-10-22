@@ -22,6 +22,7 @@ package v1alpha2
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/simplyblock/atlas/crdtypes"
 	"github.com/simplyblock/atlas/statemachine"
 )
 
@@ -105,9 +106,8 @@ type UpgradeSpec struct {
 	// Image is the version to move to. It replaces
 	// ControlPlane.spec.source.managed.image when the operation succeeds, so the
 	// entity keeps describing what is running.
-	// +kubebuilder:validation:Pattern=`^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$`
 	// +kubebuilder:validation:Required
-	Image string `json:"image"`
+	Image crdtypes.ImageReference `json:"image"`
 }
 
 // RestartSpec parameterizes the Restart action and is ignored by the others.

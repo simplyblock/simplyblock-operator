@@ -17,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/simplyblock/atlas/crdtypes"
 	"github.com/simplyblock/atlas/statemachine"
 )
 
@@ -203,9 +204,8 @@ type LocalControlPlane struct {
 	// Any registry is accepted, mirrors included, as long as the value is a
 	// well-formed reference carrying a tag, a digest, or both. Digest pinning
 	// (@sha256:...) is recommended.
-	// +kubebuilder:validation:Pattern=`^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$`
 	// +kubebuilder:validation:Required
-	Image string `json:"image"`
+	Image crdtypes.ImageReference `json:"image"`
 
 	// ImagePullPolicy controls when that image is pulled.
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
@@ -353,9 +353,8 @@ type ManagedControlPlane struct {
 	// there is no equivalent to fall back to without this field -- every
 	// StorageCluster on a managed deployment must get an image from here or
 	// from its own spec.
-	// +kubebuilder:validation:Pattern=`^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$`
 	// +optional
-	StorageNodeImage string `json:"storageNodeImage,omitempty"`
+	StorageNodeImage crdtypes.ImageReference `json:"storageNodeImage,omitempty"`
 }
 
 // ControlPlaneSource selects whether this cluster hosts its control plane or is

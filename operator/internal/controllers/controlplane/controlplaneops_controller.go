@@ -285,10 +285,10 @@ func (r *ControlPlaneOpsReconciler) preflight(
 			"the control plane is %s; an upgrade starts from Available so that what it verifies "+
 				"afterward is a change rather than a recovery", target.Status.Phase), nil
 	}
-	if localImage(target) == ops.Spec.Upgrade.Image {
+	if localImage(target) == string(ops.Spec.Upgrade.Image) {
 		return false, "", &terminalStepError{message: fmt.Sprintf(
 			"the control plane already runs %s, so there is no rollout to verify",
-			ops.Spec.Upgrade.Image)}
+			string(ops.Spec.Upgrade.Image))}
 	}
 	return true, "", nil
 }
@@ -510,7 +510,7 @@ func (r *ControlPlaneOpsReconciler) await(
 	if ops.Spec.Action == simplyblockv1alpha2.ControlPlaneOpsActionUpgrade && ops.Spec.Upgrade != nil {
 		// A bad image leaves the old replica serving, so the component counts
 		// below would hold for the whole step budget. The Deployment says sooner.
-		if _, _, err := r.webAPIRolledTo(ctx, target.Namespace, ops.Spec.Upgrade.Image); err != nil {
+		if _, _, err := r.webAPIRolledTo(ctx, target.Namespace, string(ops.Spec.Upgrade.Image)); err != nil {
 			return false, "", err
 		}
 	}
@@ -558,7 +558,7 @@ func (r *ControlPlaneOpsReconciler) verify(
 			message: "spec.upgrade.image is gone, so there is nothing to verify the rollout against",
 		}
 	}
-	if done, held, err := r.webAPIRolledTo(ctx, target.Namespace, ops.Spec.Upgrade.Image); !done || err != nil {
+	if done, held, err := r.webAPIRolledTo(ctx, target.Namespace, string(ops.Spec.Upgrade.Image)); !done || err != nil {
 		return false, held, err
 	}
 
