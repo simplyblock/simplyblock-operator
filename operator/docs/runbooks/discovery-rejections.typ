@@ -58,10 +58,10 @@
 A customer deploys simplyblock by running *discovery*: an `OperatorOps` resource with `action: Discover`.
 Discovery inspects the Kubernetes workers and their disks and writes a draft *ClusterDeploymentConfig*
 (CDC). The customer reviews the draft and approves it. This document lists every reason discovery leaves a
-worker or a disk out of the draft, fails altogether, or why a CDC is refused afterwards, and what to do
+worker or a disk out of the draft, fails altogether, or why a CDC is refused afterward, and what to do
 about each.
 
-Placeholders in messages are written in angle brackets, for example `<worker>`. Commands on a host run
+Placeholders in messages are written in angle brackets, for example, `<worker>`. Commands on a host run
 through `oc debug node/<node>` followed by `chroot /host` on OpenShift, or through SSH elsewhere.
 
 = Where the rejections show up
@@ -87,7 +87,7 @@ and *writes* the draft. The rejections are grouped by the stage that produces th
   [Draft document status], [`kubectl get cdc -n <ns>` and `kubectl describe cdc <name> -n <ns>`],
 )
 
-#note[A disk refusal event shows only the reason name, for example `sdb: declined by available because the
+#note[A disk refusal event shows only the reason name, for example, `sdb: declined by available because the
 probe refused it: NotBlank`. *What* was found (the mountpoint, the filesystem type, the holding device) is in
 the probe report ConfigMap under `devices[].rejections[].detail`. Ask the customer for it whenever the
 reason name alone does not settle the case.]
@@ -137,14 +137,14 @@ records all of them at once rather than one after another.
     connector((2, 0)),
     check((2, 1), [*Each worker:* any disk left?]),
     exit((3, 1), [*No disk left*, or NVMe disks held by another driver (§5.2)]),
-    check((2, 2), [On the shared management and data networks?]),
-    exit((3, 2), [*Management network* or *data network* (§5.2)]),
-    check((2, 3), [All disks on one NUMA node?]),
-    exit((3, 3), [*Second NUMA node*: the other socket's disks are left out (§5.2)]),
-    check((2, 4), [Journal disk available? \ logical block device mode only]),
-    exit((3, 4), [*Only one disk* or *equal disks* (§5.3). The run fails]),
-    check((2, 5), [Any worker left with disks?]),
-    exit((3, 5), [*No usable disk* (§2). The run fails]),
+    check((2, 2), [All disks on one NUMA node?]),
+    exit((3, 2), [*Second NUMA node*: the other socket's disks are left out (§5.2)]),
+    check((2, 3), [On the shared management and data networks?]),
+    exit((3, 3), [*Management network* or *data network* (§5.2)]),
+    check((2, 4), [Any worker left with disks?]),
+    exit((3, 4), [*No usable disk* (§2). The run fails]),
+    check((2, 5), [Journal disk available? \ logical block device mode only]),
+    exit((3, 5), [*Only one disk* or *tied smallest disks* (§5.3). The run fails]),
     check((2, 6), [Draft CDC written. \ Document checks pass?]),
     exit((3, 6), [Draft held in `Draft`, approved CDC `Failed` (§6)]),
     check((2, 7), [Approval accepted?]),
@@ -183,7 +183,7 @@ The run itself fails and no draft is written. The OperatorOps shows phase `Faile
   [Collect the probe pod logs. Usual causes: the image cannot be pulled (private registry, air gap), the probe is not allowed to run privileged (OpenShift SCC, Pod Security admission), or a taint keeps it off the nodes.],
   [Probes timed out], [`the probes did not all finish within 15m; ...`],
   [A probe pod did not finish within 15 minutes.],
-  [Find the pod that is still `Pending` or `Running` and ask for its `kubectl describe` output. Usually an image pull or a taint without a matching `spec.discover.tolerations` entry.],
+  [Find the pod that is still `Pending` or `Running` and ask for its `kubectl describe` output. Usually, it is an image pull or a taint without a matching `spec.discover.tolerations` entry.],
   [Cluster not readable], [`the cluster could not be read within 5m` or `the draft could not be written within 5m`],
   [The Kubernetes API did not answer in time.],
   [Check API server health and the operator logs, then run discovery again.],
@@ -210,8 +210,8 @@ rest. Each one is reported as a `WorkerDeclined` event.
   [Cordoned or tainted], [`<worker> is not used: it is cordoned`, `... it carries the taint <key>=<value>:<effect>`, or `... it is not schedulable`],
   [The node is cordoned, or it has a `NoSchedule` or `NoExecute` taint.],
   [Ask whether the node is meant for storage. If so, `kubectl uncordon <node>` or remove the taint. Adding tolerations to the run is not enough: a tainted node is still skipped.],
-  [Control-plane or infrastructure node], [`<worker> is not used: it is <role>; set spec.discover.enableControlPlaneNodes to include it`],
-  [The node is a control-plane or infrastructure node.],
+  [Control-plane node], [`<worker> is not used: it is <role>; set spec.discover.enableControlPlaneNodes to include it`],
+  [The node is a control-plane node. Infrastructure nodes are used without this setting.],
   [Ask whether storage is meant to run there (typical for three-node compact clusters). If so, set `spec.discover.enableControlPlaneNodes: true`.],
   [Unknown worker name], [`<worker> is named in spec.discover.workers and there is no node by that name`],
   [A name in the run's worker list does not exist.],
@@ -242,15 +242,15 @@ below destroys what is on the disk.
   [`SwapArea`], [The disk or a partition of it is in use as swap.], [`the device is an active swap area`],
   [`swapoff /dev/<disk>` and remove it from `/etc/fstab`.],
   [`Stacked`], [Another device is built on top of the disk: an active LVM volume, a software RAID array, an encrypted volume, or a multipath map. `lsblk` shows children under the disk.], [`held by [<device>]`],
-  [Ask what the disk is used for. To release it: LVM, `vgchange -an <vg>`, then `vgremove <vg>` and `pvremove /dev/<disk>`. Software RAID, `mdadm --stop /dev/<md>`, then `mdadm --zero-superblock /dev/<disk>`. Encryption, `cryptsetup close <name>`. Multipath, exclude the disk in the multipath configuration.],
+  [Ask what the disk is used for. To release it: LVM, check what else the group holds with `pvs -o pv_name,vg_name,pv_used`. If the volume group lies only on this disk: `vgchange -an <vg>`, then `vgremove <vg>`. If it spans other disks, `vgremove` would delete their volumes too: move the data off this disk with `pvmove /dev/<disk>` (or remove the volumes on it), then `vgreduce <vg> /dev/<disk>`. Then `pvremove /dev/<disk>`. Software RAID, `mdadm --stop /dev/<md>`, then `mdadm --zero-superblock /dev/<disk>`. Encryption, `cryptsetup close <name>`. Multipath, exclude the disk in the multipath configuration.],
   [`LVMPhysicalVolume`], [The disk is an LVM physical volume, but no LVM volume on it is active. `lsblk` shows a bare disk; `pvs` or `pvdisplay` lists it.], [`LVM2 physical-volume label at 512`],
-  [Confirm with `pvs /dev/<disk>`. If it belongs to a volume group, `vgremove <vg>` (or `vgreduce <vg> /dev/<disk>` to keep the group). Then `pvremove /dev/<disk>`. On RHEL-based hosts also `lvmdevices --deldev /dev/<disk>`. Operator versions before this reason existed report the same disk as `NotBlank`.],
+  [Check what else the group holds with `pvs -o pv_name,vg_name,pv_used`. If the volume group lies only on this disk: `vgchange -an <vg>`, then `vgremove <vg>`. If it spans other disks, `vgremove` would delete their volumes too: move the data off this disk with `pvmove /dev/<disk>` (or remove the volumes on it), then `vgreduce <vg> /dev/<disk>`. Then `pvremove /dev/<disk>`. On RHEL-based hosts also `lvmdevices --deldev /dev/<disk>`. Operator versions before this reason existed report the same disk as `NotBlank`.],
   [`NotBlank`], [The disk carries a filesystem, swap signature, encryption header, RAID or ZFS label, or other data that is not recognized as empty.], [What was found, for example `XFS superblock at 0`],
   [`wipefs -a /dev/<disk>`. For an old software RAID member, `mdadm --zero-superblock /dev/<disk>`. For ZFS, `zpool labelclear -f /dev/<disk>`.],
   [`Partitioned`], [The disk has a partition table.], [`the device carries the partitions [<names>]` or `GPT header at <offset>`],
   [If the partitions are not needed: `wipefs -a /dev/<disk>` (and `sgdisk --zap-all /dev/<disk>` to remove the backup GPT). If the table is left over and partitioning is the only reason on the disk, the customer can set `spec.discover.enablePartitionedDevices: true` instead of wiping.],
   [`NotAWholeDisk`], [The device is a partition, an LVM volume, a RAID array, a loop device, a RAM disk, or a network block device (`nbd`). Every worker has many of these; they are expected.], [`the device is a <kind>`],
-  [Usually nothing: these are never proposed. If the customer expected a *partition* to be used: partitions can only be used in logical block device mode. Ask whether logical block devices are meant to be used (see section 5, "Not NVMe"). Otherwise use the whole disk.],
+  [Usually nothing: these are never proposed. If the customer expected a *partition* to be used: partitions can only be used in logical block device mode. Ask whether logical block devices are meant to be used (see section 5, "Not NVMe"). Otherwise use the whole disk. In logical block device mode a partition is taken when this is its only reason and it is empty; any other reason on it is resolved like the same reason on a disk.],
   [`Busy`], [The kernel would not hand the disk over, and nothing visible (mount, swap, stacked device) explains why.], [`the kernel refused an exclusive open, and gives no reason`],
   [Usually seen together with `Mounted` on the boot disk, which explains it. Alone: find out what holds the disk with `fuser -vm /dev/<disk>` or `lsof /dev/<disk>`. Typical holders: multipathd, a virtual machine, an iSCSI target, a backup agent.],
   [`Unreadable`], [The probe could not establish whether the disk is in use or what is on it.], [`the kernel could not be asked: ...` or `the device could not be read: ...`],
@@ -347,8 +347,8 @@ In logical block device mode every worker needs one disk set aside for the journ
   [Only one disk], [`<worker> hands over no disk that could carry the journal, and a block cluster has no other journal layout ... Give the worker a second disk, or deploy it as nvme`],
   [A worker contributes fewer than two disks.],
   [Add a second disk to the worker, leave the worker out, or deploy in NVMe mode if the disks are NVMe.],
-  [Equal disks], [`<worker> hands over no disk smaller than its others, so nothing says which one carries the journal ...`],
-  [All disks on a worker are the same size, so none is obviously the journal disk.],
+  [Tied smallest disks], [`<worker> hands over no disk smaller than its others, so nothing says which one carries the journal ...`],
+  [Two or more of the worker's disks share the smallest size, so none is obviously the journal disk. The larger disks do not matter: 1 TB, 1 TB, and 4 TB is refused too.],
   [Set `spec.discover.forceJournalDevice: true`. One of the disks then becomes the journal; the message states how much capacity that costs.],
 )
 
@@ -401,8 +401,8 @@ All under `spec.discover` of the OperatorOps.
 #grid((1.5fr, 4fr), ([Setting], [Effect]),
   [`enableLogicalBlockDevices`], [Logical block device mode: virtio, SCSI, SAS, SATA, and NVMe disks through the kernel, named by `/dev/disk/by-id` path. Required for virtual machines and most cloud instances. The default is NVMe mode, which takes only NVMe disks, named by PCI address.],
   [`enablePartitionedDevices`], [Takes a disk whose only problem is a leftover partition table.],
-  [`forceJournalDevice`], [Logical block device mode: picks a journal disk among equal-sized disks.],
-  [`enableControlPlaneNodes`], [Includes control-plane and infrastructure nodes.],
+  [`forceJournalDevice`], [Logical block device mode: picks a journal disk when several disks tie for the smallest size.],
+  [`enableControlPlaneNodes`], [Includes control-plane nodes. Infrastructure nodes are always included.],
   [`workers` or `nodeSelector`], [Which workers to inspect; use one or the other.],
   [`tolerations`], [Lets the probe run on tainted nodes and carries over to the deployment. Does not make a tainted node usable.],
   [`failureDomainLabel`], [The node label that names each worker's failure domain.],
