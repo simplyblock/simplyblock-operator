@@ -15,6 +15,12 @@ type ClusterResponse struct {
 	NDCS              int
 	NPCS              int
 	MaxFaultTolerance int
+	// SyncReplication, LostSite and LostSiteState are the sync-replication
+	// facts: whether the cluster spans two sites, and the site the control
+	// plane records as out with how far its drain or fence got.
+	SyncReplication bool
+	LostSite        string
+	LostSiteState   string
 }
 
 type clusterResponsePayload struct {
@@ -27,6 +33,9 @@ type clusterResponsePayload struct {
 	NDCS              int    `json:"distr_ndcs"`
 	NPCS              int    `json:"distr_npcs"`
 	MaxFaultTolerance int    `json:"max_fault_tolerance"`
+	SyncReplication   bool   `json:"sync_replication"`
+	LostSite          string `json:"lost_site"`
+	LostSiteState     string `json:"lost_site_state"`
 }
 
 func ParseClusterResponse(body []byte) (ClusterResponse, error) {

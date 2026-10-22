@@ -83,6 +83,9 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 	if found := r.missingSites(ctx, config); found != "" {
 		findings = append(findings, finding{reason: MissingSites, message: found})
 	}
+	if found := r.siteMismatches(ctx, config); found != "" {
+		findings = append(findings, finding{reason: SiteMismatch, message: found})
+	}
 
 	overflow, err := r.failureDomainOverflow(ctx, config)
 	if err != nil {
@@ -521,4 +524,54 @@ func (r *ClusterDeploymentConfigReconciler) namespaceAlreadyHasACluster(
 		}
 	}
 	return "", nil
+}
+
+// siteMismatches reports the node groups of a stretched cluster's document whose
+// site is not the cluster's. A stretched cluster's site is the whole Kubernetes
+// cluster it runs on, so a group naming the other site would add nodes running
+// here to the other site's half of the backend cluster. An empty site is
+// missingSites' finding, not this one.
+func (r *ClusterDeploymentConfigReconciler) siteMismatches(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) string {
+	site := r.stretchedSiteOf(ctx, config)
+	if site == "" {
+		return ""
+	}
+
+	var found []string
+	for _, set := range config.Spec.NodeSets {
+		for _, group := range set.Groups {
+			if group.Site != "" && group.Site != site {
+				found = append(found, fmt.Sprintf("%s/%s (site %s)", set.Name, group.Name, group.Site))
+			}
+		}
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"this document deploys site %s of a stretched cluster, and group %s %s another site; "+
+			"every group must be on site %s",
+		site, strings.Join(found, ", "), plural(len(found), "names", "name"), site)
+}
+
+// stretchedSiteOf is the site of the stretched cluster the document creates or
+// grows, empty when the cluster is not one site of a stretched cluster.
+func (r *ClusterDeploymentConfigReconciler) stretchedSiteOf(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) string {
+	if config.Spec.ClusterRef == "" {
+		if template := config.Spec.Cluster; template != nil && template.Stretched != nil {
+			return template.Stretched.Site
+		}
+		return ""
+	}
+
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: config.Namespace, Name: config.Spec.ClusterRef}
+	if err := r.Get(ctx, key, &cluster); err != nil {
+		return ""
+	}
+	return cluster.StretchedSite()
 }

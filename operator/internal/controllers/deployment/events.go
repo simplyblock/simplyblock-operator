@@ -31,6 +31,10 @@ const (
 	// a site. Every node of a sync cluster needs one, so provisioning holds until
 	// they are filled in.
 	MissingSites = "MissingSites"
+	// SiteMismatch is a node group of a stretched cluster's site whose site is
+	// not that cluster's site: its nodes would join the other site's half of the
+	// cluster while running on this one.
+	SiteMismatch = "SiteMismatch"
 
 	// What the document says about erasure coding, which is the one part of a
 	// deployment nothing below the operator checks: the control plane validates
@@ -45,6 +49,13 @@ const (
 	// AwaitingNodes is the expansion waiting for a node it created to come
 	// online before it asks for the cluster to be activated.
 	AwaitingNodes = "AwaitingNodes"
+	// WaitingForPeerSite is a stretched cluster's leader whose own nodes are
+	// online but whose other site has not yet brought up the nodes the backend
+	// needs before the cluster can activate.
+	WaitingForPeerSite = "WaitingForPeerSite"
+	// ActivationLeftToLeader is a stretched cluster's follower whose nodes are
+	// online; the activation is its leader's, so it asks for none.
+	ActivationLeftToLeader = "ActivationLeftToLeader"
 
 	// ActivationRequested is the expansion having asked, which is the last thing
 	// a document does.

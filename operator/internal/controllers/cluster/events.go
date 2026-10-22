@@ -31,6 +31,21 @@ const (
 	// than created, which is the difference between a migration and a mistake.
 	ClusterAdopted = "ClusterAdopted"
 
+	// PeerClusterMissing says a follower site is waiting for its leader: the
+	// backend cluster does not exist yet, or the credentials to adopt it have not
+	// been delivered. A follower never creates the cluster itself.
+	PeerClusterMissing = "PeerClusterMissing"
+	// SyncReplicationMismatch says a follower was pointed at a backend cluster
+	// that is not a sync-replication cluster, which no stretched cluster can be;
+	// the adoption is refused rather than joining it.
+	SyncReplicationMismatch = "SyncReplicationMismatch"
+	// SiteRecordChanged says the control plane's record of a lost site changed:
+	// a site was recorded out, its drain or fence moved on, or it returned.
+	SiteRecordChanged = "SiteRecordChanged"
+	// RoleChanged says this site's stretched role changed, which moves the
+	// cluster-wide operations to or from this site's operator.
+	RoleChanged = "RoleChanged"
+
 	// TaskCompleted and TaskCanceled are what remains of a control-plane task
 	// once it leaves status.tasks. The list is a window on the present and
 	// these are the record that something happened in it.
