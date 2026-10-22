@@ -563,9 +563,10 @@ type ClusterTemplate struct {
 	Stripe *StripeSpec `json:"stripe,omitempty"`
 
 	// ClusterMode is how many storage nodes the cluster is built for: Single
-	// is exactly one storage node, created without high availability, and its
-	// stripe is 1+0, since with no second node there is nothing to place
-	// parity on; Dual runs 1+1 on exactly two storage nodes; Standard,
+	// runs every erasure-coding scheme on exactly one storage node, each chunk of
+	// a stripe on its own device, so the node needs dataChunks+parityChunks
+	// devices and the parity protects against device failures rather than the
+	// loss of the node; Dual runs 1+1 on exactly two storage nodes; Standard,
 	// the default, keeps every scheme at its usual minimum. It is carried to the
 	// cluster's spec.clusterMode.
 	// +optional

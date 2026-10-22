@@ -15,8 +15,8 @@ spec:
     minHugePagesSize: 16G
     name: discovered-discover-net-38-cluster
     stripe:
-      dataChunks: 1
-      parityChunks: 0
+      dataChunks: 2
+      parityChunks: 1
     vcpuCount: 16
   environment: K3s
   hostOS:

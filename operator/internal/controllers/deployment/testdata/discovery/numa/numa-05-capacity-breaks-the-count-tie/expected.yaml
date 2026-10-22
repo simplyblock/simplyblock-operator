@@ -16,7 +16,7 @@ spec:
     name: discovered-discover-numa-05-cluster
     stripe:
       dataChunks: 1
-      parityChunks: 0
+      parityChunks: 1
     vcpuCount: 8
   environment: K3s
   hostOS:

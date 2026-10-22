@@ -15,8 +15,8 @@ spec:
     minHugePagesSize: 34G
     name: discovered-discover-size-20-cluster
     stripe:
-      dataChunks: 1
-      parityChunks: 0
+      dataChunks: 2
+      parityChunks: 1
     vcpuCount: 16
   environment: K3s
   hostOS:

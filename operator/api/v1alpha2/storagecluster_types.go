@@ -654,7 +654,6 @@ const (
 // StorageClusterSpec is the desired state of one simplyblock backend cluster.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.kms) || self.kms == oldSelf.kms",message="kms is immutable once set"
 // +kubebuilder:validation:XValidation:rule="(has(self.clusterMode) && self.clusterMode == 'Dual') || (!has(self.arbitration) && !(has(self.enableArbitration) && self.enableArbitration))",message="enableArbitration and arbitration are only valid when clusterMode is Dual"
-// +kubebuilder:validation:XValidation:rule="!has(self.clusterMode) || self.clusterMode != 'Single' || (has(self.stripe) && (!has(self.stripe.dataChunks) || self.stripe.dataChunks == 1) && has(self.stripe.parityChunks) && self.stripe.parityChunks == 0)",message="a Single cluster runs one storage node, so its stripe is 1+0: state stripe.parityChunks: 0"
 // +kubebuilder:validation:XValidation:rule="(has(self.clusterMode) && self.clusterMode == 'Single') == (has(oldSelf.clusterMode) && oldSelf.clusterMode == 'Single')",message="clusterMode cannot be changed to or from Single: the control plane fixes it when the cluster is created"
 // +kubebuilder:validation:XValidation:rule="!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomicity4K requires enableChecksumValidation to be true"
 // +kubebuilder:validation:XValidation:rule="has(self.supercluster) || (has(self.maxSubsystemCount) && has(self.vcpuCount))",message="maxSubsystemCount and vcpuCount are required unless the cluster is a supercluster"
@@ -893,11 +892,11 @@ type StorageClusterSpec struct {
 	VolumeAutoPlacement *VolumeAutoPlacementSettings `json:"volumeAutoPlacement,omitempty"`
 
 	// ClusterMode is how many storage nodes the cluster is built for. Single is
-	// one storage node, created on the control plane without high availability
-	// and with a single journal, and its stripe is 1+0, stated as
-	// stripe.parityChunks: 0: with no second node there is nothing to place
-	// parity or a secondary on, so a Single cluster protects no data against a
-	// failure. Dual is exactly two storage
+	// one storage node, created on the control plane non-HA with a single
+	// journal, with every erasure-coding scheme placed across that node's
+	// devices (one chunk of a stripe per device): the node needs
+	// dataChunks+parityChunks devices, and the parity protects against device
+	// failures rather than the loss of the node. Dual is exactly two storage
 	// nodes running 1+1, one copy on each, optionally under the control plane's
 	// two-node arbitration. Standard, the default, is three or more storage
 	// nodes. A cluster cannot be changed to or from Single after it is created.

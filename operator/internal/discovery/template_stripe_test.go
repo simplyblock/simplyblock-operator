@@ -132,10 +132,11 @@ func oneWorkerWith(sizes ...uint64) Plan {
 	return plan
 }
 
-// A single worker is proposed as a single-node cluster running 1+0, whatever
-// devices it hands over: with no second node there is nothing to place parity
-// on. A disk proposed for the journal is not one data lands on.
-func TestASingleWorkerIsProposedOnePlusZero(t *testing.T) {
+// A single worker is proposed as a single-node cluster, and its scheme follows
+// from the devices it hands over for data, since each chunk of a stripe lands
+// on its own device (the control plane's device floor is ndcs+npcs at one
+// node). A disk proposed for the journal is not one data lands on.
+func TestASingleWorkerIsProposedBySchemeOfItsDevices(t *testing.T) {
 	const tb = uint64(1) << 40
 	for _, tc := range []struct {
 		name    string
@@ -144,10 +145,11 @@ func TestASingleWorkerIsProposedOnePlusZero(t *testing.T) {
 		journal bool
 	}{
 		{"one disk", oneWorkerWith(tb), "1+0", false},
-		{"two equal disks", oneWorkerWith(tb, tb), "1+0", false},
-		{"three equal disks", oneWorkerWith(tb, tb, tb), "1+0", false},
-		{"six equal disks", oneWorkerWith(tb, tb, tb, tb, tb, tb), "1+0", false},
-		{"a small disk beside two", oneWorkerWith(tb/8, tb, tb), "1+0", true},
+		{"two equal disks", oneWorkerWith(tb, tb), "1+1", false},
+		{"three equal disks", oneWorkerWith(tb, tb, tb), "2+1", false},
+		{"six equal disks", oneWorkerWith(tb, tb, tb, tb, tb, tb), "2+1", false},
+		{"a small disk beside two", oneWorkerWith(tb/8, tb, tb), "1+1", true},
+		{"a small disk beside three", oneWorkerWith(tb/8, tb, tb, tb), "2+1", true},
 	} {
 		template, err := ClusterTemplateFor("a-cluster", tc.plan, TemplateOptions{})
 		if err != nil {
@@ -165,8 +167,8 @@ func TestASingleWorkerIsProposedOnePlusZero(t *testing.T) {
 		if got := scheme.String(); got != tc.scheme {
 			t.Errorf("%s: proposed %s, want %s", tc.name, got, tc.scheme)
 		}
-		if !strings.Contains(strings.Join(template.Notes, "\n"), "protects no data") {
-			t.Errorf("%s: the note does not say the cluster protects no data", tc.name)
+		if scheme.ParityChunks > 0 && !strings.Contains(strings.Join(template.Notes, "\n"), "device failure") {
+			t.Errorf("%s: the note does not say what the parity protects against", tc.name)
 		}
 	}
 }

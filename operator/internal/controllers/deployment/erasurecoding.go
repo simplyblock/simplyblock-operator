@@ -141,10 +141,10 @@ func StripeChecks(
 	return nil, nil
 }
 
-// singleNodeChecks holds a declared single-node cluster to what it is: exactly
-// one storage node, a 1+0 stripe, and on the node a device for data (sbcli
-// cluster_ops.activation_minimum_devices), counted from the groups that name
-// their devices. A group that names none hands over every
+// singleNodeChecks holds a declared single-node cluster to what the control
+// plane activates: exactly one storage node, and on it one device per chunk of
+// a stripe (sbcli cluster_ops.activation_minimum_devices), counted from the
+// groups that name their devices. A group that names none hands over every
 // device the worker has, which only the node's own report can count.
 func singleNodeChecks(
 	config *simplyblockv1alpha2.ClusterDeploymentConfig, scheme erasurecoding.Scheme,
@@ -156,16 +156,6 @@ func singleNodeChecks(
 			Message: fmt.Sprintf(
 				"the cluster is a single-node cluster (clusterMode Single), which runs exactly one "+
 					"storage node, and this document %s %d", leavesPhrase(config), total.nodes()),
-		}}
-	}
-
-	if scheme != (erasurecoding.Scheme{DataChunks: 1, ParityChunks: 0}) {
-		return []StripeCheck{{
-			Reason: StripeSingleNodeParity,
-			Message: fmt.Sprintf(
-				"%s is %s, and a single-node cluster (clusterMode Single) runs 1+0: with no "+
-					"second node there is nothing to place parity on, and the cluster is created "+
-					"without high availability", subject, scheme),
 		}}
 	}
 

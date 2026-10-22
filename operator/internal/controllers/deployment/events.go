@@ -36,9 +36,6 @@ const (
 	StripeBelowMinimumWorkers = "StripeBelowMinimumWorkers"
 	StripeSingleNodeCount     = "StripeSingleNodeCount"
 	StripeBelowMinimumDevices = "StripeBelowMinimumDevices"
-	// StripeSingleNodeParity is a single-node cluster stated with parity: it
-	// runs 1+0, having no second node to place parity on.
-	StripeSingleNodeParity = "StripeSingleNodeParity"
 
 	// AwaitingNodes is the expansion waiting for a node it created to come
 	// online before it asks for the cluster to be activated.

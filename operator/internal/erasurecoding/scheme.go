@@ -96,10 +96,12 @@ type Topology struct {
 // MinimumNodesFor is MinimumNodes, except for a declared single-node or
 // two-node cluster.
 //
-// A single-node cluster (StorageCluster spec.clusterMode Single) runs 1+0 on
-// its one storage node, which admission and approval enforce: the control
-// plane activates it non-HA with a single journal, and with no second node
-// there is nothing to place parity on.
+// A single-node cluster (StorageCluster spec.clusterMode Single) runs every scheme on
+// its one storage node: the control plane activates it non-HA with a single
+// journal, puts every chunk of a stripe on a different device of that node
+// (anti-affinity labels off), and needs ndcs+npcs devices rather than nodes
+// (sbcli cluster_ops.activation_minimum_devices). The parity then protects
+// against device failures, not against losing the node.
 //
 // A two-node cluster (spec.clusterMode Dual) runs 1+1 on exactly its two nodes, one
 // copy each, with no spare to rebuild onto. The control plane activates that
@@ -132,10 +134,10 @@ func TopologyOf(mode simplyblockv1alpha2.ClusterMode) Topology {
 	}
 }
 
-// MinimumDevicesPerNode is how many storage devices the node of a declared
-// single-node cluster needs for the scheme: one per chunk of a stripe, which
-// for the 1+0 a single-node cluster runs is one. Zero means the control plane
-// counts devices across nodes and this rule does not apply.
+// MinimumDevicesPerNode is how many storage devices each node of a declared
+// single-node cluster needs for the scheme: one per chunk of a stripe, since
+// every chunk lands on a different device of the one node. Zero means the
+// control plane counts devices across nodes and this rule does not apply.
 func (s Scheme) MinimumDevicesPerNode(topology Topology) int {
 	if topology.SingleNode {
 		return s.DataChunks + s.ParityChunks
