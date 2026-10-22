@@ -12193,10 +12193,6 @@
             "type": "array",
             "title": "Member Backup Ids"
           },
-          "encrypted": {
-            "type": "boolean",
-            "title": "Encrypted"
-          },
           "size": {
             "type": "integer",
             "title": "Size"
@@ -12239,7 +12235,6 @@
           "group_seq",
           "status",
           "member_backup_ids",
-          "encrypted",
           "size",
           "created_at"
         ],

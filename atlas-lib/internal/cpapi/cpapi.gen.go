@@ -1526,7 +1526,6 @@ type GroupBackupDTO struct {
 	ConsistencyGroupId   openapi_types.UUID   `json:"consistency_group_id"`
 	ConsistencyGroupName string               `json:"consistency_group_name"`
 	CreatedAt            time.Time            `json:"created_at"`
-	Encrypted            bool                 `json:"encrypted"`
 	ErrorMessage         *string              `json:"error_message,omitempty"`
 	GroupSeq             int                  `json:"group_seq"`
 	Id                   openapi_types.UUID   `json:"id"`
