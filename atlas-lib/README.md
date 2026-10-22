@@ -146,6 +146,10 @@ atlas/
 │   └── conntrackrpc/       FlowService: served by the CSI node plugin, called by the operator
 │       ├── conntrackrpc.go NewServer(conntrack.Forget), Remote(conn).Forget
 │       └── conntrackv1/    the FlowService protocol (buf-generated, committed)
+├── placement/
+│   └── placementrpc/       PlacementService: served by the operator, called by the CSI controller
+│       ├── placementrpc.go NewServer(Placer), Remote(conn).Place; controllers only
+│       └── placementv1/    the PlacementService protocol (buf-generated, committed)
 ├── prometheus/             The telemetry simplyblock exports about itself (PromQL)
 │   ├── doc.go              Why this is not part of controlplane, and how fresh a value is
 │   ├── client.go           Provider, New, NewWithAPI (the test seam), query helpers

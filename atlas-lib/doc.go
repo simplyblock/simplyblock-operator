@@ -49,6 +49,9 @@
 //	                another node's.
 //	conntrack       Forget a host's connection-tracking entries for one dead
 //	                backend; conntrack/conntrackrpc serves it over a link.
+//	placement/placementrpc
+//	                Which member of a supercluster a new volume goes to: the
+//	                operator serves it, the CSI controller calls it.
 //	prometheus      Read the telemetry simplyblock exports about itself:
 //	                capacity, per-volume load, and node write latency.
 //	errs            Sentinel errors shared across atlas, matched with errors.Is.
