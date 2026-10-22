@@ -13,6 +13,9 @@ import (
 	"github.com/simplyblock/atlas/prometheus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
@@ -158,5 +161,72 @@ func TestEachMembersReadingIsHandedToPlacement(t *testing.T) {
 
 	if readings["uuid-a"].Total != 100 || readings["uuid-b"].Total != 200 {
 		t.Errorf("readings handed to placement = %+v, want both members'", readings)
+	}
+}
+
+// I-54, the supercluster's half: setting a member's disablePlacement takes it
+// out of placement, and the event says why.
+func TestDisablingPlacementOnAMemberIsAnnounced(t *testing.T) {
+	rec := &recorder{}
+	r := newSuperclusterReconciler(t, nil, rec,
+		newTestSupercluster(func(c *simplyblockv1alpha2.StorageCluster) {
+			c.Status.Members = []simplyblockv1alpha2.SuperclusterMemberStatus{{Name: "prod-dense-kqv", PlacementEligible: true}}
+		}),
+		newTestMember("prod-dense-kqv", "uuid-a", func(c *simplyblockv1alpha2.StorageCluster) {
+			c.Spec.DisablePlacement = ptr.To(true)
+		}))
+
+	_, sc := reconcileSupercluster(t, r)
+
+	if memberStatus(t, sc, "prod-dense-kqv").PlacementEligible {
+		t.Error("a member with placement disabled is eligible")
+	}
+	if got := rec.noteFor(MemberPlacementChanged); !strings.Contains(got, "placement is disabled") {
+		t.Errorf("%s = %q, want it to say placement is disabled", MemberPlacementChanged, got)
+	}
+}
+
+// I-55: two superclusters of one name in two namespaces each list only the
+// members naming them in their own namespace.
+func TestSuperclustersInTwoNamespacesListOnlyTheirOwnMembers(t *testing.T) {
+	other := newTestSupercluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.Namespace = "elsewhere"
+		c.UID = "uid-elsewhere"
+	})
+	foreign := newTestMember("prod-other-xyz", "uuid-x", func(c *simplyblockv1alpha2.StorageCluster) {
+		c.Namespace = "elsewhere"
+	})
+	r := newSuperclusterReconciler(t, nil, &recorder{},
+		newTestSupercluster(), newTestMember("prod-dense-kqv", "uuid-a"), other, foreign)
+
+	_, sc := reconcileSupercluster(t, r)
+
+	if len(sc.Status.Members) != 1 || sc.Status.Members[0].Name != "prod-dense-kqv" {
+		t.Errorf("members = %+v, want only the one in its own namespace", sc.Status.Members)
+	}
+}
+
+// I-56: a reconcile with nothing changed writes no status.
+func TestAReconcileWithNothingChangedWritesNoStatus(t *testing.T) {
+	writes := 0
+	r := newSuperclusterReconciler(t, nil, &recorder{}, newTestSupercluster(), newTestMember("prod-dense-kqv", "uuid-a"))
+	reconcileSupercluster(t, r)
+	r.Client = interceptor.NewClient(r.Client.(client.WithWatch), interceptor.Funcs{
+		SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+			patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			writes++
+			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+		SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+			opts ...client.SubResourceUpdateOption) error {
+			writes++
+			return c.SubResource(sub).Update(ctx, obj, opts...)
+		},
+	})
+
+	reconcileSupercluster(t, r)
+
+	if writes != 0 {
+		t.Errorf("status writes on an unchanged supercluster = %d, want 0", writes)
 	}
 }

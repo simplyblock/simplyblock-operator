@@ -642,3 +642,50 @@ func TestChooseWithoutRoomIsExhausted(t *testing.T) {
 		t.Errorf("Choose = %v, want ResourceExhausted", err)
 	}
 }
+
+// storageNodeOn is a storage node of the member running on the worker.
+func storageNodeOn(name, member, worker string) *simplyblockv1alpha2.StorageNode {
+	return &simplyblockv1alpha2.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
+		Spec:       simplyblockv1alpha2.StorageNodeSpec{ClusterRef: member, WorkerNode: worker},
+	}
+}
+
+func workerIn(name, region string) *corev1.Node {
+	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{
+		corev1.LabelTopologyRegion: region,
+	}}}
+}
+
+// I-57: a member's region is read from its workers' Node labels at each
+// placement, so a relabeled worker moves the member.
+func TestAMembersRegionFollowsItsWorkers(t *testing.T) {
+	f := newFixture(t, nil, standardObjects(claim("data", nil), claim("data-2", nil),
+		storageNodeOn("sn-a", memberA, "worker-a"), storageNodeOn("sn-b", memberB, "worker-b"),
+		workerIn("worker-a", "eu-west-1"), workerIn("worker-b", "eu-east-1"))...)
+	f.service.Observe(uuidB, prometheus.Capacity{Total: 100 * gib, Used: 0, SampledAt: epoch})
+	inWest := func(volume, claimName string) placementrpc.Request {
+		req := request(volume, claimName)
+		req.Preferred = []map[string]string{{corev1.LabelTopologyRegion: "eu-west-1"}}
+		return req
+	}
+
+	if member, err := f.service.Place(context.Background(), inWest("pvc-1", "data")); err != nil || member != uuidA {
+		t.Fatalf("Place = %q, %v; want %s, the member in eu-west-1", member, err, uuidA)
+	}
+
+	for name, region := range map[string]string{"worker-a": "eu-east-1", "worker-b": "eu-west-1"} {
+		var worker corev1.Node
+		if err := f.client.Get(context.Background(), types.NamespacedName{Name: name}, &worker); err != nil {
+			t.Fatal(err)
+		}
+		worker.Labels[corev1.LabelTopologyRegion] = region
+		if err := f.client.Update(context.Background(), &worker); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if member, err := f.service.Place(context.Background(), inWest("pvc-2", "data-2")); err != nil || member != uuidB {
+		t.Errorf("Place after relabeling = %q, %v; want %s, now in eu-west-1", member, err, uuidB)
+	}
+}
