@@ -70,13 +70,17 @@ type ControlPlaneReconciler struct {
 	// Prober performs the readiness and version reads. It is an interface so the
 	// phase branches can be exercised without an HTTP server.
 	Prober Prober
+
+	// NUMAPluginImage is the NUMA device plugin's image. Empty keeps the image
+	// the embedded manifest names.
+	NUMAPluginImage string
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=controlplanes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=controlplanes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=controlplanes/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
-// +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets;daemonsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts;configmaps;services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
@@ -135,6 +139,10 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	if err := r.applyNUMAPlugin(ctx, &cp); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	switch {
 	case isManaged(&cp):
 		return r.reconcileManaged(ctx, &cp)
@@ -152,7 +160,7 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 }
 
 // reconcileManaged resolves the endpoint, probes it, and reports. The operator
-// installs nothing and owns no components here, so status.components stays empty
+// installs no control plane and owns no components here, so status.components stays empty
 // and the probe is the only signal: the phase is Available or Unavailable, and
 // Degraded is unreachable (§4.3).
 func (r *ControlPlaneReconciler) reconcileManaged(
@@ -766,6 +774,7 @@ func (r *ControlPlaneReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).
+		Owns(&appsv1.DaemonSet{}).
 		Owns(&batchv1.Job{}).
 		Named("controlplane").
 		Complete(r)

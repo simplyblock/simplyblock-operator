@@ -16,6 +16,9 @@
 # Re-include bundle directory
 !**/bundle/
 
+# Re-include the manifest the manager embeds (go:embed in controlplane/numaplugin.go)
+!operator/internal/controllers/controlplane/manifests/numa-resource-plugin.yaml
+
 # Re-include LICENSE file
 !LICENSE
 
