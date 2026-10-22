@@ -1,0 +1,94 @@
+// The StretchedCluster role-swap guard: a swap reaches both sites' clusters, so
+// it is admitted only while both are Online.
+
+package webhook
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	admissionv1 "k8s.io/api/admission/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+)
+
+func stretchedRequest(leaderPhase, followerPhase simplyblockv1alpha2.StorageClusterPhase) *simplyblockv1alpha2.StretchedCluster {
+	sc := &simplyblockv1alpha2.StretchedCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: "simplyblock"},
+		Spec: simplyblockv1alpha2.StretchedClusterSpec{
+			ClusterName: "production",
+			Sites: []simplyblockv1alpha2.StretchedSite{
+				{Cluster: "site-a", Site: "a", Role: simplyblockv1alpha2.StretchedRoleLeader},
+				{Cluster: "site-b", Site: "b", Role: simplyblockv1alpha2.StretchedRoleFollower},
+			},
+		},
+	}
+	for _, s := range []struct {
+		cluster string
+		phase   simplyblockv1alpha2.StorageClusterPhase
+	}{{"site-a", leaderPhase}, {"site-b", followerPhase}} {
+		entry := simplyblockv1alpha2.StretchedClusterSiteStatus{Cluster: s.cluster}
+		if s.phase != "" {
+			entry.StorageCluster = &simplyblockv1alpha2.StorageSiteCluster{Name: "production", Phase: string(s.phase)}
+		}
+		sc.Status.Sites = append(sc.Status.Sites, entry)
+	}
+	return sc
+}
+
+func swapped(sc *simplyblockv1alpha2.StretchedCluster) *simplyblockv1alpha2.StretchedCluster {
+	out := sc.DeepCopy()
+	out.Spec.Sites[0].Role, out.Spec.Sites[1].Role = out.Spec.Sites[1].Role, out.Spec.Sites[0].Role
+	return out
+}
+
+func updateOf(t *testing.T, oldObj, newObj any) admission.Request {
+	t.Helper()
+	return admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Operation: admissionv1.Update, Object: raw(t, newObj), OldObject: raw(t, oldObj),
+	}}
+}
+
+// U-23: a swap while either site's cluster is not Online would land on a cluster
+// mid-creation or mid-recovery.
+func TestARoleSwapIsRefusedUntilBothSitesAreOnline(t *testing.T) {
+	online := simplyblockv1alpha2.StorageClusterPhaseOnline
+	v := &StretchedClusterValidator{}
+	for name, old := range map[string]*simplyblockv1alpha2.StretchedCluster{
+		"leader still creating":  stretchedRequest(simplyblockv1alpha2.StorageClusterPhaseCreating, online),
+		"follower not projected": stretchedRequest(online, ""),
+		"follower degraded":      stretchedRequest(online, simplyblockv1alpha2.StorageClusterPhaseDegraded),
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp := v.Handle(context.Background(), updateOf(t, old, swapped(old)))
+			if resp.Allowed {
+				t.Fatal("a role swap was admitted with a site not Online")
+			}
+			if !strings.Contains(resp.Result.Message, "RoleSwapNotReady") {
+				t.Errorf("the refusal does not say RoleSwapNotReady: %s", resp.Result.Message)
+			}
+		})
+	}
+}
+
+// U-23: a swap on a ready pair is admitted; the hub then re-delivers both works.
+func TestARoleSwapOnAReadyPairIsAdmitted(t *testing.T) {
+	online := simplyblockv1alpha2.StorageClusterPhaseOnline
+	old := stretchedRequest(online, online)
+	if resp := (&StretchedClusterValidator{}).Handle(context.Background(), updateOf(t, old, swapped(old))); !resp.Allowed {
+		t.Fatalf("a swap on two Online sites was refused: %s", resp.Result.Message)
+	}
+}
+
+// Any other change is the schema's business, whatever the sites' state.
+func TestAnUpdateThatSwapsNothingIsNotThisGuardsBusiness(t *testing.T) {
+	old := stretchedRequest(simplyblockv1alpha2.StorageClusterPhaseCreating, "")
+	changed := old.DeepCopy()
+	changed.Spec.Approved = true
+	if resp := (&StretchedClusterValidator{}).Handle(context.Background(), updateOf(t, old, changed)); !resp.Allowed {
+		t.Fatalf("an approval was refused by the role-swap guard: %s", resp.Result.Message)
+	}
+}

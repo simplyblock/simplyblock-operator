@@ -401,7 +401,9 @@ func (r *ClusterDeploymentConfigReconciler) failureDomainsRequired(
 func (r *ClusterDeploymentConfigReconciler) missingSites(
 	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) string {
-	if !r.syncReplicationRequired(ctx, config) {
+	// On a stretched cluster an empty group site is the cluster's site
+	// (groupSite), so no group can be missing one.
+	if !r.syncReplicationRequired(ctx, config) || r.stretchedSiteOf(ctx, config) != "" {
 		return ""
 	}
 

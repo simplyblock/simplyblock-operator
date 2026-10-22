@@ -252,3 +252,52 @@ func TestALeaderWaitsForThePeerSiteBeforeActivating(t *testing.T) {
 		})
 	}
 }
+
+// Regression: 2026-10-22-stretched-groups-need-a-site. A stretched cluster's site
+// is the whole Kubernetes cluster, so the hub does not write a site into every
+// node group of the draft the discovery wrote; a group left without one held the
+// whole provisioning on MissingSites. On a stretched cluster an empty group site
+// is the cluster's site.
+func TestAGroupWithoutASiteTakesTheStretchedClustersSite(t *testing.T) {
+	config := aStretchedDocument("")
+	r := reconcilerFor(t, append(workers("worker-1", "worker-2"), config)...)
+
+	findings, err := r.validate(context.Background(), config)
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	for _, f := range findings {
+		if f.reason == MissingSites {
+			t.Fatalf("a stretched document's groups without a site held provisioning: %s", f.message)
+		}
+	}
+
+	cluster, err := r.buildCluster(config, theCluster)
+	if err != nil {
+		t.Fatalf("buildCluster: %v", err)
+	}
+	set := config.Spec.NodeSets[0]
+	node := r.buildNode(config, cluster, set, set.Groups[0], set.Groups[0].Workers[0], 0)
+	if node.Spec.Config.Site != stretchedSite {
+		t.Errorf("the node's site = %q, want the stretched cluster's site %q", node.Spec.Config.Site, stretchedSite)
+	}
+}
+
+// A standalone sync cluster still needs a site on every group: it has no
+// installation-wide site to default to.
+func TestASyncClustersGroupsStillNeedASite(t *testing.T) {
+	config := aStretchedDocument("")
+	config.Spec.Cluster.Stretched = nil
+	r := reconcilerFor(t, append(workers("worker-1", "worker-2"), config)...)
+
+	findings, err := r.validate(context.Background(), config)
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	for _, f := range findings {
+		if f.reason == MissingSites {
+			return
+		}
+	}
+	t.Fatalf("a standalone sync document's groups without a site passed validation (findings %+v)", findings)
+}

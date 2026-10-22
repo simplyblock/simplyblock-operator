@@ -636,7 +636,7 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 				Expand:           expansionOf(config),
 				DeviceNames:      devicesOf(group),
 				FailureDomain:    group.FailureDomain,
-				Site:             group.Site,
+				Site:             groupSite(group, cluster),
 				SpdkSystemMemory: group.SpdkSystemMemory,
 				// The core ids this group's machines hold back. It reaches the
 				// node's own entry in the per-node ConfigMap, which is where a
@@ -922,4 +922,14 @@ func stripeWidth(cluster *simplyblockv1alpha2.StorageCluster) int {
 		}
 	}
 	return ndcs + npcs
+}
+
+// groupSite is the site a group's nodes join: the group's own, or, on a
+// stretched cluster, whose site is the whole Kubernetes cluster, the cluster's
+// site when the group names none.
+func groupSite(group simplyblockv1alpha2.NodeGroup, cluster *simplyblockv1alpha2.StorageCluster) string {
+	if group.Site != "" {
+		return group.Site
+	}
+	return cluster.StretchedSite()
 }

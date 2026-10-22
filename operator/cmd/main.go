@@ -1167,6 +1167,10 @@ func main() {
 			&webhook.Admission{Handler: &internalwebhook.StorageNodeOpsValidator{Client: mgr.GetClient()}})
 		setupLog.Info("registered storagenodeops validating webhook")
 
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-stretchedcluster",
+			&webhook.Admission{Handler: &internalwebhook.StretchedClusterValidator{}})
+		setupLog.Info("registered stretchedcluster validating webhook")
+
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagedeviceops",
 			&webhook.Admission{Handler: &internalwebhook.StorageDeviceOpsValidator{Client: mgr.GetClient()}})
 		setupLog.Info("registered storagedeviceops validating webhook")
