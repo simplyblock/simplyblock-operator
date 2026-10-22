@@ -38,7 +38,7 @@ import (
 // needs rather than to nothing.
 //
 // topology is what the cluster declares (spec.clusterMode): a
-// single-node cluster activates any scheme on its one node, a two-node cluster
+// single-node cluster activates its 1+0 on its one node, a two-node cluster
 // 1+1 on exactly two (erasurecoding.Scheme.MinimumNodesFor).
 func ActivationNodeCountViolation(
 	stripe *simplyblockv1alpha2.StripeSpec, topology erasurecoding.Topology, nodes int,

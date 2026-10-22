@@ -40,8 +40,8 @@ func aNodeSet(name, mgmt string, workerNames ...string) simplyblockv1alpha2.Node
 }
 
 // aSuperclusterDocument is a draft of two node sets of one worker each, on two
-// different networks, as single-node members striped 1+1 across two of their
-// three block devices, the third being the journal device block devices need.
+// different networks, as single-node members running 1+0 on their block
+// devices, one of which is the journal device block devices need.
 func aSuperclusterDocument(
 	mutate func(*simplyblockv1alpha2.ClusterDeploymentConfig),
 ) *simplyblockv1alpha2.ClusterDeploymentConfig {
@@ -50,7 +50,7 @@ func aSuperclusterDocument(
 		c.Spec.Cluster.ClusterMode = simplyblockv1alpha2.ClusterModeSingle
 		c.Spec.Cluster.EnableJournalDevice = ptr.To(true)
 		c.Spec.Cluster.Stripe = &simplyblockv1alpha2.StripeSpec{
-			DataChunks: ptr.To(int32(1)), ParityChunks: ptr.To(int32(1)),
+			DataChunks: ptr.To(int32(1)), ParityChunks: ptr.To(int32(0)),
 		}
 		c.Spec.NodeSets = []simplyblockv1alpha2.NodeSet{
 			aNodeSet("fast", "eth1", "worker-1"),

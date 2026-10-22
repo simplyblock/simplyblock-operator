@@ -55,8 +55,16 @@ func TestAMemberIsCreatedWithItsNodeSetsOverrides(t *testing.T) {
 				entry.NodeSet, ptr.FromOrZero(member.Spec.VCPUCount), ptr.FromOrZero(member.Spec.MaxSubsystemCount),
 				member.Spec.MinHugePagesSize, member.Spec.Stripe, vcpu, subsystems, pages, data)
 		}
-		if ptr.FromOrZero(member.Spec.Stripe.ParityChunks) != 1 {
-			t.Errorf("member of node set %s: parity chunks %v, want 1", entry.NodeSet, member.Spec.Stripe.ParityChunks)
+		// The dense node set's override carries its parity through; approval
+		// refuses it on a single-node member, which
+		// TestTheStripeMinimumIsCheckedAgainstTheMembersOwnScheme covers.
+		parity := int32(0)
+		if entry.NodeSet == "dense" {
+			parity = 1
+		}
+		if ptr.FromOrZero(member.Spec.Stripe.ParityChunks) != parity {
+			t.Errorf("member of node set %s: parity chunks %v, want %d",
+				entry.NodeSet, ptr.FromOrZero(member.Spec.Stripe.ParityChunks), parity)
 		}
 		layout := member.Spec.StorageNodes
 		if len(layout.SocketsToUse) != sockets || ptr.FromOrZero(layout.NodesPerSocket) != perSocket {
@@ -66,9 +74,9 @@ func TestAMemberIsCreatedWithItsNodeSetsOverrides(t *testing.T) {
 	}
 }
 
-// The stripe minimum is checked against each member's own scheme: a single
-// node member with two data devices carries 1+1, and the node set that
-// overrides it to 2+1 is the one reported.
+// The stripe is checked against each member's own scheme: a single-node
+// member runs the template's 1+0, and the node set that overrides it to 2+1 is
+// the one reported.
 func TestTheStripeMinimumIsCheckedAgainstTheMembersOwnScheme(t *testing.T) {
 	config := aSuperclusterDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
 		c.Spec.NodeSets[1].Cluster = &simplyblockv1alpha2.NodeSetClusterOverrides{

@@ -8,11 +8,11 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// A document that declares a single-node cluster may run any scheme on one
-// worker, as long as that worker hands over a device per chunk of a stripe;
-// it may not name more than one worker, and the same worker without the
+// A document that declares a single-node cluster runs 1+0 on one worker:
+// parity on one node is refused, it may not name more than one worker, the
+// worker hands over a data device, and the same worker without the
 // declaration is still too few for anything redundant.
-func TestASingleNodeDraftRunsEverySchemeOnOneWorker(t *testing.T) {
+func TestASingleNodeDraftRunsOnePlusZeroOnOneWorker(t *testing.T) {
 	stripe := func(d, p int32) *simplyblockv1alpha2.StripeSpec {
 		return &simplyblockv1alpha2.StripeSpec{DataChunks: ptr.To(d), ParityChunks: ptr.To(p)}
 	}
@@ -30,15 +30,14 @@ func TestASingleNodeDraftRunsEverySchemeOnOneWorker(t *testing.T) {
 		journal    bool // enableJournalDevice
 		reason     string
 	}{
-		{"1+1 single on one worker, two devices", stripe(1, 1), []string{"worker-1"}, true, 2, false, ""},
-		{"2+1 single on one worker, three devices", stripe(2, 1), []string{"worker-1"}, true, 3, false, ""},
-		{"2+2 single on one worker, four devices", stripe(2, 2), []string{"worker-1"}, true, 4, false, ""},
-		{"4+2 single on one worker, six devices", stripe(4, 2), []string{"worker-1"}, true, 6, false, ""},
-		{"4+2 single, devices unnamed", stripe(4, 2), []string{"worker-1"}, true, 0, false, ""},
-		{"4+2 single on one worker, five devices", stripe(4, 2), []string{"worker-1"}, true, 5, false, StripeBelowMinimumDevices},
-		{"2+1 single, three devices less a journal", stripe(2, 1), []string{"worker-1"}, true, 3, true, StripeBelowMinimumDevices},
-		{"2+1 single, four devices less a journal", stripe(2, 1), []string{"worker-1"}, true, 4, true, ""},
-		{"2+1 single on two workers", stripe(2, 1), []string{"worker-1", "worker-2"}, true, 3, false, StripeSingleNodeCount},
+		{"1+0 single on one worker, one device", stripe(1, 0), []string{"worker-1"}, true, 1, false, ""},
+		{"1+0 single, devices unnamed", stripe(1, 0), []string{"worker-1"}, true, 0, false, ""},
+		{"1+1 single on one worker, two devices", stripe(1, 1), []string{"worker-1"}, true, 2, false, StripeSingleNodeParity},
+		{"2+1 single on one worker, three devices", stripe(2, 1), []string{"worker-1"}, true, 3, false, StripeSingleNodeParity},
+		{"4+2 single, devices unnamed", stripe(4, 2), []string{"worker-1"}, true, 0, false, StripeSingleNodeParity},
+		{"1+0 single, one device less a journal", stripe(1, 0), []string{"worker-1"}, true, 1, true, StripeBelowMinimumDevices},
+		{"1+0 single, two devices less a journal", stripe(1, 0), []string{"worker-1"}, true, 2, true, ""},
+		{"1+0 single on two workers", stripe(1, 0), []string{"worker-1", "worker-2"}, true, 1, false, StripeSingleNodeCount},
 		{"2+1 undeclared on one worker", stripe(2, 1), []string{"worker-1"}, false, 3, false, StripeBelowMinimumNodes},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -62,7 +61,7 @@ func TestASingleNodeDraftRunsEverySchemeOnOneWorker(t *testing.T) {
 			stripeFinding := func(reason string) bool {
 				switch reason {
 				case StripeBelowMinimumNodes, StripeBelowMinimumWorkers, StripeSingleNodeCount,
-					StripeBelowMinimumDevices:
+					StripeBelowMinimumDevices, StripeSingleNodeParity:
 					return true
 				}
 				return false

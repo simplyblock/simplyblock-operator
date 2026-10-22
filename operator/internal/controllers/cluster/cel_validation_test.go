@@ -485,7 +485,7 @@ func TestStorageClusterCELReadsAnUnstatedHalfAsTheDefault(t *testing.T) {
 func TestStorageClusterClusterModeRules(t *testing.T) {
 	apiClient := apiServer(t)
 	base := func(mode simplyblockv1alpha2.ClusterMode) *simplyblockv1alpha2.StorageCluster {
-		return &simplyblockv1alpha2.StorageCluster{
+		c := &simplyblockv1alpha2.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{GenerateName: "mode-", Namespace: "default"},
 			Spec: simplyblockv1alpha2.StorageClusterSpec{
 				MaxSubsystemCount: ptr.To(int32(10)),
@@ -493,6 +493,14 @@ func TestStorageClusterClusterModeRules(t *testing.T) {
 				ClusterMode:       mode,
 			},
 		}
+		// A single-node cluster states its 1+0 stripe, which the rule below
+		// requires of it.
+		if mode == simplyblockv1alpha2.ClusterModeSingle {
+			c.Spec.Stripe = &simplyblockv1alpha2.StripeSpec{
+				DataChunks: ptr.To(int32(1)), ParityChunks: ptr.To(int32(0)),
+			}
+		}
+		return c
 	}
 
 	unknown := base("Triple")
@@ -549,4 +557,51 @@ func TestStorageClusterClusterModeRules(t *testing.T) {
 		t.Errorf("an unrelated update of a single-node cluster was refused: %v", err)
 	}
 	_ = apiClient.Delete(context.Background(), same)
+}
+
+// A single-node cluster runs one storage node, so its stripe is 1+0: parity
+// across the devices of one node is refused, and so is an unstated stripe,
+// whose unstated halves would make it 1+1.
+func TestASingleNodeClusterIsOnePlusZero(t *testing.T) {
+	apiClient := apiServer(t)
+	stripe := func(d, p int32) *simplyblockv1alpha2.StripeSpec {
+		return &simplyblockv1alpha2.StripeSpec{DataChunks: ptr.To(d), ParityChunks: ptr.To(p)}
+	}
+	for _, tc := range []struct {
+		name        string
+		mode        simplyblockv1alpha2.ClusterMode
+		stripe      *simplyblockv1alpha2.StripeSpec
+		wantRefused bool
+	}{
+		{"Single 1+0", simplyblockv1alpha2.ClusterModeSingle, stripe(1, 0), false},
+		{"Single 1+1", simplyblockv1alpha2.ClusterModeSingle, stripe(1, 1), true},
+		{"Single 2+1", simplyblockv1alpha2.ClusterModeSingle, stripe(2, 1), true},
+		{"Single without a stripe", simplyblockv1alpha2.ClusterModeSingle, nil, true},
+		{"Single with only dataChunks", simplyblockv1alpha2.ClusterModeSingle,
+			&simplyblockv1alpha2.StripeSpec{DataChunks: ptr.To(int32(1))}, true},
+		{"Standard 2+1", simplyblockv1alpha2.ClusterModeStandard, stripe(2, 1), false},
+		{"Standard without a stripe", simplyblockv1alpha2.ClusterModeStandard, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := &simplyblockv1alpha2.StorageCluster{
+				ObjectMeta: metav1.ObjectMeta{GenerateName: "single-", Namespace: "default"},
+				Spec: simplyblockv1alpha2.StorageClusterSpec{
+					MaxSubsystemCount: ptr.To(int32(10)),
+					VCPUCount:         ptr.To(int32(6)),
+					ClusterMode:       tc.mode,
+					Stripe:            tc.stripe,
+				},
+			}
+			err := apiClient.Create(context.Background(), cluster)
+			if err == nil {
+				defer func() { _ = apiClient.Delete(context.Background(), cluster) }()
+			}
+			switch {
+			case tc.wantRefused && (err == nil || !strings.Contains(err.Error(), "1+0")):
+				t.Fatalf("got %v, want the single-node 1+0 refusal", err)
+			case !tc.wantRefused && err != nil:
+				t.Fatalf("refused: %v", err)
+			}
+		})
+	}
 }

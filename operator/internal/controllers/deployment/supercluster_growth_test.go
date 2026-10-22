@@ -35,7 +35,7 @@ func aGrownSupercluster() []client.Object {
 		c.Name = existingMember
 		c.Spec.SuperclusterRef = grownSupercluster
 		c.Spec.ClusterMode = simplyblockv1alpha2.ClusterModeSingle
-		c.Spec.Stripe = &simplyblockv1alpha2.StripeSpec{DataChunks: ptr.To(int32(1)), ParityChunks: ptr.To(int32(1))}
+		c.Spec.Stripe = &simplyblockv1alpha2.StripeSpec{DataChunks: ptr.To(int32(1)), ParityChunks: ptr.To(int32(0))}
 	})
 	return append(workers("worker-1", "worker-2", "worker-3"), supercluster, member, aStorageNode(existingMember, "worker-1"))
 }

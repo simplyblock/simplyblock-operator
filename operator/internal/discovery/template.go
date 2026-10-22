@@ -152,7 +152,7 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 			" A cluster's stripe cannot be changed afterward, so this is the number to "+
 			"correct now or never.")
 	} else {
-		stripe, topology, note := stripeFor(plan, propose)
+		stripe, topology, note := stripeFor(plan)
 		out.Template.Stripe = stripe
 		switch {
 		case topology.SingleNode:
@@ -262,12 +262,9 @@ func enabled(on bool) string {
 // alternatives rather than picking one.
 //
 // A fleet of one worker is proposed as a single-node cluster (clusterMode
-// Single), and a fleet of exactly two as a two-node cluster (clusterMode Dual) running 1+1: without
-// the declaration neither carries anything redundant, and the stripe a cluster
-// is created with is the one it keeps. A single node places each chunk of a
-// stripe on its own device, so its scheme follows from the devices the worker
-// hands over for data (all of them, less the one a proposed journal device
-// takes): three or more carry 2+1, two carry 1+1, and one carries only 1+0.
+// Single) running 1+0, since with no second node there is nothing to place
+// parity on, and a fleet of exactly two as a two-node cluster (clusterMode
+// Dual) running 1+1. The stripe a cluster is created with is the one it keeps.
 //
 // A draft of several node sets is a supercluster, each node set a member that
 // stripes across its own nodes alone (design-superclusters.md §5.1), so the
@@ -275,7 +272,7 @@ func enabled(on bool) string {
 // document until a node set can override it, so such a draft proposes neither
 // single-node nor two-node mode: a one-worker tier would otherwise make every
 // member single-node.
-func stripeFor(plan Plan, journalDevice bool) (*simplyblockv1alpha2.StripeSpec, erasurecoding.Topology, string) {
+func stripeFor(plan Plan) (*simplyblockv1alpha2.StripeSpec, erasurecoding.Topology, string) {
 	nodes := fleetSize(plan)
 	members := len(plan.NodeSets) > 1
 	if members {
@@ -295,17 +292,9 @@ func stripeFor(plan Plan, journalDevice bool) (*simplyblockv1alpha2.StripeSpec, 
 		}
 		note = memberStripeNote(scheme, nodes)
 	case nodes == 1:
-		devices := dataDevices(plan, journalDevice)
-		switch {
-		case devices >= 3:
-			scheme = erasurecoding.Scheme{DataChunks: 2, ParityChunks: 1}
-		case devices == 2:
-			scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 1}
-		default:
-			scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 0}
-		}
+		scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 0}
 		topology.SingleNode = true
-		note = singleNodeStripeNote(scheme, devices)
+		note = singleNodeStripeNote(scheme)
 	case nodes == 2:
 		scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 1}
 		topology.TwoNode = true
@@ -332,52 +321,14 @@ func stripeFor(plan Plan, journalDevice bool) (*simplyblockv1alpha2.StripeSpec, 
 	return stripe, topology, note
 }
 
-// dataDevices is how many devices the fleet's one worker hands over for data:
-// the disks the draft names, less the one a proposed journal device takes.
-func dataDevices(plan Plan, journalDevice bool) int {
-	if len(plan.Workers) != 1 {
-		return 0
-	}
-	devices := len(plan.Workers[0].Addresses())
-	if journalDevice && devices > 0 {
-		devices--
-	}
-	return devices
-}
-
-// singleNodeStripeNote accounts for a single-node proposal: what the parity
-// protects against, and which wider schemes the devices would also carry.
-func singleNodeStripeNote(scheme erasurecoding.Scheme, devices int) string {
-	if scheme.ParityChunks == 0 {
-		return fmt.Sprintf(
-			"stripe is %s as a single-node cluster (clusterMode Single), which protects nothing: "+
-				"the worker hands over %d %s for data, and a redundant scheme places each "+
-				"chunk of a stripe on its own device, so 1+1 needs two. A cluster's stripe "+
-				"cannot be changed afterward",
-			scheme, devices, plural(devices, "device", "devices"))
-	}
-	var alternatives []string
-	for _, other := range erasurecoding.Supported() {
-		if other == scheme || other.ParityChunks == 0 ||
-			other.DataChunks+other.ParityChunks > devices {
-			continue
-		}
-		alternatives = append(alternatives, other.String())
-	}
-	also := ""
-	if len(alternatives) > 0 {
-		also = fmt.Sprintf(" The devices would also carry %s, which trade capacity for a "+
-			"second tolerated device failure or the other way about.",
-			strings.Join(alternatives, ", "))
-	}
+// singleNodeStripeNote accounts for a single-node proposal.
+func singleNodeStripeNote(scheme erasurecoding.Scheme) string {
 	return fmt.Sprintf(
-		"stripe is %s as a single-node cluster (clusterMode Single): each chunk of a stripe lands "+
-			"on its own device of the one worker, which hands over %d for data, so the "+
-			"cluster survives %d device %s but not the loss of the worker; data migration "+
-			"after a device failure runs in relaxed placement on the same node.%s A cluster "+
-			"meant to grow to more workers is not created as Single and states the stripe of the "+
-			"fleet it will have. A cluster's stripe cannot be changed afterward",
-		scheme, devices, scheme.ParityChunks, plural(scheme.ParityChunks, "failure", "failures"), also)
+		"stripe is %s as a single-node cluster (clusterMode Single), created without high "+
+			"availability: with no second node there is nothing to place parity or a "+
+			"secondary on, so the cluster protects no data against a failure. A cluster meant "+
+			"to grow to more workers is not created as Single and states the stripe of the "+
+			"fleet it will have. A cluster's stripe cannot be changed afterward", scheme)
 }
 
 // stripeNote accounts for the proposal, which for this field means saying what
