@@ -85,6 +85,9 @@ func (r *ArbitrationReconciler) reportRemediation(
 			return err
 		}
 		rem := &simplyblockv1alpha2.NodeRemediationStatus{NodeNotReady: !nodeReady(&node)}
+		if prev := sn.Status.Remediation; prev != nil {
+			rem.ReportedHostNQNs = prev.ReportedHostNQNs
+		}
 		for _, t := range node.Spec.Taints {
 			switch t.Key {
 			case simplyblockv1alpha2.TaintOutOfService:
@@ -95,15 +98,20 @@ func (r *ArbitrationReconciler) reportRemediation(
 		}
 		// Positive fencing evidence is out-of-service only: NotReady is also what
 		// a partition looks like, and the storage-fenced taint is the arbiter's
-		// own verdict. Reported when it changes; a failed report keeps the last
-		// accepted value, so the next reconcile retries.
+		// own verdict. So is an out-of-service taint the storage fence
+		// remediation set: it follows the arbiter's host fence, and reported as
+		// evidence it would make the arbiter treat the healed node as gone again.
+		// Reported when it changes; a failed report keeps the last accepted
+		// value, so the next reconcile retries.
+		evidence := rem.OutOfService &&
+			node.Annotations[simplyblockv1alpha2.AnnoOutOfServiceBy] != simplyblockv1alpha2.OutOfServiceByStorageFence
 		prev := sn.Status.Remediation
 		if prev != nil {
 			rem.ReportedFenced = prev.ReportedFenced
 		}
-		if sn.Status.UUID != "" && (rem.ReportedFenced == nil || *rem.ReportedFenced != rem.OutOfService) {
-			if err := r.API.ReportFencing(ctx, cluster, sn.Status.UUID, rem.OutOfService); err == nil {
-				v := rem.OutOfService
+		if sn.Status.UUID != "" && (rem.ReportedFenced == nil || *rem.ReportedFenced != evidence) {
+			if err := r.API.ReportFencing(ctx, cluster, sn.Status.UUID, evidence); err == nil {
+				v := evidence
 				rem.ReportedFenced = &v
 			}
 		}

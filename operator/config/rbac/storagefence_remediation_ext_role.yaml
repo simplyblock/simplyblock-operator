@@ -1,0 +1,34 @@
+# Lets NodeHealthCheck (medik8s) remediate storage-fenced nodes with simplyblock's
+# StorageFenceRemediation. NodeHealthCheck reads the template a NodeHealthCheck
+# names and creates and deletes the remediations from it under its own service
+# account, which aggregates every ClusterRole carrying this label
+# (sbcli docs/design/two-node-kubernetes-fencing.md §1).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simplyblock-storage-fence-ext-remediation
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: kustomize
+    rbac.ext-remediation/aggregate-to-ext-remediation: "true"
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagefenceremediationtemplates
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagefenceremediations
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete

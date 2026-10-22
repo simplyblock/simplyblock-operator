@@ -978,6 +978,16 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "TwoNodeArbitration")
 		os.Exit(1)
 	}
+	// NodeHealthCheck's external remediation for a storage-fenced node (sbcli
+	// docs/design/two-node-kubernetes-fencing.md §1): the out-of-service taint.
+	if err := (&twonode.RemediationReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		API:    &twonodecp.Adapter{Reader: mgr.GetClient(), EndpointResolver: controlPlaneEndpoint},
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageFenceRemediation")
+		os.Exit(1)
+	}
 	if err := (&controller.ReplicationSlotReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),

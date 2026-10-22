@@ -655,6 +655,17 @@ spec:
                       maximum: 4500
                       minimum: 500
                       type: integer
+                    hostFencing:
+                      description: |-
+                        HostFencing lets Kubernetes follow the arbiter's fence of a node whose
+                        state is unknown. The control plane revokes the node's NVMe host
+                        identities on its peer, the operator sets the StorageFenced condition on
+                        its Kubernetes node, and a NodeHealthCheck with a
+                        StorageFenceRemediationTemplate applies the out-of-service taint, so its
+                        pods and VMs restart on the peer within seconds. A partition then has a
+                        winner instead of stopping I/O on both nodes. Requires the NodeHealthCheck
+                        operator.
+                      type: boolean
                     leaseTtlMs:
                       description: |-
                         LeaseTtlMs is how long a lease from the arbiter stays valid. It only
@@ -1538,6 +1549,36 @@ spec:
                       items:
                         type: string
                       type: array
+                    hostFences:
+                      description: HostFences are the control plane's host fences (spec.arbitration.hostFencing).
+                      items:
+                        description: |-
+                          HostFenceStatus is one host fence of the control plane, as the operator last
+                          read it.
+                        properties:
+                          epoch:
+                            description: Epoch is the arbiter's epoch of the verdict that fenced the node.
+                            format: int64
+                            type: integer
+                          node:
+                            description: Node is the Kubernetes node whose host is fenced.
+                            type: string
+                          state:
+                            description: |-
+                              State is the fence's state: revoking, revoked, releasable, restoring or
+                              unavailable (no host NQN known for the node).
+                            type: string
+                          winner:
+                            description: Winner is the Kubernetes node the fence was applied on.
+                            type: string
+                        required:
+                          - node
+                          - state
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                        - node
+                      x-kubernetes-list-type: map
                     message:
                       description: Message explains why the record could not be read or applied.
                       type: string

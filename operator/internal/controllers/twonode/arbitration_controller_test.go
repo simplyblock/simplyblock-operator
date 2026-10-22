@@ -3,6 +3,7 @@ package twonode
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -30,6 +31,32 @@ type fakeAPI struct {
 	err       error
 	reports   []string // "<node>=<fenced>" per ReportFencing call
 	reportErr error
+	// settings, clientHosts and releases record the host-fencing calls.
+	settings    []string // "<arbitration>,<hostFencing>"
+	clientHosts map[string][]string
+	releases    []string
+	releaseErr  error
+}
+
+func (f *fakeAPI) SetTwoNodeSettings(_ context.Context, _ *simplyblockv1alpha2.StorageCluster, arb, hf bool) error {
+	f.settings = append(f.settings, fmt.Sprintf("%t,%t", arb, hf))
+	return nil
+}
+
+func (f *fakeAPI) SetClientHosts(_ context.Context, _ *simplyblockv1alpha2.StorageCluster, id string, nqns []string) error {
+	if f.clientHosts == nil {
+		f.clientHosts = map[string][]string{}
+	}
+	f.clientHosts[id] = nqns
+	return nil
+}
+
+func (f *fakeAPI) ReleaseHostFence(_ context.Context, _ *simplyblockv1alpha2.StorageCluster, id string) error {
+	if f.releaseErr != nil {
+		return f.releaseErr
+	}
+	f.releases = append(f.releases, id)
+	return nil
 }
 
 func (f *fakeAPI) ReportFencing(_ context.Context, _ *simplyblockv1alpha2.StorageCluster, id string, fenced bool) error {
@@ -70,7 +97,7 @@ func setup(t *testing.T, api *fakeAPI, extraTaint *corev1.Taint) (*ArbitrationRe
 	}
 	scheme := testsupport.NewScheme(t, clientgoscheme.AddToScheme)
 	c := testsupport.NewClient(t, scheme,
-		[]client.Object{&simplyblockv1alpha2.StorageCluster{}, &simplyblockv1alpha2.StorageNode{}}, objs...)
+		[]client.Object{&simplyblockv1alpha2.StorageCluster{}, &simplyblockv1alpha2.StorageNode{}, &corev1.Node{}}, objs...)
 	fixed := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	return &ArbitrationReconciler{Client: c, Scheme: scheme, API: api, Now: func() time.Time { return fixed }}, c
 }
