@@ -280,7 +280,7 @@ func (d *InitialDiscovery) declineReason(ctx context.Context, config *bootstrap.
 	useControlPlane := ptr.BoolFromOrFalse(spec.EnableControlPlaneNodes)
 	usable := 0
 	for _, node := range nodes.Items {
-		if UsableWorker(node, useControlPlane) {
+		if UsableWorker(node, useControlPlane, spec.Tolerations) {
 			usable++
 		}
 	}

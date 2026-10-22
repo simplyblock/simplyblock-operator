@@ -411,9 +411,9 @@ func (r *OperatorOpsReconciler) inspect(
 		// infrastructure ones, so an infra node passes every check the run had
 		// before this one and its being the storage tier went unnoticed.
 		role := discoverypkg.RoleOf(node)
-		if !UsableWorker(node, useControlPlane) {
+		if !UsableWorker(node, useControlPlane, spec.Tolerations) {
 			r.event(ops, corev1.EventTypeNormal, WorkerDeclined,
-				fmt.Sprintf("%s is not used: %s", node.Name, declinedBecause(node, role)))
+				fmt.Sprintf("%s is not used: %s", node.Name, declinedBecause(node, role, spec.Tolerations)))
 			continue
 		}
 		if !role.HoldsStorageNodes() {
@@ -1073,9 +1073,12 @@ func (r *OperatorOpsReconciler) event(
 
 // schedulable reports whether a node is one work can be placed on.
 //
-// A cordoned node and a node carrying a NoSchedule taint are both excluded: a
-// probe Job is pinned with spec.nodeName and would run on either, and a worker
-// the cluster is not scheduling to is not one to hand to a storage cluster.
+// A cordoned node and a node carrying a NoSchedule taint the run does not
+// tolerate are both excluded: a probe Job is pinned with spec.nodeName and would
+// run on either, and a worker the cluster is not scheduling to is not one to hand
+// to a storage cluster. A taint the run tolerates is the opposite case: it is
+// how a dedicated storage plane is marked, and spec.discover.tolerations exists
+// so a run can probe through it.
 // UsableWorker reports whether a discovery run would inspect this machine.
 //
 // It is exported so that the one thing deciding whether a run is worth raising at
@@ -1083,8 +1086,8 @@ func (r *OperatorOpsReconciler) event(
 // run against a cluster with nothing to inspect would create an object whose only
 // outcome is to fail, and on a namespace delete that object holds a finalizer the
 // operator may no longer be alive to clear.
-func UsableWorker(node corev1.Node, useControlPlane bool) bool {
-	if !schedulable(node) {
+func UsableWorker(node corev1.Node, useControlPlane bool, tolerations []corev1.Toleration) bool {
+	if !schedulable(node, tolerations) {
 		return false
 	}
 	role := discoverypkg.RoleOf(node)
@@ -1093,9 +1096,9 @@ func UsableWorker(node corev1.Node, useControlPlane bool) bool {
 
 // declinedBecause says why UsableWorker refused the machine, so the event a
 // reviewer reads names the condition rather than only the outcome.
-func declinedBecause(node corev1.Node, role discoverypkg.NodeRole) string {
-	if !schedulable(node) {
-		return unschedulableReason(node)
+func declinedBecause(node corev1.Node, role discoverypkg.NodeRole, tolerations []corev1.Toleration) string {
+	if !schedulable(node, tolerations) {
+		return unschedulableReason(node, tolerations)
 	}
 	return fmt.Sprintf("it is %s; set spec.discover.enableControlPlaneNodes to include it",
 		role.Describe())
@@ -1103,29 +1106,57 @@ func declinedBecause(node corev1.Node, role discoverypkg.NodeRole) string {
 
 // unschedulableReason says which of the two conditions excluded the node, so an
 // administrator reads "it is cordoned" rather than a bare refusal.
-func unschedulableReason(node corev1.Node) string {
+func unschedulableReason(node corev1.Node, tolerations []corev1.Toleration) string {
 	if node.Spec.Unschedulable {
 		return "it is cordoned"
 	}
-	for _, taint := range node.Spec.Taints {
-		if taint.Effect == corev1.TaintEffectNoSchedule || taint.Effect == corev1.TaintEffectNoExecute {
-			return fmt.Sprintf("it carries the taint %s=%s:%s",
-				taint.Key, taint.Value, taint.Effect)
-		}
+	if taint := untoleratedTaint(node, tolerations); taint != nil {
+		return fmt.Sprintf("it carries the taint %s=%s:%s, which the run does not tolerate",
+			taint.Key, taint.Value, taint.Effect)
 	}
 	return "it is not schedulable"
 }
 
-func schedulable(node corev1.Node) bool {
-	if node.Spec.Unschedulable {
-		return false
-	}
-	for _, taint := range node.Spec.Taints {
-		if taint.Effect == corev1.TaintEffectNoSchedule || taint.Effect == corev1.TaintEffectNoExecute {
-			return false
+func schedulable(node corev1.Node, tolerations []corev1.Toleration) bool {
+	return !node.Spec.Unschedulable && untoleratedTaint(node, tolerations) == nil
+}
+
+// untoleratedTaint is the first NoSchedule or NoExecute taint on node that none
+// of tolerations covers, or nil.
+func untoleratedTaint(node corev1.Node, tolerations []corev1.Toleration) *corev1.Taint {
+	for i := range node.Spec.Taints {
+		taint := &node.Spec.Taints[i]
+		if taint.Effect != corev1.TaintEffectNoSchedule && taint.Effect != corev1.TaintEffectNoExecute {
+			continue
+		}
+		if !toleratedBy(taint, tolerations) {
+			return taint
 		}
 	}
-	return true
+	return nil
+}
+
+// toleratedBy is the scheduler's toleration match for the Exists and Equal
+// operators: an empty key with Exists covers every taint, an empty effect
+// covers every effect.
+func toleratedBy(taint *corev1.Taint, tolerations []corev1.Toleration) bool {
+	for _, tol := range tolerations {
+		if tol.Effect != "" && tol.Effect != taint.Effect {
+			continue
+		}
+		if tol.Key != "" && tol.Key != taint.Key {
+			continue
+		}
+		switch tol.Operator {
+		case corev1.TolerationOpExists:
+			return true
+		case corev1.TolerationOpEqual, "":
+			if tol.Key == taint.Key && tol.Value == taint.Value {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // jobExhausted reports whether a Job has used up its retries.
