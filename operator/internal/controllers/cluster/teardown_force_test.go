@@ -32,3 +32,19 @@ func TestTheBackendClusterIsDeletedWithForce(t *testing.T) {
 		t.Errorf("force = %q, want true: a deleted StorageCluster brings its cluster down completely", force)
 	}
 }
+
+// A cluster the control plane no longer has is a cluster deleted. A forced
+// delete can outlast the client's timeout while it shuts nodes down, and the
+// retry that follows finds the cluster gone.
+func TestAClusterAlreadyGoneIsDeleted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"detail":"cluster not found"}`))
+	}))
+	t.Cleanup(srv.Close)
+	api := NewControlPlane(func(context.Context) string { return srv.URL }, nil)
+
+	if err := api.DeleteCluster(context.Background(), "4f0c0000-0000-4000-8000-00000000000a"); err != nil {
+		t.Errorf("DeleteCluster of a cluster already gone = %v, want success", err)
+	}
+}

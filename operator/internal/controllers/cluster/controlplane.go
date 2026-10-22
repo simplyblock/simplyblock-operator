@@ -201,8 +201,16 @@ func (c *httpControlPlane) atlasFor(ctx context.Context) (*atlascp.Client, error
 // refuses a cluster that still has nodes or pools, and its node removal is an
 // online drain onto the other nodes, which a cluster being deleted, and the
 // one node of a single-node cluster, cannot do.
+//
+// A 404 is success: the cluster is gone. A forced delete can outlast the
+// client's timeout while it shuts nodes down, and the retry that follows finds
+// the cluster already deleted.
 func (c *httpControlPlane) DeleteCluster(ctx context.Context, clusterID string) error {
 	_, err := c.call(ctx, http.MethodDelete, "/api/v2/clusters/"+clusterID+"?force=true", nil)
+	var refusal *ControlPlaneError
+	if errors.As(err, &refusal) && refusal.Status == http.StatusNotFound {
+		return nil
+	}
 	return err
 }
 
