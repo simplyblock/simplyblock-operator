@@ -237,6 +237,27 @@ func (e FailoverResultDTOStatus) Valid() bool {
 	}
 }
 
+// Defines values for GroupManifestState.
+const (
+	Broken    GroupManifestState = "broken"
+	Committed GroupManifestState = "committed"
+	Deleting  GroupManifestState = "deleting"
+)
+
+// Valid indicates whether the value is a known member of the GroupManifestState enum.
+func (e GroupManifestState) Valid() bool {
+	switch e {
+	case Broken:
+		return true
+	case Committed:
+		return true
+	case Deleting:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for HCPKeyDescriptorType.
 const (
 	Hcp HCPKeyDescriptorType = "hcp"
@@ -599,6 +620,7 @@ const (
 	FailedDeviceMigration TaskDTOFunctionName = "failed_device_migration"
 	FdbBackup             TaskDTOFunctionName = "fdb_backup"
 	GroupBackupCommit     TaskDTOFunctionName = "group_backup_commit"
+	GroupBackupDelete     TaskDTOFunctionName = "group_backup_delete"
 	JcCompResume          TaskDTOFunctionName = "jc_comp_resume"
 	LvolBatchMigration    TaskDTOFunctionName = "lvol_batch_migration"
 	LvolMigration         TaskDTOFunctionName = "lvol_migration"
@@ -636,6 +658,8 @@ func (e TaskDTOFunctionName) Valid() bool {
 	case FdbBackup:
 		return true
 	case GroupBackupCommit:
+		return true
+	case GroupBackupDelete:
 		return true
 	case JcCompResume:
 		return true
@@ -1608,6 +1632,16 @@ type GroupBackupManifest struct {
 
 	// Source Where a group backup's generation came from. Provenance for a reader.
 	Source GroupManifestSource `json:"source"`
+
+	// State Whether a group manifest's member backups can be relied on (design §9).
+	//
+	// A group manifest is written ``committed``, at the commit barrier. A delete
+	// marks it ``deleting`` before it touches any member, and removes it only once
+	// every member is retired. A delete that ended after retiring a member marks it
+	// ``broken``: some members are gone, so the group backup cannot restore, and
+	// the bucket says so rather than presenting it as whole. Only a ``committed``
+	// group backup is restorable or importable.
+	State *GroupManifestState `json:"state,omitempty"`
 }
 
 // GroupFailbackParams defines model for GroupFailbackParams.
@@ -1623,6 +1657,16 @@ type GroupManifestSource struct {
 	ConsistencyGroupName string             `json:"consistency_group_name"`
 	Generation           int                `json:"generation"`
 }
+
+// GroupManifestState Whether a group manifest's member backups can be relied on (design §9).
+//
+// A group manifest is written “committed“, at the commit barrier. A delete
+// marks it “deleting“ before it touches any member, and removes it only once
+// every member is retired. A delete that ended after retiring a member marks it
+// “broken“: some members are gone, so the group backup cannot restore, and
+// the bucket says so rather than presenting it as whole. Only a “committed“
+// group backup is restorable or importable.
+type GroupManifestState string
 
 // HCPKeyDescriptor Keys held in HashiCorp Vault, wrapped under a named transit key.
 type HCPKeyDescriptor struct {
@@ -3727,8 +3771,10 @@ type ClientInterface interface {
 
 	// ClustersBackupsGroupsDeleteApiV2ClustersClusterIdBackupsGroupsGroupBackupIdDelete Clusters:Backups:Groups:Delete
 	//
-	// Delete a group backup: its group manifest and its record. The member
-	// backups follow per-volume retention (design §9).
+	// Start deleting a group backup (design §9). Its record and manifest are
+	// marked deleting, and a task retires its member backups and then removes
+	// both; the record reads ``deleting`` until then, and ``broken`` if the delete
+	// could not finish after retiring a member.
 	//
 	// Corresponds with DELETE /api/v2/clusters/{cluster_id}/backups/groups/{group_backup_id}/ (the `ClustersBackupsGroupsDeleteApiV2ClustersClusterIdBackupsGroupsGroupBackupIdDelete` operationId).
 	ClustersBackupsGroupsDeleteApiV2ClustersClusterIdBackupsGroupsGroupBackupIdDelete(ctx context.Context, clusterId openapi_types.UUID, groupBackupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -5754,8 +5800,10 @@ func (c *Client) ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsI
 
 // ClustersBackupsGroupsDeleteApiV2ClustersClusterIdBackupsGroupsGroupBackupIdDelete Clusters:Backups:Groups:Delete
 //
-// Delete a group backup: its group manifest and its record. The member
-// backups follow per-volume retention (design §9).
+// Start deleting a group backup (design §9). Its record and manifest are
+// marked deleting, and a task retires its member backups and then removes
+// both; the record reads “deleting“ until then, and “broken“ if the delete
+// could not finish after retiring a member.
 //
 // Corresponds with DELETE /api/v2/clusters/{cluster_id}/backups/groups/{group_backup_id}/ (the `ClustersBackupsGroupsDeleteApiV2ClustersClusterIdBackupsGroupsGroupBackupIdDelete` operationId).
 func (c *Client) ClustersBackupsGroupsDeleteApiV2ClustersClusterIdBackupsGroupsGroupBackupIdDelete(ctx context.Context, clusterId openapi_types.UUID, groupBackupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -17738,8 +17786,10 @@ type ClientWithResponsesInterface interface {
 
 	// ClustersBackupsGroupsDeleteApiV2ClustersClusterIdBackupsGroupsGroupBackupIdDeleteWithResponse Clusters:Backups:Groups:Delete
 	//
-	// Delete a group backup: its group manifest and its record. The member
-	// backups follow per-volume retention (design §9).
+	// Start deleting a group backup (design §9). Its record and manifest are
+	// marked deleting, and a task retires its member backups and then removes
+	// both; the record reads ``deleting`` until then, and ``broken`` if the delete
+	// could not finish after retiring a member.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -27081,8 +27131,10 @@ func (c *ClientWithResponses) ClustersBackupsGroupsImportApiV2ClustersClusterIdB
 
 // ClustersBackupsGroupsDeleteApiV2ClustersClusterIdBackupsGroupsGroupBackupIdDeleteWithResponse Clusters:Backups:Groups:Delete
 //
-// Delete a group backup: its group manifest and its record. The member
-// backups follow per-volume retention (design §9).
+// Start deleting a group backup (design §9). Its record and manifest are
+// marked deleting, and a task retires its member backups and then removes
+// both; the record reads “deleting“ until then, and “broken“ if the delete
+// could not finish after retiring a member.
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -30400,7 +30452,7 @@ func ParseClustersBackupsGroupsDeleteApiV2ClustersClusterIdBackupsGroupsGroupBac
 	}
 
 	switch {
-	case rsp.StatusCode == 204:
+	case rsp.StatusCode == 202:
 		break // No content-type
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:

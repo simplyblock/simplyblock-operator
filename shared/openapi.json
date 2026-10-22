@@ -7201,7 +7201,7 @@
           "group-backups"
         ],
         "summary": "Clusters:Backups:Groups:Delete",
-        "description": "Delete a group backup: its group manifest and its record. The member\nbackups follow per-volume retention (design \u00a79).",
+        "description": "Start deleting a group backup (design \u00a79). Its record and manifest are\nmarked deleting, and a task retires its member backups and then removes\nboth; the record reads ``deleting`` until then, and ``broken`` if the delete\ncould not finish after retiring a member.",
         "operationId": "clusters_backups_groups_delete_api_v2_clusters__cluster_id__backups_groups__group_backup_id___delete",
         "security": [
           {
@@ -7231,7 +7231,7 @@
           }
         ],
         "responses": {
-          "204": {
+          "202": {
             "description": "Successful Response"
           },
           "422": {
@@ -12325,6 +12325,10 @@
             "type": "array",
             "title": "Member Backup Ids"
           },
+          "state": {
+            "$ref": "#/components/schemas/GroupManifestState",
+            "default": "committed"
+          },
           "encrypted": {
             "type": "boolean",
             "title": "Encrypted",
@@ -14450,6 +14454,7 @@
               "s3_backup_restore",
               "s3_backup_merge",
               "group_backup_commit",
+              "group_backup_delete",
               "cluster_expand",
               "replication_final",
               "fdb_backup"
@@ -15818,6 +15823,16 @@
         },
         "type": "object",
         "title": "_GenerationTakeParams"
+      },
+      "GroupManifestState": {
+        "type": "string",
+        "enum": [
+          "committed",
+          "deleting",
+          "broken"
+        ],
+        "title": "GroupManifestState",
+        "description": "Whether a group manifest's member backups can be relied on (design \u00a79).\n\nA group manifest is written ``committed``, at the commit barrier. A delete\nmarks it ``deleting`` before it touches any member, and removes it only once\nevery member is retired. A delete that ended after retiring a member marks it\n``broken``: some members are gone, so the group backup cannot restore, and\nthe bucket says so rather than presenting it as whole. Only a ``committed``\ngroup backup is restorable or importable."
       }
     },
     "securitySchemes": {

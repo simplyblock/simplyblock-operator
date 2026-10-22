@@ -369,7 +369,22 @@ Group backups are backups, so their routes live under `/backups/groups/`, beside
 
 ## 9. Retention and Scheduling
 
-Retention is the control plane's, as it is for single-volume backups (`design-storagebackup.md` §9). A group-backup policy carries `maxVersions` and `maxAge` that the control plane applies **per generation**: pruning a group backup deletes its group manifest and its record, then retires its member backups: one that the next generation still chains against is merged into that generation's copy (the single-volume schedule's own merge, one per volume chain per cycle), and one that nothing chains against is deleted. The group schedule repeats the retirement every cycle, so a merge that could not start when the generation was pruned is picked up later. Without this a pruned generation's full copies outlived it in the bucket for good while the chain grew under them (live 2026-10-20). Pruning a whole generation is the unit, so a group's retention count is generations kept, not member copies kept.
+Retention is the control plane's, as it is for single-volume backups (`design-storagebackup.md` §9). A group-backup policy carries `maxVersions` and `maxAge` that the control plane applies **per generation**. Pruning a whole generation is the unit, so a group's retention count is generations kept, not member copies kept. Without retiring the members, a pruned generation's full copies outlived it in the bucket for good while the chain grew under them (live 2026-10-20).
+
+A group backup is deleted in the reverse order of its creation, metadata outermost:
+
+1. **Mark.** The group manifest is rewritten with `state: deleting`, then the record becomes `deleting`, before any member is touched. A manifest that cannot be marked refuses the delete and changes nothing. A record in `pending` or `in_progress` is refused: it is still committing.
+2. **Retire.** A `group_backup_delete` task retires the members across cycles. A member that the next generation chains against is merged into that generation's copy (the single-volume schedule's own merge, one per volume chain at a time), so the next generation stays restorable. A member that nothing chains against is deleted. The task defers while a merge or a member upload is in flight.
+3. **Remove.** Only once every member is deleted or merged are the group manifest and then the record removed.
+
+A delete task that ends unfinished (a timeout, the retry ceiling, or a cancellation) settles the group backup rather than leaving it `deleting`:
+
+| Members touched                     | Record      | Manifest `state` |
+|-------------------------------------|-------------|------------------|
+| None (no member deleted or merging) | `completed` | `committed`      |
+| At least one                        | `broken`    | `broken`         |
+
+A `broken` group backup cannot restore, export, or import. Deleting it again resumes the retirement. Import refuses a manifest that is not `committed`, and an import from a bucket skips one, since a bucket can hold a group backup whose delete is in flight on its source. The group schedule still sweeps member copies whose group backup is gone entirely, which only a delete from before this ordering leaves behind.
 
 Scheduling is Phase 4. Until then a group backup is taken on demand through the create endpoint, `sbctl`, or a `StorageGroupBackup` (§7.5), and kept until deleted. The schedule, when it lands, takes one generation per interval and backs it up, which is the single-volume schedule applied to the group source (§7.1).
 
