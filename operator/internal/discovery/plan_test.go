@@ -484,3 +484,43 @@ func TestTheExplanationKeepsTheRulesApart(t *testing.T) {
 		}
 	}
 }
+
+// Regression: 2026-10-22-block-mode-partitions-never-proposed. A logical block
+// device run is documented to take a partition, and WholeDiskRule admits one,
+// but every partition reaches AvailableRule refused as NotAWholeDisk, and that
+// rule waived only a partition table. No partition was ever proposed.
+func TestPlanProposesABlankPartitionInABlockRun(t *testing.T) {
+	partition := func(name, content string, reasons ...blockdev.Reason) nodeprobe.Device {
+		d := refused(blockDisk(name, tb), append([]blockdev.Reason{blockdev.ReasonNotAWholeDisk}, reasons...)...)
+		d.Kind = string(blockdev.KindPartition)
+		d.Content = content
+		return d
+	}
+	fleet := []nodeprobe.Report{report("worker-1",
+		refused(blockDisk("vdb", 4*tb), blockdev.ReasonPartitioned),
+		partition("vdb1", "Blank"),
+		partition("vdb2", "Filesystem", blockdev.ReasonNotBlank),
+		// A probe that refused the partition without reading it: nothing says
+		// it is empty, so nothing may hand it over.
+		partition("vdb3", ""),
+		blockDisk("vdc", 2*tb),
+	)}
+
+	run := &simplyblockv1alpha2.DiscoverSpec{EnableLogicalBlockDevices: ptr.To(true)}
+	plan := Planner{}.Plan(fleet, run)
+
+	if len(plan.NodeSets) != 1 || len(plan.NodeSets[0].Groups) != 1 {
+		t.Fatalf("built %+v, refusals %+v", plan.NodeSets, plan.Refusals)
+	}
+	got := plan.NodeSets[0].Groups[0].Devices.Block
+	if !slices.Equal(got, []string{"/dev/vdb1", "/dev/vdc"}) {
+		t.Errorf("the group names %v, want the blank partition and the disk", got)
+	}
+
+	// An NVMe run never takes a partition, read or not.
+	nvmeFleet := []nodeprobe.Report{report("worker-1", partition("nvme0n1p1", "Blank"))}
+	nvmeFleet[0].Devices[0].PCIAddress = "0000:5e:00.0"
+	if nvme := (Planner{}).Plan(nvmeFleet, nil); len(nvme.NodeSets) != 0 {
+		t.Errorf("an NVMe run built %+v from a partition", nvme.NodeSets)
+	}
+}
