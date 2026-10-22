@@ -375,6 +375,9 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 		if selector := foundationDBNodeSelector(cp); len(selector) > 0 {
 			template["spec"].(map[string]any)["nodeSelector"] = toAnyMap(selector)
 		}
+		if tolerations := foundationDBTolerations(cp); len(tolerations) > 0 {
+			template["spec"].(map[string]any)["tolerations"] = tolerations
+		}
 		if peerTLS {
 			// The operator replaces general.podTemplate wholesale for a class
 			// that overrides it, so the volume is repeated here rather than
@@ -408,6 +411,9 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 	if selector := foundationDBNodeSelector(cp); len(selector) > 0 {
 		general["podTemplate"].(map[string]any)["spec"].(map[string]any)["nodeSelector"] =
 			toAnyMap(selector)
+	}
+	if tolerations := foundationDBTolerations(cp); len(tolerations) > 0 {
+		general["podTemplate"].(map[string]any)["spec"].(map[string]any)["tolerations"] = tolerations
 	}
 	if peerTLS {
 		general["podTemplate"].(map[string]any)["spec"].(map[string]any)["volumes"] = fdbPeerVolume()
@@ -542,6 +548,42 @@ func foundationDBNodeSelector(cp *simplyblockv1alpha2.ControlPlane) map[string]s
 		return fdb.NodeSelector
 	}
 	return local.NodeSelector
+}
+
+// foundationDBTolerations is the control plane's tolerations in the
+// unstructured shape the FoundationDBCluster's pod templates take.
+//
+// The database is placed with the control plane, so it has to tolerate what the
+// control plane tolerates: a nodeSelector onto a tainted node group without the
+// matching toleration leaves every process Pending, and the install waits on
+// FoundationDB for ever.
+func foundationDBTolerations(cp *simplyblockv1alpha2.ControlPlane) []any {
+	local := cp.Spec.Source.Local
+	if local == nil || len(local.Tolerations) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(local.Tolerations))
+	for i := range local.Tolerations {
+		t := local.Tolerations[i]
+		entry := map[string]any{}
+		if t.Key != "" {
+			entry["key"] = t.Key
+		}
+		if t.Operator != "" {
+			entry["operator"] = string(t.Operator)
+		}
+		if t.Value != "" {
+			entry["value"] = t.Value
+		}
+		if t.Effect != "" {
+			entry["effect"] = string(t.Effect)
+		}
+		if t.TolerationSeconds != nil {
+			entry["tolerationSeconds"] = *t.TolerationSeconds
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // coordinatorCount is spec.source.local.foundationDB.replicas, or the API's

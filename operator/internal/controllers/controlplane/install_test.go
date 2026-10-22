@@ -667,3 +667,30 @@ func TestAnUnpinnedDatabaseStaysWithTheControlPlane(t *testing.T) {
 		}
 	}
 }
+
+// The database runs where the control plane runs, so it has to tolerate what the
+// control plane tolerates. Placing it with the control plane's nodeSelector but
+// none of its tolerations left every process Pending on a tainted control-plane
+// node group, and the install waited on FoundationDB for ever (EKS bed
+// 2026-10-22).
+func TestTheDatabaseToleratesWhatTheControlPlaneTolerates(t *testing.T) {
+	cp := localControlPlane()
+	cp.Spec.Source.Local.NodeSelector = map[string]string{"sb-role": "controlplane"}
+	cp.Spec.Source.Local.Tolerations = []corev1.Toleration{{
+		Key: "simplyblock.io/role", Operator: corev1.TolerationOpEqual,
+		Value: "controlplane", Effect: corev1.TaintEffectNoSchedule,
+	}}
+
+	want := []any{map[string]any{
+		"key": "simplyblock.io/role", "operator": "Equal",
+		"value": "controlplane", "effect": "NoSchedule",
+	}}
+	cluster := foundationDBCluster(cp)
+	for _, class := range []string{"general", "storage", "log"} {
+		got := nestedAny(t, cluster.Object,
+			"spec", "processes", class, "podTemplate", "spec", "tolerations")
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("process class %s tolerates %v, want %v", class, got, want)
+		}
+	}
+}
