@@ -496,3 +496,174 @@ func TestMigration_ClusterScope_RefusesAFailoverPolicy(t *testing.T) {
 		t.Errorf("phase = %q, want Failed for a failover-mode policy", got.Status.Phase)
 	}
 }
+
+// A PV keeps the handle it was provisioned with, so a cluster-scoped migration
+// that chose volumes by that handle could never move a volume again once it
+// had migrated: the handle still names the cluster it left. Selection goes by
+// where each volume lives now, and a completed migration's slot gives way to
+// the new policy instead of pinning the claim to the old one.
+func TestMigration_ClusterScope_SelectsVolumesByWhereTheyLiveNow(t *testing.T) {
+	const (
+		clusterA = "aaaaaaaa-0000-0000-0000-000000000001"
+		clusterB = "bbbbbbbb-0000-0000-0000-000000000001"
+		clusterC = "cccccccc-0000-0000-0000-000000000001"
+		poolA    = "aaaaaaaa-0000-0000-0000-00000000000a"
+		poolB    = "bbbbbbbb-0000-0000-0000-00000000000b"
+		poolC    = "cccccccc-0000-0000-0000-00000000000c"
+		volA     = "11111111-1111-1111-1111-111111111111" // pvc-m's original, on A
+		volB     = "22222222-2222-2222-2222-222222222222" // pvc-m migrated to B
+		volN     = "33333333-3333-3333-3333-333333333333" // pvc-n's original, on B
+		volC     = "44444444-4444-4444-4444-444444444444" // pvc-n migrated to C
+		volO     = "55555555-5555-5555-5555-555555555555" // pvc-o, never moved, on B
+	)
+	siteB := testCluster("default", "site-b", clusterB)
+	pair := readyPairForOps()
+	pair.Name = "pair-b"
+	pair.Spec.SourceCluster = "site-b"
+	pol := migrationPolicy()
+	pol.Name = "mig-b"
+	pol.Spec.PairRef = "pair-b"
+	ops := migrationOps(utils.ReplicationOpsScopeCluster, "site-b")
+	ops.Spec.PolicyRef = "mig-b"
+
+	finished := func(name, policy, pvc, handle string) *simplyblockv1alpha1.ReplicationSlot {
+		return &simplyblockv1alpha1.ReplicationSlot{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec:       simplyblockv1alpha1.ReplicationSlotSpec{PolicyRef: policy, PVCRef: pvc, VolumeID: handle},
+			Status: simplyblockv1alpha1.ReplicationSlotStatus{
+				State:     string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone),
+				Direction: string(simplyblockv1alpha1.ReplicationSlotDirectionTarget),
+			},
+		}
+	}
+	r, cl := newOpsReplReconciler(t, siteB, pair, pol, ops,
+		migBoundPVC("pvc-m", "pv-m", map[string]string{utils.AnnotationReplicationPolicy: "old"}),
+		csiPV("pv-m", clusterA+":"+poolA+":"+volA),
+		finished("old-pvc-m", "old", "pvc-m", clusterA+":"+poolA+":"+volA),
+		migBoundPVC("pvc-n", "pv-n", map[string]string{utils.AnnotationReplicationPolicy: "away"}),
+		csiPV("pv-n", clusterB+":"+poolB+":"+volN),
+		finished("away-pvc-n", "away", "pvc-n", clusterB+":"+poolB+":"+volN),
+		migBoundPVC("pvc-o", "pv-o", nil), csiPV("pv-o", clusterB+":"+poolB+":"+volO),
+	)
+
+	rel := func(w http.ResponseWriter, isSource bool, tc, tp, tv, active string) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"is_source": isSource, "target_cluster_id": tc, "target_pool_id": tp,
+			"target_lvol_id": tv, "active_lvol_id": active,
+		})
+	}
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		switch req.URL.Path {
+		case "/api/v2/clusters/" + clusterA + "/replication/relationships/" + volA:
+			rel(w, true, clusterB, poolB, volB, volB)
+		case "/api/v2/clusters/" + clusterB + "/replication/relationships/" + volB:
+			rel(w, false, clusterB, poolB, volB, volB)
+		case "/api/v2/clusters/" + clusterB + "/replication/relationships/" + volN:
+			rel(w, true, clusterC, poolC, volC, volC)
+		case "/api/v2/clusters/" + clusterC + "/replication/relationships/" + volC:
+			rel(w, false, clusterC, poolC, volC, volC)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	reconcileOps(t, r)
+
+	annotation := func(name string) string {
+		pvc := &corev1.PersistentVolumeClaim{}
+		_ = cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: name}, pvc)
+		return pvc.Annotations[utils.AnnotationReplicationPolicy]
+	}
+	if got := annotation("pvc-m"); got != "mig-b" {
+		t.Errorf("pvc-m policy = %q, want mig-b: it migrated to B, and its finished slot must give way", got)
+	}
+	if got := annotation("pvc-o"); got != "mig-b" {
+		t.Errorf("pvc-o policy = %q, want mig-b", got)
+	}
+	if got := annotation("pvc-n"); got != "away" {
+		t.Errorf("pvc-n policy = %q, want it left alone: it moved on to C", got)
+	}
+
+	got := getOps(t, cl)
+	if got.Status.Subphase != replOpsSubphaseEnrolling {
+		t.Errorf("subphase = %q, want %s", got.Status.Subphase, replOpsSubphaseEnrolling)
+	}
+	var skippedN bool
+	for _, res := range got.Status.Results {
+		if res.PVCRef == "pvc-m" && res.Status == string(simplyblockv1alpha1.ReplicationOpsResultSkipped) {
+			t.Errorf("pvc-m skipped: %s", res.Detail)
+		}
+		if res.PVCRef == "pvc-n" && res.Status == string(simplyblockv1alpha1.ReplicationOpsResultSkipped) {
+			skippedN = true
+			if !strings.Contains(res.Detail, clusterC) {
+				t.Errorf("pvc-n detail = %q, want it to name the cluster it moved to", res.Detail)
+			}
+		}
+	}
+	if !skippedN {
+		t.Errorf("results = %+v, want pvc-n reported as moved away", got.Status.Results)
+	}
+}
+
+// A volume back on the cluster it once left under the same policy (A -> B ->
+// A on one pair): the finished slot holds the slot name the policy needs, so
+// it is retired and the watcher creates a fresh one.
+func TestMigration_ClusterScope_RetiresAFinishedSlotOfTheSamePolicy(t *testing.T) {
+	const (
+		clusterB = "bbbbbbbb-0000-0000-0000-000000000001"
+		clusterC = "cccccccc-0000-0000-0000-000000000001"
+		poolB    = "bbbbbbbb-0000-0000-0000-00000000000b"
+		poolC    = "cccccccc-0000-0000-0000-00000000000c"
+		volC     = "44444444-4444-4444-4444-444444444444"
+		volB     = "66666666-6666-6666-6666-666666666666"
+	)
+	siteB := testCluster("default", "site-b", clusterB)
+	pair := readyPairForOps()
+	pair.Name = "pair-b"
+	pair.Spec.SourceCluster = "site-b"
+	pol := migrationPolicy()
+	pol.Name = "mig-b"
+	pol.Spec.PairRef = "pair-b"
+	ops := migrationOps(utils.ReplicationOpsScopeCluster, "site-b")
+	ops.Spec.PolicyRef = "mig-b"
+	slot := &simplyblockv1alpha1.ReplicationSlot{
+		ObjectMeta: metav1.ObjectMeta{Name: "mig-b-pvc-r", Namespace: "default"},
+		Spec: simplyblockv1alpha1.ReplicationSlotSpec{PolicyRef: "mig-b", PVCRef: "pvc-r",
+			VolumeID: clusterC + ":" + poolC + ":" + volC},
+		Status: simplyblockv1alpha1.ReplicationSlotStatus{
+			State: string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone),
+		},
+	}
+	r, cl := newOpsReplReconciler(t, siteB, pair, pol, ops, slot,
+		migBoundPVC("pvc-r", "pv-r", map[string]string{utils.AnnotationReplicationPolicy: "mig-b"}),
+		csiPV("pv-r", clusterC+":"+poolC+":"+volC),
+	)
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/api/v2/clusters/" + clusterC + "/replication/relationships/" + volC:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"is_source": true, "target_cluster_id": clusterB, "target_pool_id": poolB,
+				"target_lvol_id": volB, "active_lvol_id": volB,
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	reconcileOps(t, r)
+
+	err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "mig-b-pvc-r"},
+		&simplyblockv1alpha1.ReplicationSlot{})
+	if err == nil {
+		t.Error("the finished slot is still there; the watcher cannot create the policy's new one")
+	}
+	if got := getOps(t, cl); got.Status.Subphase != replOpsSubphaseEnrolling {
+		t.Errorf("subphase = %q, want %s", got.Status.Subphase, replOpsSubphaseEnrolling)
+	}
+}
