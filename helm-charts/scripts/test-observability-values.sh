@@ -22,15 +22,26 @@ render() {
     --set controlplane.observability.enabled=true "$@"
 }
 
+# query runs a yq expression over a rendered manifest and prints its result, or
+# "unset" when nothing matched. The fallback is applied here rather than with
+# yq's `//`: the yq CI pins (v4.44.3) applies `//` to every document a select
+# dropped, and prints "unset" once for each of them.
+query() {
+  local manifest="$1" expr="$2" out
+  out="$("$YQ" -N "$expr" <<<"$manifest")"
+  if [[ -z "$out" || "$out" == "null" ]]; then
+    out="unset"
+  fi
+  echo "$out"
+}
+
 # container prints one field of a Deployment container, or "unset".
 container() {
-  local manifest="$1" name="$2" field="$3"
-  "$YQ" "select(.kind == \"Deployment\") | .spec.template.spec.containers[] | select(.name == \"$name\") | .$field // \"unset\"" <<<"$manifest"
+  query "$1" "select(.kind == \"Deployment\") | .spec.template.spec.containers[] | select(.name == \"$2\") | .$3"
 }
 
 graylog_env() {
-  local manifest="$1" env="$2"
-  "$YQ" "select(.kind == \"Deployment\") | .spec.template.spec.containers[] | select(.name == \"graylog\") | .env[] | select(.name == \"$env\") | .value // \"unset\"" <<<"$manifest"
+  query "$1" "select(.kind == \"Deployment\") | .spec.template.spec.containers[] | select(.name == \"graylog\") | .env[] | select(.name == \"$2\") | .value"
 }
 
 # Each pull policy reaches its containers.
