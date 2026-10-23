@@ -253,6 +253,9 @@ type CreateLVolData struct {
 	Namespaced       bool   `json:"namespaced"`
 	PvcName          string `json:"pvc_name,omitempty"`
 	ConsistencyGroup string `json:"consistency_group,omitempty"`
+	// PriorityClass is the I/O service class, by name or by the control
+	// plane's number; absent is Default.
+	PriorityClass string `json:"priority_class,omitempty"`
 }
 
 // CreateVolume creates a logical volume and returns volume ID

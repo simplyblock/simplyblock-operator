@@ -92,4 +92,17 @@ const (
 	// failure nowhere but in the cluster's status falling back, so this event is
 	// the only record that an attempt was made and lost.
 	ActivationRetried = "ActivationRetried"
+
+	// ServiceClassesApplied says spec.serviceClasses differed from what the
+	// control plane held and was sent to it.
+	ServiceClassesApplied = "ServiceClassesApplied"
+
+	// ServiceClassesRefused carries the control plane's refusal of
+	// spec.serviceClasses, typically a class that is still used by a volume.
+	// The change is retried on every sync until the spec or the volumes move.
+	ServiceClassesRefused = "ServiceClassesRefused"
+
+	// ServiceClassesUnsupported says the control plane is too old to configure
+	// service classes, so spec.serviceClasses is not applied.
+	ServiceClassesUnsupported = "ServiceClassesUnsupported"
 )
