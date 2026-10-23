@@ -127,6 +127,17 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              consistencyGroupName:
+                description: |-
+                  ConsistencyGroupName names the consistency group this policy backs up as
+                  one unit, resolved in ClusterRef's cluster. When set, the policy takes one
+                  crash-consistent generation of the group per scheduled interval and backs
+                  up every member together, rather than backing up selected claims
+                  independently. The group is named rather than selected by label because the
+                  membership label's key is constant and only its value, the group name,
+                  varies. Set at most one of this and ClaimSelector.
+                maxLength: 63
+                type: string
               maxAge:
                 description: |-
                   MaxAge is how long to keep a backup ("30d," "720h"). Empty means no limit
@@ -176,6 +187,10 @@ spec:
               rule: '!has(oldSelf.maxVersions) || has(self.maxVersions)'
             - message: field maxAge is immutable once set
               rule: '!has(oldSelf.maxAge) || has(self.maxAge)'
+            - message: 'set at most one of claimSelector and consistencyGroupName:
+                a policy backs up either independent claims or one whole consistency
+                group'
+              rule: '!(has(self.claimSelector) && has(self.consistencyGroupName))'
           status:
             description: status defines the observed state of StorageBackupPolicy
             properties:

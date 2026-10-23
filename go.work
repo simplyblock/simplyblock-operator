@@ -1,0 +1,12 @@
+go 1.26.10
+
+toolchain go1.26.10
+
+use (
+	./atlas-lib
+	./control-center/mock
+	./csi-driver
+	./fleet
+	./operator
+	./test/integration
+)

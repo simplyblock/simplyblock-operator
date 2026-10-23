@@ -37,7 +37,7 @@ func TestDeclaredStepsMatchTheKindsEnum(t *testing.T) {
 	// The Enum marker's values, which are also the CEL rule's list. Written out
 	// rather than read from the type, because writing them out is the point: the
 	// marker is a comment the compiler does not check.
-	marker := []string{"AwaitingVolume", "Binding", "Restoring", "Validating"}
+	marker := []string{"AwaitingVolume", "AwaitingVolumes", "Binding", "Restoring", "Validating"}
 
 	if !slices.Equal(declared, marker) {
 		t.Errorf("the graph declares %v and the kind's Enum marker lists %v", declared, marker)

@@ -527,7 +527,7 @@ func resourceEnv(name, resourceName, divisor string) corev1.EnvVar {
 // driver's repository, tagged with the operator's tag prefixed pnfs-mds-.
 func mdsImage(d *simplyblockv1alpha2.SimplyblockDriver) (string, error) {
 	if image := d.Spec.PNFS.MDS.Image; image != "" {
-		return image, nil
+		return string(image), nil
 	}
 	operator := os.Getenv(OperatorImageEnv)
 	if operator == "" {

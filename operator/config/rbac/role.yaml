@@ -454,6 +454,7 @@ rules:
   - storagedeviceops/status
   - storagedevices/status
   - storagefenceremediations/status
+  - storagegroupbackups/status
   - storagenodeops/status
   - storagenodes/status
   - storagenodesets/status
@@ -493,6 +494,7 @@ rules:
   - storage.simplyblock.io
   resources:
   - storagefenceremediationtemplates
+  - storagegroupbackups
   - storagenodesets
   - volumegroupsnapshotops
   verbs:

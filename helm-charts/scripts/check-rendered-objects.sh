@@ -28,7 +28,6 @@ OPERATOR=(
   "ValidatingWebhookConfiguration/simplyblock-operator-validating-webhook-configuration"
   "ServiceAccount/simplyblock-operator"
   "Service/simplyblock-csi-link"
-  "ConfigMap/simplyblock-bootstrap"
 )
 
 # Objects the standalone and managed profiles render on top of OPERATOR.
@@ -167,7 +166,7 @@ checkVendoredCRDs() {
 # is a second CSI deployment, or a control plane they did not ask for, and the
 # discovery run is a draft cluster proposed from workers they did not choose.
 checkEmpty() {
-  local present unwanted bootstrap
+  local present unwanted
   local clean=1
 
   present="$(render empty)"
@@ -185,12 +184,8 @@ checkEmpty() {
     fi
   done
 
-  bootstrap="$(helm template sb "$CHART" --namespace simplyblock \
-    "${CAPABILITIES[@]}" \
-    --set deployment.profile=empty \
-    --show-only templates/bootstrap-configmap.yaml 2>/dev/null)"
-  if ! grep -qE '^ +enabled: false$' <<<"$bootstrap"; then
-    echo "  empty: the bootstrap ConfigMap does not decline the discovery run"
+  if grep -qxF "OperatorOps/initial-discovery" <<<"$present"; then
+    echo "  empty: the discovery run is rendered"
     clean=0
     fail=1
   fi
@@ -457,6 +452,120 @@ checkClusterStorageClasses() {
   fi
 }
 
+# checkDiscovery asserts that a standalone install renders the discovery run, that
+# the values reach its spec.discover, and that the profiles that raise no run
+# render none.
+#
+# The chart is the only thing that creates the run. Nothing in the operator
+# raises one, so an install that drops it here has no draft waiting.
+checkDiscovery() {
+  local yq="${YQ:-yq}"
+  local ok=1 doc got
+
+  # operatorOps prints the rendered OperatorOps, with the extra settings given.
+  operatorOps() {
+    local profile="$1"
+    shift
+    helm template sb "$CHART" --namespace simplyblock \
+      "${CAPABILITIES[@]}" \
+      --set deployment.profile="$profile" \
+      --set controlplane.managed.endpoint=https://cp.example.com \
+      "$@" 2>/dev/null | "$yq" -N 'select(.kind == "OperatorOps")'
+  }
+
+  # An install stating nothing runs discovery with nothing narrowed, and waives a
+  # partition table because a machine that held data before carries one.
+  doc="$(operatorOps standalone)"
+  got="$("$yq" '.metadata.name + " " + .metadata.namespace + " " + .spec.action + " " +
+    (.spec.discover | to_entries | map(.key + "=" + (.value | tostring)) | join(","))' <<<"$doc")"
+  if [ "$got" != "initial-discovery simplyblock Discover enablePartitionedDevices=true" ]; then
+    echo "  discovery: the default run rendered [${got}]"
+    ok=0
+  fi
+
+  doc="$(operatorOps standalone \
+    --set discovery.nodeSelector.node-role\\.kubernetes\\.io/simplyblock-storage="" \
+    --set discovery.enableControlPlaneNodes=true \
+    --set 'discovery.deviceFilter.pcieDenyList={0000:00:1f.2}')"
+  got="$("$yq" '.spec.action + " " + (.spec.discover.enableControlPlaneNodes | tostring) + " " +
+    .spec.discover.deviceFilter.pcieDenyList[0] + " " +
+    (.spec.discover.enablePartitionedDevices | tostring) + " " + .metadata.name' <<<"$doc")"
+  if [ "$got" != "Discover true 0000:00:1f.2 true initial-discovery" ]; then
+    echo "  discovery: values rendered [${got}], want [Discover true 0000:00:1f.2 true initial-discovery]"
+    ok=0
+  fi
+
+  doc="$(operatorOps standalone --set discovery.name=mine --set discovery.namespace=other \
+    --set discovery.enablePartitionedDevices=false)"
+  got="$("$yq" '.metadata.name + " " + .metadata.namespace + " " +
+    (.spec.discover.enablePartitionedDevices | tostring)' <<<"$doc")"
+  if [ "$got" != "mine other false" ]; then
+    echo "  discovery: name, namespace, and the partition waiver rendered [${got}], want [mine other false]"
+    ok=0
+  fi
+
+  # A logical-block-device run refuses PCI filters, even empty ones, so the empty
+  # lists of the defaults must not reach the spec.
+  doc="$(operatorOps standalone --set discovery.enableLogicalBlockDevices=true \
+    --set 'discovery.deviceFilter.blockDenyList={/dev/sda}')"
+  got="$("$yq" '.spec.discover.deviceFilter | keys | join(",")' <<<"$doc")"
+  if [ "$got" != "blockDenyList" ]; then
+    echo "  discovery: the device filter rendered [${got}], want [blockDenyList]"
+    ok=0
+  fi
+
+  # The draft values are accepted and unused, so they change nothing in the run.
+  doc="$(operatorOps standalone --set discovery.draft.name=mine)"
+  got="$("$yq" '.spec.discover | keys | join(",")' <<<"$doc")"
+  if [ "$got" != "enablePartitionedDevices" ]; then
+    echo "  discovery: a draft value reached spec.discover [${got}]"
+    ok=0
+  fi
+
+  # The profiles that raise no run render none, whatever the values say.
+  for profile in managed empty; do
+    doc="$(operatorOps "$profile" --set discovery.enableControlPlaneNodes=true)"
+    if [ -n "$doc" ]; then
+      echo "  discovery: the ${profile} profile renders an OperatorOps"
+      ok=0
+    fi
+  done
+  doc="$(operatorOps standalone --set discovery.enabled=false)"
+  if [ -n "$doc" ]; then
+    echo "  discovery: discovery.enabled=false renders an OperatorOps"
+    ok=0
+  fi
+
+  if [ "$ok" -eq 1 ]; then
+    echo "  discovery: standalone renders the run, and nothing else does"
+  else
+    fail=1
+  fi
+}
+
+# checkOperatorOpsWebhook asserts that the OperatorOps webhook admits a write when
+# it cannot be reached.
+#
+# The chart renders the discovery run in the same pass as the operator, before
+# the operator's pod serves the webhook, so a policy that rejects an unreachable
+# webhook fails every fresh install. A rejection the webhook gives is still
+# enforced, and the controller refuses the one thing it checks again.
+checkOperatorOpsWebhook() {
+  local yq="${YQ:-yq}"
+  local got
+
+  got="$(helm template sb "$CHART" --namespace simplyblock "${CAPABILITIES[@]}" \
+    --set deployment.profile=standalone 2>/dev/null |
+    "$yq" -N 'select(.kind == "ValidatingWebhookConfiguration") | .webhooks[] |
+      select(.name == "voperatorops.simplyblock.io") | .failurePolicy')"
+  if [ "$got" != "Ignore" ]; then
+    echo "  webhook: voperatorops.simplyblock.io has failurePolicy [${got}], want [Ignore]"
+    fail=1
+  else
+    echo "  webhook: voperatorops.simplyblock.io admits a write when it cannot be reached"
+  fi
+}
+
 check standalone "${COMMON[@]}"
 check managed "${COMMON[@]}"
 check empty "${OPERATOR[@]}"
@@ -465,5 +574,7 @@ checkVendoredCRDs
 checkLogCollector
 checkDriverPNFS
 checkClusterStorageClasses
+checkDiscovery
+checkOperatorOpsWebhook
 
 exit "$fail"

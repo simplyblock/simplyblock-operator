@@ -21,6 +21,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/crdtypes"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -446,7 +447,7 @@ func webAPIAt(image string, updated, ready int32, mutate ...func(*appsv1.Deploym
 // upgradeTo builds an Upgrade operation naming image.
 func upgradeTo(image string) *simplyblockv1alpha2.ControlPlaneOps {
 	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionUpgrade)
-	ops.Spec.Upgrade = &simplyblockv1alpha2.UpgradeSpec{Image: image}
+	ops.Spec.Upgrade = &simplyblockv1alpha2.UpgradeSpec{Image: crdtypes.ImageReference(image)}
 	return ops
 }
 

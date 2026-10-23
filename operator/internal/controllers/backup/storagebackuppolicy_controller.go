@@ -69,6 +69,12 @@ type BackupClient interface {
 	DeleteBackupPolicy(ctx context.Context, clusterID, policyID string) error
 	AttachBackupPolicy(ctx context.Context, clusterID, policyID, volumeID string) error
 	DetachBackupPolicy(ctx context.Context, clusterID, policyID, volumeID string) error
+
+	// ConsistencyGroupByName resolves a group a consistencyGroupName policy backs
+	// up, and AttachBackupPolicyToConsistencyGroup puts the group under the policy
+	// so the control plane backs it up as one unit on its schedule (§7.1).
+	ConsistencyGroupByName(ctx context.Context, clusterID, name string) (string, error)
+	AttachBackupPolicyToConsistencyGroup(ctx context.Context, clusterID, policyID, groupID string) error
 }
 
 // StorageBackupPolicyReconciler reconciles a StorageBackupPolicy.
@@ -148,6 +154,13 @@ func (r *StorageBackupPolicyReconciler) Reconcile(ctx context.Context, req ctrl.
 		return r.fail(ctx, &policy, clusterID, fmt.Sprintf("the control plane refused the policy: %v", err))
 	}
 
+	// A consistency-group policy covers a whole group as one unit rather than a
+	// set of independent claims, so it attaches to the group rather than
+	// reconciling per-claim membership (§7.1).
+	if policy.Spec.ConsistencyGroupName != "" {
+		return r.reconcileGroupPolicy(ctx, clusterID, policyID, &policy)
+	}
+
 	attached, err := r.reconcileMembership(ctx, clusterID, policyID, &policy)
 	if err != nil {
 		return r.hold(ctx, &policy, fmt.Sprintf("the membership could not be reconciled: %v", err))
@@ -168,6 +181,39 @@ func (r *StorageBackupPolicyReconciler) Reconcile(ctx context.Context, req ctrl.
 			status.AttachedClaims = attached
 			status.Message = fmt.Sprintf("The policy is active and covers %d claim(s)", len(attached))
 			status.LastBackupAt = r.lastBackupAt(ctx, &policy)
+		})
+}
+
+// reconcileGroupPolicy attaches a consistency-group policy to its named group, so
+// the control plane backs the group up as one unit on the policy's schedule.
+//
+// The group is resolved by name each pass rather than recorded, because it is
+// born from its first labeled member and may not exist when the policy is first
+// reconciled. A group that is not there yet holds the policy in Pending rather
+// than failing it: the attachment is made once the group appears.
+func (r *StorageBackupPolicyReconciler) reconcileGroupPolicy(
+	ctx context.Context, clusterID, policyID string, policy *simplyblockv1alpha2.StorageBackupPolicy,
+) (ctrl.Result, error) {
+	groupID, err := r.API.ConsistencyGroupByName(ctx, clusterID, policy.Spec.ConsistencyGroupName)
+	if err != nil {
+		return r.hold(ctx, policy, fmt.Sprintf(
+			"waiting for consistency group %s: %v", policy.Spec.ConsistencyGroupName, err))
+	}
+	if err := r.API.AttachBackupPolicyToConsistencyGroup(ctx, clusterID, policyID, groupID); err != nil {
+		return r.hold(ctx, policy, fmt.Sprintf(
+			"could not attach the policy to consistency group %s: %v",
+			policy.Spec.ConsistencyGroupName, err))
+	}
+	return ctrl.Result{RequeueAfter: policyRetry}, r.writeStatus(ctx, policy,
+		func(status *simplyblockv1alpha2.StorageBackupPolicyStatus) {
+			status.Phase = simplyblockv1alpha2.StorageBackupPolicyPhaseActive
+			status.ClusterID = clusterID
+			status.PolicyID = policyID
+			status.AttachedClaims = nil
+			status.Message = fmt.Sprintf(
+				"The policy is active and backs up consistency group %s as one unit",
+				policy.Spec.ConsistencyGroupName)
+			status.LastBackupAt = r.lastBackupAt(ctx, policy)
 		})
 }
 

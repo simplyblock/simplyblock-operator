@@ -35,6 +35,17 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
+// ProvisionedByAnnotation is the annotation the external provisioner selects
+// on: it deletes a Released PersistentVolume with reclaim policy Delete only
+// when this names its own driver, and leaves every other PV alone. A restored
+// volume's PV is created by the operator, not provisioned by the driver, so
+// without the annotation a deleted restored claim left its PV Released and
+// its backend volume alive -- three restored members kept their consistency
+// group occupied after the claims were gone, and the next restore into that
+// name was refused (live 2026-10-20, regression_test/24). With it, deleting
+// the claim deletes the volume, which is what reclaim policy Delete promises.
+const ProvisionedByAnnotation = "pv.kubernetes.io/provisioned-by"
+
 // The control plane's volume statuses a restore cares about, in its own
 // spelling. restore_failed is what the tasks runner sets after exhausting every
 // retry of the S3 transfer, and it is the only one of the two that is a verdict.
@@ -47,14 +58,23 @@ const (
 func (r *StorageBackupOpsReconciler) perform(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps, current step,
 ) (bool, error) {
+	group := ops.IsGroupRestore()
 	switch current {
 	case stepValidating:
 		return r.validate(ctx, ops)
 	case stepRestoring:
+		if group {
+			return r.startGroupRestore(ctx, ops)
+		}
 		return r.startRestore(ctx, ops)
 	case stepAwaitingVolume:
 		return r.awaitVolume(ctx, ops)
+	case stepAwaitingVolumes:
+		return r.awaitGroupVolumes(ctx, ops)
 	case stepBinding:
+		if group {
+			return r.bindGroup(ctx, ops)
+		}
 		return r.bind(ctx, ops)
 	default:
 		return false, fatalf("step %s belongs to no action this controller drives", current)
@@ -75,6 +95,13 @@ func (r *StorageBackupOpsReconciler) validate(
 	clusterID, err := r.clusterIDFor(ctx, ops)
 	if err != nil {
 		return false, fmt.Errorf("resolve cluster %s: %w", ops.Spec.ClusterRef.Name, err)
+	}
+
+	// A group restore names no single backup. It resolves the group backup, the
+	// cluster, and the target pool here; the per-member copies are read by the
+	// control plane rather than one at a time by this operation.
+	if ops.IsGroupRestore() {
+		return r.validateGroup(ctx, ops, clusterID, restore)
 	}
 
 	var backup simplyblockv1alpha2.StorageBackup
@@ -335,8 +362,9 @@ func (r *StorageBackupOpsReconciler) ensurePersistentVolume(
 	size := restoredSize(backup)
 	volume := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   name,
-			Labels: map[string]string{RestoredByLabel: ops.Name},
+			Name:        name,
+			Labels:      map[string]string{RestoredByLabel: ops.Name},
+			Annotations: map[string]string{ProvisionedByAnnotation: utils.CSIProvisioner},
 		},
 		Spec: corev1.PersistentVolumeSpec{
 			StorageClassName: storageClass,

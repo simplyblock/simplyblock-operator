@@ -3311,9 +3311,8 @@ type OpenShiftSpec struct {
 type StorageNodesSpec struct {
 	// Image is the storage-node container image. Defaults to the ControlPlane
 	// singleton's spec.image when unset, so a deployment states the version once.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
-	Image string `json:"image,omitempty"`
+	Image crdtypes.ImageReference `json:"image,omitempty"`
 
 	// ImagePullPolicy controls when that image is pulled. It defaults to Always
 	// for the reason SimplyblockDriver's does: the images this product ships are

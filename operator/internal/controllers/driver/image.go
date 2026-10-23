@@ -38,7 +38,7 @@ const (
 // and the operator's own registry and tag with the CSI repository otherwise.
 func driverImage(d *simplyblockv1alpha2.SimplyblockDriver) (string, error) {
 	if d.Spec.Image != "" {
-		return d.Spec.Image, nil
+		return string(d.Spec.Image), nil
 	}
 
 	operator := os.Getenv(OperatorImageEnv)
