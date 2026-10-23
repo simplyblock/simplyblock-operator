@@ -543,6 +543,29 @@ checkDiscovery() {
   fi
 }
 
+# checkOperatorOpsWebhook asserts that the OperatorOps webhook admits a write when
+# it cannot be reached.
+#
+# The chart renders the discovery run in the same pass as the operator, before
+# the operator's pod serves the webhook, so a policy that rejects an unreachable
+# webhook fails every fresh install. A rejection the webhook gives is still
+# enforced, and the controller refuses the one thing it checks again.
+checkOperatorOpsWebhook() {
+  local yq="${YQ:-yq}"
+  local got
+
+  got="$(helm template sb "$CHART" --namespace simplyblock "${CAPABILITIES[@]}" \
+    --set deployment.profile=standalone 2>/dev/null |
+    "$yq" -N 'select(.kind == "ValidatingWebhookConfiguration") | .webhooks[] |
+      select(.name == "voperatorops.simplyblock.io") | .failurePolicy')"
+  if [ "$got" != "Ignore" ]; then
+    echo "  webhook: voperatorops.simplyblock.io has failurePolicy [${got}], want [Ignore]"
+    fail=1
+  else
+    echo "  webhook: voperatorops.simplyblock.io admits a write when it cannot be reached"
+  fi
+}
+
 check standalone "${COMMON[@]}"
 check managed "${COMMON[@]}"
 check empty "${OPERATOR[@]}"
@@ -552,5 +575,6 @@ checkLogCollector
 checkDriverPNFS
 checkClusterStorageClasses
 checkDiscovery
+checkOperatorOpsWebhook
 
 exit "$fail"

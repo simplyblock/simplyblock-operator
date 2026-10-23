@@ -157,7 +157,7 @@ webhooks:
       name: simplyblock-operator-webhook-service
       namespace: {{ .Release.Namespace }}
       path: /validate-storage-simplyblock-io-v1alpha2-operatorops
-  failurePolicy: Fail
+  failurePolicy: Ignore
   name: voperatorops.simplyblock.io
   rules:
   - apiGroups:
