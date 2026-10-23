@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
+	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
@@ -402,5 +403,19 @@ func TestBothPluginsAreShippedToTheLogCollector(t *testing.T) {
 			t.Errorf("%s pod template %s = %q, want \"true\"",
 				name, utils.AnnotationLogCollector, got)
 		}
+	}
+}
+
+// The hook writes the host NQN the CSI node plugin reads back with
+// nqn.DefaultHost and publishes for a two-node fence, so both spell it from
+// the same rule.
+func TestNodePostStartScriptWritesTheDefaultHostNQN(t *testing.T) {
+	want := `echo "` + nqn.NVMeHost("$(cat /etc/nvme/hostid)") + `" > ` + nqn.DefaultHostNQNFile
+	if !strings.Contains(nodePostStartScript, want) {
+		t.Errorf("postStart script does not write %q:\n%s", want, nodePostStartScript)
+	}
+	if !strings.Contains(nodePostStartScript, "uuidgen > "+nqn.PersistedHostIDFile) {
+		t.Errorf("postStart script does not persist the hostid in %s:\n%s",
+			nqn.PersistedHostIDFile, nodePostStartScript)
 	}
 }

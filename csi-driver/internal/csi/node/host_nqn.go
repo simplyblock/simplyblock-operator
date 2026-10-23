@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -23,17 +22,12 @@ import (
 	"k8s.io/klog"
 
 	"github.com/simplyblock/atlas/kube"
-)
-
-const (
-	hostNQNFile = "/etc/nvme/hostnqn"
-	hostIDFile  = "/var/lib/nvme/hostid"
-	// hostNQNPrefix is the form the postStart hook writes the hostid in.
-	hostNQNPrefix = "nqn.2014-08.org.nvmexpress:uuid:"
+	"github.com/simplyblock/atlas/nqn"
 )
 
 // AdvertiseHostNQN sets nodeName's kube.AnnoNVMeHostNQN to the kernel's default
-// host NQN. Runs once at process start, like the subnet probe.
+// host NQN, as nqn.DefaultHost reads it. Runs once at process start, like the
+// subnet probe.
 func AdvertiseHostNQN(ctx context.Context, kubeClient kubernetes.Interface, nodeName string) error {
 	return advertiseHostNQN(ctx, kubeClient, nodeName, os.ReadFile)
 }
@@ -42,7 +36,7 @@ func advertiseHostNQN(
 	ctx context.Context, kubeClient kubernetes.Interface, nodeName string,
 	read func(string) ([]byte, error),
 ) error {
-	want, err := defaultHostNQN(read)
+	want, err := nqn.DefaultHost(read)
 	if err != nil {
 		return err
 	}
@@ -65,24 +59,4 @@ func advertiseHostNQN(
 	}
 	klog.Infof("host NQN: node %s annotated %s", nodeName, want)
 	return nil
-}
-
-// defaultHostNQN reads the host NQN nvme-cli uses. The postStart hook that
-// writes /etc/nvme/hostnqn may not have run yet when the plugin starts, so the
-// persisted hostid it is built from is the fallback: both give the same NQN.
-func defaultHostNQN(read func(string) ([]byte, error)) (string, error) {
-	if b, err := read(hostNQNFile); err == nil {
-		if v := strings.TrimSpace(string(b)); strings.HasPrefix(v, "nqn.") {
-			return v, nil
-		}
-	}
-	b, err := read(hostIDFile)
-	if err != nil {
-		return "", fmt.Errorf("read the node's NVMe host id: %w", err)
-	}
-	id := strings.TrimSpace(string(b))
-	if id == "" {
-		return "", fmt.Errorf("the node's NVMe host id in %s is empty", hostIDFile)
-	}
-	return hostNQNPrefix + id, nil
 }

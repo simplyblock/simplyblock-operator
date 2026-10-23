@@ -40,6 +40,7 @@ atlas/
 │   ├── detach.go           DetachDevice: disconnect unless the subsystem is shared
 │   └── multipath.go        the halves: ConnectPaths (ordered per-path connect) + PathResult
 ├── nqn/                    Build & parse simplyblock lvol NQNs
+│   └── default_host.go     DefaultHost: the node's nvme-cli default host NQN; NVMeHost
 ├── fiemap/                 What a byte range of a file is made of: data, unwritten, delalloc, or hole
 ├── nfsclient/              The kernel NFS client's own view of its mounts
 │   └── mountstats.go       Mount, ParseMountstats, ReadMountstats: op counts, layout types, reconnects
@@ -1071,6 +1072,10 @@ A host NQN is the same story from the other end. `nqn.Host(nodeUID)` composes
 the identity an access-controlled pool authorizes, and `nqn.HostUUID` reads it
 back out — which is what a `--hostid` has to be derived from, since the kernel
 pairs hostid with hostnqn by comparison.
+`nqn.DefaultHost` reads the node's other host identity, the one nvme-cli
+presents on a connect that names none: `/etc/nvme/hostnqn`, or the persisted
+hostid in `/var/lib/nvme/hostid` composed with `nqn.NVMeHost` while that file
+is not written yet.
 
 _Today:_ the CSI driver builds every host NQN with `nqn.Host` (its node service
 and its reconnect loop), derives the DHCHAP `--hostid` with `nqn.HostUUID`
@@ -1078,6 +1083,9 @@ and its reconnect loop), derives the DHCHAP `--hostid` with `nqn.HostUUID`
 subsystem NQN with `nqn.Parse` (`internal/controlplane`, `internal/initiator`,
 `internal/reconnect`). It kept its own copies of the last two until the
 `internal/csi/common` split, when they were adopted and deleted.
+The CSI node plugin publishes `nqn.DefaultHost` on its Node
+(`internal/csi/node/host_nqn.go`), so the operator can name both identities
+when a two-node fence revokes them.
 
 #### Assemble an LVM stack on a device
 

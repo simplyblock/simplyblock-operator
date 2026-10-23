@@ -12,6 +12,7 @@ import (
 	kfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/nqn"
 )
 
 func files(m map[string]string) func(string) ([]byte, error) {
@@ -34,24 +35,11 @@ func nodeAnnotation(t *testing.T, client *kfake.Clientset) string {
 
 func TestAdvertiseHostNQNPublishesTheKernelDefault(t *testing.T) {
 	client := kfake.NewSimpleClientset(testNode(nil, nil))
-	read := files(map[string]string{hostNQNFile: "nqn.2014-08.org.nvmexpress:uuid:1111\n"})
+	read := files(map[string]string{nqn.DefaultHostNQNFile: "nqn.2014-08.org.nvmexpress:uuid:1111\n"})
 	if err := advertiseHostNQN(context.Background(), client, "node-a", read); err != nil {
 		t.Fatalf("advertiseHostNQN: %v", err)
 	}
 	if got := nodeAnnotation(t, client); got != "nqn.2014-08.org.nvmexpress:uuid:1111" {
-		t.Errorf("annotation = %q", got)
-	}
-}
-
-// The postStart hook writes /etc/nvme/hostnqn concurrently with the plugin's
-// start; the persisted hostid it is built from gives the same NQN.
-func TestAdvertiseHostNQNFallsBackToTheHostID(t *testing.T) {
-	client := kfake.NewSimpleClientset(testNode(nil, nil))
-	read := files(map[string]string{hostIDFile: "2222\n"})
-	if err := advertiseHostNQN(context.Background(), client, "node-a", read); err != nil {
-		t.Fatalf("advertiseHostNQN: %v", err)
-	}
-	if got := nodeAnnotation(t, client); got != "nqn.2014-08.org.nvmexpress:uuid:2222" {
 		t.Errorf("annotation = %q", got)
 	}
 }
@@ -70,7 +58,7 @@ func TestAdvertiseHostNQNPublishesNothingWithoutAHostID(t *testing.T) {
 
 func TestAdvertiseHostNQNKeepsOtherAnnotations(t *testing.T) {
 	client := kfake.NewSimpleClientset(testNode(nil, map[string]string{"other": "x"}))
-	read := files(map[string]string{hostNQNFile: "nqn.2014-08.org.nvmexpress:uuid:3333"})
+	read := files(map[string]string{nqn.DefaultHostNQNFile: "nqn.2014-08.org.nvmexpress:uuid:3333"})
 	if err := advertiseHostNQN(context.Background(), client, "node-a", read); err != nil {
 		t.Fatalf("advertiseHostNQN: %v", err)
 	}
