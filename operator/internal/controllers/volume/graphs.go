@@ -35,8 +35,11 @@ const (
 	stepVerifying  = simplyblockv1alpha2.PersistentVolumeOpsStepVerifying
 )
 
-// actionMigrate is the MultiConfig key for the one action this kind carries.
-const actionMigrate = statemachine.Action(simplyblockv1alpha2.PersistentVolumeOpsActionMigrate)
+// The MultiConfig keys of the kind's two actions.
+const (
+	actionMigrate  = statemachine.Action(simplyblockv1alpha2.PersistentVolumeOpsActionMigrate)
+	actionRelocate = statemachine.Action(simplyblockv1alpha2.PersistentVolumeOpsActionRelocate)
+)
 
 // How long each step may take before the operation is reported as stuck.
 //
@@ -71,7 +74,35 @@ const (
 	// with nothing tracking it blocks every later migration of the volume, and
 	// has.
 	verifyingDeadline = 10 * time.Minute
+
+	// replicatingBaseDeadline and replicatingPerMemberDeadline bound a
+	// Relocate's initial sync: the whole of every volume of the subsystem
+	// crosses into the target before the commit, so the bound grows with the
+	// count, as the copy's does.
+	replicatingBaseDeadline      = 2 * time.Hour
+	replicatingPerMemberDeadline = 30 * time.Minute
+
+	// committingDeadline bounds recording a task for every volume.
+	committingDeadline = 15 * time.Minute
+
+	// attachingDeadline bounds one volume's wait for its cutover to be
+	// prepared, which includes the control plane's catch-up and its shrink
+	// rounds, and the path Jobs after it.
+	attachingDeadline = 30 * time.Minute
+
+	// proceedingDeadline bounds one volume's release. The control plane
+	// proceeds alone two minutes into the wait, so the step ends well inside
+	// it unless the cutover itself is stuck.
+	proceedingDeadline = 10 * time.Minute
 )
+
+// replicatingDeadline is the bound on a Relocate's initial sync.
+func replicatingDeadline(members int32) time.Duration {
+	if members < 1 {
+		members = 1
+	}
+	return replicatingBaseDeadline + time.Duration(members)*replicatingPerMemberDeadline
+}
 
 // deadline is the entry hook every state here carries: it sets the step's
 // budget and performs nothing. The side effect of a step is performed on the
@@ -117,6 +148,42 @@ func graphs(members int32) statemachine.MultiConfig[step] {
 				// moved, and what is left is the cleanup that makes the move
 				// safe — so stopping here would leave exactly the state this
 				// step exists to prevent.
+				stepVerifying: {OnEnter: deadline(verifyingDeadline)},
+			},
+		},
+		actionRelocate: {
+			Initial: stepValidating,
+			States: map[step]statemachine.StateDef[step]{
+				// Abortable until the commit: replication can be stopped and
+				// the source carries on as before.
+				stepValidating: {
+					To:        []step{stepReplicating},
+					Abortable: true,
+					OnEnter:   deadline(validatingDeadline),
+				},
+				stepReplicating: {
+					To:        []step{stepCommitting},
+					Abortable: true,
+					OnEnter:   deadline(replicatingDeadline(members)),
+				},
+				// From the commit on, the control plane cuts the volumes over
+				// and deletes their sources whatever the operation does, so no
+				// step after it can be stopped.
+				stepCommitting: {
+					To:      []step{stepAttachingPaths},
+					OnEnter: deadline(committingDeadline),
+				},
+				stepAttachingPaths: {
+					To:      []step{stepProceeding},
+					OnEnter: deadline(attachingDeadline),
+				},
+				// The volumes of one subsystem are cut over one at a time,
+				// so a release leads to the next volume's paths until every
+				// volume is served by the target.
+				stepProceeding: {
+					To:      []step{stepAttachingPaths, stepVerifying},
+					OnEnter: deadline(proceedingDeadline),
+				},
 				stepVerifying: {OnEnter: deadline(verifyingDeadline)},
 			},
 		},

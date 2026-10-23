@@ -115,6 +115,8 @@ type MigrationClient interface {
 	ContinueMigration(ctx context.Context, clusterID, nqn, migrationID string) error
 	GetMigration(ctx context.Context, clusterID, nqn, migrationID string) (controlplane.Migration, error)
 	CancelMigration(ctx context.Context, clusterID, nqn, migrationID string) error
+
+	RelocationClient
 }
 
 // PersistentVolumeOpsReconciler reconciles a PersistentVolumeOps.
@@ -134,7 +136,7 @@ type PersistentVolumeOpsReconciler struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=persistentvolumeops,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=persistentvolumeops/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=persistentvolumeops/finalizers,verbs=update
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters;storagenodes;simplyblockdrivers,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters;storagenodes;storagepools;simplyblockdrivers,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=patch
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
@@ -279,7 +281,9 @@ func (r *PersistentVolumeOpsReconciler) Reconcile(
 		}
 	}
 
-	if ops.Status.Step.State == "" {
+	// The slot serializes the control plane's migrations inside one cluster.
+	// A Relocate replicates between clusters and does not take it.
+	if ops.Status.Step.State == "" && ops.Spec.Action != simplyblockv1alpha2.PersistentVolumeOpsActionRelocate {
 		holder, err := r.acquireSlot(ctx, &ops, subject.cluster)
 		switch {
 		case errors.Is(err, errSlotContended):
@@ -356,6 +360,13 @@ func (r *PersistentVolumeOpsReconciler) advance(
 	if ops.Spec.Abort && machine.CanAbort() {
 		return r.unwind(ctx, ops, subject, current)
 	}
+	// A committed cutover cannot be taken back: the control plane runs it to
+	// the end whatever the operation does, so the move carries on and says why
+	// the abort was not honored.
+	if ops.Spec.Abort && ops.Spec.Action == simplyblockv1alpha2.PersistentVolumeOpsActionRelocate {
+		r.event(ops, corev1.EventTypeNormal, ReasonRelocationAbortIgnored,
+			"The abort arrived at step %s, after the commit; a committed cutover cannot be taken back", current)
+	}
 
 	if machine.TimeoutReached() {
 		r.event(ops, corev1.EventTypeWarning, ReasonStepDeadlineExceeded,
@@ -397,6 +408,12 @@ func (r *PersistentVolumeOpsReconciler) advance(
 	r.observeStep(ops, subject, current)
 
 	if machine.IsTerminal() {
+		if ops.Spec.Action == simplyblockv1alpha2.PersistentVolumeOpsActionRelocate {
+			r.event(ops, corev1.EventTypeNormal, ReasonOperationSucceeded,
+				"Volume %s was moved to member %s", ops.Spec.PersistentVolumeName, ops.Spec.Relocate.TargetClusterRef)
+			return r.finish(ctx, ops, simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded,
+				fmt.Sprintf("the volume was moved to member %s", ops.Spec.Relocate.TargetClusterRef))
+		}
 		r.countTowardRealignment(ctx, subject)
 		r.event(ops, corev1.EventTypeNormal, ReasonOperationSucceeded,
 			"Volume %s was moved to node %s", ops.Spec.PersistentVolumeName, subject.targetNodeName())
@@ -404,7 +421,7 @@ func (r *PersistentVolumeOpsReconciler) advance(
 			fmt.Sprintf("the volume was moved to node %s", subject.targetNodeName()))
 	}
 
-	next := firstSuccessor(machine)
+	next := relocateSuccessor(ops, machine)
 	// Write-ahead: the step is recorded before it is entered, so a crash
 	// between the two leaves a record that the step was attempted rather than a
 	// record that it was not.
@@ -756,6 +773,9 @@ func terminal(phase simplyblockv1alpha2.PersistentVolumeOpsPhase) bool {
 // the copy's deadline scales by. It is zero until the migration's creation
 // reports one, and the graph turns that into the base bound.
 func memberCount(ops *simplyblockv1alpha2.PersistentVolumeOps) int32 {
+	if ops.Status.Relocate != nil {
+		return int32(len(ops.Status.Relocate.Volumes))
+	}
 	if ops.Status.Migration == nil || ops.Status.Migration.MemberCount == nil {
 		return 0
 	}

@@ -1,5 +1,5 @@
-// The migration's graph as data: what it declares, and the three places that
-// have to agree about it.
+// The graphs of the kind's two actions as data: what they declare, and the
+// three places that have to agree about it.
 //
 // A shared statemachine.KubeSnapshot cannot carry an Enum marker, so the step
 // values live in three places — the graph, the kind's Enum marker, and the CEL
@@ -30,7 +30,9 @@ import (
 // than derived so that the assertion below compares two independent statements
 // of the same set: deriving it from the graph would make the test agree with
 // itself.
-var everyStep = []string{"Migrating", "Validating", "Verifying"}
+var everyStep = []string{
+	"AttachingPaths", "Committing", "Migrating", "Proceeding", "Replicating", "Validating", "Verifying",
+}
 
 func TestTheStepEnumCoversEveryDeclaredState(t *testing.T) {
 	declared := statemachine.DeclaredMultiStates(graphs(0))
@@ -74,7 +76,8 @@ func celRuleValues(rule string) []string {
 // stepCELRule is the rule as the type declares it. Keeping a copy here is the
 // cost of a rule living in a struct tag; the test above is what makes the copy
 // worth having.
-const stepCELRule = "!has(self.state) || self.state in ['Validating','Migrating','Verifying']"
+const stepCELRule = "!has(self.state) || self.state in " +
+	"['Validating','Migrating','Verifying','Replicating','Committing','AttachingPaths','Proceeding']"
 
 // Every action the API accepts needs a graph, or an operation of that action
 // fails at its first pass with ErrUnknownAction rather than doing anything.
@@ -82,6 +85,7 @@ func TestEveryActionDeclaresAGraph(t *testing.T) {
 	declared := graphs(0)
 	for _, a := range []simplyblockv1alpha2.PersistentVolumeOpsAction{
 		simplyblockv1alpha2.PersistentVolumeOpsActionMigrate,
+		simplyblockv1alpha2.PersistentVolumeOpsActionRelocate,
 	} {
 		if _, ok := declared[statemachine.Action(a)]; !ok {
 			t.Errorf("action %q has no graph", a)
@@ -115,12 +119,14 @@ func TestTheMigrationIsALine(t *testing.T) {
 // TestOnlyVerifyingRefusesAnAbort. Before the copy finishes there is a backend
 // migration to cancel and paths to take back. After it, the volume has already
 // moved: there is nothing to undo, and the operation is what finishes the work.
+// A Relocate adds the steps after its commit, which the control plane runs to
+// the end whatever the operation does.
 //
 // The same graph answers for a delete, which is the point of asking it here
 // rather than in two places: a deletion may never express a stop that
 // spec.abort could not (design-crd-model.md §3.1).
 func TestOnlyVerifyingRefusesAnAbort(t *testing.T) {
-	want := []step{stepVerifying}
+	want := []step{stepAttachingPaths, stepCommitting, stepProceeding, stepVerifying}
 	if diff := cmp.Diff(want, UnabortableSteps()); diff != "" {
 		t.Errorf("the steps an abort cannot be honored from (-want +got):\n%s", diff)
 	}
