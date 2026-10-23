@@ -54,6 +54,12 @@ spec:
         nodeSelector:
           {{- toYaml . | nindent 10 }}
         {{- end }}
+        {{- with .Values.controlplane.foundationdb.tolerations }}
+        # What the database's processes tolerate. Unset leaves them with the
+        # control plane's tolerations below; stated, these replace them.
+        tolerations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
       # The chart states both halves explicitly rather than leaving the CR's
       # defaults to decide. The CR defaults to serving TLS, and the chart's
       # tls.enabled defaults to off, and a release that said nothing would get

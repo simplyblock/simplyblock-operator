@@ -70,6 +70,15 @@ spec:
           protocol: TCP
         image: controller:latest
         name: manager
+        # The operator's own image, for the images it derives from it: the probe
+        # Jobs run it, and the CSI driver and the rebalancer are its siblings at
+        # the same registry and tag. config/default copies the container's image
+        # into both, so they name whatever the manager was deployed from.
+        env:
+        - name: SB_OPERATOR_IMAGE
+          value: controller:latest
+        - name: SB_NODEPROBE_IMAGE
+          value: controller:latest
         securityContext:
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false

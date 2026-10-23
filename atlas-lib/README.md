@@ -161,6 +161,8 @@ atlas/
 │   └── claim.go            KubeClaim + WithClaim: fire a state's side effect once, under a leased claim
 ├── net/                    Outbound URL validation (SSRF guard)
 ├── ptr/                    Pointer/optional-field helpers for generated + K8s types
+├── crdtypes/               Validated value types CRD fields share; the markers sit on the type
+│   └── image.go            ImageReference: any registry, a tag, a digest, or both
 ├── bounded/                Hard deadlines for calls no context reaches
 │   ├── bounded.go          Call/Do: a sysfs read, ioctl, or open under a deadline + the stuck-key guard
 │   └── command.go          CombinedOutput/Output: a child process that returns even when it cannot be reaped

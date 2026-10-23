@@ -78,6 +78,20 @@ patches:
 # simplyblock-operator-simplyblock-csi-link. Replacements run after the prefix
 # is applied, so this one writes the name from a label the Service carries.
 replacements:
+# The manager's own image into the variables that name it. They are set after
+# the image transformer has run, so they carry the reference the installer was
+# built with rather than the controller:latest placeholder.
+- source:
+    kind: Deployment
+    name: simplyblock-operator-controller-manager
+    fieldPath: spec.template.spec.containers.[name=manager].image
+  targets:
+  - select:
+      kind: Deployment
+      name: simplyblock-operator-controller-manager
+    fieldPaths:
+    - spec.template.spec.containers.[name=manager].env.[name=SB_OPERATOR_IMAGE].value
+    - spec.template.spec.containers.[name=manager].env.[name=SB_NODEPROBE_IMAGE].value
 - source:
     kind: Service
     name: simplyblock-operator-csi-link

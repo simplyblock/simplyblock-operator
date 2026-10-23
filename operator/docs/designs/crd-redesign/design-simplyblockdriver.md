@@ -1028,37 +1028,31 @@ const (
 // host, so a sidecar beside it runs with the same access.
 type SidecarImages struct {
 	// Provisioner is csi-provisioner, on the controller plugin.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
-	Provisioner string `json:"provisioner,omitempty"`
+	Provisioner crdtypes.ImageReference `json:"provisioner,omitempty"`
 
 	// Attacher is csi-attacher, on the controller plugin.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
-	Attacher string `json:"attacher,omitempty"`
+	Attacher crdtypes.ImageReference `json:"attacher,omitempty"`
 
 	// Resizer is csi-resizer, on the controller plugin.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
-	Resizer string `json:"resizer,omitempty"`
+	Resizer crdtypes.ImageReference `json:"resizer,omitempty"`
 
 	// Snapshotter is csi-snapshotter, on the controller plugin. It is this
 	// driver's sidecar and not the cluster's snapshot-controller, whose image
 	// is not overridable here because that component belongs to the cluster.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
-	Snapshotter string `json:"snapshotter,omitempty"`
+	Snapshotter crdtypes.ImageReference `json:"snapshotter,omitempty"`
 
 	// HealthMonitor is csi-external-health-monitor-controller, on the
 	// controller plugin.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
-	HealthMonitor string `json:"healthMonitor,omitempty"`
+	HealthMonitor crdtypes.ImageReference `json:"healthMonitor,omitempty"`
 
 	// NodeDriverRegistrar is node-driver-registrar, on the node plugin.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
-	NodeDriverRegistrar string `json:"nodeDriverRegistrar,omitempty"`
+	NodeDriverRegistrar crdtypes.ImageReference `json:"nodeDriverRegistrar,omitempty"`
 }
 
 // DriverTLSProvider is where the TLS certificate on this connection comes
@@ -1125,9 +1119,8 @@ type SimplyblockDriverSpec struct {
 	// operator's own registry and tag with the CSI driver's repository, so a
 	// deployment that states nothing runs the driver belonging to the operator
 	// reconciling it, which is the pairing the release was tested as.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
-	Image string `json:"image,omitempty"`
+	Image crdtypes.ImageReference `json:"image,omitempty"`
 
 	// ImagePullPolicy controls when that image is pulled. It defaults to Always
 	// because the default Image is a moving tag: it follows the operator's own,

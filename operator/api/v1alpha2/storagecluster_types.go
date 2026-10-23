@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/simplyblock/atlas/crdtypes"
 	"github.com/simplyblock/atlas/statemachine"
 )
 
@@ -371,8 +372,9 @@ type VolumeAutoPlacementSettings struct {
 	PrometheusURL *string `json:"prometheusURL,omitempty"`
 
 	// EnableLatencyBenchmark turns on fio-based NVMe-oF latency measurement
-	// through Kubernetes Jobs. It is off unless a RebalancerImage is
-	// configured.
+	// through Kubernetes Jobs. It is off unless set to true. The Jobs run the
+	// rebalancer image that volume migration runs: rebalancerImage under
+	// volumeMigrationSettings, or the operator's own release.
 	// +optional
 	EnableLatencyBenchmark *bool `json:"enableLatencyBenchmark,omitempty"`
 
@@ -519,9 +521,8 @@ type OpenShiftSpec struct {
 type StorageNodesSpec struct {
 	// Image is the storage-node container image. Defaults to the ControlPlane
 	// singleton's spec.image when unset, so a deployment states the version once.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
-	Image string `json:"image,omitempty"`
+	Image crdtypes.ImageReference `json:"image,omitempty"`
 
 	// ImagePullPolicy controls when that image is pulled. It defaults to Always
 	// for the reason SimplyblockDriver's does: the images this product ships are

@@ -46,7 +46,7 @@ func TestDriverImagePrefersTheSpec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("driverImage: %v", err)
 	}
-	if got != d.Spec.Image {
+	if got != string(d.Spec.Image) {
 		t.Errorf("image = %q, want the spec's %q", got, d.Spec.Image)
 	}
 }

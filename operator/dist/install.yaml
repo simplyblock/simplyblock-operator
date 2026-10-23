@@ -1497,10 +1497,10 @@ spec:
                           is not written downstream, so the field it would fill keeps its own
                           default rather than being overridden with nothing.
 
-                          The registry set is the one every image field in this API is held to,
-                          which is what keeps a reviewed document from naming a build nobody
-                          published.
-                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                          Every image field in this API is held to the same reference format and
+                          to no particular registry, so an air-gapped deployment can name its own
+                          mirror.
+                        pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                         type: string
                       imagePullPolicy:
                         default: Always
@@ -1527,10 +1527,10 @@ spec:
                           is not written downstream, so the field it would fill keeps its own
                           default rather than being overridden with nothing.
 
-                          The registry set is the one every image field in this API is held to,
-                          which is what keeps a reviewed document from naming a build nobody
-                          published.
-                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                          Every image field in this API is held to the same reference format and
+                          to no particular registry, so an air-gapped deployment can name its own
+                          mirror.
+                        pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                         type: string
                       imagePullPolicy:
                         default: Always
@@ -1554,10 +1554,10 @@ spec:
                           is not written downstream, so the field it would fill keeps its own
                           default rather than being overridden with nothing.
 
-                          The registry set is the one every image field in this API is held to,
-                          which is what keeps a reviewed document from naming a build nobody
-                          published.
-                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                          Every image field in this API is held to the same reference format and
+                          to no particular registry, so an air-gapped deployment can name its own
+                          mirror.
+                        pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                         type: string
                       imagePullPolicy:
                         default: Always
@@ -2003,7 +2003,7 @@ spec:
                       Image is the version to move to. It replaces
                       ControlPlane.spec.source.managed.image when the operation succeeds, so the
                       entity keeps describing what is running.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                     type: string
                 required:
                 - image
@@ -2194,10 +2194,10 @@ spec:
                   Image is the container image used for all simplyblock control-plane and
                   storage-node workloads (e.g., `quay.io/simplyblock-io/simplyblock:26.2.2`).
                   StorageNodeSet CRs that omit spec.clusterImage inherit this value.
-                  Must reference one of the trusted registries (`quay.io/simplyblock-io`,
-                  `docker.io/simplyblock`, `public.ecr.aws/simply-block`). Digest pinning
+                  Any registry is accepted, mirrors included, as long as the value is a
+                  well-formed reference carrying a tag, a digest, or both. Digest pinning
                   (@sha256:...) is recommended.
-                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                 type: string
             type: object
           status:
@@ -2422,14 +2422,60 @@ spec:
                               from. It cannot be a class this operator provides, because the control
                               plane has to exist before any simplyblock volume can.
                             type: string
+                          tolerations:
+                            description: |-
+                              Tolerations are applied to the database's own processes, and nothing else
+                              the control plane runs. Unset leaves them with the control plane's
+                              tolerations, spec.source.local.tolerations. When set, they replace those
+                              for the database rather than adding to them, the rule NodeSelector
+                              follows: the database confined to tainted workers tolerates their taint,
+                              and the rest of the control plane does not follow it there.
+                            items:
+                              description: |-
+                                The pod this Toleration is attached to tolerates any taint that matches
+                                the triple <key,value,effect> using the matching operator <operator>.
+                              properties:
+                                effect:
+                                  description: |-
+                                    Effect indicates the taint effect to match. Empty means match all taint effects.
+                                    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                                  type: string
+                                key:
+                                  description: |-
+                                    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                                    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                                  type: string
+                                operator:
+                                  description: |-
+                                    Operator represents a key's relationship to the value.
+                                    Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                                    Exists is equivalent to wildcard for value, so that a pod can
+                                    tolerate all taints of a particular category.
+                                    Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                                  type: string
+                                tolerationSeconds:
+                                  description: |-
+                                    TolerationSeconds represents the period of time the toleration (which must be
+                                    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                                    it is not set, which means tolerate the taint forever (do not evict). Zero and
+                                    negative values will be treated as 0 (evict immediately) by the system.
+                                  format: int64
+                                  type: integer
+                                value:
+                                  description: |-
+                                    Value is the taint value the toleration matches to.
+                                    If the operator is Exists, the value should be empty, otherwise just a regular string.
+                                  type: string
+                              type: object
+                            type: array
                         type: object
                       image:
                         description: |-
                           Image is the management API and control-plane image.
-                          Must reference one of the trusted registries (`quay.io/simplyblock-io`,
-                          `docker.io/simplyblock`, `public.ecr.aws/simply-block`); digest pinning
+                          Any registry is accepted, mirrors included, as long as the value is a
+                          well-formed reference carrying a tag, a digest, or both. Digest pinning
                           (@sha256:...) is recommended.
-                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                        pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                         type: string
                       imagePullPolicy:
                         default: IfNotPresent
@@ -2693,7 +2739,7 @@ spec:
                           there is no equivalent to fall back to without this field -- every
                           StorageCluster on a managed deployment must get an image from here or
                           from its own spec.
-                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                        pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                         type: string
                     required:
                     - endpoint
@@ -4838,7 +4884,7 @@ spec:
                   operator's own registry and tag with the CSI driver's repository, so a
                   deployment that states nothing runs the driver belonging to the operator
                   reconciling it, which is the pairing the release was tested as.
-                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                 type: string
               imagePullPolicy:
                 default: Always
@@ -4989,7 +5035,7 @@ spec:
                           in the spdkcsi repository, tagged with the operator's tag prefixed
                           pnfs-mds-, so a deployment that states nothing runs the image belonging
                           to the operator reconciling it.
-                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                        pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                         type: string
                       nodeSelector:
                         additionalProperties:
@@ -5136,7 +5182,7 @@ spec:
                 properties:
                   attacher:
                     description: Attacher is csi-attacher, on the controller plugin.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                     type: string
                   csiAddons:
                     description: |-
@@ -5148,38 +5194,35 @@ spec:
                       service this driver serves.
 
                       Unlike the other sidecars above, this one's upstream home is the
-                      csi-addons project's own registry, not simplyblock's: the allowlist
-                      carries quay.io/csiaddons alongside the simplyblock registries so a
-                      deployment can run the stock kubernetes-csi-addons sidecar image
-                      directly, ahead of (or instead of) a quay.io/simplyblock-io mirror.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block|quay\.io/csiaddons)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                      csi-addons project's own registry (quay.io/csiaddons), not simplyblock's.
+                    pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                     type: string
                   healthMonitor:
                     description: |-
                       HealthMonitor is csi-external-health-monitor-controller, on the
                       controller plugin.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                     type: string
                   nodeDriverRegistrar:
                     description: NodeDriverRegistrar is node-driver-registrar, on
                       the node plugin.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                     type: string
                   provisioner:
                     description: Provisioner is csi-provisioner, on the controller
                       plugin.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                     type: string
                   resizer:
                     description: Resizer is csi-resizer, on the controller plugin.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                     type: string
                   snapshotter:
                     description: |-
                       Snapshotter is csi-snapshotter, on the controller plugin. It is this
                       driver's sidecar and not the cluster's snapshot-controller, whose image
                       is not overridable here because that component belongs to the cluster.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                     type: string
                 type: object
               tls:
@@ -7913,7 +7956,7 @@ spec:
                     description: |-
                       Image is the storage-node container image. Defaults to the ControlPlane
                       singleton's spec.image when unset, so a deployment states the version once.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                     type: string
                   imagePullPolicy:
                     default: Always
@@ -8258,8 +8301,9 @@ spec:
                   enableLatencyBenchmark:
                     description: |-
                       EnableLatencyBenchmark turns on fio-based NVMe-oF latency measurement
-                      through Kubernetes Jobs. It is off unless a RebalancerImage is
-                      configured.
+                      through Kubernetes Jobs. It is off unless set to true. The Jobs run the
+                      rebalancer image that volume migration runs: rebalancerImage under
+                      volumeMigrationSettings, or the operator's own release.
                     type: boolean
                   evaluationInterval:
                     description: |-
@@ -10916,8 +10960,10 @@ spec:
               clusterImage:
                 description: |-
                   ClusterImage is the container image used for storage-node workloads.
-                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
-                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                  Any registry is accepted, mirrors included, as long as the value is a
+                  well-formed reference carrying a tag, a digest, or both. Digest pinning
+                  (@sha256:...) is recommended.
+                pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                 type: string
               clusterName:
                 description: ClusterName is the target storage cluster name.
@@ -11374,14 +11420,18 @@ spec:
               spdkImage:
                 description: |-
                   SpdkImage is the SPDK image reference used by node services.
-                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
-                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                  Any registry is accepted, mirrors included, as long as the value is a
+                  well-formed reference carrying a tag, a digest, or both. Digest pinning
+                  (@sha256:...) is recommended.
+                pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                 type: string
               spdkProxyImage:
                 description: |-
                   SpdkProxyImage is the SPDK proxy image reference used by node services.
-                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
-                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                  Any registry is accepted, mirrors included, as long as the value is a
+                  well-formed reference carrying a tag, a digest, or both. Digest pinning
+                  (@sha256:...) is recommended.
+                pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                 type: string
               spdkSystemMemory:
                 description: |-
@@ -17018,6 +17068,11 @@ spec:
         - --csi-link
         command:
         - /manager
+        env:
+        - name: SB_OPERATOR_IMAGE
+          value: quay.io/simplyblock-io/simplyblock-operator:0.1.0
+        - name: SB_NODEPROBE_IMAGE
+          value: quay.io/simplyblock-io/simplyblock-operator:0.1.0
         image: quay.io/simplyblock-io/simplyblock-operator:0.1.0
         livenessProbe:
           httpGet:

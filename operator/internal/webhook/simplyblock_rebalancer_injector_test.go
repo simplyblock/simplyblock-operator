@@ -302,3 +302,56 @@ func extractImageAndConfigMap(t *testing.T, patches []jsonpatch.JsonPatchOperati
 	}
 	return image, configMapName
 }
+
+// TestTheLatencyBenchmarkStaysOptIn. The rebalancer image now always resolves
+// on an installed operator, from the operator's own release, so an image being
+// available must not be what turns the benchmark on. Only
+// enableLatencyBenchmark does.
+func TestTheLatencyBenchmarkStaysOptIn(t *testing.T) {
+	const podName = "snode-spdk-pod-4420-c03e15"
+	spdkLabels := map[string]string{"app": "spdk-app-4420"}
+	t.Setenv("SB_OPERATOR_IMAGE", "quay.io/simplyblock-io/simplyblock-operator:v26.4.0-beta2")
+	t.Setenv("SIMPLYBLOCK_REBALANCER_IMAGE", "")
+
+	cases := []struct {
+		name      string
+		placement *simplyblockv1alpha2.VolumeAutoPlacementSettings
+		wantImage string
+	}{
+		{name: "no auto-placement settings", placement: nil},
+		{name: "enableLatencyBenchmark unset", placement: &simplyblockv1alpha2.VolumeAutoPlacementSettings{}},
+		{
+			name:      "enableLatencyBenchmark true",
+			placement: &simplyblockv1alpha2.VolumeAutoPlacementSettings{EnableLatencyBenchmark: ptr.To(true)},
+			wantImage: "quay.io/simplyblock-io/simplyblock-rebalancer:v26.4.0-beta2",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := &simplyblockv1alpha2.StorageCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster", Namespace: "default"},
+				Spec:       simplyblockv1alpha2.StorageClusterSpec{VolumeAutoPlacement: tc.placement},
+				Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: testClusterUUID},
+			}
+			c := fake.NewClientBuilder().WithScheme(newScheme(t)).
+				WithObjects(cluster).WithStatusSubresource(cluster).Build()
+
+			pod := makePod(podName, spdkLabels, nil)
+			resp := (&SimplyblockRebalancerInjector{Client: c}).
+				Handle(context.Background(), admissionRequest(t, pod))
+			if !resp.Allowed {
+				t.Fatalf("the pod was refused: %v", resp.Result)
+			}
+
+			var image string
+			for _, container := range applyPatches(t, pod, resp.Patches).Spec.Containers {
+				if container.Name == testContainerName {
+					image = container.Image
+				}
+			}
+			if image != tc.wantImage {
+				t.Errorf("benchmark sidecar image = %q, want %q (empty: not injected)", image, tc.wantImage)
+			}
+		})
+	}
+}

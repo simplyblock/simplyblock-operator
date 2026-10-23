@@ -64,6 +64,8 @@
 //	net             Reject URLs that are unsafe to forward to the backend.
 //	ptr             Pointers to values, for the optional fields of generated
 //	                request bodies and Kubernetes types.
+//	crdtypes        Validated value types custom resource fields share across
+//	                API groups and versions, so a validation rule is written once.
 //
 // Everything under internal/ (sysfs scanning, the generated control-plane API
 // client, and build metadata) is implementation detail and carries no

@@ -145,15 +145,21 @@ func (c DeviceClass) Address(device nodeprobe.Device) string {
 
 // AvailableRule admits a device the probe found free.
 //
-// EnablePartitionedDevices is the one waiver, and it is narrow on purpose: a
-// device whose only refusal is its partition table is admitted, and a device
-// that is also mounted, held, or unreadable is not. That is what
-// blockdev.Candidate.OnlyRejectedFor guarantees on the probe's side and what
-// this rule spends here.
+// There are two waivers, and both are narrow on purpose. With
+// EnablePartitionedDevices, a device whose only refusal is its partition table
+// is admitted, and a device that is also mounted, held, or unreadable is not.
+// That is what blockdev.Candidate.OnlyRejectedFor guarantees on the probe's
+// side and what this rule spends here. A logical block device run also admits a
+// partition whose only refusal is being one, and only when the probe read it
+// and found it empty.
 type AvailableRule struct {
 	// AllowPartitioned waives a partition table, for the administrator who
 	// knows the table is stale.
 	AllowPartitioned bool
+
+	// AllowPartitions waives NotAWholeDisk for a partition, for the logical
+	// block device class, which the backend reaches through the kernel.
+	AllowPartitions bool
 }
 
 func (AvailableRule) Name() string { return "available" }
@@ -165,6 +171,9 @@ func (r AvailableRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool,
 	if r.AllowPartitioned && device.OnlyRejectedFor(string(blockdev.ReasonPartitioned)) {
 		return true, ""
 	}
+	if r.AllowPartitions && emptyPartition(device) {
+		return true, ""
+	}
 
 	reasons := make([]string, 0, len(device.Rejections))
 	for _, rejection := range device.Rejections {
@@ -174,6 +183,19 @@ func (r AvailableRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool,
 		return false, "the probe did not report it as available and gave no reason"
 	}
 	return false, "the probe refused it: " + strings.Join(reasons, ", ")
+}
+
+// emptyPartition reports whether device is a partition refused only for being
+// one, and read as holding nothing. A probe that refused the partition without
+// reading it leaves Content empty, and that is not evidence of an empty
+// partition.
+func emptyPartition(device nodeprobe.Device) bool {
+	if device.Kind != string(blockdev.KindPartition) ||
+		!device.OnlyRejectedFor(string(blockdev.ReasonNotAWholeDisk)) {
+		return false
+	}
+	return device.Content == blockdev.ContentBlank.String() ||
+		device.Content == blockdev.ContentReleased.String()
 }
 
 // ClassRule admits a device that can be named in the class the run is scanning,

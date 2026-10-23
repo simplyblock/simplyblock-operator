@@ -32,6 +32,10 @@ const (
 	// ReasonNotAWholeDisk is a partition, a device-mapper node, a software-RAID
 	// array, a loop device, or a RAM disk. A cluster is built out of whole
 	// disks, and each of these is either a slice of one or not one at all.
+	//
+	// A logical block device run waives it for a partition, which the backend
+	// takes through the kernel. A partition is therefore read like a disk when
+	// nothing else refused it, so the waiver has its content to rest on.
 	ReasonNotAWholeDisk Reason = "NotAWholeDisk"
 
 	// ReasonFabricNamespace is an NVMe namespace reached over a fabric, which
@@ -96,10 +100,21 @@ const (
 	// also carries a filesystem.
 	ReasonPartitioned Reason = "Partitioned"
 
-	// ReasonNotBlank is a device carrying anything else: a filesystem, an LVM
-	// physical-volume label, a RAID superblock, or bytes matching no signature
-	// this package knows. Candidate.Reading names what was found.
+	// ReasonNotBlank is a device carrying anything else: a filesystem, a RAID
+	// superblock, or bytes matching no signature this package knows.
+	// Candidate.Reading names what was found.
 	ReasonNotBlank Reason = "NotBlank"
+
+	// ReasonLVMPhysicalVolume is a device carrying an LVM physical-volume label
+	// with no logical volume of it active. Nothing holds it and nothing is
+	// mounted from it, so lsblk shows a bare disk while pvs lists it. A device
+	// with an active logical volume is refused as ReasonStacked before its
+	// bytes are read, and never reaches this reason.
+	//
+	// It is separate from ReasonNotBlank because the fix is different: the
+	// label belongs to LVM, and pvremove, not wipefs on a filesystem, is what
+	// hands the disk back.
+	ReasonLVMPhysicalVolume Reason = "LVMPhysicalVolume"
 )
 
 // Rejection is one ground with the evidence for it, so that an event or a log
@@ -233,10 +248,12 @@ func (in Inspector) Candidates(ctx context.Context) ([]Candidate, error) {
 //
 // The order is what makes it safe. Everything establishable without touching
 // the device comes first, and the content reading runs only for a device that
-// has survived all of it, so a mounted disk is never opened. A partition table
-// found in sysfs is the one structural finding that does not stop the read: the
-// override that accepts a stale table still wants to know what else is on the
-// disk.
+// has survived all of it, so a mounted disk is never opened. Two structural
+// findings do not stop the read. A partition table found in sysfs does not,
+// because the override that accepts a stale table still wants to know what else
+// is on the disk. Being a partition does not either, because a logical block
+// device run may take one, and it needs the reading to know the partition is
+// empty.
 func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidate {
 	c := Candidate{Disk: disk, Usage: usage}
 
@@ -246,7 +263,7 @@ func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidat
 	if disk.Transport == TransportNVMeFabric {
 		c.reject(ReasonFabricNamespace,
 			"the namespace is reached over a fabric, so its bytes belong to whatever exported it")
-	} else if disk.Kind == KindDisk && disk.Transport == TransportUnknown {
+	} else if (disk.Kind == KindDisk || disk.Kind == KindPartition) && disk.Transport == TransportUnknown {
 		c.reject(ReasonUnknownTransport, "the device sits on no bus this scan could name")
 	}
 	if disk.SizeBytes == 0 {
@@ -280,7 +297,7 @@ func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidat
 
 	// Everything above was established without opening anything. A device
 	// already refused on any of those grounds is one this must not read.
-	if c.rejectedApartFromPartitions() {
+	if c.refusedBeyondReading(disk.Kind) {
 		return c
 	}
 
@@ -304,7 +321,16 @@ func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidat
 			break
 		}
 		c.reject(ReasonNotBlank, reading.Detail)
-	case ContentFilesystem, ContentStackLayer:
+	case ContentStackLayer:
+		// An LVM label is the only stack layer the signatures name today. One
+		// added later is refused as NotBlank until it is given its own reason,
+		// rather than being reported as LVM.
+		if reading.Type == "LVM2_member" {
+			c.reject(ReasonLVMPhysicalVolume, reading.Detail)
+			break
+		}
+		c.reject(ReasonNotBlank, reading.Detail)
+	case ContentFilesystem:
 		c.reject(ReasonNotBlank, reading.Detail)
 	case ContentReleased:
 		// Not a rejection. The signature was erased where the format keeps it,
@@ -340,12 +366,16 @@ func (c *Candidate) reject(reason Reason, detail string) {
 	c.Rejections = append(c.Rejections, Rejection{Reason: reason, Detail: detail})
 }
 
-// rejectedApartFromPartitions reports whether the device was refused on any
-// ground other than carrying a partition table, which is the test for whether
-// reading its bytes is still worth doing.
-func (c Candidate) rejectedApartFromPartitions() bool {
+// refusedBeyondReading reports whether the device was refused on a ground that
+// rules out reading its bytes: anything other than carrying a partition table,
+// or, for a partition, being one. It is the test for whether the content
+// reading still runs.
+func (c Candidate) refusedBeyondReading(kind Kind) bool {
 	for _, rejection := range c.Rejections {
-		if rejection.Reason != ReasonPartitioned {
+		switch {
+		case rejection.Reason == ReasonPartitioned:
+		case rejection.Reason == ReasonNotAWholeDisk && kind == KindPartition:
+		default:
 			return true
 		}
 	}

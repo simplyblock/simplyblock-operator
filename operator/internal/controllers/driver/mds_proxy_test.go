@@ -67,7 +67,7 @@ func TestTheMDSProxyRunsOnTheHostNetworkWhereverTheMDSMay(t *testing.T) {
 		t.Fatalf("want one container, got %d", len(pod.Containers))
 	}
 	c := pod.Containers[0]
-	if c.Image != d.Spec.PNFS.MDS.Image {
+	if c.Image != string(d.Spec.PNFS.MDS.Image) {
 		t.Errorf("image = %q, want the metadata server's %q, so both ends speak one protocol", c.Image, d.Spec.PNFS.MDS.Image)
 	}
 	if !slices.Equal(c.Command, []string{"/usr/bin/mds-proxy"}) {

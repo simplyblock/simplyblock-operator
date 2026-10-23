@@ -48,13 +48,13 @@ type resolvedSidecars struct {
 func sidecars(d *simplyblockv1alpha2.SimplyblockDriver) resolvedSidecars {
 	o := d.Spec.SidecarImages
 	return resolvedSidecars{
-		provisioner:         orDefault(o.Provisioner, defaultProvisionerImage),
-		attacher:            orDefault(o.Attacher, defaultAttacherImage),
-		resizer:             orDefault(o.Resizer, defaultResizerImage),
-		snapshotter:         orDefault(o.Snapshotter, defaultSnapshotterImage),
-		healthMonitor:       orDefault(o.HealthMonitor, defaultHealthMonitorImage),
-		nodeDriverRegistrar: orDefault(o.NodeDriverRegistrar, defaultNodeDriverRegistrarImage),
-		csiAddons:           orDefault(o.CSIAddons, defaultCSIAddonsImage),
+		provisioner:         orDefault(string(o.Provisioner), defaultProvisionerImage),
+		attacher:            orDefault(string(o.Attacher), defaultAttacherImage),
+		resizer:             orDefault(string(o.Resizer), defaultResizerImage),
+		snapshotter:         orDefault(string(o.Snapshotter), defaultSnapshotterImage),
+		healthMonitor:       orDefault(string(o.HealthMonitor), defaultHealthMonitorImage),
+		nodeDriverRegistrar: orDefault(string(o.NodeDriverRegistrar), defaultNodeDriverRegistrarImage),
+		csiAddons:           orDefault(string(o.CSIAddons), defaultCSIAddonsImage),
 	}
 }
 
