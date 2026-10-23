@@ -28,7 +28,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/erasurecoding"
 )
 
 // finding is one thing validation found, carrying the reason its event is raised
@@ -132,6 +135,9 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 		}
 		if found := blockDevicesWithoutJournalDevice(scope.document); found != "" {
 			findings = append(findings, finding{reason: JournalDeviceRequired, message: scope.prefix + found})
+		}
+		if found := failureDomainLayoutRefusal(scope.document); found != "" {
+			findings = append(findings, finding{reason: FailureDomainLayout, message: scope.prefix + found})
 		}
 	}
 	findings = append(findings, memberLimits(config, members)...)
@@ -414,6 +420,37 @@ func (r *ClusterDeploymentConfigReconciler) failureDomainsRequired(
 		return false
 	}
 	return cluster.Spec.EnableFailureDomains != nil && *cluster.Spec.EnableFailureDomains
+}
+
+// failureDomainLayoutRefusal is why the control plane would refuse to activate
+// the cluster a document creates in failure-domain mode, or nothing. The control
+// plane checks the layout at a fresh activation alone, after the cluster has
+// been created and every node added, so a growth document is not held to it.
+func failureDomainLayoutRefusal(config *simplyblockv1alpha2.ClusterDeploymentConfig) string {
+	template := config.Spec.Cluster
+	if config.Spec.ClusterRef != "" || template == nil || !ptr.BoolFromOrFalse(template.EnableFailureDomains) {
+		return ""
+	}
+	hosts := map[string]map[string]struct{}{}
+	for _, set := range config.Spec.NodeSets {
+		for _, group := range set.Groups {
+			if group.FailureDomain == "" {
+				// Reported by missingFailureDomains; the layout is not known.
+				return ""
+			}
+			if hosts[group.FailureDomain] == nil {
+				hosts[group.FailureDomain] = map[string]struct{}{}
+			}
+			for _, worker := range group.Workers {
+				hosts[group.FailureDomain][worker] = struct{}{}
+			}
+		}
+	}
+	layout := make(map[string]int, len(hosts))
+	for domain, workers := range hosts {
+		layout[domain] = len(workers)
+	}
+	return erasurecoding.FailureDomainViolation(erasurecoding.SchemeOf(template.Stripe), layout)
 }
 
 // summarize renders the findings for status.message: one sentence, which is what

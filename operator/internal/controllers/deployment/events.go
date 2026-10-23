@@ -27,6 +27,11 @@ const (
 	// the ones its cluster has already mapped, exceed what the mapping holds.
 	TooManyFailureDomains = "TooManyFailureDomains"
 
+	// FailureDomainLayout is a document creating a cluster in failure-domain
+	// mode whose domains the control plane refuses to activate: fewer than the
+	// stripe's parity plus two, or holding unequal numbers of workers.
+	FailureDomainLayout = "FailureDomainLayout"
+
 	// What the document says about erasure coding, which is the one part of a
 	// deployment nothing below the operator checks: the control plane validates
 	// the scheme on the cluster create and counts devices at activation, never

@@ -791,16 +791,27 @@ and the draft carries the finding `PlacementGroupLabelIncomplete`, naming them.
 
 **Missing topology is reported, never guessed.**
 
-| Workers in one partition           | Draft                                                                           |
-|------------------------------------|---------------------------------------------------------------------------------|
-| All carry the failure-domain label | Failure domains set, and `enableFailureDomains` set on the template             |
-| None carries it                    | Failure domains unset, `enableFailureDomains` unset, members dealt by name only |
-| Some carry it                      | Drafted, with the finding `TopologyIncomplete` naming the unlabeled workers     |
-| None carries the region label      | One unnamed region, which is today's behavior                                   |
+| Workers in one partition           | Draft                                                                                                 |
+|------------------------------------|-------------------------------------------------------------------------------------------------------|
+| All carry the failure-domain label | Failure domains set, and `enableFailureDomains` set on the template when the layout activates (below) |
+| None carries it                    | Failure domains unset, `enableFailureDomains` unset, members dealt by name only                       |
+| Some carry it                      | Drafted, with the finding `TopologyIncomplete` naming the unlabeled workers                           |
+| None carries the region label      | One unnamed region, which is today's behavior                                                         |
 
 A partial labeling is a finding rather than a refusal, because the draft is a
 proposal for a reviewer to correct, and labeling the missing workers and running
 discovery again is the correction.
+
+**Failure-domain mode is proposed only for a layout the control plane
+activates.** The control plane activates a new cluster in failure-domain mode
+only with at least parity+2 distinct domains and the same number of workers in
+each, and it checks this after the cluster is created and every node added.
+A fleet labeled otherwise keeps its failure domains on the groups, and the draft
+leaves `enableFailureDomains` off with a note giving the reason. Four workers
+sharing one zone, as a single-zone lab labels them, is the common case.
+Approval holds a document that creates a cluster to the same rule, per member,
+with the finding `FailureDomainLayout`. A growth document is not held to it,
+because the control plane checks it at a fresh activation alone.
 
 **Approval checks the region boundary on every document**, including one written
 by hand. `Validating` reads the region label of every worker a node set lists and

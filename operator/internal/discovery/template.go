@@ -187,9 +187,15 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 		out.Template.EnableFailureDomains = seed.EnableFailureDomains
 		out.Notes = append(out.Notes, statedNote("enableFailureDomains", enabled(*seed.EnableFailureDomains)))
 	} else if plan.FailureDomains {
-		out.Template.EnableFailureDomains = ptr.To(true)
-		out.Notes = append(out.Notes, "enableFailureDomains is on, because every worker carries a "+
-			"failure domain, and each group names its workers' domain")
+		if refused := failureDomainLayoutRefusal(plan, erasurecoding.SchemeOf(out.Template.Stripe)); refused != "" {
+			out.Notes = append(out.Notes, "enableFailureDomains is off although every worker carries "+
+				"a failure domain, because the control plane would refuse to activate the cluster: "+
+				refused)
+		} else {
+			out.Template.EnableFailureDomains = ptr.To(true)
+			out.Notes = append(out.Notes, "enableFailureDomains is on, because every worker carries a "+
+				"failure domain, and each group names its workers' domain")
+		}
 	}
 	if seed.EnableAtomicity4K != nil {
 		out.Template.EnableAtomicity4K = seed.EnableAtomicity4K
@@ -211,6 +217,34 @@ func statedNote(field, value string) string {
 	return fmt.Sprintf(
 		"%s is %s, stated by this installation's bootstrap configuration rather than "+
 			"derived from what this run found.", field, value)
+}
+
+// failureDomainLayoutRefusal is why the control plane would refuse to activate
+// a cluster of the plan in failure-domain mode, or "" when it would not. Each
+// node set is a cluster of its own, so each is answered on its own.
+func failureDomainLayoutRefusal(plan Plan, scheme erasurecoding.Scheme) string {
+	for _, set := range plan.NodeSets {
+		hosts := map[string]map[string]struct{}{}
+		for _, group := range set.Groups {
+			if hosts[group.FailureDomain] == nil {
+				hosts[group.FailureDomain] = map[string]struct{}{}
+			}
+			for _, worker := range group.Workers {
+				hosts[group.FailureDomain][worker] = struct{}{}
+			}
+		}
+		layout := make(map[string]int, len(hosts))
+		for domain, workers := range hosts {
+			layout[domain] = len(workers)
+		}
+		if refused := erasurecoding.FailureDomainViolation(scheme, layout); refused != "" {
+			if len(plan.NodeSets) > 1 {
+				return fmt.Sprintf("node set %s: %s", set.Name, refused)
+			}
+			return refused
+		}
+	}
+	return ""
 }
 
 // describeStripe reads a seeded layout back as a reviewer would write it, and

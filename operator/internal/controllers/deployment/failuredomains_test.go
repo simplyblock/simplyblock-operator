@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/simplyblock/atlas/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -226,5 +227,67 @@ func TestAGrowthDocumentIsCountedAgainstTheClustersMapping(t *testing.T) {
 	overflows := documentWithDomainCount(2, growth)
 	if found := tooManyDomains(t, reconcilerFor(t, overflows, cluster.DeepCopy()), overflows); len(found) != 1 {
 		t.Errorf("findings = %+v, want one TooManyFailureDomains", found)
+	}
+}
+
+// zonedDocument is a 2+1 document with failure domains enabled over four
+// workers, one group per worker, each group in the domain given.
+func zonedDocument(zones ...string) *simplyblockv1alpha2.ClusterDeploymentConfig {
+	return aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Approved = false
+		c.Spec.Cluster.EnableFailureDomains = ptr.To(true)
+		c.Spec.Cluster.Stripe = &simplyblockv1alpha2.StripeSpec{
+			DataChunks: ptr.To(int32(2)), ParityChunks: ptr.To(int32(1)),
+		}
+		template := c.Spec.NodeSets[0].Groups[0]
+		groups := make([]simplyblockv1alpha2.NodeGroup, 0, len(zones))
+		for i, zone := range zones {
+			group := template
+			group.Name = fmt.Sprintf("group-%d", i+1)
+			group.Workers = []string{fmt.Sprintf("worker-%d", i+1)}
+			group.FailureDomain = zone
+			groups = append(groups, group)
+		}
+		c.Spec.NodeSets[0].Groups = groups
+	})
+}
+
+// The control plane refuses to activate a cluster in failure-domain mode with
+// fewer than parity+2 domains, after every node has been added: four workers
+// sharing zone default, as discovery on a single-zone lab drafted them, is the
+// case. The draft says so before approval.
+func TestFailureDomainsTheControlPlaneRefusesToActivateAreReported(t *testing.T) {
+	found := findingsOf(t, zonedDocument("default", "default", "default", "default"),
+		workers("worker-1", "worker-2", "worker-3", "worker-4")...)
+
+	got := only(t, found, FailureDomainLayout)
+	if !strings.Contains(got.message, "at least 3") {
+		t.Errorf("finding = %q, want it to say at least 3 domains", got.message)
+	}
+}
+
+func TestBalancedFailureDomainsAreAccepted(t *testing.T) {
+	found := findingsOf(t, zonedDocument("a", "b", "c", "d"),
+		workers("worker-1", "worker-2", "worker-3", "worker-4")...)
+
+	if len(found) != 0 {
+		t.Errorf("findings = %+v, want none", found)
+	}
+}
+
+// The rule is the control plane's at a fresh activation only; a growth
+// document is answered by the expansion's own placement.
+func TestAGrowthDocumentIsNotHeldToTheActivationLayout(t *testing.T) {
+	cluster := aCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.Spec.EnableFailureDomains = ptr.To(true)
+	})
+	growth := zonedDocument("default", "default")
+	growth.Spec.ClusterRef = theCluster
+	growth.Spec.Cluster = nil
+
+	for _, f := range findingsOf(t, growth, append(workers("worker-1", "worker-2"), cluster)...) {
+		if f.reason == FailureDomainLayout {
+			t.Errorf("finding = %s, want none for a growth document", f.message)
+		}
 	}
 }

@@ -6,10 +6,13 @@
 package discovery
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -98,11 +101,13 @@ func TestAFailureDomainThatDoesNotFitIsReportedAndNotRewritten(t *testing.T) {
 	}
 }
 
-// Every worker labeled enables failure domains on the template; no worker
-// labeled leaves them unset and reports nothing.
+// Every worker labeled, in a layout the control plane activates, enables
+// failure domains on the template; no worker labeled leaves them unset and
+// reports nothing.
 func TestTheTemplateEnablesFailureDomainsOnlyWhenEveryWorkerHasOne(t *testing.T) {
 	all := zonedPlan("", map[string]map[string]string{
 		"worker-1": {corev1.LabelTopologyZone: "a"}, "worker-2": {corev1.LabelTopologyZone: "b"},
+		"worker-3": {corev1.LabelTopologyZone: "c"},
 	})
 	none := zonedPlan("", map[string]map[string]string{"worker-1": nil, "worker-2": nil})
 
@@ -258,5 +263,54 @@ func TestALargePlacementGroupIsNotSplit(t *testing.T) {
 	sets, _ := splitWithFindings(placementGrouped(40, func(int) string { return "big" }))
 	if got := sizes(sets); got["big"] != 40 || len(got) != 1 {
 		t.Errorf("sets = %v, want big of 40", got)
+	}
+}
+
+// enablesFailureDomains is whether the draft for the zones given turns failure
+// domains on, and the note it writes about them.
+func enablesFailureDomains(t *testing.T, zones ...string) (bool, string) {
+	t.Helper()
+	labels := map[string]map[string]string{}
+	for i, zone := range zones {
+		labels[fmt.Sprintf("worker-%d", i+1)] = map[string]string{corev1.LabelTopologyZone: zone}
+	}
+	template, err := ClusterTemplateFor("c", zonedPlan("", labels), TemplateOptions{})
+	if err != nil {
+		t.Fatalf("ClusterTemplateFor: %v", err)
+	}
+	for _, note := range template.Notes {
+		if strings.Contains(note, "enableFailureDomains") {
+			return ptr.BoolFromOrFalse(template.Template.EnableFailureDomains), note
+		}
+	}
+	return ptr.BoolFromOrFalse(template.Template.EnableFailureDomains), ""
+}
+
+// A fleet labeled into fewer domains than the stripe's parity plus two, or into
+// domains of unequal size, is one the control plane refuses to activate in
+// failure-domain mode, so the draft leaves the mode off and says why: four
+// workers sharing zone default, as a single-zone lab labels them, is the case.
+func TestFailureDomainsTheControlPlaneRefusesAreNotEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		zones []string
+		want  string
+	}{
+		{"one shared zone", []string{"default", "default", "default", "default"}, "at least 3"},
+		{"unequal zones", []string{"a", "a", "b", "c"}, "equal"},
+	} {
+		on, note := enablesFailureDomains(t, tc.zones...)
+		if on {
+			t.Errorf("%s: enableFailureDomains is on", tc.name)
+		}
+		if !strings.Contains(note, tc.want) {
+			t.Errorf("%s: note = %q, want it to say %q", tc.name, note, tc.want)
+		}
+	}
+}
+
+func TestBalancedFailureDomainsAreEnabled(t *testing.T) {
+	if on, note := enablesFailureDomains(t, "a", "a", "b", "b", "c", "c"); !on {
+		t.Errorf("six workers in three zones of two: enableFailureDomains is off (%s)", note)
 	}
 }
