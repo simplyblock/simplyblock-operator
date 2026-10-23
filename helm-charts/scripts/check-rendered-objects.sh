@@ -504,6 +504,16 @@ checkDiscovery() {
     ok=0
   fi
 
+  # A logical-block-device run refuses PCI filters, even empty ones, so the empty
+  # lists of the defaults must not reach the spec.
+  doc="$(operatorOps standalone --set discovery.enableLogicalBlockDevices=true \
+    --set 'discovery.deviceFilter.blockDenyList={/dev/sda}')"
+  got="$("$yq" '.spec.discover.deviceFilter | keys | join(",")' <<<"$doc")"
+  if [ "$got" != "blockDenyList" ]; then
+    echo "  discovery: the device filter rendered [${got}], want [blockDenyList]"
+    ok=0
+  fi
+
   # The draft values are accepted and unused, so they change nothing in the run.
   doc="$(operatorOps standalone --set discovery.draft.name=mine)"
   got="$("$yq" '.spec.discover | keys | join(",")' <<<"$doc")"

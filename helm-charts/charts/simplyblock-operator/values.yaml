@@ -125,10 +125,11 @@ deployment:
 # every schedulable worker and writes a ClusterDeploymentConfig in Draft. Nothing
 # is deployed until somebody reads that draft and sets `approved: true` on it.
 #
-# The values below are its spec.discover, and are left out of it when unset. The
-# operator does not raise a run of its own, so an install without this chart (OLM)
-# writes the OperatorOps by hand. A finished run is not run again: a value changed
-# on a later upgrade does not discover again, so write a new OperatorOps for that.
+# The values below are its spec.discover, and one at its default is left out of it.
+# The operator does not raise a run of its own, so an install without this chart
+# (OLM) writes the OperatorOps by hand. A finished run is not run again: a value
+# changed on a later upgrade does not discover again, so write a new OperatorOps
+# for that.
 #
 # Not rendered for the managed profile, where the cluster that manages this one
 # raises the run, nor for the empty profile, whose administrator writes the
@@ -138,29 +139,145 @@ discovery:
   # for it sets this to false and writes its ClusterDeploymentConfig by hand.
   enabled: true
 
-  # Each of these is a field of OperatorOps spec.discover, and is left out of it
-  # when unset.
+  # What the run is called. It is also what the draft is named after, unless
+  # draft.name below states one, and the draft's name is what the proposed
+  # StorageCluster is named after in turn, so a long name here is refused by the
+  # 37-character check on that last one.
+  name: initial-discovery
+
+  # Where the run, its probe Jobs, their reports, and the draft go. Empty is the
+  # namespace this release is installed into.
   #
-  #   name: initial-discovery          # the run's name; the draft is "discovered-<name>"
-  #   namespace: simplyblock-storage   # empty is this release's namespace; must exist
-  #   nodeSelector:                    # empty inspects every schedulable worker
+  # It places those four things. What follows from it is the deployment config
+  # controller's own behavior rather than this value's: approving a draft builds
+  # the StorageCluster and its StorageNodes in the draft's namespace, so a draft
+  # placed here is a cluster placed here. The namespace has to exist already, and
+  # `helm uninstall` does not remove what was built in it.
+  #
+  #   namespace: simplyblock-storage
+  namespace: ""
+
+  # Which workers the run inspects, by label on the Kubernetes Node. Empty
+  # inspects every schedulable worker, which is the usual first run: what it
+  # produces is a draft of everything the fleet has, and narrowing it is what a
+  # reviewer does against a draft they can see.
+  #
+  # It also decides whether the run is raised at all. A fleet where nothing
+  # matches this selector is a fleet with nothing to inspect, and a run raised
+  # against one fails.
+  #
+  # The entries are ANDed, and the labels are the fleet's own rather than keys
+  # this product defines:
+  #
+  #   nodeSelector:
   #     node-role.kubernetes.io/simplyblock-storage: ""
-  #   tolerations:                     # what the probe pods, and then the storage nodes, tolerate
+  nodeSelector: {}
+
+  # What the run's probe pods tolerate, in the ordinary Kubernetes shape.
+  #
+  # A fleet that dedicates machines to storage taints them, and a run that
+  # tolerates nothing inspects nothing. They reach the draft as well, because the
+  # taints a probe had to tolerate are the taints the storage nodes have to live
+  # with, so this is also what the storage-node DaemonSet ends up tolerating:
+  #
+  #   tolerations:
   #     - key: storage.simplyblock.io/dedicated
   #       operator: Equal
   #       value: "true"
   #       effect: NoSchedule
-  #   enableControlPlaneNodes: false   # consider the machines that run the API server and etcd
-  #   enableLogicalBlockDevices: false # scan logical block devices instead of NVMe
-  #   enablePartitionedDevices: true   # report devices carrying a partition table
-  #   forceJournalDevice: false        # take one of several equal disks as the journal device
-  #   deviceFilter:
-  #     pcieDenyList: ["0000:00:1f.2"]
-  #     blockDenyList: ["/dev/sda"]
-  #     pcieAllowList: []
-  #     blockAllowList: []
-  #     pcieModel: ""
-  #     driveSizeRange: ""
+  #     - key: node.kubernetes.io/unreachable
+  #       operator: Exists
+  #       effect: NoExecute
+  #       tolerationSeconds: 300
+  tolerations: []
+
+  # Let the run consider the machines that run the API server and etcd.
+  #
+  # Off, because a storage node is a data path and putting one on an etcd host is
+  # a placement almost nobody intends. The single-node development cluster and the
+  # combined three-node deployment are what it is for, and on a single-node
+  # cluster it is what makes the run happen at all: the one machine there is the
+  # control-plane node.
+  enableControlPlaneNodes: false
+
+  # Scan each worker's logical block devices instead of its NVMe devices. It
+  # selects the class rather than adding one: a cluster is built out of one
+  # class of backend storage, and a draft describes one cluster. It decides which
+  # of the filters under deviceFilter apply, and what forceJournalDevice
+  # resolves, which is why it sits here rather than among the filters.
+  enableLogicalBlockDevices: false
+
+  # Report devices carrying a partition table alongside the available ones. On,
+  # because a machine that has held data before carries one on every disk and
+  # refusing them makes the run meant to show a fleet what it has report that it
+  # has nothing. It waives the table and nothing else: a device that is also
+  # mounted, held by the kernel, or carrying swap stays out. It widens what the
+  # run reports for either class, which is why it sits here rather than among
+  # the filters.
+  enablePartitionedDevices: true
+
+  # Dedicate a journal device on a fleet whose disks do not say which one.
+  #
+  # The run proposes a dedicated journal device when every worker hands over one
+  # disk smaller than its others, because a fleet built that way was built that
+  # way on purpose. Where several disks share the smallest size nothing says
+  # which to take, and taking one spends a whole disk the fleet did not set
+  # aside: on a worker with ten 10 TB disks that is 10 TB, silently. So the run
+  # does not guess.
+  #
+  # What happens instead depends on the class. An NVMe cluster carves a journal
+  # partition out of every device when none is dedicated, so the run leaves the
+  # field unset, says so, and every disk stays storage. A cluster of logical
+  # block devices has no such layout, so the run fails rather than writing a
+  # document that creates the cluster, formats its drives, and then fails every
+  # node_add. Set this on such a fleet to have one of the equal disks taken
+  # anyway, and read the draft's note to see which disk it cost.
+  #
+  # It does not force a worker that hands over a single disk, with or without
+  # this: dedicating that disk leaves the worker nothing to store on.
+  forceJournalDevice: false
+
+  # Which of an inspected worker's devices reach the draft. What is filtered out
+  # here never appears in the document, so this is the place to keep a boot disk
+  # out of a fifty-worker draft nobody reads line by line.
+  deviceFilter:
+    # The two block-device lists, which require enableLogicalBlockDevices.
+    #
+    # A deny list is the one most deployments want: on a fleet that boots from
+    # /dev/sda, this single entry keeps the root disk out of every group of the
+    # draft. An allow list is the opposite and is narrow enough to be dangerous,
+    # because a draft it emptied looks the same as a fleet with no disks. Prefer
+    # narrowing the draft, which a reviewer can see and correct.
+    #
+    #   blockAllowList:
+    #     - /dev/nvme0n1
+    #   blockDenyList:
+    #     - /dev/sda
+    blockAllowList: []
+    blockDenyList: []
+
+    # The NVMe class's half of the same thing, by PCI address. The deny entry is
+    # the slot every worker in a uniform fleet boots from.
+    #
+    #   pcieAllowList:
+    #     - "0000:5e:00.0"
+    #   pcieDenyList:
+    #     - "0000:00:1f.2"
+    pcieAllowList: []
+    pcieDenyList: []
+
+    # Restrict candidates to devices whose PCI model string matches, which is how
+    # a fleet with one drive model among several hands over only that model. It
+    # narrows the NVMe class alone.
+    #
+    #   pcieModel: SAMSUNG MZQL23T8HCLS-00A07
+    pcieModel: ""
+
+    # Size range a candidate has to fall in, which is how the system disks of a
+    # uniform fleet are excluded. It applies to whichever class is being scanned:
+    #
+    #   driveSizeRange: 1T-16T
+    driveSizeRange: ""
 
   # The values below are accepted and not used. The operator no longer seeds the
   # draft from the chart, so edit the draft before approving it. They stay so that

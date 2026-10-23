@@ -19,7 +19,10 @@ metadata:
 spec:
   action: Discover
   discover:
-    # The default run waives a partition table, so a chart-rendered one does too.
+    # The partition waiver is on unless stated, because a machine that held data
+    # before carries a table on every disk. The rest are left out of the spec when
+    # they are at their default, which keeps an empty PCI filter from reaching a
+    # logical-block-device run that refuses one.
     enablePartitionedDevices: {{ if hasKey $d "enablePartitionedDevices" }}{{ $d.enablePartitionedDevices }}{{ else }}true{{ end }}
     {{- with $d.nodeSelector }}
     nodeSelector:
@@ -30,11 +33,15 @@ spec:
       {{- toYaml . | nindent 6 }}
     {{- end }}
     {{- range $field := list "enableControlPlaneNodes" "enableLogicalBlockDevices" "forceJournalDevice" }}
-    {{- if hasKey $d $field }}
-    {{ $field }}: {{ index $d $field }}
+    {{- if index $d $field }}
+    {{ $field }}: true
     {{- end }}
     {{- end }}
-    {{- with $d.deviceFilter }}
+    {{- $filter := dict }}
+    {{- range $key, $value := $d.deviceFilter }}
+    {{- if $value }}{{ $_ := set $filter $key $value }}{{ end }}
+    {{- end }}
+    {{- with $filter }}
     deviceFilter:
       {{- toYaml . | nindent 6 }}
     {{- end }}
