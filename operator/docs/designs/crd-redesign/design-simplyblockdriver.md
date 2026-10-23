@@ -252,9 +252,11 @@ field that hides it.
 single fact that decides whether provisioning happens at all.
 
 `status.snapshotSupport` is `Detected` when the cluster already served
-`snapshot.storage.k8s.io/v1` and `Installed` when this operator applied the CRDs
-and a controller (§4.1). It is the field that says whether other drivers in the
-cluster depend on what this one installed.
+`snapshot.storage.k8s.io/v1`, `Installed` when this operator applied the CRDs
+and a controller, and `Missing` when the cluster serves no snapshot API (§4.1).
+`Installed` says whether other drivers in the cluster depend on what this one
+installed. `Missing` raises a warning event and reads `Detected` once the API
+appears.
 
 `status.version` is the version the deployed driver reports, published so that a
 skew against `ControlPlane.status.version` is visible on one screen (§5).
@@ -393,7 +395,7 @@ chart cannot cover is an installation that is not a chart, or a release with
 `snapshotcontroller.create` false, and that is the case still open. It needs the
 upstream manifests carried in the operator's binary and an image for the
 controller that no field names, so `status.snapshotSupport` reaches `Detected`
-and not yet `Installed`.
+or `Missing` and not yet `Installed`.
 
 **The `VolumeSnapshotClass` for this driver is applied either way.** It names
 `spec.driverName` and belongs to this deployment, unlike the CRDs and the

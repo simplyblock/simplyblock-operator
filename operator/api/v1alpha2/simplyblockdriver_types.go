@@ -352,8 +352,9 @@ type SimplyblockDriverSpec struct {
 	PNFS DriverPNFS `json:"pnfs,omitempty"`
 }
 
-// SnapshotSupportOrigin is where the cluster's snapshot support came from.
-// +kubebuilder:validation:Enum=Detected;Installed
+// SnapshotSupportOrigin is where the cluster's snapshot support came from, or
+// that it has none.
+// +kubebuilder:validation:Enum=Detected;Installed;Missing
 type SnapshotSupportOrigin string
 
 const (
@@ -365,6 +366,9 @@ const (
 	// them. They are cluster-scoped and shared, so they carry no controller
 	// reference and outlive this object.
 	SnapshotSupportOriginInstalled SnapshotSupportOrigin = "Installed"
+	// SnapshotSupportOriginMissing is a cluster that serves no snapshot API, so
+	// VolumeSnapshots cannot work until the CRDs and a snapshot-controller exist.
+	SnapshotSupportOriginMissing SnapshotSupportOrigin = "Missing"
 )
 
 // SimplyblockDriverOrigin is where the running deployment came from. Every
