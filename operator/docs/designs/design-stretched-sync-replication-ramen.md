@@ -14,7 +14,7 @@
 |-------------|-------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------|
 | **Phase 1** | Implemented, but for §5.4's reachability check (P0-2) | Topology: the control plane on the OCM hub, one backend cluster whose nodes live in two Kubernetes clusters, a leader operator that creates it and a follower that adopts it | §3, §4, §5, §6 |
 | **Phase 2** | Implemented; site link validated live                 | The site link: the fleet add-on's agent as the forwarder, the hub as the relay, the operators and CSI plugins of both sites as peers of one gRPC fabric                      | §7             |
-| **Phase 3** | Implemented but for group moves, not yet run live     | RamenDR in sync mode: the metro `DRPolicy`, the placement-driven flip on stage without `VolumeReplication`, cluster fencing through csi-addons `NetworkFence`                | §8, §9, §10    |
+| **Phase 3** | Implemented but for group moves; relocate run live    | RamenDR in sync mode: the metro `DRPolicy`, the Ramen-driven flip without `VolumeReplication`, cluster fencing through csi-addons `NetworkFence`                             | §8, §9, §10    |
 | **Phase 4** | Planned                                               | Leader hand-over when the leader site is lost, and the day-two operations of a stretched cluster                                                                             | §11            |
 
 Phase 1 stands the cluster up and is testable without Ramen: two sites, one control plane, volumes served from either site by the backend's own site model. Phase 2 gives the two operators and the hub one addressable fabric, which Phase 1 can live without (it crosses nothing but `ManifestWork`) and Phase 3 and 4 need. Phase 3 is the DR behavior. Phase 4 is what happens to the operator roles when a whole site is gone for a long time.
@@ -274,7 +274,7 @@ Both discoveries run at once, so both drafts are reviewable together, and one ap
 PR #673 read a node's site from its zone label. On two Kubernetes clusters the site is not a label a scheduler consults; it is which cluster the node is in. The site is therefore carried once per installation and fanned out:
 
 - `StorageCluster.spec.stretched.site` (Appendix B) is the site of every node this `StorageCluster` adds. The `StorageNode` reconciler sets `site` in the node-add body from it; a `NodeGroup` in the delivered config carries the same value, and the webhook refuses a group whose site differs from the cluster's.
-- The driver's cluster secret entry, which the `StorageCluster` controller composes, gains `sync` and `site` beside `local`, so a node plugin knows its site without a `Node` read (§9.2). No `SimplyblockDriver` field carries it: a spec field written by a controller would break the rule that spec is the user's.
+- The driver's cluster secret entry, which the `StorageCluster` controller composes, gains `sync` and `site` beside `local`, so a node plugin knows its site without a `Node` read (§9.4). No `SimplyblockDriver` field carries it: a spec field written by a controller would break the rule that spec is the user's.
 
 A zone label may still partition a site into failure domains; it no longer names the site.
 
@@ -466,53 +466,61 @@ Ramen pairs the two clusters' `StorageClass`es by name and by the `ramendr.opens
 | `DRCluster` annotations  | `storage-driver`, `storage-clusterid`, `storage-secret-name`, `storage-secret-namespace` | identical                                                       | Ramen copies them into the `NetworkFence` it creates (§10.1). The cluster id is the backend cluster's UUID                |
 | `DRPolicy`               | `schedulingInterval: ""`, `drClusters: [a, b]`                                           |                                                                 | Sync mode                                                                                                                 |
 
-The `cluster_id` parameter names the one backend cluster on both sites, so a volume created on either site is a volume of the same cluster, and the handle the PV carries resolves on both sites through the driver's cluster secret, whose one entry is marked `local` on both (§9.2). Nothing in the driver's chain-walk or fail-over redirect runs for a sync volume; those are the async design's.
+The `cluster_id` parameter names the one backend cluster on both sites, so a volume created on either site is a volume of the same cluster, and the handle the PV carries resolves on both sites through the driver's cluster secret, whose one entry is marked `local` on both (§9.4). Nothing in the driver's chain-walk or fail-over redirect runs for a sync volume; those are the async design's.
 
 ### 8.3 Relocate and failover, as Ramen sees them
 
-**Relocate (planned, both sites up):** the DRPC switches placement; Ramen on A sets the VRG secondary and removes the application; Ramen on B restores the PVs and PVCs from S3 with the same `volumeHandle` (§9.6) and sets the VRG primary; the application's pods schedule on B; `NodeStageVolume` runs on B's nodes. The storage move happens inside that stage (§9).
+**Relocate (planned, both sites up):** the DRPC switches placement; Ramen on A sets the VRG secondary and removes the application; Ramen makes the VRG on B primary, and it restores the PVs and PVCs from S3 with the same `volumeHandle` (§9.6); B's operator sees the VRG primary and moves its volumes to B (§9.2); Ramen points the placement at B once the VRG reports ready; the application's pods schedule on B, and their stage attaches once the volumes are led from B (§9.4).
 
-**Failover (A lost):** the DRPC fails over; Ramen fences A through B's driver (§10); restores the PVs and PVCs on B (§9.6); the pods schedule on B; stage runs on B and finds the volumes already led from B by the fence, or promotes them there if the fence left any to the per-volume path.
+**Failover (A lost):** the DRPC fails over; Ramen fences A through B's driver (§10); makes the VRG on B primary with action `Failover`; B's operator moves the volumes to B, forced, because the planned promote cannot pass against a lost site; the pods schedule on B and stage once the volumes are led from B.
 
 **Fail-back:** when A returns, the backend's site activation rebuilds A's instances automatically (`sync-replication.md` §6, "Site return"); Ramen unfences A; a relocate back to A is a planned move again.
 
-In every case the node plugin on the target is the last actor and the gate.
+In every case Ramen's VRG on the target is the trigger, the target's operator moves the storage, and the node plugin is the gate.
 
 ---
 
-## 9. The Flip: Placement-Driven, Without VolumeReplication
+## 9. The Flip: Ramen-Driven, Without VolumeReplication
 
 ### 9.1 The principle survives
 
-PR #673's §6 stands on one property: a node never attaches a volume that is not led from its own site, and the switchover is driven by where the pod was scheduled. What changes is the mechanism between the node's decision and the backend's promote. There, the node patched a `VolumeReplication` and the csi-addons reconciler called the driver's `PromoteVolume`. Here, there is no `VolumeReplication`, so the node asks its site's operator, and the operator calls the backend.
+PR #673's §6 stands on one property: a node never attaches a volume that is not led from its own site. What changes is what triggers the move. Ramen's sync mode assumes storage active on both sites at once, so it moves an application's placement and its PV and PVC objects and calls no storage verb: it creates no `VolumeReplication`, and nothing reaches the driver's `PromoteVolume`. This cluster leads each volume store from one site, so the move is made by the site's operator, and Ramen's own decision is its trigger: when Ramen makes an application's `VolumeReplicationGroup` primary on a site, that site's operator moves the application's volumes there, before Ramen points the placement at the site and the pods start. The node plugin only checks the result.
 
-### 9.2 The node plugin's determination
+### 9.2 The operator follows Ramen's `VolumeReplicationGroup`
 
-On a sync cluster every volume is a sync volume: the mode is the cluster's, not the class's (`sync-replication.md` §2), so the per-PVC `VolumeReplication` lookup of PR #673 §6.6 is replaced by one fact in the driver's cluster secret entry: `sync: true`, written by the operator from `StorageCluster.status`, beside `site: <this site>` (§5.3). A node plugin on a sync cluster reads its site and the cluster's sync flag from that file; nothing is read from the `Node` object and nothing is correlated through PVCs.
+Each site's operator watches Ramen's `VolumeReplicationGroup`s (`operator/internal/controllers/vrgfollow`). A VRG it acts on is a sync VRG (`spec.sync` set; an async VRG's volumes are moved by Ramen's `VolumeReplication`s) whose `spec.replicationState` is `primary` on this site, on a cluster whose `StorageCluster` is one site of a stretched cluster. For such a VRG it selects the claims of `spec.pvcSelector` in the VRG's namespace, keeps those bound to a PV of this driver whose handle names the stretched cluster, and asks the `SwitchoverService` (§9.3) to move each volume to this site. The move is planned, and allowed to escalate to a forced promote only when the VRG's `spec.action` is `Failover`, which Ramen sets only after the lost cluster is fenced (§10).
 
-At `NodeStageVolume` the plugin reads `GET V/replication/sync-status` (no site), which answers the site the store is led from and whether the replicas are in sync, and compares it with its own site:
+The controller does not block. A move the backend is still running is asked about again after a named interval, and so is a VRG whose claims Ramen has not restored and bound yet. A refused move is reported as a `SyncMoveRefused` event on the VRG, naming the blocking volumes, and asked about again. It watches VRGs on spec changes only, and the claims of their namespaces, which Ramen restores after it has made the VRG primary. Ramen's kind is watched only once the API server serves it, because a watch on an absent kind stops the whole manager: the operator starts the controller when Ramen is installed, without a restart.
 
-- **Led here, in sync:** proceed to `GET V/connect` and attach. No move. This is the common case, because a volume is born on the site that created it (§9.5) and a workload that has not been relocated stays there.
-- **Led elsewhere:** ask the operator to move it (§9.3) and hold.
-- **Led nowhere** (the window after a promote before the first I/O, or a store the backend reports as moving): hold with a retryable error; the kubelet re-stages.
+Ramen's own readiness does not wait for the move: in sync mode the VRG reports its data ready without asking the storage. Ramen may therefore point the placement at the site while a promote is still running, and the stage's gate (§9.4) covers that window.
 
 ### 9.3 `SwitchoverService`
 
-The operator serves `SwitchoverService.Move(volume | group, toSite)` on its link (Appendix C). It is the one caller of the backend's sync verbs and it owns the sequencing PR #673 §6.3 assigned to the csi-addons reconciler:
+The operator's `SwitchoverService.Move(volume, toSite)` (Appendix C) is the one caller of the backend's sync verbs, and it owns the sequencing PR #673 §6.3 assigned to the csi-addons reconciler. Its caller is the VRG follower of §9.2, in process:
 
 1. Read `GET V/replication/sync-status`. A volume already led from `to_site` answers `MOVED` with no call to the backend, which makes a repeated `Move` free.
-2. `POST V/replication/demote?site=<from>`. The backend answers `204`, or `409` naming the volumes of the store still served on the old site, which is the case of a store shared with a workload that did not move. The operator answers `REFUSED` with those volumes, and the stage fails with `FailedPrecondition` naming them. A demote the backend cannot reach because the old site is down is skipped; step 3 then escalates.
+2. `POST V/replication/demote?site=<from>`. The backend answers `204`, or `409` naming the volumes of the store still served on the old site, which is the case of a store shared with a workload that did not move. The operator answers `REFUSED` with those volumes, which the VRG follower reports on the VRG. A demote the backend cannot reach because the old site is down is skipped; step 3 then escalates.
 3. `POST V/replication/failover?site=<to>&planned=true`. `200` answers `MOVED`. `409 promote in progress` answers `IN_PROGRESS`. `412`, the other site not online, escalates to `planned=false` when the request allows it, and emits the `SyncPeerSiteOffline` event on the site's `StorageCluster`s: the same inversion PR #673 §7.1 defines, whose safety rests on the backend's proof that the site is lost (§10, §13). Any other `409` answers `REFUSED`.
 
-The operator serializes moves per store: a `Move` for a store with a move in flight answers `IN_PROGRESS` without calling the backend, so two pods of one application staging on two nodes of site B produce one demote and one promote. The operator does not poll. A stage answered `IN_PROGRESS` fails with `Unavailable`, the kubelet stages again, and the next `Move` finds the backend's resumable promote further along, which is the non-blocking wait PR #673 §6.4 chose.
+The operator serializes moves per store: a `Move` for a store with a move in flight answers `IN_PROGRESS` without calling the backend, so the volumes of one application on one store produce one demote and one promote. The service does not poll: its caller asks again, and the next `Move` finds the backend's resumable promote further along, which is the non-blocking wait PR #673 §6.4 chose.
 
-The implementation is `atlas-lib/switchover` (the service, over a backend interface) and `operator/internal/switchover` (the backend, through the control-plane client). Each site's operator registers it on the CSI link its node plugins dial and on its site link. A group move through the `G/replication/...` routes is not built: `MoveRequest` names one volume, and a consistency group's members move one by one.
+The implementation is `atlas-lib/switchover` (the service, over a backend interface) and `operator/internal/switchover` (the backend, through the control-plane client). Each site's operator also registers it on its site link, for the other site's operator. A group move through the `G/replication/...` routes is not built: `MoveRequest` names one volume, and a consistency group's members move one by one.
 
 The demote in step 2 is issued against the **old** site by the **new** site's operator. The backend is site-agnostic on the API, so this needs no cooperation from the old site's operator, which is what lets a relocate complete when the old site's operator is slow, and lets a failover complete when it is gone. The old site's operator learns of the move from the control-plane stream it already watches, and its node plugins' next unstage finds nothing to do (PR #673 §6.5).
 
+A claim moved without Ramen (a test, or an operator moving a workload by hand) has no VRG, and nothing moves its volume: whoever moves the claim moves the volume, through the backend's routes or `sbctl volume sync-promote`, before the pod is started on the new site (`regression_test/25/07-flip.sh`).
+
 ### 9.4 The gate
 
-Unchanged in substance: `NodeStageVolume` reads the connection entries only after the backend reports the volume led from this site, now from `GET V/replication/sync-status` rather than from a `VolumeReplication` condition, and never attaches on a stale status, because the status names the site. A move the operator reports complete that the status does not yet reflect is held one more retry. The gate runs before the stage connects to the volume, because a connect on a site the volume is not led from clears the backend's record that the site never connected, which the birth-state demote depends on (`ensureLedHere` in `csi-driver/internal/csi/node/syncgate.go`). The first-I/O rule of the backend ("issue client I/O on at least one volume of every LVS that moved before any object operation on that LVS," `sync-replication.md` §6) is met by the mount itself; the operator defers any object operation on a store it has just moved until the status shows a leader.
+On a sync cluster every volume is a sync volume: the mode is the cluster's, not the class's (`sync-replication.md` §2), so the per-PVC `VolumeReplication` lookup of PR #673 §6.6 is replaced by one fact in the driver's cluster secret entry: `sync: true`, written by the operator from `StorageCluster.status`, beside `site: <this site>` (§5.3). Nothing is read from the `Node` object and nothing is correlated through PVCs.
+
+At `NodeStageVolume` the plugin reads `GET V/replication/sync-status` (no site), which answers the site the store is led from, and compares it with its own:
+
+- **Led here:** proceed to `GET V/connect` and attach. This is the common case: a volume is born on the site that created it (§9.5), and a moved one is moved before Ramen starts its pods.
+- **Led elsewhere, or nowhere** (a promote still running, or the window after it before the first I/O): hold with `Unavailable`, naming the site it is led from; the kubelet stages again. The node never moves a volume.
+- **A secret entry with `sync: true` and no `site`:** fail with `FailedPrecondition` before any backend call.
+
+The node attaches only once the status names its site, so it never attaches on a stale status. The gate runs before the stage connects to the volume, because a connect on a site the volume is not led from clears the backend's record that the site never connected, which the birth-state demote depends on (`ensureLedHere` in `csi-driver/internal/csi/node/syncgate.go`). The first-I/O rule of the backend ("issue client I/O on at least one volume of every LVS that moved before any object operation on that LVS," `sync-replication.md` §6) is met by the mount itself; the operator defers any object operation on a store it has just moved until the status shows a leader.
 
 ### 9.5 Birth site: a PVC's volume is created on its own site
 
@@ -536,7 +544,7 @@ A move is a Kubernetes operation on the claim and a backend operation on the lea
 
 **On the site the workload leaves.** Before any PVC is protected, Ramen sets its PV's `reclaimPolicy` to `Retain` and annotates the PV as retained for its own needs (`retainPVForPVC` in Ramen's `vrg_volrep.go`). When the placement moves, the application is removed and its PVC with it, and the retained PV goes `Released` without the kubelet ever calling `DeleteVolume`. In sync mode Ramen keeps the retention on the secondary, because both sites' VRGs map to the same volume, and it clears the PV's claim reference so the PV can bind again to a recreated PVC when the workload comes home (Ramen's comment at the VR-deletion path and `updateExistingPVForSync`). The volume therefore stays, with its home site and its data, and the driver on this site is not involved in the move at all.
 
-**On the site the workload arrives at.** Ramen restores the PV and the PVC it uploaded to S3: the same PV name, the same `volumeHandle`, bound to each other. The handle names the one backend cluster, which the driver's secret on this site resolves, so the restored PV is a static PV of a volume this site already knows. No `CreateVolume` runs. If a PV of that name already exists here, from a previous stay of the workload, Ramen updates it in place for sync (`updateExistingPVForSync`) rather than refusing. The first pod then stages, and the stage moves the leadership (§9.2, §9.3).
+**On the site the workload arrives at.** Ramen restores the PV and the PVC it uploaded to S3: the same PV name, the same `volumeHandle`, bound to each other. The handle names the one backend cluster, which the driver's secret on this site resolves, so the restored PV is a static PV of a volume this site already knows. No `CreateVolume` runs. If a PV of that name already exists here, from a previous stay of the workload, Ramen updates it in place for sync (`updateExistingPVForSync`) rather than refusing. This site's operator moves the leadership when Ramen makes the VRG primary here (§9.2, §9.3), and the first pod's stage attaches once the volume is led from this site (§9.4).
 
 **Without Ramen.** A test or an operator-driven move does what Ramen does: it retains the PV on A, removes the PVC, and restores the same PV on B as a static PV bound to a new PVC (`regression_test/25/07-flip.sh`). Applying a PVC of the same name on B is not enough. The external provisioner names a volume after the claim's UID, `pvc-<uid>`, and a recreated claim has a new UID, so its create names a volume that does not exist and provisions a new, empty one.
 
@@ -567,13 +575,13 @@ POST /api/v2/clusters/{id}/sites/{site}/fence
 
 The backend runs its disaster site steps once for the site: the liveness proof per node of the site (no running state, no SPDK answer, no surviving peer still reporting the journal link), then `lost_site = <site>`, `lost_site_state = fencing`, every device of the site unavailable, its nodes `OFFLINE`, every volume of every store led from it fenced on it, then `done` (`sync-replication.md` §5). The route is idempotent and resumable, as the steps already are. It runs the status check of the proof inline and the rest as a task: `202` with the task while it runs, which the driver returns as `codes.Unavailable`, `200` once the site is recorded `done`, and `409` with the reason when the fence is refused, which the driver returns as `codes.FailedPrecondition`. Either way csi-addons retries. The backend refuses while a node of the site is in a running state, while another site is recorded lost, while the monitor is draining the site, during an activation of the site, when no other site is online, and once when the task's liveness proof failed, naming the task; the next call starts a new attempt. The backend also holds a site's return while a fence task of it is open, so an activation cannot rebuild nodes the fence is taking offline. The site-level route is the one new backend requirement: today those steps run only inside a forced promote of one store, and a fence that promoted stores one by one would leave the site half-fenced between calls.
 
-The fence does not move leadership. Stores led from the fenced site stay closed until a promote opens them on the survivor, which the stage on the survivor requests (§9.3) with `planned=false`, because the planned gate cannot pass against a fenced site. Ramen's own order guarantees the pods on the survivor stage after the fence.
+The fence does not move leadership. Stores led from the fenced site stay closed until a promote opens them on the survivor, which the survivor's operator requests (§9.2) when Ramen makes the VRG primary there with action `Failover`, escalating to `planned=false` because the planned gate cannot pass against a fenced site. Ramen's own order guarantees the VRG turns primary after the fence.
 
 `UnfenceClusterNetwork` is a confirmation, not an action. The site returns by the backend's own activation when its nodes come back, and the route answers `200` once the control plane no longer records the site, `409` while it still does, which the driver returns as `codes.FailedPrecondition`. Ramen then holds `Unfenced` until the storage has healed, which is the behavior the DRPC expects before a relocate back.
 
 ### 10.3 Why the surviving site's operator never needs the leader
 
-Nothing in §9 or §10 reads the leader role. The node asks its own operator; its own operator calls the control plane; the fence is issued by whichever site Ramen addresses, which is always the survivor. The leader role governs cluster lifecycle (§5.2) and nothing in the DR path, which is what makes the loss of the leader site an ordinary failover (§11).
+Nothing in §9 or §10 reads the leader role. Each site's operator follows its own site's VRG and calls the control plane; the fence is issued by whichever site Ramen addresses, which is always the survivor. The leader role governs cluster lifecycle (§5.2) and nothing in the DR path, which is what makes the loss of the leader site an ordinary failover (§11).
 
 ---
 
@@ -603,7 +611,7 @@ The control plane is upgraded on the hub, by the hub operator's `ControlPlaneOps
 | `POST` | `/api/v2/clusters/{id}/storage-nodes` with `site`                                                           | Add a node on a site. On the branch                                                                                                                             |
 | `POST` | `/api/v2/clusters/{id}/storage-pools/{id}/volumes` with `site`                                              | **New.** Restrict the owner-node choice to the online nodes of that site; `400` for an unknown site, `409` when `host_id` names a node of another site (§9.5)   |
 | `POST` | `V/replication/demote?site=`, `V/replication/failover?site=&planned=`, and the `G/replication/...` siblings | The planned and forced moves the operator issues (§9.3). On the branch                                                                                          |
-| `GET`  | `V/replication/sync-status`                                                                                 | The led site and sync state the node plugin gates on (§9.2). On the branch                                                                                      |
+| `GET`  | `V/replication/sync-status`                                                                                 | The led site the VRG follower and the node's gate read (§9.2, §9.4). On the branch                                                                              |
 | `POST` | `/api/v2/clusters/{id}/sites/{site}/fence`                                                                  | **New**, on `stretched-p0-2`. Run the disaster site steps for a whole site as a task: `202` running, `200` done, `409` refused (§10.2)                          |
 | `POST` | `/api/v2/clusters/{id}/sites/{site}/unfence`                                                                | **New**, on `stretched-p0-2`. Confirm the site is no longer recorded; `409` while it is (§10.2). `GET .../sites/{site}/status` reads the record                 |
 | `GET`  | `/api/v2/clusters/{id}/sites`                                                                               | **New**, not built. The sites, their records, and node membership, for the hub's status roll-up. The driver maps CIDRs through the storage-node listing instead |
@@ -680,7 +688,7 @@ Two of these carry alerts. `simplyblock_site_link_up` at zero for longer than th
 
 The plan is [`tests/test-plan-stretched-sync-replication-ramen.md`](../tests/test-plan-stretched-sync-replication-ramen.md). What each class must prove:
 
-- **Unit.** The role machine on `StorageCluster` (leader creates, follower adopts, follower refuses cluster-scoped ops, role swap drops an in-flight ops); the node plugin's determination from the secret file and the status read; `SwitchoverService`'s sequencing and per-store serialization against a mock backend, including `409 volumes` and the `412` escalation; the driver's CIDR-to-site resolution and its refusals; the relay's sub-peer prefix check.
+- **Unit.** The role machine on `StorageCluster` (leader creates, follower adopts, follower refuses cluster-scoped ops, role swap drops an in-flight ops); the VRG follower's selection of what to move and when (sync, primary, this cluster, bound claims, `Failover` alone forcing); the node gate's wait from the secret file and the status read; `SwitchoverService`'s sequencing and per-store serialization against a mock backend, including `409 volumes` and the `412` escalation; the driver's CIDR-to-site resolution and its refusals; the relay's sub-peer prefix check.
 - **Integration (envtest, two managers).** Two operator managers against one mock control plane, driven by two `ClusterDeploymentConfig`s with the role fields: the follower reaches `Adopting` without posting a create, both reach the same UUID, nodes are added with the right site. The hub operator's two discovery, sizing, and approval flows from one `StretchedCluster`, against a fake work and view client.
 - **Link.** A relay, two agents and two local peers in one process: a stream from `site/a/operator` to `site/b/controller/x` carries gRPC end to end; a sub-peer with a foreign prefix is refused; a dropped relay session redials and the registry recovers.
 - **Live.** The lab of Appendix D: a relocate round trip under a hashed writer, an unplanned failover with the leader site powered off, the site's return and relocate back, and the follower-as-leader swap. The pass criteria are Ramen's own conditions on the DRPC and VRG plus the backend's site records, as `design-ramen-integration.md` §6.3 insists, with the data check from `design-csi-addons-replication.md` §12.
@@ -1140,8 +1148,8 @@ message StreamEnds {
   string source = 2;
 }
 
-// Served by each site's operator, locally to its node plugins and remotely
-// through the relay.
+// Served by each site's operator: called in process by its VRG follower
+// (§9.2), and remotely through the relay by the other site's operator.
 service SwitchoverService {
   rpc Move(MoveRequest) returns (MoveResponse);
 }

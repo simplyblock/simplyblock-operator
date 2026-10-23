@@ -69,23 +69,39 @@ File: `operator/internal/controller/stretchedcluster_controller_unit_test.go`
 | U-100 | The images a `StretchedCluster` pins (`spec.images`) reach both sites' drafts, so both sites' storage nodes run the same SPDK and SPDK proxy                                                                                                                                                                                                | Positive            | `TestBothDraftsPinTheStretchedClustersImages`                                                                             |
 | U-101 | The leader asks for the activation only once the other site has ndcs+npcs online nodes on at least three hosts, a host read from the node's control-plane name. Regression: 2026-10-23-peer-site-host-count, the backend refused an activation with the other site's nodes on two hosts                                                     | Regression          | `TestALeaderWaitsForThePeerSitesNodesToSpanThreeHosts`, `TestALeaderWaitsForThePeerSiteBeforeActivating`                  |
 
-### The node plugin's determination (§9.2, §9.4)
+### The node gate (§9.4)
 
 File: `csi-driver/internal/csi/node/syncgate_test.go`
 
-| #     | Scenario                                                                                                                                                                                                                  | Type       | Test                                                                          |
-|-------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|-------------------------------------------------------------------------------|
-| U-26  | The cluster secret entry carries `sync: true` and `site: a`; a status read answering `led_from: a` proceeds to connect                                                                                                    | Positive   | `TestAVolumeLedHereStagesWithoutAMove`                                        |
-| U-27  | `led_from: b` calls `SwitchoverService.Move` for the volume to site `a`, allowing a forced promote, and returns `codes.Unavailable` while the answer is `IN_PROGRESS`                                                     | Positive   | `TestAVolumeLedElsewhereIsMovedHereFirst`, `TestAMoveInProgressHoldsTheStage` |
-| U-28  | `led_from: ""` (between promote and first I/O) returns `codes.Unavailable` without calling `Move`                                                                                                                         | Boundary   | `TestAVolumeLedFromNoSiteIsHeldWithoutAMove`                                  |
-| U-29  | `MOVED` answered but the next status read still says `led_from: b`: one more `Unavailable`, no connect                                                                                                                    | Boundary   | `TestAMoveTheStatusDoesNotReflectIsHeld`                                      |
-| U-30  | `REFUSED` with `blocking_volumes` returns `codes.FailedPrecondition` quoting the operator's reason and the volumes                                                                                                        | Negative   | `TestARefusedMoveSaysWhy`                                                     |
-| U-31  | A secret entry without `sync` takes the async path unchanged: no status read, no `Move`                                                                                                                                   | Regression | `TestANonSyncClusterIsNotGated`                                               |
-| U-32  | A secret entry with `sync: true` and no `site` fails the stage with `codes.FailedPrecondition` before any backend call                                                                                                    | Negative   | `TestASyncClusterWithoutASiteHoldsBeforeAnyCall`                              |
-| U-33  | A volume of a consistency group calls `Move` with the group handle, not the volume                                                                                                                                        | Positive   | —                                                                             |
-| U-34  | Unstage after the volume moved away: the disconnect finds no subsystem and succeeds                                                                                                                                       | Boundary   | —                                                                             |
-| U-113 | A node plugin not linked to its operator holds the stage with `codes.Unavailable`                                                                                                                                         | Negative   | `TestANodeNotLinkedToItsOperatorHolds`                                        |
-| U-114 | The gate runs before the stage connects to the volume. Regression: 2026-10-17-stage-connects-before-gate, a connect on the stale site cleared the backend's never-connected record and the birth-state demote never fired | Regression | `TestAStageHoldsOnTheGateBeforeBringingTheStackUp`                            |
+| #     | Scenario                                                                                                                                                                                                                  | Type       | Test                                               |
+|-------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------|
+| U-26  | The cluster secret entry carries `sync: true` and `site: a`; a status read answering `led_from: a` proceeds to connect                                                                                                    | Positive   | `TestAVolumeLedHereStages`                         |
+| U-27  | ~~`led_from: b` calls `SwitchoverService.Move`~~ Superseded by U-124: the stage never moves a volume                                                                                                                      | —          | —                                                  |
+| U-28  | `led_from: ""` (between promote and first I/O) returns `codes.Unavailable`                                                                                                                                                | Boundary   | `TestAVolumeLedFromNoSiteIsHeld`                   |
+| U-29  | ~~`MOVED` answered but the status still names `b`~~ Superseded by U-124: the gate attaches only when the status names its site                                                                                            | —          | —                                                  |
+| U-30  | ~~`REFUSED` returns `codes.FailedPrecondition`~~ Superseded by U-128: a refusal is reported on the VRG                                                                                                                    | —          | —                                                  |
+| U-31  | A secret entry without `sync` takes the async path unchanged: no status read                                                                                                                                              | Regression | `TestANonSyncClusterIsNotGated`                    |
+| U-32  | A secret entry with `sync: true` and no `site` fails the stage with `codes.FailedPrecondition` before any backend call                                                                                                    | Negative   | `TestASyncClusterWithoutASiteHoldsBeforeAnyCall`   |
+| U-33  | A volume of a consistency group calls `Move` with the group handle, not the volume                                                                                                                                        | Positive   | —                                                  |
+| U-34  | Unstage after the volume moved away: the disconnect finds no subsystem and succeeds                                                                                                                                       | Boundary   | —                                                  |
+| U-113 | ~~A node plugin not linked to its operator holds~~ Superseded: the node no longer calls its operator                                                                                                                      | —          | —                                                  |
+| U-114 | The gate runs before the stage connects to the volume. Regression: 2026-10-17-stage-connects-before-gate, a connect on the stale site cleared the backend's never-connected record and the birth-state demote never fired | Regression | `TestAStageHoldsOnTheGateBeforeBringingTheStackUp` |
+| U-124 | A volume led from the other site holds the stage with `codes.Unavailable`, naming that site; the stage never moves it                                                                                                     | Negative   | `TestAVolumeLedElsewhereIsWaitedFor`               |
+
+### The VRG follower in the operator (§9.2)
+
+File: `operator/internal/controllers/vrgfollow/vrgfollow_test.go`, `operator/cmd/ramen_late_test.go`
+
+| #     | Scenario                                                                                                                                     | Type     | Test                                                                                         |
+|-------|----------------------------------------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------------------------------------------------|
+| U-125 | A sync VRG primary on this site moves every volume it protects here, planned, and settles once all are moved                                 | Positive | `TestAPrimaryVRGMovesItsVolumesToThisSite`                                                   |
+| U-126 | A VRG with action `Failover` allows the forced promote; any other action does not                                                            | Positive | `TestAFailoverVRGAllowsAForcedPromote`, `TestAPrimaryVRGMovesItsVolumesToThisSite`           |
+| U-127 | A move still running is requeued, not waited on                                                                                              | Boundary | `TestAMoveInProgressIsAskedAgain`                                                            |
+| U-128 | A refused move emits `SyncMoveRefused` on the VRG naming the blocking volumes, and is requeued                                               | Negative | `TestARefusedMoveIsReportedOnTheVRG`                                                         |
+| U-129 | A secondary VRG, an async VRG, and a cluster that is not stretched move nothing                                                              | Negative | `TestOnlyASyncPrimaryVRGOnAStretchedClusterMovesAnything`                                    |
+| U-130 | Only bound claims of this driver and this cluster are moved; an unbound claim, and a primary VRG with no claims restored yet, are waited for | Boundary | `TestOnlyThisClustersBoundVolumesAreMoved`, `TestAPrimaryVRGWithNoClaimsYetIsWaitedFor`      |
+| U-131 | A VRG that is gone is not an error                                                                                                           | Boundary | `TestAGoneVRGIsNotAnError`                                                                   |
+| U-132 | The follower starts once Ramen's VRG kind is served, without a restart, and never while it is absent                                         | Positive | `TestTheVRGFollowerStartsOnceRamenIsInstalled`, `TestTheVRGFollowerIsNotStartedWithoutRamen` |
 
 ### Birth site on `CreateVolume` (§9.5)
 
@@ -145,21 +161,21 @@ File: `operator/internal/controllers/node/storagenode_remote_test.go`
 
 Files: `atlas-lib/switchover/switchover_test.go` (the service), `operator/internal/switchover/backend_test.go` (the operator's backend)
 
-| #     | Scenario                                                                                                                                               | Type     | Test                                                                                                |
-|-------|--------------------------------------------------------------------------------------------------------------------------------------------------------|----------|-----------------------------------------------------------------------------------------------------|
-| U-35  | `Move(volume, to: a)`: demote `?site=b`, then `failover?site=a&planned=true`, answer `MOVED` on `200`                                                  | Positive | `TestAPlannedMoveDemotesThenPromotes`                                                               |
-| U-36  | Demote answers `409` with `volumes`: no promote, answer `REFUSED` with `blocking_volumes` and the backend's message                                    | Negative | `TestARefusedDemoteNamesWhatBlocksIt`                                                               |
-| U-37  | Promote answers `409 in progress`: the caller sees `IN_PROGRESS` and asks again, and the service does not poll                                         | Boundary | `TestAPromoteStillRunningIsInProgress`                                                              |
-| U-38  | Promote answers `412` with `allow_forced`: one `failover?site=a` without `planned`, the escalation reported for `SyncPeerSiteOffline`, answer `MOVED`  | Positive | `TestALostSiteEscalatesToAForcedPromoteWhenAllowed`                                                 |
-| U-39  | Promote answers `412` without `allow_forced`: answer `REFUSED`, no forced promote                                                                      | Negative | `TestALostSiteEscalatesToAForcedPromoteWhenAllowed`                                                 |
-| U-40  | Two concurrent `Move`s for one store: one demote and one promote, the second answered `IN_PROGRESS`                                                    | Boundary | `TestOneMovePerStoreAtATime`                                                                        |
-| U-41  | A `Move` for a volume already led from `to_site`: `MOVED` with no demote or promote                                                                    | Boundary | `TestAVolumeLedFromTheTargetSiteIsAlreadyMoved`                                                     |
-| U-42  | A group `Move` uses the `G/replication/...` routes once for the group                                                                                  | Positive | —                                                                                                   |
-| U-43  | A `Move` from a remote peer (`site/b/operator`) is served; a `Move` from a remote node peer (`site/b/node/x`) is refused with `codes.PermissionDenied` | Negative | —                                                                                                   |
-| U-44  | Object operations on a store the service just moved are deferred until the status shows a leader (first-I/O rule)                                      | Boundary | —                                                                                                   |
-| U-115 | A demote the backend cannot reach because the old site is down does not stop the move: the promote decides, forced only after the planned one's `412`  | Boundary | `TestAnUnreachableOldSiteDoesNotBlockThePromote`                                                    |
-| U-116 | A `Move` without a target site is refused before any backend call                                                                                      | Negative | `TestAMoveWithoutATargetSiteIsRefused`                                                              |
-| U-117 | The operator's backend calls the control plane at the endpoint and with the credential the operator resolves, and refuses without an endpoint          | Positive | `TestTheBackendUsesTheControlPlanesEndpointAndCredential`, `TestTheBackendRefusesWithoutAnEndpoint` |
+| #     | Scenario                                                                                                                                              | Type     | Test                                                                                                |
+|-------|-------------------------------------------------------------------------------------------------------------------------------------------------------|----------|-----------------------------------------------------------------------------------------------------|
+| U-35  | `Move(volume, to: a)`: demote `?site=b`, then `failover?site=a&planned=true`, answer `MOVED` on `200`                                                 | Positive | `TestAPlannedMoveDemotesThenPromotes`                                                               |
+| U-36  | Demote answers `409` with `volumes`: no promote, answer `REFUSED` with `blocking_volumes` and the backend's message                                   | Negative | `TestARefusedDemoteNamesWhatBlocksIt`                                                               |
+| U-37  | Promote answers `409 in progress`: the caller sees `IN_PROGRESS` and asks again, and the service does not poll                                        | Boundary | `TestAPromoteStillRunningIsInProgress`                                                              |
+| U-38  | Promote answers `412` with `allow_forced`: one `failover?site=a` without `planned`, the escalation reported for `SyncPeerSiteOffline`, answer `MOVED` | Positive | `TestALostSiteEscalatesToAForcedPromoteWhenAllowed`                                                 |
+| U-39  | Promote answers `412` without `allow_forced`: answer `REFUSED`, no forced promote                                                                     | Negative | `TestALostSiteEscalatesToAForcedPromoteWhenAllowed`                                                 |
+| U-40  | Two concurrent `Move`s for one store: one demote and one promote, the second answered `IN_PROGRESS`                                                   | Boundary | `TestOneMovePerStoreAtATime`                                                                        |
+| U-41  | A `Move` for a volume already led from `to_site`: `MOVED` with no demote or promote                                                                   | Boundary | `TestAVolumeLedFromTheTargetSiteIsAlreadyMoved`                                                     |
+| U-42  | A group `Move` uses the `G/replication/...` routes once for the group                                                                                 | Positive | —                                                                                                   |
+| U-43  | A `Move` from a remote peer (`site/b/operator`) is served; a node plugin reaches no `Move`, since the operator no longer serves it on the CSI link    | Negative | —                                                                                                   |
+| U-44  | Object operations on a store the service just moved are deferred until the status shows a leader (first-I/O rule)                                     | Boundary | —                                                                                                   |
+| U-115 | A demote the backend cannot reach because the old site is down does not stop the move: the promote decides, forced only after the planned one's `412` | Boundary | `TestAnUnreachableOldSiteDoesNotBlockThePromote`                                                    |
+| U-116 | A `Move` without a target site is refused before any backend call                                                                                     | Negative | `TestAMoveWithoutATargetSiteIsRefused`                                                              |
+| U-117 | The operator's backend calls the control plane at the endpoint and with the credential the operator resolves, and refuses without an endpoint         | Positive | `TestTheBackendUsesTheControlPlanesEndpointAndCredential`, `TestTheBackendRefusesWithoutAnEndpoint` |
 
 ### `NetworkFence` in the driver (§10.2)
 
@@ -258,7 +274,7 @@ Two operator managers in one `envtest` process, each with its own namespace and 
 
 | #    | Scenario                                                                                                                                                   | Type     | Test |
 |------|------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| I-11 | A fake node peer on site `b` stages a volume led from `a`: the `b` operator demotes `a`, promotes `b`, the stage proceeds                                  | Positive | —    |
+| I-11 | A VRG made primary on site `b` for a volume led from `a`: the `b` operator demotes `a`, promotes `b`, and a stage on `b` then proceeds                     | Positive | —    |
 | I-12 | The `a` operator is stopped: the move still completes, because the demote is issued against the control plane, not the peer                                | Positive | —    |
 | I-13 | The relay is stopped: a local stage on `b` still completes (local link); a cross-site `SiteService.Describe` returns `ErrNoSession`                        | Boundary | —    |
 | I-14 | A PVC provisioned by site `b`'s driver: the mock's create body carries `site: b`; the volume's owner node is on `b`                                        | Positive | —    |
@@ -309,14 +325,14 @@ The lab of design Appendix D: a hub cluster running OCM, `ramen-hub`, the fleet 
 
 ### Birth site (§9.5)
 
-| #    | Scenario                                                                                                                                                                   | Type     | Test                            |
-|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|---------------------------------|
-| E-14 | A PVC created on `a` with `Immediate` binding: `storage_node_id` is a site-`a` node, `GET V/replication/status` says `led_from: a`                                         | Positive | —                               |
-| E-15 | A PVC created on `b` with `WaitForFirstConsumer` and `pod-affinity`: owner node is the storage node co-located with the pod's worker on `b`                                | Positive | —                               |
-| E-16 | A snapshot of an `a`-born volume restored on `b`: the clone's home is `a`; `b`'s pod stages after one planned move                                                         | Boundary | —                               |
-| E-17 | Relocate `a` to `b`: the backend volume UUID and the volume count are unchanged before and after; the PV on `a` is `Released` with `Retain` and no claim reference         | Positive | —                               |
-| E-18 | Unprotect (delete the DRPC) then delete the PVC on the primary: the PV's policy is `Delete` again and the backend volume is gone                                           | Positive | —                               |
-| E-19 | Without Ramen: delete the PVC on `a` with the PV retained, restore the PV on `b` bound to a new PVC: the claim binds to the existing volume, its pod stages after one move | Positive | `regression_test/25/07-flip.sh` |
+| #    | Scenario                                                                                                                                                                                                                    | Type     | Test                            |
+|------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|---------------------------------|
+| E-14 | A PVC created on `a` with `Immediate` binding: `storage_node_id` is a site-`a` node, `GET V/replication/status` says `led_from: a`                                                                                          | Positive | —                               |
+| E-15 | A PVC created on `b` with `WaitForFirstConsumer` and `pod-affinity`: owner node is the storage node co-located with the pod's worker on `b`                                                                                 | Positive | —                               |
+| E-16 | A snapshot of an `a`-born volume restored on `b`: the clone's home is `a`; `b`'s pod stages after one planned move                                                                                                          | Boundary | —                               |
+| E-17 | Relocate `a` to `b`: the backend volume UUID and the volume count are unchanged before and after; the PV on `a` is `Released` with `Retain` and no claim reference                                                          | Positive | —                               |
+| E-18 | Unprotect (delete the DRPC) then delete the PVC on the primary: the PV's policy is `Delete` again and the backend volume is gone                                                                                            | Positive | —                               |
+| E-19 | Without Ramen: delete the PVC on `a` with the PV retained, restore the PV on `b` bound to a new PVC, move the volume through the backend: the claim binds to the existing volume and its pod stages once it is led from `b` | Positive | `regression_test/25/07-flip.sh` |
 
 ### Hub loss (§13)
 
@@ -359,12 +375,12 @@ The lab of design Appendix D: a hub cluster running OCM, `ramen-hub`, the fleet 
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 123       | 102     | 21          |
+| Unit        | 128       | 107     | 21          |
 | Integration | 19        | 0       | 19          |
 | E2E         | 21        | 7       | 14          |
 | Manual      | 3         | 0       | 3           |
 
-An E2E row counts as covered when a lab script asserts it. Of the seven, E-20 and E-21 have run. `07-flip.sh`, `09-relocate.sh`, and `10-failover.sh` (E-04, E-05, E-08, E-09, E-19) have not yet run against the images of this branch.
+Unit counts exclude the four rows superseded by the Ramen-driven move (U-27, U-29, U-30, U-113). An E2E row counts as covered when a lab script asserts it. Of the seven, E-20 and E-21 have run. `07-flip.sh`, `09-relocate.sh`, and `10-failover.sh` (E-04, E-05, E-08, E-09, E-19) have not yet run against the images of this branch.
 
 ---
 
@@ -398,6 +414,6 @@ Phases 1 to 3 are built and their unit rows are covered, with these left open:
 | U-62             | The HTTP relay to the control plane is not built                                                                                                                                           |
 | U-68, U-70, U-71 | The co-located pin, the backend's `400` for an unknown site, and the clone path are unchanged by the birth site, and no test drives them on a sync cluster                                 |
 | U-74, U-77       | The size conflict and `DeleteVolume` are unchanged on a sync cluster, and no test drives them on one                                                                                       |
-| U-81             | The service does not wait on a stream event: a stage answered `IN_PROGRESS` retries and its next `Move` reads the status (U-37), so nothing is pending for an event to resolve             |
+| U-81             | The VRG follower asks again after a named interval, and the next `Move` reads the status (U-127), so nothing is pending for an event to resolve                                            |
 
 Every integration and manual row is `—`, and the E2E rows without a script above. The rows that must be green before Phase 3 is called safe are U-53 (a fence never answers success early), U-29 (a stage never attaches on a stale status), and U-75 (a recreate never deletes a volume whose site is down). All three are covered by unit tests; the live proof is E-08, which has not yet run.

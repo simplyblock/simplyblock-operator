@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -63,12 +62,6 @@ type Config struct {
 	// MDSServiceAccount names the pNFS metadata server pod's ServiceAccount,
 	// unqualified. Empty closes the MDS kind to every peer.
 	MDSServiceAccount string
-
-	// Register adds the services the operator serves to its peers, such as
-	// SwitchoverService for a node plugin of a stretched cluster. Capabilities
-	// names them in the handshake.
-	Register     func(grpc.ServiceRegistrar)
-	Capabilities []string
 }
 
 // The hub needs to verify peer tokens, and — on clusters whose API server does
@@ -127,9 +120,7 @@ func Setup(mgr ctrl.Manager, cfg Config) (*link.Registry, error) {
 				return false
 			}
 		},
-		Register:     cfg.Register,
-		Capabilities: cfg.Capabilities,
-		Logger:       slog.New(logr.ToSlogHandler(mgr.GetLogger().WithName("csi-link"))),
+		Logger: slog.New(logr.ToSlogHandler(mgr.GetLogger().WithName("csi-link"))),
 	})
 	if err != nil {
 		_ = listener.Close()

@@ -4,14 +4,10 @@ package node
 
 import (
 	"context"
-	"fmt"
-
-	"google.golang.org/grpc"
 
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/simplyblock/atlas/controlplane"
-	"github.com/simplyblock/atlas/link/sitev1"
 	"github.com/simplyblock/atlas/lvol"
 	export "github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/nvme"
@@ -54,11 +50,10 @@ type Server struct {
 	guardian       *guardian.Guardian
 
 	// The stretched cluster's stage gate (syncgate.go): this node's site and
-	// whether a cluster is sync, where a volume is led from, and the operator's
-	// SwitchoverService. Seams, so the gate is tested without a cluster.
+	// whether a cluster is sync, and where a volume is led from. Seams, so the
+	// gate is tested without a cluster.
 	syncSite   func(clusterID string) (site string, sync bool, err error)
 	syncStatus func(ctx context.Context, h lvol.VolumeHandle) (controlplane.VolumeSyncStatus, error)
-	switchover func() (sitev1.SwitchoverServiceClient, error)
 }
 
 // New builds the node service. It performs no I/O and starts nothing: the
@@ -80,23 +75,7 @@ func New(d *csicommon.CSIDriver, kubeClient kubernetes.Interface, manager *sbkub
 		manager:           manager,
 		syncSite:          clusters.SyncSite,
 		syncStatus:        syncStatusFromSecret,
-		switchover: func() (sitev1.SwitchoverServiceClient, error) {
-			return nil, fmt.Errorf("the node plugin is not linked to its operator")
-		},
 	}, nil
-}
-
-// AttachOperatorLink gives the node service its link to the operator, whose
-// SwitchoverService moves a stretched cluster's volume to this node's site. It
-// is set after construction because the link is started after the service.
-func (ns *Server) AttachOperatorLink(conn func() (grpc.ClientConnInterface, error)) {
-	ns.switchover = func() (sitev1.SwitchoverServiceClient, error) {
-		c, err := conn()
-		if err != nil {
-			return nil, err
-		}
-		return sitev1.NewSwitchoverServiceClient(c), nil
-	}
 }
 
 // syncStatusFromSecret reads where a volume is led from, through the cluster

@@ -28,7 +28,6 @@ import (
 
 	"github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/link"
-	"github.com/simplyblock/atlas/link/sitev1"
 	atlasprom "github.com/simplyblock/atlas/prometheus"
 	atlasswitchover "github.com/simplyblock/atlas/switchover"
 
@@ -78,6 +77,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/twonode"
 	twonodecp "github.com/simplyblock/simplyblock-operator/internal/controllers/twonode/cpadapter"
 	volumecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/volume"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/vrgfollow"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
 	"github.com/simplyblock/simplyblock-operator/internal/switchover"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -430,8 +430,6 @@ func main() {
 			NodeServiceAccount:       "simplyblock-csi-node-sa",
 			ControllerServiceAccount: "simplyblock-csi-controller-sa",
 			MDSServiceAccount:        "simplyblock-csi-mds-sa",
-			Register:                 switchoverServer.Register,
-			Capabilities:             []string{sitev1.SwitchoverService_ServiceDesc.ServiceName},
 		})
 		if err != nil {
 			setupLog.Error(err, "unable to set up the CSI link")
@@ -1133,6 +1131,37 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	// The VRG follower moves a stretched cluster's volumes to the site Ramen makes
+	// their VolumeReplicationGroup primary on (design-stretched-sync-replication-
+	// ramen.md §9). It watches Ramen's kind, so it starts once Ramen is installed.
+	registerVRGFollower := func() error {
+		if err := (&vrgfollow.Reconciler{
+			Client:    mgr.GetClient(),
+			Recorder:  mgr.GetEventRecorder("vrgfollow"),
+			Mover:     switchoverServer,
+			Namespace: operatorNamespace,
+		}).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("controller VRGFollower: %w", err)
+		}
+		return nil
+	}
+	hasVRG, err := serverHasResource(workDiscovery, ramenGroupVersion, ramenVRGResource)
+	if err != nil {
+		setupLog.Error(err, "unable to determine whether Ramen's VolumeReplicationGroup is served")
+		os.Exit(1)
+	}
+	if hasVRG {
+		if err := registerVRGFollower(); err != nil {
+			setupLog.Error(err, "unable to create controller")
+			os.Exit(1)
+		}
+	} else if err := mgr.Add(&ramenLateStart{
+		log: setupLog, disc: workDiscovery, register: registerVRGFollower,
+	}); err != nil {
+		setupLog.Error(err, "unable to add the Ramen VolumeReplicationGroup watcher")
+		os.Exit(1)
+	}
+
 	// +kubebuilder:scaffold:builder
 
 	// Provision the admission webhooks' serving certificate at runtime (self-signed

@@ -151,14 +151,8 @@ func Run(conf *config.Config) {
 	if conf.LinkEnabled {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		agent, err := startLink(ctx, conf)
-		if err != nil {
+		if err := startLink(ctx, conf); err != nil {
 			klog.Fatalf("failed to start the operator link: %s", err)
-		}
-		// A node plugin asks its operator to move a stretched cluster's volume
-		// to this site over the same link (internal/csi/node/syncgate.go).
-		if ns != nil {
-			ns.AttachOperatorLink(agent.Conn)
 		}
 	}
 
@@ -215,7 +209,7 @@ func Run(conf *config.Config) {
 // linking it, and is identified by the node it runs on. A controller plugin
 // links as itself and currently serves nothing. It is registered so the
 // operator can see it, and so services can be added without new plumbing.
-func startLink(ctx context.Context, conf *config.Config) (*link.Agent, error) {
+func startLink(ctx context.Context, conf *config.Config) error {
 	cfg := csilink.Config{
 		HubAddress:  conf.LinkHubAddress,
 		CAFile:      conf.LinkCAFile,
@@ -227,7 +221,7 @@ func startLink(ctx context.Context, conf *config.Config) (*link.Agent, error) {
 	switch {
 	case conf.IsNodeServer:
 		if conf.NodeID == "" {
-			return nil, fmt.Errorf("link needs the node name (--nodeid); the operator verifies it")
+			return fmt.Errorf("link needs the node name (--nodeid); the operator verifies it")
 		}
 		// storage.Local reads this node through sysfs. It must be the local
 		// one: serving a remote accessor would make this node a proxy for
@@ -235,14 +229,14 @@ func startLink(ctx context.Context, conf *config.Config) (*link.Agent, error) {
 		local := storage.Local(nvme.SysfsConfig{})
 		srv, err := storagerpc.NewServer(local)
 		if err != nil {
-			return nil, fmt.Errorf("node storage: %w", err)
+			return fmt.Errorf("node storage: %w", err)
 		}
 		// The node forgets the connection-tracking entries translated to a dead
 		// pNFS metadata server pod when the operator asks. It runs on the host's
 		// network, so the table it reaches is the host's.
 		flows, err := conntrackrpc.NewServer(conntrack.Forget)
 		if err != nil {
-			return nil, fmt.Errorf("node flows: %w", err)
+			return fmt.Errorf("node flows: %w", err)
 		}
 		// No export service: exports are assembled in the metadata server's
 		// guest, never on a node.
@@ -255,15 +249,16 @@ func startLink(ctx context.Context, conf *config.Config) (*link.Agent, error) {
 
 	case conf.IsControllerServer:
 		if conf.PodName == "" {
-			return nil, fmt.Errorf("link needs the pod name (--pod-name); the operator verifies it")
+			return fmt.Errorf("link needs the pod name (--pod-name); the operator verifies it")
 		}
 		cfg.ID = link.ControllerPeer(conf.PodName)
 
 	default:
-		return nil, fmt.Errorf("link needs either --node or --controller")
+		return fmt.Errorf("link needs either --node or --controller")
 	}
 
-	return csilink.Start(ctx, cfg)
+	_, err := csilink.Start(ctx, cfg)
+	return err
 }
 
 // startNodeServer builds the node service and starts the background loops that

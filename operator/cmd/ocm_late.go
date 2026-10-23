@@ -29,7 +29,7 @@ func waitForResource(ctx context.Context, log logr.Logger, disc serverResourcesG
 		}
 		served, err := serverHasResource(disc, groupVersion, resource)
 		if err != nil {
-			log.Info("could not check for the OCM ManifestWork resource; trying again",
+			log.Info("could not check whether the resource is served; trying again",
 				"groupVersion", groupVersion, "resource", resource, "error", err.Error())
 		} else if served {
 			return true
