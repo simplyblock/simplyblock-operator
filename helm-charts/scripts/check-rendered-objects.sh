@@ -456,6 +456,75 @@ checkClusterStorageClasses() {
   fi
 }
 
+# checkDiscovery asserts that discovery values render the OperatorOps that runs
+# them, and that an install stating none renders no run for the operator to
+# decline behind.
+#
+# The operator raises the default run itself. A value an administrator sets has
+# to reach spec.discover, because the run the operator raises would not carry it.
+checkDiscovery() {
+  local yq="${YQ:-yq}"
+  local ok=1 doc got
+
+  # operatorOps prints the rendered OperatorOps, with the extra settings given.
+  operatorOps() {
+    local profile="$1"
+    shift
+    helm template sb "$CHART" --namespace simplyblock \
+      "${CAPABILITIES[@]}" \
+      --set deployment.profile="$profile" \
+      --set controlplane.managed.endpoint=https://cp.example.com \
+      "$@" 2>/dev/null | "$yq" -N 'select(.kind == "OperatorOps")'
+  }
+
+  doc="$(operatorOps standalone)"
+  if [ -n "$doc" ]; then
+    echo "  discovery: an install stating nothing renders an OperatorOps"
+    ok=0
+  fi
+
+  doc="$(operatorOps standalone \
+    --set discovery.nodeSelector.node-role\\.kubernetes\\.io/simplyblock-storage="" \
+    --set discovery.enableControlPlaneNodes=true \
+    --set 'discovery.deviceFilter.pcieDenyList={0000:00:1f.2}')"
+  got="$("$yq" '.spec.action + " " + (.spec.discover.enableControlPlaneNodes | tostring) + " " +
+    .spec.discover.deviceFilter.pcieDenyList[0] + " " +
+    (.spec.discover.enablePartitionedDevices | tostring) + " " + .metadata.name' <<<"$doc")"
+  if [ "$got" != "Discover true 0000:00:1f.2 true initial-discovery" ]; then
+    echo "  discovery: values rendered [${got}], want [Discover true 0000:00:1f.2 true initial-discovery]"
+    ok=0
+  fi
+
+  doc="$(operatorOps standalone --set discovery.name=mine --set discovery.namespace=other \
+    --set discovery.enablePartitionedDevices=false)"
+  got="$("$yq" '.metadata.name + " " + .metadata.namespace + " " +
+    (.spec.discover.enablePartitionedDevices | tostring)' <<<"$doc")"
+  if [ "$got" != "mine other false" ]; then
+    echo "  discovery: name, namespace, and the partition waiver rendered [${got}], want [mine other false]"
+    ok=0
+  fi
+
+  # The profiles that raise no run render none, whatever the values say.
+  for profile in managed empty; do
+    doc="$(operatorOps "$profile" --set discovery.enableControlPlaneNodes=true)"
+    if [ -n "$doc" ]; then
+      echo "  discovery: the ${profile} profile renders an OperatorOps"
+      ok=0
+    fi
+  done
+  doc="$(operatorOps standalone --set discovery.enabled=false --set discovery.enableControlPlaneNodes=true)"
+  if [ -n "$doc" ]; then
+    echo "  discovery: discovery.enabled=false renders an OperatorOps"
+    ok=0
+  fi
+
+  if [ "$ok" -eq 1 ]; then
+    echo "  discovery: values reach spec.discover, and nothing renders without them"
+  else
+    fail=1
+  fi
+}
+
 check standalone "${COMMON[@]}"
 check managed "${COMMON[@]}"
 check empty "${OPERATOR[@]}"
@@ -464,5 +533,6 @@ checkVendoredCRDs
 checkLogCollector
 checkDriverPNFS
 checkClusterStorageClasses
+checkDiscovery
 
 exit "$fail"

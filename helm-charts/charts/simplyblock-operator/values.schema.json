@@ -489,6 +489,107 @@
       "properties": {
         "enabled": {
           "type": "boolean"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "namespace": {
+          "type": "string",
+          "maxLength": 63,
+          "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "nodeSelector": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "tolerations": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "operator": {
+                "enum": [
+                  "Exists",
+                  "Equal"
+                ]
+              },
+              "value": {
+                "type": "string"
+              },
+              "effect": {
+                "enum": [
+                  "NoSchedule",
+                  "PreferNoSchedule",
+                  "NoExecute"
+                ]
+              },
+              "tolerationSeconds": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "enableControlPlaneNodes": {
+          "type": "boolean"
+        },
+        "enableLogicalBlockDevices": {
+          "type": "boolean"
+        },
+        "enablePartitionedDevices": {
+          "type": "boolean"
+        },
+        "forceJournalDevice": {
+          "type": "boolean"
+        },
+        "deviceFilter": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "blockAllowList": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^/dev/[a-zA-Z0-9._/-]+$"
+              }
+            },
+            "blockDenyList": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^/dev/[a-zA-Z0-9._/-]+$"
+              }
+            },
+            "pcieAllowList": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\\.[0-9a-fA-F]$"
+              }
+            },
+            "pcieDenyList": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\\.[0-9a-fA-F]$"
+              }
+            },
+            "pcieModel": {
+              "type": "string"
+            },
+            "driveSizeRange": {
+              "type": "string",
+              "pattern": "^$|^[0-9]+[KMGTP]?[i]?[B]?-[0-9]+[KMGTP]?[i]?[B]?$"
+            }
+          }
         }
       }
     }
