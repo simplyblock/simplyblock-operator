@@ -463,6 +463,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The controllers start once the operator's own admission webhooks can be
+	// reached (webhook_gate.go). Everything registered through ctrlMgr waits for
+	// that. The collectors and the stream subscriptions write no object a webhook
+	// admits, so they start with the manager.
+	webhookGate := newWebhookGate(mgr.GetAPIReader(), operatorNamespace, utils.WebhookServiceName,
+		ctrl.Log.WithName("webhook-gate"))
+	if err := mgr.Add(webhookGate); err != nil {
+		setupLog.Error(err, "unable to add the webhook gate")
+		os.Exit(1)
+	}
+	ctrlMgr := gatedManager{Manager: mgr, gate: webhookGate.open}
+
 	cpSubscriptions := cpinformer.NewSubscriptionManager(streamCfg, ctrl.Log.WithName("cpinformer"), cpinformer.LeaderOnly)
 	deviceSubscription := subscriptions.NewDeviceSubscription()
 	deviceScopes := cpSubscriptions.AddSubscription(deviceSubscription)
@@ -512,7 +524,7 @@ func main() {
 		nfsExportReconciler.Assembler = controller.NewLinkAssembler(csiPeers)
 		nfsExportReconciler.Flows = csilink.NewFlows(csilink.RegistryNodePeers(csiPeers))
 	}
-	if err := nfsExportReconciler.SetupWithManager(mgr); err != nil {
+	if err := nfsExportReconciler.SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NFSExport")
 		os.Exit(1)
 	}
@@ -521,7 +533,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Devices:  deviceSubscription,
 		Recorder: mgr.GetEventRecorder("storagedevice-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageDevice")
 		os.Exit(1)
 	}
@@ -614,7 +626,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("controlplane-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlane")
 		os.Exit(1)
 	}
@@ -622,7 +634,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("controlplaneops-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlaneOps")
 		os.Exit(1)
 	}
@@ -646,7 +658,7 @@ func main() {
 			&backupSubscription.ClusterRegistry,
 			&backupPolicySubscription.ClusterRegistry,
 		},
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageCluster")
 		os.Exit(1)
 	}
@@ -659,7 +671,7 @@ func main() {
 		TLSProvider:      tlsProvider,
 		TLSMutualEnabled: tlsMutualEnabled,
 		Workload:         storageNodeWorkload,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeWorkload")
 		os.Exit(1)
 	}
@@ -669,7 +681,7 @@ func main() {
 		Recorder:         mgr.GetEventRecorder("storagepool-controller"),
 		VolumeScopes:     volumeScopes,
 		EndpointResolver: controlPlaneEndpoint,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StoragePool")
 		os.Exit(1)
 	}
@@ -677,14 +689,14 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagepoolops-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StoragePoolOps")
 		os.Exit(1)
 	}
 	if err := (&controller.TaskReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Task")
 		os.Exit(1)
 	}
@@ -706,7 +718,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Backups:  backupSubscription,
 		Recorder: mgr.GetEventRecorder("storagebackup-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackup")
 		os.Exit(1)
 	}
@@ -716,7 +728,7 @@ func main() {
 		Recorder: mgr.GetEventRecorder("storagebackuprequest-controller"),
 		API:      backupAPI,
 		Backups:  backupSubscription,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupRequest")
 		os.Exit(1)
 	}
@@ -726,7 +738,7 @@ func main() {
 		Recorder: mgr.GetEventRecorder("storagegroupbackup-controller"),
 		API:      backupAPI,
 		Backups:  backupSubscription,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageGroupBackup")
 		os.Exit(1)
 	}
@@ -735,7 +747,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagebackuppolicy-controller"),
 		API:      backupAPI,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupPolicy")
 		os.Exit(1)
 	}
@@ -755,7 +767,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagebackupops-controller"),
 		API:      backupAPI,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupOps")
 		os.Exit(1)
 	}
@@ -763,7 +775,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("backuprestore-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupRestore")
 		os.Exit(1)
 	}
@@ -771,7 +783,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("backuppolicy-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupPolicy")
 		os.Exit(1)
 	}
@@ -779,7 +791,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("backupimport-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupImport")
 		os.Exit(1)
 	}
@@ -796,7 +808,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("persistentvolumeops-controller"),
 		API:      backupAPI,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeOps")
 		os.Exit(1)
 	}
@@ -810,7 +822,7 @@ func main() {
 			Client:   mgr.GetClient(),
 			Scheme:   mgr.GetScheme(),
 			Recorder: mgr.GetEventRecorder("volumemigration-controller"),
-		}).SetupWithManager(mgr); err != nil {
+		}).SetupWithManager(ctrlMgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "VolumeMigration")
 			os.Exit(1)
 		}
@@ -821,7 +833,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("pinnedvolume-controller"),
 		Mover:    volumeMover,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeClaim")
 		os.Exit(1)
 	}
@@ -837,7 +849,7 @@ func main() {
 		DeviceScopes: deviceScopes,
 		Capacity:     nodeCapacity,
 		Workload:     storageNodeWorkload,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
 	}
@@ -850,7 +862,7 @@ func main() {
 		Clusters: clusterSubscription,
 		Workload: storageNodeWorkload,
 		Mover:    volumeMover,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeOps")
 		os.Exit(1)
 	}
@@ -873,7 +885,7 @@ func main() {
 		Scheme:    mgr.GetScheme(),
 		Recorder:  mgr.GetEventRecorder("clusterdeploymentconfig-controller"),
 		Namespace: operatorNamespace,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ClusterDeploymentConfig")
 		os.Exit(1)
 	}
@@ -883,7 +895,7 @@ func main() {
 		Recorder:   mgr.GetEventRecorder("operatorops-controller"),
 		Discovery:  operatorOpsDiscovery,
 		ProbeImage: os.Getenv(deployment.NodeProbeImageEnv),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OperatorOps")
 		os.Exit(1)
 	}
@@ -902,7 +914,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagedeviceops-controller"),
 		API:      backupAPI,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageDeviceOps")
 		os.Exit(1)
 	}
@@ -911,7 +923,7 @@ func main() {
 		Scheme:    mgr.GetScheme(),
 		Recorder:  mgr.GetEventRecorder("simplyblockdriver-controller"),
 		Snapshots: &driver.DiscoveredSnapshotAPI{Discovery: operatorOpsDiscovery},
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SimplyblockDriver")
 		os.Exit(1)
 	}
@@ -923,7 +935,7 @@ func main() {
 		Clusters: clusterSubscription,
 		Nodes:    nodeSubscription,
 		Tasks:    taskSubscription,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageClusterOps")
 		os.Exit(1)
 	}
@@ -933,7 +945,7 @@ func main() {
 		Recorder:          mgr.GetEventRecorder("volumerebalancer-controller"),
 		LatencyPercentile: latencyPercentile,
 		Mover:             volumeMover,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeRebalancer")
 		os.Exit(1)
 	}
@@ -950,7 +962,7 @@ func main() {
 		// Resolves each storage node's data-network IP (the NICs endpoint) for the fio baseline;
 		// independent of the provisioner, so it is set for both prod and test paths.
 		APIClient: webapi.NewClient(),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeLatency")
 		os.Exit(1)
 	}
@@ -958,14 +970,14 @@ func main() {
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
 		EndpointResolver: controlPlaneEndpoint,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationPolicy")
 		os.Exit(1)
 	}
 	if err := (&controller.PVCAnnotationWatcher{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PVCAnnotationWatcher")
 		os.Exit(1)
 	}
@@ -973,7 +985,7 @@ func main() {
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
 		EndpointResolver: controlPlaneEndpoint,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationPair")
 		os.Exit(1)
 	}
@@ -983,7 +995,7 @@ func main() {
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		API:    &twonodecp.Adapter{Reader: mgr.GetClient(), EndpointResolver: controlPlaneEndpoint},
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TwoNodeArbitration")
 		os.Exit(1)
 	}
@@ -993,7 +1005,7 @@ func main() {
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		API:    &twonodecp.Adapter{Reader: mgr.GetClient(), EndpointResolver: controlPlaneEndpoint},
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageFenceRemediation")
 		os.Exit(1)
 	}
@@ -1001,7 +1013,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("replicationslot-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationSlot")
 		os.Exit(1)
 	}
@@ -1009,7 +1021,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("replicationops-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationOps")
 		os.Exit(1)
 	}
@@ -1017,7 +1029,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("volumegroupsnapshotops-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeGroupSnapshotOps")
 		os.Exit(1)
 	}
@@ -1040,7 +1052,7 @@ func main() {
 			Client:   mgr.GetClient(),
 			Scheme:   mgr.GetScheme(),
 			Recorder: mgr.GetEventRecorder("testfailover-controller"),
-		}).SetupWithManager(mgr); err != nil {
+		}).SetupWithManager(ctrlMgr); err != nil {
 			return fmt.Errorf("controller TestFailover: %w", err)
 		}
 		// A managed site's storage deployment is requested from the hub through
@@ -1049,7 +1061,7 @@ func main() {
 			Client:   mgr.GetClient(),
 			Scheme:   mgr.GetScheme(),
 			Recorder: mgr.GetEventRecorder("storagesitedeployment-controller"),
-		}).SetupWithManager(mgr); err != nil {
+		}).SetupWithManager(ctrlMgr); err != nil {
 			return fmt.Errorf("controller StorageSiteDeployment: %w", err)
 		}
 		return nil
@@ -1227,7 +1239,12 @@ func main() {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+	// Ready only while the admission webhooks serve: readiness is what puts the
+	// pod into the webhook Service's endpoints, and the controllers wait on those.
+	webhookServing := webhookReadyCheck(webhookReady, func() healthz.Checker {
+		return mgr.GetWebhookServer().StartedChecker()
+	})
+	if err := mgr.AddReadyzCheck("readyz", webhookServing); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
