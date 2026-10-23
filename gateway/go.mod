@@ -1,6 +1,6 @@
 module github.com/simplyblock/gateway
 
-go 1.26.2
+go 1.26.10
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.1
@@ -60,6 +60,7 @@ require (
 	github.com/ryanuber/go-glob v1.0.0 // indirect
 	github.com/segmentio/kafka-go v0.4.51 // indirect
 	github.com/smira/go-statsd v1.3.4 // indirect
+	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.74.0 // indirect
