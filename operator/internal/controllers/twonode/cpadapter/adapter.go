@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -38,7 +39,40 @@ func (a *Adapter) Get(ctx context.Context, cluster *simplyblockv1alpha2.StorageC
 	if err != nil || rec == nil {
 		return nil, err
 	}
-	return &twonode.Record{State: rec.State, Epoch: rec.Epoch, FencedNodes: rec.FencedNodes()}, nil
+	out := &twonode.Record{State: rec.State, Epoch: rec.Epoch, FencedNodes: rec.FencedNodes(),
+		Enabled: rec.Enabled, HostFencing: rec.HostFencing, ClientHosts: rec.ClientHosts}
+	if len(rec.HostFences) > 0 {
+		out.HostFences = make(map[string]twonode.HostFence, len(rec.HostFences))
+		for id, f := range rec.HostFences {
+			out.HostFences[id] = twonode.HostFence{State: f.State, On: f.On, Epoch: f.Epoch,
+				Since: time.UnixMilli(f.Since)}
+		}
+	}
+	return out, nil
+}
+
+// SetTwoNodeSettings writes the cluster's two-node settings.
+func (a *Adapter) SetTwoNodeSettings(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, arbitration, hostFencing bool,
+) error {
+	ctx = a.authenticate(ctx, cluster)
+	return a.client(ctx).SetTwoNodeSettings(ctx, cluster.Status.UUID, arbitration, hostFencing)
+}
+
+// SetClientHosts reports the host NQNs of a storage node's Kubernetes node.
+func (a *Adapter) SetClientHosts(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, nodeUUID string, hostNQNs []string,
+) error {
+	ctx = a.authenticate(ctx, cluster)
+	return a.client(ctx).SetArbitrationClientHosts(ctx, cluster.Status.UUID, nodeUUID, hostNQNs)
+}
+
+// ReleaseHostFence gives a fenced node's host access back.
+func (a *Adapter) ReleaseHostFence(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, nodeUUID string,
+) error {
+	ctx = a.authenticate(ctx, cluster)
+	return a.client(ctx).ReleaseHostFence(ctx, cluster.Status.UUID, nodeUUID)
 }
 
 // ReportFencing sends positive fencing evidence for a node, or clears it.

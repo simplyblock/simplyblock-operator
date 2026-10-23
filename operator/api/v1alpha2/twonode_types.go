@@ -15,9 +15,39 @@ import (
 const TaintStorageFenced = "storage.simplyblock.io/fenced"
 
 // TaintOutOfService is Kubernetes' own taint for a node that is known to be
-// shut down. The operator only reads it, as positive fencing evidence; it never
-// sets it (that is the job of OpenShift's remediation or an administrator).
+// shut down. The operator reads it as positive fencing evidence, except where its
+// own StorageFenceRemediation set it (AnnoOutOfServiceBy): that one follows the
+// arbiter's verdict and is not new evidence about the node.
 const TaintOutOfService = "node.kubernetes.io/out-of-service"
+
+// TaintOutOfServiceValue is the value the storage fence remediation gives the
+// out-of-service taint, the one the Kubernetes documentation uses.
+const TaintOutOfServiceValue = "nodeshutdown"
+
+// AnnoOutOfServiceBy marks a Node whose out-of-service taint the storage fence
+// remediation set, with OutOfServiceByStorageFence as its value, so that only
+// that remediation removes it and the operator does not report it to the
+// arbiter as fencing evidence.
+const AnnoOutOfServiceBy = "storage.simplyblock.io/out-of-service-by"
+
+// OutOfServiceByStorageFence is the AnnoOutOfServiceBy value of the storage
+// fence remediation.
+const OutOfServiceByStorageFence = "storage-fence-remediation"
+
+// ConditionStorageFenced is the Node condition the operator sets on the
+// Kubernetes node of a storage node whose host the control plane fenced: its
+// host NQNs are revoked on the peer, so nothing on the node can write to the
+// cluster any more (sbcli docs/design/two-node-kubernetes-fencing.md §3.4). A
+// NodeHealthCheck remediates on it.
+const ConditionStorageFenced = "StorageFenced"
+
+// Reasons of ConditionStorageFenced.
+const (
+	// StorageFencedReasonWitness: the arbiter fenced the node's host.
+	StorageFencedReasonWitness = "WitnessVerdict"
+	// StorageFencedReasonReleased: no fence in force for the node.
+	StorageFencedReasonReleased = "NotFenced"
+)
 
 // ArbitrationSpec tunes the control plane's arbitration for a cluster of
 // exactly two storage nodes. All fields are optional; omitted values take the
@@ -39,6 +69,44 @@ type ArbitrationSpec struct {
 	// +kubebuilder:validation:Minimum=500
 	// +kubebuilder:validation:Maximum=10000
 	LeaseTtlMs *int32 `json:"leaseTtlMs,omitempty"`
+
+	// HostFencing lets Kubernetes follow the arbiter's fence of a node whose
+	// state is unknown. The control plane revokes the node's NVMe host
+	// identities on its peer, the operator sets the StorageFenced condition on
+	// its Kubernetes node, and a NodeHealthCheck with a
+	// StorageFenceRemediationTemplate applies the out-of-service taint, so its
+	// pods and VMs restart on the peer within seconds. A partition then has a
+	// winner instead of stopping I/O on both nodes. Requires the NodeHealthCheck
+	// operator.
+	// +optional
+	HostFencing *bool `json:"hostFencing,omitempty"`
+}
+
+// HostFencingEnabled reports whether the cluster asks for host fencing: a
+// Dual cluster with arbitration and spec.arbitration.hostFencing on.
+func (c *StorageCluster) HostFencingEnabled() bool {
+	return c.Spec.ClusterMode == ClusterModeDual &&
+		c.Spec.EnableArbitration != nil && *c.Spec.EnableArbitration &&
+		c.Spec.Arbitration != nil && c.Spec.Arbitration.HostFencing != nil && *c.Spec.Arbitration.HostFencing
+}
+
+// HostFenceStatus is one host fence of the control plane, as the operator last
+// read it.
+type HostFenceStatus struct {
+	// Node is the Kubernetes node whose host is fenced.
+	Node string `json:"node"`
+
+	// State is the fence's state: revoking, revoked, releasable, restoring or
+	// unavailable (no host NQN known for the node).
+	State string `json:"state"`
+
+	// Winner is the Kubernetes node the fence was applied on.
+	// +optional
+	Winner string `json:"winner,omitempty"`
+
+	// Epoch is the arbiter's epoch of the verdict that fenced the node.
+	// +optional
+	Epoch int64 `json:"epoch,omitempty"`
 }
 
 // ArbitrationStatus is the operator's view of the arbiter's record for the
@@ -57,6 +125,12 @@ type ArbitrationStatus struct {
 	// on the arbiter's request.
 	// +optional
 	FencedNodes []string `json:"fencedNodes,omitempty"`
+
+	// HostFences are the control plane's host fences (spec.arbitration.hostFencing).
+	// +optional
+	// +listType=map
+	// +listMapKey=node
+	HostFences []HostFenceStatus `json:"hostFences,omitempty"`
 
 	// ObservedAt is when the operator last read the arbiter's record.
 	// +optional
@@ -91,6 +165,13 @@ type NodeRemediationStatus struct {
 	// leaves it unchanged, so the next reconcile retries.
 	// +optional
 	ReportedFenced *bool `json:"reportedFenced,omitempty"`
+
+	// ReportedHostNQNs are the NVMe host NQNs of the Kubernetes node the
+	// control plane last accepted for this storage node: the kernel default the
+	// CSI node plugin publishes, and the simplyblock form derived from the node's
+	// UID. A host fence revokes all of them on the peer.
+	// +optional
+	ReportedHostNQNs []string `json:"reportedHostNQNs,omitempty"`
 
 	// ObservedAt is when the operator last looked at the node.
 	// +optional

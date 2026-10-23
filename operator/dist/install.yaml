@@ -783,6 +783,17 @@ spec:
                         maximum: 4500
                         minimum: 500
                         type: integer
+                      hostFencing:
+                        description: |-
+                          HostFencing lets Kubernetes follow the arbiter's fence of a node whose
+                          state is unknown. The control plane revokes the node's NVMe host
+                          identities on its peer, the operator sets the StorageFenced condition on
+                          its Kubernetes node, and a NodeHealthCheck with a
+                          StorageFenceRemediationTemplate applies the out-of-service taint, so its
+                          pods and VMs restart on the peer within seconds. A partition then has a
+                          winner instead of stopping I/O on both nodes. Requires the NodeHealthCheck
+                          operator.
+                        type: boolean
                       leaseTtlMs:
                         description: |-
                           LeaseTtlMs is how long a lease from the arbiter stays valid. It only
@@ -7584,6 +7595,17 @@ spec:
                     maximum: 4500
                     minimum: 500
                     type: integer
+                  hostFencing:
+                    description: |-
+                      HostFencing lets Kubernetes follow the arbiter's fence of a node whose
+                      state is unknown. The control plane revokes the node's NVMe host
+                      identities on its peer, the operator sets the StorageFenced condition on
+                      its Kubernetes node, and a NodeHealthCheck with a
+                      StorageFenceRemediationTemplate applies the out-of-service taint, so its
+                      pods and VMs restart on the peer within seconds. A partition then has a
+                      winner instead of stopping I/O on both nodes. Requires the NodeHealthCheck
+                      operator.
+                    type: boolean
                   leaseTtlMs:
                     description: |-
                       LeaseTtlMs is how long a lease from the arbiter stays valid. It only
@@ -8490,6 +8512,38 @@ spec:
                     items:
                       type: string
                     type: array
+                  hostFences:
+                    description: HostFences are the control plane's host fences (spec.arbitration.hostFencing).
+                    items:
+                      description: |-
+                        HostFenceStatus is one host fence of the control plane, as the operator last
+                        read it.
+                      properties:
+                        epoch:
+                          description: Epoch is the arbiter's epoch of the verdict
+                            that fenced the node.
+                          format: int64
+                          type: integer
+                        node:
+                          description: Node is the Kubernetes node whose host is fenced.
+                          type: string
+                        state:
+                          description: |-
+                            State is the fence's state: revoking, revoked, releasable, restoring or
+                            unavailable (no host NQN known for the node).
+                          type: string
+                        winner:
+                          description: Winner is the Kubernetes node the fence was
+                            applied on.
+                          type: string
+                      required:
+                      - node
+                      - state
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - node
+                    x-kubernetes-list-type: map
                   message:
                     description: Message explains why the record could not be read
                       or applied.
@@ -10855,6 +10909,15 @@ spec:
                       out of service. Unset until the first report succeeds; a failed report
                       leaves it unchanged, so the next reconcile retries.
                     type: boolean
+                  reportedHostNQNs:
+                    description: |-
+                      ReportedHostNQNs are the NVMe host NQNs of the Kubernetes node the
+                      control plane last accepted for this storage node: the kernel default the
+                      CSI node plugin publishes, and the simplyblock form derived from the node's
+                      UID. A host fence revokes all of them on the peer.
+                    items:
+                      type: string
+                    type: array
                   storageFencedEpoch:
                     description: |-
                       StorageFencedEpoch is the epoch in the storage-fenced taint the operator
@@ -12962,6 +13025,17 @@ spec:
                             maximum: 4500
                             minimum: 500
                             type: integer
+                          hostFencing:
+                            description: |-
+                              HostFencing lets Kubernetes follow the arbiter's fence of a node whose
+                              state is unknown. The control plane revokes the node's NVMe host
+                              identities on its peer, the operator sets the StorageFenced condition on
+                              its Kubernetes node, and a NodeHealthCheck with a
+                              StorageFenceRemediationTemplate applies the out-of-service taint, so its
+                              pods and VMs restart on the peer within seconds. A partition then has a
+                              winner instead of stopping I/O on both nodes. Requires the NodeHealthCheck
+                              operator.
+                            type: boolean
                           leaseTtlMs:
                             description: |-
                               LeaseTtlMs is how long a lease from the arbiter stays valid. It only
@@ -14804,6 +14878,14 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - nodes/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
   - persistentvolumeclaims
   verbs:
   - create
@@ -15107,6 +15189,14 @@ rules:
   - list
   - watch
 - apiGroups:
+  - storage.k8s.io
+  resources:
+  - volumeattachments
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - storage.simplyblock.io
   resources:
   - backupimports
@@ -15167,6 +15257,7 @@ rules:
   - storageclusterops/finalizers
   - storageclusters/finalizers
   - storagedeviceops/finalizers
+  - storagefenceremediations/finalizers
   - storagenodeops/finalizers
   - storagenodes/finalizers
   - storagepoolops/finalizers
@@ -15201,6 +15292,7 @@ rules:
   - storageclusters/status
   - storagedeviceops/status
   - storagedevices/status
+  - storagefenceremediations/status
   - storagegroupbackups/status
   - storagenodeops/status
   - storagenodes/status
@@ -15230,6 +15322,17 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - storagefenceremediations
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagefenceremediationtemplates
   - storagegroupbackups
   - storagenodesets
   - volumegroupsnapshotops
@@ -15362,6 +15465,36 @@ rules:
   verbs:
   - get
   - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-operator
+    rbac.ext-remediation/aggregate-to-ext-remediation: "true"
+  name: simplyblock-operator-simplyblock-storage-fence-ext-remediation
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagefenceremediationtemplates
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagefenceremediations
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

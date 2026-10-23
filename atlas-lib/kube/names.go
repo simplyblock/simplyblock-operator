@@ -248,6 +248,14 @@ const (
 	// DeprecatedAnnoHostID is the pre-rename form of AnnoHostID, still
 	// honored for backward compatibility.
 	DeprecatedAnnoHostID = "simplybk/host-id"
+	// AnnoNVMeHostNQN is the host NQN the node's kernel presents when the CSI
+	// node plugin connects a volume without naming one (/etc/nvme/hostnqn,
+	// derived from the node's persisted hostid). The node plugin publishes it
+	// on its Node; the operator reports it, beside the UID-derived form of
+	// nqn.Host, to the control plane, which revokes both when it fences the
+	// node's host on a two-node cluster
+	// (sbcli docs/design/two-node-kubernetes-fencing.md, section 3.1).
+	AnnoNVMeHostNQN = "storage.simplyblock.io/nvme-host-nqn"
 	// Finalizer guards a PV/PVC from deletion until the backing logical
 	// volume is released.
 	Finalizer = "storage.simplyblock.io/lvol-protection"

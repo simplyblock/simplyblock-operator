@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -305,7 +306,7 @@ func BuildStorageNodeDaemonSet(
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "simplyblock-storage-node-sa",
 					HostNetwork:        true,
-					Tolerations:        wl.Tolerations,
+					Tolerations:        storageNodeAgentTolerations(sn, wl),
 					NodeSelector: map[string]string{
 						kube.LabelStorageNodeSet: sn.Name,
 					},
@@ -745,4 +746,27 @@ func skipKubeletConfiguration(wl *simplyblockv1alpha2.StorageNodesSpec) string {
 		return "false"
 	}
 	return "true"
+}
+
+// storageNodeAgentTolerations is what the storage-node agent tolerates: the
+// configured tolerations, and on a cluster with host fencing the out-of-service
+// taint as well. The storage fence remediation puts that taint on a fenced
+// node, and the control plane heals the node through its agent; evicted, the
+// agent would hold the heal, and with it the release of the taint, forever
+// (sbcli docs/design/two-node-kubernetes-fencing.md §1). The SPDK pods the
+// control plane starts tolerate every NoExecute taint already.
+func storageNodeAgentTolerations(
+	cluster *simplyblockv1alpha2.StorageCluster, wl *simplyblockv1alpha2.StorageNodesSpec,
+) []corev1.Toleration {
+	if !cluster.HostFencingEnabled() {
+		return wl.Tolerations
+	}
+	for _, t := range wl.Tolerations {
+		if (t.Key == simplyblockv1alpha2.TaintOutOfService || (t.Key == "" && t.Operator == corev1.TolerationOpExists)) &&
+			(t.Effect == "" || t.Effect == corev1.TaintEffectNoExecute) {
+			return wl.Tolerations
+		}
+	}
+	return append(slices.Clone(wl.Tolerations), corev1.Toleration{Key: simplyblockv1alpha2.TaintOutOfService,
+		Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute})
 }

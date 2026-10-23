@@ -285,6 +285,18 @@ spec:
       kind: StorageClusterOps
       name: storageclusterops.storage.simplyblock.io
       version: v1alpha1
+    - description: StorageFenceRemediation applies the out-of-service taint to a node
+        whose host the two-node arbiter fenced; NodeHealthCheck creates and deletes it.
+      displayName: Storage Fence Remediation
+      kind: StorageFenceRemediation
+      name: storagefenceremediations.storage.simplyblock.io
+      version: v1alpha2
+    - description: StorageFenceRemediationTemplate is what a NodeHealthCheck names as
+        its remediation template to remediate storage-fenced nodes.
+      displayName: Storage Fence Remediation Template
+      kind: StorageFenceRemediationTemplate
+      name: storagefenceremediationtemplates.storage.simplyblock.io
+      version: v1alpha2
     - description: StorageDevice is the Schema for the storagedevices API.
       displayName: Storage Device
       kind: StorageDevice

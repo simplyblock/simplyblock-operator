@@ -279,6 +279,7 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	go advertiseVDOCapability(kubeClient, nodeName)
 	go advertiseKVMCapability(kubeClient, nodeName)
 	go advertiseSubnets(kubeClient, nodeName)
+	go advertiseHostNQN(kubeClient, nodeName)
 
 	return ns, nil
 }
@@ -309,6 +310,16 @@ func advertiseSubnets(kubeClient kubernetes.Interface, nodeName string) {
 	err := node.AdvertiseSubnets(context.Background(), kubeClient, nodeName)
 	if err != nil {
 		klog.Errorf("failed to advertise subnets for node %s: %v", nodeName, err)
+	}
+}
+
+// advertiseHostNQN publishes the kernel's default NVMe host NQN, which the
+// control plane revokes on the peer when it fences this node's host on a
+// two-node cluster, in the background for the same reason as the VDO probe.
+func advertiseHostNQN(kubeClient kubernetes.Interface, nodeName string) {
+	err := node.AdvertiseHostNQN(context.Background(), kubeClient, nodeName)
+	if err != nil {
+		klog.Errorf("failed to advertise the NVMe host NQN for node %s: %v", nodeName, err)
 	}
 }
 
