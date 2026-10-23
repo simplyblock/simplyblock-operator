@@ -39,6 +39,11 @@ const (
 	// that is not a sync-replication cluster, which no stretched cluster can be;
 	// the adoption is refused rather than joining it.
 	SyncReplicationMismatch = "SyncReplicationMismatch"
+	// ForeignNodeOnSite says a follower's site already has a node in the backend
+	// cluster that none of this site's StorageNodes is, so another installation
+	// holds the site; the adoption is held rather than putting two operators on
+	// one site's nodes.
+	ForeignNodeOnSite = "ForeignNodeOnSite"
 	// SiteRecordChanged says the control plane's record of a lost site changed:
 	// a site was recorded out, its drain or fence moved on, or it returned.
 	SiteRecordChanged = "SiteRecordChanged"

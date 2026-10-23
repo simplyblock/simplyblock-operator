@@ -12,6 +12,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -22,6 +23,7 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 func upgradeSecretName(cluster *simplyblockv1alpha2.StorageCluster) string {
@@ -45,9 +47,20 @@ func (r *StorageClusterReconciler) awaitLeader(
 		return ctrl.Result{RequeueAfter: clusterRetry}, r.note(ctx, cluster,
 			"waiting for the control plane to become ready")
 	}
-	if _, found, err := r.upgradeClaim(ctx, cluster); err != nil {
+	if claim, found, err := r.upgradeClaim(ctx, cluster); err != nil {
 		return ctrl.Result{RequeueAfter: clusterRetry}, err
 	} else if found {
+		// The preflight (§5.4) runs here rather than in Adopting: what it finds
+		// is a cluster that cannot be adopted yet, and a hold in this step has
+		// no deadline to run out.
+		reason, refusal, err := r.followerPreflight(ctx, cluster, claim)
+		if err != nil {
+			return ctrl.Result{RequeueAfter: clusterRetry}, err
+		}
+		if refusal != "" {
+			return ctrl.Result{RequeueAfter: clusterRetry}, r.noteOnce(ctx, cluster,
+				corev1.EventTypeWarning, reason, refusal)
+		}
 		return r.enterCreationStep(ctx, cluster, machine,
 			simplyblockv1alpha2.StorageClusterStepAdopting)
 	}
@@ -61,6 +74,50 @@ func (r *StorageClusterReconciler) awaitLeader(
 	}
 	return ctrl.Result{RequeueAfter: clusterRetry}, r.noteOnce(ctx, cluster,
 		corev1.EventTypeNormal, PeerClusterMissing, message)
+}
+
+// followerPreflight checks the backend cluster the hub handed a follower before
+// the follower adopts it (§5.4), and reports the event reason and the refusal, or
+// "" when the adoption may go ahead. The cluster must be a sync-replication
+// cluster, and no node on the follower's own site may be another installation's:
+// one whose UUID none of this site's StorageNodes carries.
+func (r *StorageClusterReconciler) followerPreflight(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, claim adoption,
+) (string, string, error) {
+	if refusal := refuseFollowerAdoption(cluster, claim); refusal != "" {
+		return SyncReplicationMismatch, refusal, nil
+	}
+
+	nodes, err := r.API.StorageNodes(webapi.WithBearerToken(ctx, claim.Secret), claim.UUID)
+	if err != nil {
+		return "", "", fmt.Errorf("listing the nodes of backend cluster %s: %w", claim.UUID, err)
+	}
+	var local simplyblockv1alpha2.StorageNodeList
+	if err := r.List(ctx, &local, client.InNamespace(cluster.Namespace)); err != nil {
+		return "", "", err
+	}
+	own := map[string]struct{}{}
+	for i := range local.Items {
+		if node := &local.Items[i]; !node.IsRemote() && node.Status.UUID != "" {
+			own[node.Status.UUID] = struct{}{}
+		}
+	}
+	var foreign []string
+	for _, node := range nodes {
+		if node.Site != cluster.Spec.Stretched.Site {
+			continue
+		}
+		if _, ours := own[node.UUID]; !ours {
+			foreign = append(foreign, node.UUID)
+		}
+	}
+	if len(foreign) > 0 {
+		return ForeignNodeOnSite, fmt.Sprintf(
+			"follower site: backend cluster %s already has node(s) %s on site %s that no StorageNode "+
+				"of this site carries, so another installation holds the site; the adoption is held",
+			claim.UUID, strings.Join(foreign, ", "), cluster.Spec.Stretched.Site), nil
+	}
+	return "", "", nil
 }
 
 // refuseFollowerAdoption reports why a follower cannot take over what it was

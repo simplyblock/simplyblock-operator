@@ -7,6 +7,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -212,6 +213,34 @@ func TestEachDraftIsSizedAsOneSiteOfASyncCluster(t *testing.T) {
 	}
 	if got.Status.Phase != simplyblockv1alpha2.StretchedClusterPhaseDrafted {
 		t.Errorf("phase = %q, want Drafted", got.Status.Phase)
+	}
+}
+
+// §5.4: a site whose StorageCluster holds in its preflight states why in its
+// status message, and the hub carries that reason into status.sites[], so the
+// hold reads from the hub without a site kubeconfig.
+func TestTheHubShowsWhyASitesStorageClusterIsHeld(t *testing.T) {
+	const reason = "follower site: backend cluster c0ffee00 already has node(s) f0e1 on site b"
+	sc := newStretched(func(s *simplyblockv1alpha2.StretchedCluster) { s.Spec.Approved = true })
+	r, cl, _ := newStretchedReconciler(t, sc)
+	got := reconcileStretched(t, r, cl, 2)
+	for _, site := range got.Spec.Sites {
+		project(t, cl, got, site.Cluster, site.Site, "draft", stretchedDraft(got, true))
+	}
+	got = reconcileStretched(t, r, cl, 1)
+	project(t, cl, got, strLeaderMC, strLeaderSite, "cluster",
+		projectedCluster(simplyblockv1alpha2.StorageClusterPhaseProvisioning, ""))
+	got = reconcileStretched(t, r, cl, 1)
+	held := projectedCluster(simplyblockv1alpha2.StorageClusterPhaseCreating, "")
+	held.Status.UUID = ""
+	held.Status.Message = reason
+	project(t, cl, got, strFollowerMC, strFollowerSit, "cluster", held)
+	got = reconcileStretched(t, r, cl, 1)
+
+	for _, s := range got.Status.Sites {
+		if s.Cluster == strFollowerMC && !strings.Contains(s.Message, reason) {
+			t.Errorf("status.sites[%s].message = %q, want the StorageCluster's hold reason %q", s.Cluster, s.Message, reason)
+		}
 	}
 }
 

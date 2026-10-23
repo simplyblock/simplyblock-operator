@@ -220,11 +220,15 @@ func (f siteFlow) read(ctx context.Context, c client.Client, work *workv1.Manife
 		return reading, err
 	}
 	sc := &simplyblockv1alpha2.StorageSiteCluster{Name: clusterName}
+	// heldBy is the StorageCluster's own status message: while it is still being
+	// created, the reason a step holds it, such as a failed preflight (§5.4).
+	var heldBy string
 	if haveSC {
 		var cluster simplyblockv1alpha2.StorageCluster
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(scObj, &cluster); err == nil {
 			sc.UUID = cluster.Status.UUID
 			sc.Phase = string(cluster.Status.Phase)
+			heldBy = cluster.Status.Message
 			sc.Pool = cluster.Annotations[annotationStorageClusterDefaultPool]
 			if cluster.Status.Stretched != nil {
 				reading.SiteRecord = cluster.Status.Stretched.SiteRecord
@@ -245,9 +249,12 @@ func (f siteFlow) read(ctx context.Context, c client.Client, work *workv1.Manife
 		return reading.at(simplyblockv1alpha2.StorageSiteDeploymentPhaseFailed,
 			fmt.Sprintf("StorageCluster %s is Unavailable after the expansion", clusterName)), nil
 	}
-	return reading.at(simplyblockv1alpha2.StorageSiteDeploymentPhaseDeploying, fmt.Sprintf(
-		"draft %s, StorageCluster %s %s", orDefault(string(cdc.Status.Phase), "Expanding"),
-		clusterName, orDefault(sc.Phase, "not reported yet"))), nil
+	message := fmt.Sprintf("draft %s, StorageCluster %s %s", orDefault(string(cdc.Status.Phase), "Expanding"),
+		clusterName, orDefault(sc.Phase, "not reported yet"))
+	if heldBy != "" {
+		message += ": " + heldBy
+	}
+	return reading.at(simplyblockv1alpha2.StorageSiteDeploymentPhaseDeploying, message), nil
 }
 
 func (r siteReading) at(phase simplyblockv1alpha2.StorageSiteDeploymentPhase, message string) siteReading {

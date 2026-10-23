@@ -192,12 +192,15 @@ File: `atlas-lib/link/relay_test.go`, `fleet/internal/forwarder/forwarder_test.g
 
 File: `operator/internal/controllers/cluster/storagecluster_preflight_test.go`
 
-| #    | Scenario                                                                                                                        | Type     | Test |
-|------|---------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-63 | The reachability read answers every worker reachable: the create proceeds                                                       | Positive | —    |
-| U-64 | One worker unreachable: the cluster holds in `CheckingControlPlane` with the worker named                                       | Negative | —    |
-| U-65 | The reachability route is absent (`404`): the preflight falls back to the node API probe and does not fail on the missing route | Boundary | —    |
-| U-66 | The follower finds a node of its own site already added by another installation: refused with the node named                    | Negative | —    |
+| #     | Scenario                                                                                                                                                                                                           | Type       | Test                                                     |
+|-------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------|
+| U-63  | The reachability read answers every worker reachable: the create proceeds                                                                                                                                          | Positive   | —                                                        |
+| U-64  | One worker unreachable: the cluster holds in `CheckingControlPlane` with the worker named                                                                                                                          | Negative   | —                                                        |
+| U-65  | The reachability route is absent (`404`): the preflight falls back to the node API probe and does not fail on the missing route                                                                                    | Boundary   | —                                                        |
+| U-66  | The follower finds a node of its own site already added by another installation: refused with the node named                                                                                                       | Negative   | `TestAFollowerWhoseSiteHasAnotherInstallationsNodeHolds` |
+| U-102 | A follower handed a backend cluster without sync replication holds in `CheckingControlPlane` with the reason, before `Adopting`, so no deadline runs out. Regression: 2026-10-22-follower-sync-refusal-in-adopting | Regression | `TestAFollowerHandedANonSyncClusterHoldsBeforeAdopting`  |
+| U-103 | A node on the follower's site that one of the site's own `StorageNode`s carries is not another installation's: the follower adopts over it                                                                         | Boundary   | `TestAFollowerAdoptsOverItsOwnSitesNodes`                |
+| U-104 | The hub appends a site's `StorageCluster` status message, the reason a preflight holds it, to `status.sites[].message`                                                                                             | Positive   | `TestTheHubShowsWhyASitesStorageClusterIsHeld`           |
 
 ---
 
@@ -348,7 +351,7 @@ Phase 1 is built and its unit rows are covered, with these left open:
 | Rows       | Why                                                                                                                                                          |
 |------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | U-05, U-82 | The cluster record has no `leader_site` yet (P0-2), so neither a role conflict at adoption nor a role dropped on a record change can be observed             |
-| U-63–U-66  | The preflight of §5.4 waits on the `reachability` route (P0-2); without it the only check would be a probe the operator cannot run from a site               |
+| U-63–U-65  | The reachability check of §5.4 waits on the `reachability` route (P0-2); without it the only check would be a probe the operator cannot run from a site      |
 | U-80       | A follower drives no cluster-wide operation by admission (U-14) and on a role swap (U-08); no test reads a cluster-wide task event on a follower directly    |
 | U-87       | A remote node has no worker, and the workload's node set has always skipped one; the guard is structural, and no test drives the workload with a remote node |
 | U-92       | A remote node's devices are owned by it like any node's, so the existing owner-reference cascade removes them; no test deletes a remote node with devices    |

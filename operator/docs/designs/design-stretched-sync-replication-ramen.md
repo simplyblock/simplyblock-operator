@@ -10,12 +10,12 @@
 
 ## Phasing Overview
 
-| Phase       | Status                                     | Scope                                                                                                                                                                        | Sections       |
-|-------------|--------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------|
-| **Phase 1** | Implemented, but for the preflight of §5.4 | Topology: the control plane on the OCM hub, one backend cluster whose nodes live in two Kubernetes clusters, a leader operator that creates it and a follower that adopts it | §3, §4, §5, §6 |
-| **Phase 2** | Planned                                    | The site link: the fleet add-on's agent as the forwarder, the hub as the relay, the operators and CSI plugins of both sites as peers of one gRPC fabric                      | §7             |
-| **Phase 3** | Planned                                    | RamenDR in sync mode: the metro `DRPolicy`, the placement-driven flip on stage without `VolumeReplication`, cluster fencing through csi-addons `NetworkFence`                | §8, §9, §10    |
-| **Phase 4** | Planned                                    | Leader hand-over when the leader site is lost, and the day-two operations of a stretched cluster                                                                             | §11            |
+| Phase       | Status                                                | Scope                                                                                                                                                                        | Sections       |
+|-------------|-------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------|
+| **Phase 1** | Implemented, but for §5.4's reachability check (P0-2) | Topology: the control plane on the OCM hub, one backend cluster whose nodes live in two Kubernetes clusters, a leader operator that creates it and a follower that adopts it | §3, §4, §5, §6 |
+| **Phase 2** | Planned                                               | The site link: the fleet add-on's agent as the forwarder, the hub as the relay, the operators and CSI plugins of both sites as peers of one gRPC fabric                      | §7             |
+| **Phase 3** | Planned                                               | RamenDR in sync mode: the metro `DRPolicy`, the placement-driven flip on stage without `VolumeReplication`, cluster fencing through csi-addons `NetworkFence`                | §8, §9, §10    |
+| **Phase 4** | Planned                                               | Leader hand-over when the leader site is lost, and the day-two operations of a stretched cluster                                                                             | §11            |
 
 Phase 1 stands the cluster up and is testable without Ramen: two sites, one control plane, volumes served from either site by the backend's own site model. Phase 2 gives the two operators and the hub one addressable fabric, which Phase 1 can live without (it crosses nothing but `ManifestWork`) and Phase 3 and 4 need. Phase 3 is the DR behavior. Phase 4 is what happens to the operator roles when a whole site is gone for a long time.
 
@@ -284,9 +284,11 @@ Before the leader posts the create, and before the follower adds a node, the ope
 
 - the control plane's `GET /_meta/ready` answers, and the control plane lists this Kubernetes cluster's workers' management addresses as reachable (a new `GET /clusters/{id}/reachability?site=` read, P0-2, which runs the monitor's probe once on demand);
 - for the follower, the cluster exists, is a sync cluster, and has no node yet on the follower's site from another installation;
-- `enableSyncReplication` matches on both configs, which the reconciler guarantees and the site webhook re-checks.
+- `enableSyncReplication` matches on both configs, which the reconciler guarantees and a CEL rule on `StorageCluster` re-checks: `stretched` is refused without `enableSyncReplication: true`, so both sites' configs carry it, and the follower's check above confirms the backend cluster agrees.
 
-A failed preflight holds the `StorageCluster` in `CheckingControlPlane` with the reason, which the hub reads through the site's `ManagedClusterView` into `StretchedCluster.status.sites[]`.
+A failed preflight holds the `StorageCluster` in `CheckingControlPlane` with the reason, which the hub reads through the site's `ManagedClusterView` into `StretchedCluster.status.sites[]`, appended to the site's message. The follower's checks run in its wait for the leader, before `Adopting`, so a hold has no deadline: a follower handed the wrong cluster waits with the reason rather than failing an adoption it never began. A node on the follower's site counts as another installation's when its UUID is on none of the site's own `StorageNode`s, so a follower whose `StorageCluster` is recreated over nodes it added before adopts again.
+
+The reachability check waits on the `reachability` route (P0-2). Until it exists, the preflight checks readiness and the follower's cluster, and an unreachable worker surfaces when the node add fails.
 
 ---
 
