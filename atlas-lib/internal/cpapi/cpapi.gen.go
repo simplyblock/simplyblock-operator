@@ -693,6 +693,24 @@ func (e TaskDTOStatus) Valid() bool {
 	}
 }
 
+// Defines values for UpdatableClusterParametersTwoNodeFencingAuthority.
+const (
+	Pacemaker UpdatableClusterParametersTwoNodeFencingAuthority = "pacemaker"
+	Witness   UpdatableClusterParametersTwoNodeFencingAuthority = "witness"
+)
+
+// Valid indicates whether the value is a known member of the UpdatableClusterParametersTwoNodeFencingAuthority enum.
+func (e UpdatableClusterParametersTwoNodeFencingAuthority) Valid() bool {
+	switch e {
+	case Pacemaker:
+		return true
+	case Witness:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateParamsHaType.
 const (
 	CreateParamsHaTypeHa     CreateParamsHaType = "ha"
@@ -2014,9 +2032,14 @@ type UnresolvedBackupConfig struct {
 
 // UpdatableClusterParameters defines model for UpdatableClusterParameters.
 type UpdatableClusterParameters struct {
-	Name               *string `json:"name,omitempty"`
-	TwoNodeArbitration *bool   `json:"two_node_arbitration,omitempty"`
+	Name                    *string                                            `json:"name,omitempty"`
+	TwoNodeArbitration      *bool                                              `json:"two_node_arbitration,omitempty"`
+	TwoNodeFencingAuthority *UpdatableClusterParametersTwoNodeFencingAuthority `json:"two_node_fencing_authority,omitempty"`
+	TwoNodeHostFencing      *bool                                              `json:"two_node_host_fencing,omitempty"`
 }
+
+// UpdatableClusterParametersTwoNodeFencingAuthority defines model for UpdatableClusterParameters.TwoNodeFencingAuthority.
+type UpdatableClusterParametersTwoNodeFencingAuthority string
 
 // UpdatableLVolParams defines model for UpdatableLVolParams.
 type UpdatableLVolParams struct {
@@ -2122,6 +2145,12 @@ type UnderscoreBackupSnapshotParams struct {
 	SnapshotId string `json:"snapshot_id"`
 }
 
+// UnderscoreClientHost defines model for _ClientHost.
+type UnderscoreClientHost struct {
+	HostNqn string `json:"host_nqn"`
+	NodeId  string `json:"node_id"`
+}
+
 // UnderscoreCloneParams defines model for _CloneParams.
 type UnderscoreCloneParams struct {
 	ConsistencyGroup       *string `json:"consistency_group,omitempty"`
@@ -2169,6 +2198,11 @@ type CreateParamsHaType string
 
 // CreateParamsPriorityClass defines model for CreateParams.PriorityClass.
 type CreateParamsPriorityClass int
+
+// UnderscoreHostFenceRelease defines model for _HostFenceRelease.
+type UnderscoreHostFenceRelease struct {
+	NodeId string `json:"node_id"`
+}
 
 // UnderscoreImportFromBucket Import whatever a bucket turns out to contain.
 //
@@ -2615,6 +2649,12 @@ type ClustersUpdateApiV2ClustersClusterIdPutJSONRequestBody = UpdatableClusterPa
 
 // ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody defines body for ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost for application/json ContentType.
 type ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody = UnderscoreReplicationParams
+
+// ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutJSONRequestBody defines body for ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut for application/json ContentType.
+type ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutJSONRequestBody = UnderscoreClientHost
+
+// ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostJSONRequestBody defines body for ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost for application/json ContentType.
+type ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostJSONRequestBody = UnderscoreHostFenceRelease
 
 // ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostJSONRequestBody defines body for ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost for application/json ContentType.
 type ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostJSONRequestBody = UnderscoreOverride
@@ -3215,6 +3255,50 @@ type ClientInterface interface {
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/arbitration/ (the `ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet` operationId).
 	ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutWithBody Clusters:Arbitration:Client-Host
+	//
+	// The operator reports the kernel NVMe host NQN of the Kubernetes node a
+	// storage node runs on; a host fence revokes it on the peer
+	// (docs/design/two-node-kubernetes-fencing.md, section 3.1). Empty clears it.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/client-host (the `ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut` operationId).
+	ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut Clusters:Arbitration:Client-Host
+	//
+	// The operator reports the kernel NVMe host NQN of the Kubernetes node a
+	// storage node runs on; a host fence revokes it on the peer
+	// (docs/design/two-node-kubernetes-fencing.md, section 3.1). Empty clears it.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/client-host (the `ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut` operationId).
+	ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostWithBody Clusters:Arbitration:Host-Fence:Release
+	//
+	// The operator verified that the node is clean (Ready, no pod from before
+	// the fence): give its host access back (contract section 3.2). Accepted only
+	// once the storage no longer needs the fence (state ``releasable``).
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/arbitration/host-fence/release (the `ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost` operationId).
+	ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost Clusters:Arbitration:Host-Fence:Release
+	//
+	// The operator verified that the node is clean (Ready, no pod from before
+	// the fence): give its host access back (contract section 3.2). Accepted only
+	// once the storage no longer needs the fence (state ``releasable``).
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/arbitration/host-fence/release (the `ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost` operationId).
+	ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithBody Clusters:Arbitration:Override
 	//
 	// Operator decision when the arbiter cannot decide: ``winner`` leads every
@@ -3595,8 +3679,10 @@ type ClientInterface interface {
 	// Enable or disable group replication (design-csi-addons-replication.md
 	// §14.4): a policy id attaches the whole group to that group replication
 	// policy; ``null`` detaches it (the group and its members stay grouped by
-	// label). A refused attach (not a consistency-group policy, missing policy) is
-	// a 409.
+	// label). A refused attach is a 409: not a consistency-group policy, a missing
+	// policy, or a member that cannot start replicating under it (a policy whose
+	// target is the group's own cluster, refused by replication_start). Unmapped,
+	// the last was an unhandled 500 (run 20261020-1300-ebs, test 2).
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -3608,8 +3694,10 @@ type ClientInterface interface {
 	// Enable or disable group replication (design-csi-addons-replication.md
 	// §14.4): a policy id attaches the whole group to that group replication
 	// policy; ``null`` detaches it (the group and its members stay grouped by
-	// label). A refused attach (not a consistency-group policy, missing policy) is
-	// a 409.
+	// label). A refused attach is a 409: not a consistency-group policy, a missing
+	// policy, or a member that cannot start replicating under it (a policy whose
+	// target is the group's own cluster, refused by replication_start). Unmapped,
+	// the last was an unhandled 500 (run 20261020-1300-ebs, test 2).
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -4807,6 +4895,90 @@ func (c *Client) ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet(ctx 
 	return c.Client.Do(req)
 }
 
+// ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutWithBody Clusters:Arbitration:Client-Host
+//
+// The operator reports the kernel NVMe host NQN of the Kubernetes node a
+// storage node runs on; a host fence revokes it on the peer
+// (docs/design/two-node-kubernetes-fencing.md, section 3.1). Empty clears it.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/client-host (the `ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut` operationId).
+func (c *Client) ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutRequestWithBody(c.Server, clusterId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut Clusters:Arbitration:Client-Host
+//
+// The operator reports the kernel NVMe host NQN of the Kubernetes node a
+// storage node runs on; a host fence revokes it on the peer
+// (docs/design/two-node-kubernetes-fencing.md, section 3.1). Empty clears it.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/client-host (the `ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut` operationId).
+func (c *Client) ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutRequest(c.Server, clusterId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostWithBody Clusters:Arbitration:Host-Fence:Release
+//
+// The operator verified that the node is clean (Ready, no pod from before
+// the fence): give its host access back (contract section 3.2). Accepted only
+// once the storage no longer needs the fence (state “releasable“).
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/arbitration/host-fence/release (the `ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost` operationId).
+func (c *Client) ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostRequestWithBody(c.Server, clusterId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost Clusters:Arbitration:Host-Fence:Release
+//
+// The operator verified that the node is clean (Ready, no pod from before
+// the fence): give its host access back (contract section 3.2). Accepted only
+// once the storage no longer needs the fence (state “releasable“).
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/arbitration/host-fence/release (the `ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost` operationId).
+func (c *Client) ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostRequest(c.Server, clusterId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithBody Clusters:Arbitration:Override
 //
 // Operator decision when the arbiter cannot decide: “winner“ leads every
@@ -5624,8 +5796,10 @@ func (c *Client) ClustersConsistencyGroupsMigrationStartApiV2ClustersClusterIdCo
 // Enable or disable group replication (design-csi-addons-replication.md
 // §14.4): a policy id attaches the whole group to that group replication
 // policy; “null“ detaches it (the group and its members stay grouped by
-// label). A refused attach (not a consistency-group policy, missing policy) is
-// a 409.
+// label). A refused attach is a 409: not a consistency-group policy, a missing
+// policy, or a member that cannot start replicating under it (a policy whose
+// target is the group's own cluster, refused by replication_start). Unmapped,
+// the last was an unhandled 500 (run 20261020-1300-ebs, test 2).
 //
 // Takes any type of body and a specified content type.
 //
@@ -5647,8 +5821,10 @@ func (c *Client) ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClust
 // Enable or disable group replication (design-csi-addons-replication.md
 // §14.4): a policy id attaches the whole group to that group replication
 // policy; “null“ detaches it (the group and its members stay grouped by
-// label). A refused attach (not a consistency-group policy, missing policy) is
-// a 409.
+// label). A refused attach is a 409: not a consistency-group policy, a missing
+// policy, or a member that cannot start replicating under it (a policy whose
+// target is the group's own cluster, refused by replication_start). Unmapped,
+// the last was an unhandled 500 (run 20261020-1300-ebs, test 2).
 //
 // Takes a body of the `application/json` content type.
 //
@@ -8479,6 +8655,100 @@ func NewClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetRequest(server
 	if err != nil {
 		return nil, err
 	}
+
+	return req, nil
+}
+
+// NewClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutRequest calls the generic ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut builder with application/json body
+func NewClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutRequest(server string, clusterId openapi_types.UUID, body ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutRequestWithBody(server, clusterId, "application/json", bodyReader)
+}
+
+// NewClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutRequestWithBody constructs an http.Request for the ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut method, with any body, and a specified content type
+func NewClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/arbitration/client-host", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPut, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostRequest calls the generic ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost builder with application/json body
+func NewClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostRequest(server string, clusterId openapi_types.UUID, body ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostRequestWithBody(server, clusterId, "application/json", bodyReader)
+}
+
+// NewClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostRequestWithBody constructs an http.Request for the ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost method, with any body, and a specified content type
+func NewClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/arbitration/host-fence/release", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -16356,6 +16626,50 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/arbitration/ (the `ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet` operationId).
 	ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse, error)
 
+	// ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutWithBodyWithResponse Clusters:Arbitration:Client-Host
+	//
+	// The operator reports the kernel NVMe host NQN of the Kubernetes node a
+	// storage node runs on; a host fence revokes it on the peer
+	// (docs/design/two-node-kubernetes-fencing.md, section 3.1). Empty clears it.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/client-host (the `ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut` operationId).
+	ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutResponse, error)
+
+	// ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutWithResponse Clusters:Arbitration:Client-Host
+	//
+	// The operator reports the kernel NVMe host NQN of the Kubernetes node a
+	// storage node runs on; a host fence revokes it on the peer
+	// (docs/design/two-node-kubernetes-fencing.md, section 3.1). Empty clears it.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/client-host (the `ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut` operationId).
+	ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutResponse, error)
+
+	// ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostWithBodyWithResponse Clusters:Arbitration:Host-Fence:Release
+	//
+	// The operator verified that the node is clean (Ready, no pod from before
+	// the fence): give its host access back (contract section 3.2). Accepted only
+	// once the storage no longer needs the fence (state ``releasable``).
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/arbitration/host-fence/release (the `ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost` operationId).
+	ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse, error)
+
+	// ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostWithResponse Clusters:Arbitration:Host-Fence:Release
+	//
+	// The operator verified that the node is clean (Ready, no pod from before
+	// the fence): give its host access back (contract section 3.2). Accepted only
+	// once the storage no longer needs the fence (state ``releasable``).
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/arbitration/host-fence/release (the `ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost` operationId).
+	ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse, error)
+
 	// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithBodyWithResponse Clusters:Arbitration:Override
 	//
 	// Operator decision when the arbiter cannot decide: ``winner`` leads every
@@ -16768,8 +17082,10 @@ type ClientWithResponsesInterface interface {
 	// Enable or disable group replication (design-csi-addons-replication.md
 	// §14.4): a policy id attaches the whole group to that group replication
 	// policy; ``null`` detaches it (the group and its members stay grouped by
-	// label). A refused attach (not a consistency-group policy, missing policy) is
-	// a 409.
+	// label). A refused attach is a 409: not a consistency-group policy, a missing
+	// policy, or a member that cannot start replicating under it (a policy whose
+	// target is the group's own cluster, refused by replication_start). Unmapped,
+	// the last was an unhandled 500 (run 20261020-1300-ebs, test 2).
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -16781,8 +17097,10 @@ type ClientWithResponsesInterface interface {
 	// Enable or disable group replication (design-csi-addons-replication.md
 	// §14.4): a policy id attaches the whole group to that group replication
 	// policy; ``null`` detaches it (the group and its members stay grouped by
-	// label). A refused attach (not a consistency-group policy, missing policy) is
-	// a 409.
+	// label). A refused attach is a 409: not a consistency-group policy, a missing
+	// policy, or a member that cannot start replicating under it (a policy whose
+	// target is the group's own cluster, refused by replication_start). Unmapped,
+	// the last was an unhandled 500 (run 20261020-1300-ebs, test 2).
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -18381,6 +18699,95 @@ func (r ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse) Stat
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON202 the response for an HTTP 202 `application/json` response
+	JSON202 *interface{}
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON202 returns the response for an HTTP 202 `application/json` response
+func (r ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse) GetJSON202() *interface{} {
+	return r.JSON202
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -24946,6 +25353,74 @@ func (c *ClientWithResponses) ClustersArbitrationGetApiV2ClustersClusterIdArbitr
 	return ParseClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse(rsp)
 }
 
+// ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutWithBodyWithResponse Clusters:Arbitration:Client-Host
+//
+// The operator reports the kernel NVMe host NQN of the Kubernetes node a
+// storage node runs on; a host fence revokes it on the peer
+// (docs/design/two-node-kubernetes-fencing.md, section 3.1). Empty clears it.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/client-host (the `ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut` operationId).
+func (c *ClientWithResponses) ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutResponse, error) {
+	rsp, err := c.ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutWithBody(ctx, clusterId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutResponse(rsp)
+}
+
+// ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutWithResponse Clusters:Arbitration:Client-Host
+//
+// The operator reports the kernel NVMe host NQN of the Kubernetes node a
+// storage node runs on; a host fence revokes it on the peer
+// (docs/design/two-node-kubernetes-fencing.md, section 3.1). Empty clears it.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/client-host (the `ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut` operationId).
+func (c *ClientWithResponses) ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutResponse, error) {
+	rsp, err := c.ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut(ctx, clusterId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutResponse(rsp)
+}
+
+// ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostWithBodyWithResponse Clusters:Arbitration:Host-Fence:Release
+//
+// The operator verified that the node is clean (Ready, no pod from before
+// the fence): give its host access back (contract section 3.2). Accepted only
+// once the storage no longer needs the fence (state “releasable“).
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/arbitration/host-fence/release (the `ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost` operationId).
+func (c *ClientWithResponses) ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse, error) {
+	rsp, err := c.ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostWithBody(ctx, clusterId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse(rsp)
+}
+
+// ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostWithResponse Clusters:Arbitration:Host-Fence:Release
+//
+// The operator verified that the node is clean (Ready, no pod from before
+// the fence): give its host access back (contract section 3.2). Accepted only
+// once the storage no longer needs the fence (state “releasable“).
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/arbitration/host-fence/release (the `ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost` operationId).
+func (c *ClientWithResponses) ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse, error) {
+	rsp, err := c.ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost(ctx, clusterId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse(rsp)
+}
+
 // ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithBodyWithResponse Clusters:Arbitration:Override
 //
 // Operator decision when the arbiter cannot decide: “winner“ leads every
@@ -25621,8 +26096,10 @@ func (c *ClientWithResponses) ClustersConsistencyGroupsMigrationStartApiV2Cluste
 // Enable or disable group replication (design-csi-addons-replication.md
 // §14.4): a policy id attaches the whole group to that group replication
 // policy; “null“ detaches it (the group and its members stay grouped by
-// label). A refused attach (not a consistency-group policy, missing policy) is
-// a 409.
+// label). A refused attach is a 409: not a consistency-group policy, a missing
+// policy, or a member that cannot start replicating under it (a policy whose
+// target is the group's own cluster, refused by replication_start). Unmapped,
+// the last was an unhandled 500 (run 20261020-1300-ebs, test 2).
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -25640,8 +26117,10 @@ func (c *ClientWithResponses) ClustersConsistencyGroupsReplicationConfigureApiV2
 // Enable or disable group replication (design-csi-addons-replication.md
 // §14.4): a policy id attaches the whole group to that group replication
 // policy; “null“ detaches it (the group and its members stay grouped by
-// label). A refused attach (not a consistency-group policy, missing policy) is
-// a 409.
+// label). A refused attach is a 409: not a consistency-group policy, a missing
+// policy, or a member that cannot start replicating under it (a policy whose
+// target is the group's own cluster, refused by replication_start). Unmapped,
+// the last was an unhandled 500 (run 20261020-1300-ebs, test 2).
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -27877,6 +28356,68 @@ func ParseClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse(rsp
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutResponse parses an HTTP response from a ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutWithResponse call
+func ParseClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutResponse(rsp *http.Response) (*ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse parses an HTTP response from a ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostWithResponse call
+func ParseClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse(rsp *http.Response) (*ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest interface{}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest HTTPValidationError

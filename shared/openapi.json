@@ -1147,6 +1147,109 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/arbitration/client-host": {
+      "put": {
+        "summary": "Clusters:Arbitration:Client-Host",
+        "description": "The operator reports the kernel NVMe host NQN of the Kubernetes node a\nstorage node runs on; a host fence revokes it on the peer\n(docs/design/two-node-kubernetes-fencing.md, section 3.1). Empty clears it.",
+        "operationId": "clusters_arbitration_client_host_api_v2_clusters__cluster_id__arbitration_client_host_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_ClientHost"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/arbitration/host-fence/release": {
+      "post": {
+        "summary": "Clusters:Arbitration:Host-Fence:Release",
+        "description": "The operator verified that the node is clean (Ready, no pod from before\nthe fence): give its host access back (contract section 3.2). Accepted only\nonce the storage no longer needs the fence (state ``releasable``).",
+        "operationId": "clusters_arbitration_host_fence_release_api_v2_clusters__cluster_id__arbitration_host_fence_release_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_HostFenceRelease"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/storage-nodes/": {
       "get": {
         "summary": "Clusters:Storage-Nodes:List",
@@ -8967,7 +9070,7 @@
           "consistency-groups"
         ],
         "summary": "Clusters:Consistency-Groups:Replication:Configure",
-        "description": "Enable or disable group replication (design-csi-addons-replication.md\n\u00a714.4): a policy id attaches the whole group to that group replication\npolicy; ``null`` detaches it (the group and its members stay grouped by\nlabel). A refused attach (not a consistency-group policy, missing policy) is\na 409.",
+        "description": "Enable or disable group replication (design-csi-addons-replication.md\n\u00a714.4): a policy id attaches the whole group to that group replication\npolicy; ``null`` detaches it (the group and its members stay grouped by\nlabel). A refused attach is a 409: not a consistency-group policy, a missing\npolicy, or a member that cannot start replicating under it (a policy whose\ntarget is the group's own cluster, refused by replication_start). Unmapped,\nthe last was an unhandled 500 (run 20261020-1300-ebs, test 2).",
         "operationId": "clusters_consistency_groups_replication_configure_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_put",
         "security": [
           {
@@ -13807,6 +13910,32 @@
               }
             ],
             "title": "Two Node Arbitration"
+          },
+          "two_node_fencing_authority": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "witness",
+                  "pacemaker"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Two Node Fencing Authority"
+          },
+          "two_node_host_fencing": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Two Node Host Fencing"
           }
         },
         "type": "object",
@@ -14318,6 +14447,26 @@
         ],
         "title": "_BackupSnapshotParams"
       },
+      "_ClientHost": {
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "title": "Node Id"
+          },
+          "host_nqn": {
+            "type": "string",
+            "maxLength": 223,
+            "minLength": 0,
+            "title": "Host Nqn"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_id",
+          "host_nqn"
+        ],
+        "title": "_ClientHost"
+      },
       "_CloneParams": {
         "properties": {
           "name": {
@@ -14590,6 +14739,19 @@
           "size"
         ],
         "title": "_CreateParams"
+      },
+      "_HostFenceRelease": {
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "title": "Node Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_id"
+        ],
+        "title": "_HostFenceRelease"
       },
       "_ImportFromBucket": {
         "properties": {
