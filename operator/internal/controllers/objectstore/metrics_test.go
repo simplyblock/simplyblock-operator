@@ -28,7 +28,7 @@ func histogramSampleCount(vec *prometheus.HistogramVec, labelValues ...string) u
 // sample and exactly one successful deliver call, under its own
 // ObjectStore's and node's labels.
 func TestReadyBucketObservesProvisioningDurationAndDeliveryCall(t *testing.T) {
-	readyBucketWithGatewayPod(t, "metrics-store", "metrics-bucket", "node-a", "node-a")
+	readyBucketWithGatewayPod(t, "metrics-store", "metrics-bucket", "node-a")
 
 	if got := testutil.ToFloat64(mountDeliveryCallsTotal.WithLabelValues("metrics-store", "node-a", "deliver", "success")); got != 1 {
 		t.Errorf("deliver/success calls for node-a = %v, want 1", got)
