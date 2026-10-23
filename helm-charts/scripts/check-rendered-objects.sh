@@ -504,6 +504,13 @@ checkDiscovery() {
     ok=0
   fi
 
+  # The draft values are accepted and unused, so alone they raise no run.
+  doc="$(operatorOps standalone --set discovery.draft.name=mine)"
+  if [ -n "$doc" ]; then
+    echo "  discovery: a draft value alone renders an OperatorOps"
+    ok=0
+  fi
+
   # The profiles that raise no run render none, whatever the values say.
   for profile in managed empty; do
     doc="$(operatorOps "$profile" --set discovery.enableControlPlaneNodes=true)"

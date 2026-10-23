@@ -1,12 +1,13 @@
 # The discovery run an installation customized through `discovery.*` values.
 #
-# It renders only when a value other than `enabled` is set. An installation that
+# It renders only when a value other than `enabled` and `draft` is set. The draft
+# values are accepted and unused. An installation that
 # states nothing gets the operator's own default run, which needs no object here.
 # Either way exactly one run happens: the operator declines to raise its own the
 # moment any OperatorOps exists, this one included.
 {{- $d := .Values.discovery }}
 {{- $set := false }}
-{{- range $key, $value := omit $d "enabled" }}
+{{- range $key, $value := omit $d "enabled" "draft" }}
 {{- if or $value (kindIs "bool" $value) }}{{ $set = true }}{{ end }}
 {{- end }}
 {{- if and (eq .Values.deployment.profile "standalone") $d.enabled $set }}
