@@ -982,7 +982,7 @@ func main() {
 		Readings:    placementService,
 		TLSEnabled:  tlsEnabled,
 		TLSProvider: tlsProvider,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Supercluster")
 		os.Exit(1)
 	}
