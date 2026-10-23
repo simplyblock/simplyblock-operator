@@ -14,7 +14,7 @@
 |-------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------|
 | **Phase 1** (§4–§6)     | Built   | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | A new cluster, on a control plane without P0-4. Workers shared between members, which are outside it: P0-3, P0-6 |
 | **Phase 2** (§7)        | Built   | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | IOPS and throughput ceilings: P0-5                                                                               |
-| **Phase 3** (§8.1–§8.3) | Planned | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                                                                                |
+| **Phase 3** (§8.1–§8.3) | Built   | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                                                                                |
 | **Phase 4** (§8.4)      | Planned | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3                                                                                                          |
 | **Phase 5** (§7.5)      | Planned | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2, P0-5                                                                                                    |
 
@@ -48,6 +48,19 @@ out per member, and a restore into a supercluster is placed among the members
 (§9.5). A site deployment mirrors the supercluster (§9.7), and a pNFS export
 serves the volume of the member it was placed in. The IOPS and throughput half
 of the pool ceiling waits on P0-5, as every pool's does.
+
+**Phase 3 is built:** `PersistentVolumeOps` carries the action `Relocate`
+(§8.1), admitted only to another member of the volume's supercluster that
+accepts volumes, and refused for an encrypted volume or one in a consistency
+group. The controller drives the steps of §8.2 against atlas-lib's
+`controlplane` client, cutting the volumes of one subsystem over one at a time,
+and marks every moved PV with `storage.simplyblock.io/relocated-to`. The CSI
+driver follows a moved volume for expand, snapshot, and clone, stages it from
+its mark, and deletes the volume the mark names with the PV (§8.3). The control
+plane's side is on sbcli's `superclusters` branch: a repeated commit answers 409
+naming its task, a start names the destination pool and refuses a destination
+it cannot use, and replication into a single-node cluster finishes (§11). An
+encrypted volume waits on P0-1.
 
 Each phase ships on its own. Phase 1 produces a supercluster that reports one
 status and lets an administrator name the members directly, which is already
@@ -1198,18 +1211,27 @@ its target so that it could carry one.
 	TargetClusterRef string `json:"targetClusterRef"`
 ```
 
-Admission requires that the target is a member of the same supercluster as the
-volume's current member, that it is a different member, and that it is
-placement-eligible. A volume in a member of no supercluster is refused: moving
-between unrelated clusters is replication's business
-([`design-csi-addons-replication.md`](design-csi-addons-replication.md)).
+Admission requires that the target exists, is a member of the same
+supercluster as the volume's current member, is a different member, and does not
+set `disablePlacement`. A volume in a member of no supercluster is refused:
+moving between unrelated clusters is replication's business
+([`design-csi-addons-replication.md`](design-csi-addons-replication.md)). A
+volume whose claim carries a consistency-group label is refused, because a
+group's members stay in one member (§9.3), and an encrypted volume is refused
+with `EncryptedVolumeNotMovable` until P0-1 holds (§9.4). Each of these is fixed
+for the request's life. Whether the target is serving is not: the controller
+holds in `Validating` with `TargetMemberNotReady` until it accepts volumes. The
+pairing of `action` and `relocate`, and the immutability of `targetClusterRef`,
+are the type's own rules.
 
 The lock is the same annotation on the subsystem's volumes that `Migrate` takes
 ([`design-persistentvolumeops.md`](crd-redesign/design-persistentvolumeops.md)
-§6), so a `Migrate` and a `Relocate` of one volume exclude each other. Volumes
-sharing a subsystem move together, because the control plane requires them to
-replicate to the same target node, and the operation lists every volume it moves
-in `status.relocate.volumes`.
+§6), so a `Migrate` and a `Relocate` of one volume exclude each other. A
+`Relocate` does not take the per-cluster migration slot, which serializes the
+control plane's migrations inside one cluster. Volumes sharing a subsystem move
+together, because the control plane requires them to replicate to the same
+target node, and the operation lists every volume it moves in
+`status.relocate.volumes`.
 
 ### 8.2 The step machine
 
@@ -1223,30 +1245,33 @@ target's paths on every consuming host while the relationship is
   action=Relocate received
     │
     ▼
-  Validating       ← target eligible, capacity for every volume of the subsystem,
-    │                no group membership (§9.3), not encrypted unless P0-1 holds
+  Validating       ← target serving, its pool of the source's supercluster pool,
+    │                every volume of the subsystem, none in a group (§9.3),
+    │                none encrypted unless P0-1 holds
     │  clean
     ▼
   Replicating      ← POST …/replication/start  mode=migration,
-    │                replication_cluster_id=<target>; poll …/replication/status
-    │  in sync
+    │                replication_cluster_id, replication_pool_id, interval_min=1;
+    │                poll …/replication/status
+    │  every volume in sync
     ▼
-  Committing       ← POST …/replication/commit  delete_source=true  (write-ahead
-    │                status.relocate.committed before the call)
-    │  202 or 409, the task recorded in status.relocate.taskID
+  Committing       ← POST …/replication/commit  delete_source=true  per volume
+    │                (write-ahead status.relocate.committed before the first)
+    │  202 or 409, each volume's task recorded
     ▼
-  AttachingPaths   ← relationship cutover_pending; GET …/connect returns the
-    │                target's paths beside the source's; one preconnect Job per
-    │                consuming node, the Job the replication slot uses
+  AttachingPaths   ← the next volume's relationship cutover_pending; GET
+    │                …/connect returns the target's paths beside the source's;
+    │                one preconnect Job per consuming node, the Job the
+    │                replication slot uses
     │  every Job succeeded
     ▼
-  Proceeding       ← POST …/replication/cutover-proceed  (write-ahead
-    │                status.relocate.proceeded before the call)
-    │
+  Proceeding       ← POST …/replication/cutover-proceed  (write-ahead the
+    │                volume's proceeded before the call), resent while pending
+    │  the target serves the volume ─── another volume left ──▶ AttachingPaths
     ▼
-  Verifying        ← task finished; the relationship names the target as active;
-    │                the original handle resolves through it (§8.3); every moved
-    │                PV marked relocated-to (§8.3); Jobs deleted
+  Verifying        ← every task finished; each PV's handle resolves into the
+    │                target (§8.3); every moved PV marked relocated-to; Jobs
+    │                deleted
     ▼
   phase: Succeeded
 ```
@@ -1262,6 +1287,21 @@ target's paths on every consuming host while the relationship is
 | Commit task reports failure                         | `Verifying`                               | Phase `Failed`, with the control plane's relationship state reported                                                                                                                                                                                                              |
 | The original handle does not resolve after the move | `Verifying`                               | Phase `Failed` with `HandleUnresolved`                                                                                                                                                                                                                                            |
 
+**The volumes of one subsystem cut over one at a time.** The control plane
+holds one cutover per lvstore, so a commit of every volume queues their cutovers,
+and each reaches `cutover_pending` after the one before it is done. The
+operation records a task, a release, and the outcome per volume, and runs
+`AttachingPaths` and `Proceeding` once for each. The paths belong to the
+subsystem, so the Jobs that connected them for the first volume serve the rest.
+The relationship record appears only when a cutover is prepared, after the delta
+has converged, and `AttachingPaths` waits for it.
+
+**The target pool is the source pool's counterpart.** A supercluster's
+`StoragePool` records one backend pool per member (§7.1). The entry naming the
+source member and the handle's pool identifies the supercluster pool, and its
+entry for the target member is where the volumes land. The start names it, so
+the control plane does not fall back to the target's first active pool.
+
 **`committed` and `proceeded` record intent, and the backend records
 acceptance.** Each flag is written before its first call, so a restart knows the
 call may have reached the control plane, and `committed` is what refuses an abort
@@ -1270,10 +1310,13 @@ write and the request, or a request that times out, leaves the operator unable t
 tell from its own status whether the control plane received it:
 
 - **The commit is resent until a task is recorded.** Every reconcile in
-  `Committing` without `status.relocate.taskID` sends the commit again. The
+  `Committing` for a volume without a recorded task sends the commit again. The
   first commit the control plane accepts returns 202 and its task, and every
-  later one returns 409 naming the same task (§11), so a resend never starts a
-  second cutover and always ends with the task recorded.
+  later one returns 409 naming the same task, including after the cutover has
+  finished (§11), so a resend never starts a second cutover and always ends
+  with the task recorded. A commit answered 404 found the source already
+  deleted by its own cutover, and the relationship's `cutover_done` records
+  the volume as moved.
 - **The proceed is resent while the relationship is `cutover_pending`.** Every
   reconcile in `Proceeding` reads the relationship's state, sends
   `cutover-proceed` while it is still `cutover_pending`, and advances to
@@ -1297,13 +1340,14 @@ replication calls resolve through it (`resolveChain` in
 the chain's retired members (`deleteRetiredReplicaChain`) but never its active
 volume, which Phase 3 changes for a relocated PV (below).
 
-Four controller calls address the handle directly and fail with not-found once
-the source is deleted: `ControllerExpandVolume`, `CreateSnapshot`, clone from a
-volume, and `ControllerPublishVolume` with its unpublish. Phase 3 routes them
-through the same chain resolution, so a relocated volume behaves like a
-failed-over one for every call. The resolution moves to `atlas-lib/controlplane`,
-because the operator's `Verifying` step asserts the same mapping the driver
-follows, and two copies of a chain walk are two answers to where a volume is.
+Three controller calls address the handle directly and fail with not-found once
+the source is deleted: `ControllerExpandVolume`, `CreateSnapshot`, and a clone
+from a volume. The driver does not implement `ControllerPublishVolume`. Each of
+the three tries the handle and, on a 404, follows the chain to the volume
+serving it, so a volume that never moved costs nothing. The walk is
+`controlplane.WalkChain` in atlas-lib, because the operator's `Verifying` step
+asserts the same mapping the driver follows, and two copies of a chain walk are
+two answers to where a volume is.
 
 **DeleteVolume deletes the destination only of a PV marked as relocated.**
 `deleteRetiredReplicaChain` never deletes the relationship's active volume
@@ -1625,21 +1669,21 @@ from `persistentvolumeclaim_controller.go`, and the PV `patch` verb from
 
 ## 11. Backend API Requirements
 
-| Method | Endpoint                                                                                      | Notes                                                                                                                                                                                                                                                |
-|--------|-----------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| GET    | `/api/v2/clusters/`                                                                           | Exists. Used to check that every member is on the same control plane                                                                                                                                                                                 |
-| GET    | `/api/v2/clusters/{cluster_id}/capacity`                                                      | Exists. Not read by the supercluster controller, which reads the metrics exporter instead (§16 Q13). Read by the CSI driver at `CreateVolume`                                                                                                        |
-| POST   | `/api/v2/clusters/{cluster_id}/storage-pools/`                                                | Exists. Called once per member per pool. Idempotent by name: a 409 on an existing pool is success                                                                                                                                                    |
-| POST   | `/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/start` | Exists. Body `replication_cluster_id`, `mode: migration`. A repeat on a running relationship must not start a second                                                                                                                                 |
-| GET    | `…/volumes/{volume_id}/replication/status`                                                    | Exists. Polled in `Replicating`                                                                                                                                                                                                                      |
-| POST   | `…/volumes/{volume_id}/replication/stop`                                                      | Exists. Abort before commit                                                                                                                                                                                                                          |
-| POST   | `…/volumes/{volume_id}/replication/commit`                                                    | Exists. Body `delete_source: true`. Returns 202 and a task location. Must refuse a second commit with 409 naming the running task, rather than run it twice                                                                                          |
-| GET    | `/api/v2/clusters/{cluster_id}/tasks/{task_id}`                                               | Exists. Polled in `Verifying`                                                                                                                                                                                                                        |
-| GET    | `/api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}`                           | Exists. Maps a source volume to its active volume after a commit with `delete_source`. Read by the CSI driver's chain resolution and by `Verifying`                                                                                                  |
-| GET    | `…/volumes/{volume_id}/connect`                                                               | Exists. While the relationship is `cutover_pending`, returns the target's paths beside the source's. Read in `AttachingPaths`                                                                                                                        |
-| POST   | `…/volumes/{volume_id}/replication/cutover-proceed`                                           | Exists. Releases the cutover once every consuming host holds the target's paths. The control plane waits for it up to `REPL_CUTOVER_PROCEED_TIMEOUT_SEC` (120 s). Resent while the relationship is `cutover_pending`                                 |
-| —      | Key carried with an encrypted volume                                                          | **Not established (P0-1).** No key handling is defined for replication, and `delete_source` deletes the source's key (§9.4, §16 Q10)                                                                                                                 |
-| POST   | `/api/v2/clusters/`                                                                           | **Built in sbcli#1512, not released (P0-4).** Body gains the workload names of §6.1: the storage-node API and SPDK proxy Services, the SPDK proxy certificate Secret, and the node label suffix. Absent fields mean the constant names and no suffix |
+| Method | Endpoint                                                                                      | Notes                                                                                                                                                                                                                                                                                                                                                                                                                     |
+|--------|-----------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| GET    | `/api/v2/clusters/`                                                                           | Exists. Used to check that every member is on the same control plane                                                                                                                                                                                                                                                                                                                                                      |
+| GET    | `/api/v2/clusters/{cluster_id}/capacity`                                                      | Exists. Not read by the supercluster controller, which reads the metrics exporter instead (§16 Q13). Read by the CSI driver at `CreateVolume`                                                                                                                                                                                                                                                                             |
+| POST   | `/api/v2/clusters/{cluster_id}/storage-pools/`                                                | Exists. Called once per member per pool. Idempotent by name: a 409 on an existing pool is success                                                                                                                                                                                                                                                                                                                         |
+| POST   | `/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/start` | Exists. Body `replication_cluster_id`, `replication_pool_id`, `mode: migration`, `interval_min`. Refuses with 400 and the reason a destination it cannot use: an unknown cluster, the volume's own, a pool of another cluster, a destination other than the one the volume replicates to, and a migration of an encrypted volume. `replication_pool_id` and the refusals are built on sbcli `superclusters`, not released |
+| GET    | `…/volumes/{volume_id}/replication/status`                                                    | Exists. Polled in `Replicating`                                                                                                                                                                                                                                                                                                                                                                                           |
+| POST   | `…/volumes/{volume_id}/replication/stop`                                                      | Exists. Abort before commit                                                                                                                                                                                                                                                                                                                                                                                               |
+| POST   | `…/volumes/{volume_id}/replication/commit`                                                    | Exists. Body `delete_source: true`. Returns 202 and a task location. A second commit, while the cutover task is queued or running or after it finished, returns 409 naming the task in `Location` and the body, built on sbcli `superclusters` and not released; the released control plane answers 500 and, after a finished cutover, starts a second one                                                                |
+| GET    | `/api/v2/clusters/{cluster_id}/tasks/{task_id}`                                               | Exists. Polled in `Verifying`                                                                                                                                                                                                                                                                                                                                                                                             |
+| GET    | `/api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}`                           | Exists. Maps a source volume to its active volume after a commit with `delete_source`. Read by the CSI driver's chain resolution and by `AttachingPaths`, `Proceeding`, and `Verifying`. The record is written when a cutover is prepared, so it is 404 until then                                                                                                                                                        |
+| GET    | `…/volumes/{volume_id}/connect`                                                               | Exists. While the relationship is `cutover_pending`, returns the target's paths beside the source's. Read in `AttachingPaths`                                                                                                                                                                                                                                                                                             |
+| POST   | `…/volumes/{volume_id}/replication/cutover-proceed`                                           | Exists. Releases the cutover once every consuming host holds the target's paths. The control plane waits for it up to `REPL_CUTOVER_PROCEED_TIMEOUT_SEC` (120 s). Resent while the relationship is `cutover_pending`, and 404 when no cutover is pending                                                                                                                                                                  |
+| —      | Key carried with an encrypted volume                                                          | **Not established (P0-1).** No key handling is defined for replication, and `delete_source` deletes the source's key (§9.4, §16 Q10)                                                                                                                                                                                                                                                                                      |
+| POST   | `/api/v2/clusters/`                                                                           | **Built in sbcli#1512, not released (P0-4).** Body gains the workload names of §6.1: the storage-node API and SPDK proxy Services, the SPDK proxy certificate Secret, and the node label suffix. Absent fields mean the constant names and no suffix                                                                                                                                                                      |
 
 The CSI driver authenticates to each member with that member's entry in
 `clusters`, as today. No admin token crosses a cluster boundary.
@@ -2139,9 +2183,40 @@ type RelocateVolumeSpec struct {
 	// It must be a different member of the same supercluster as the volume's
 	// current cluster, and must accept new volumes.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	// +k8s:immutable
 	TargetClusterRef string `json:"targetClusterRef"`
+}
+
+// RelocatedVolume is one volume a Relocate moves, and how far its cutover is.
+type RelocatedVolume struct {
+	// VolumeUUID is the volume's backend UUID in the source member.
+	// +kubebuilder:validation:Required
+	VolumeUUID string `json:"volumeUUID"`
+
+	// PersistentVolumeName is the PersistentVolume carrying the volume, when one
+	// does. It is what the volume's new location is recorded on.
+	// +optional
+	PersistentVolumeName string `json:"persistentVolumeName,omitempty"`
+
+	// TaskID is the control plane's task carrying the volume's cutover and the
+	// deletion of its source, from the commit's answer.
+	// +optional
+	TaskID string `json:"taskID,omitempty"`
+
+	// Proceeded is set before the volume's cutover is first released. The
+	// release is resent while the cutover waits for it.
+	// +optional
+	Proceeded bool `json:"proceeded,omitempty"`
+
+	// CutOver is set once the target serves the volume.
+	// +optional
+	CutOver bool `json:"cutOver,omitempty"`
+
+	// TargetVolumeUUID is the volume's backend UUID in the target member.
+	// +optional
+	TargetVolumeUUID string `json:"targetVolumeUUID,omitempty"`
 }
 
 // RelocateStatus is the progress of a Relocate.
@@ -2154,27 +2229,27 @@ type RelocateStatus struct {
 	// +optional
 	TargetClusterUUID string `json:"targetClusterUUID,omitempty"`
 
-	// Volumes are every volume moving together, the requested one and those
-	// sharing its subsystem, by backend UUID.
+	// TargetPoolUUID is the pool in the target member the volumes land in: the
+	// target's pool of the same supercluster pool as the source's.
 	// +optional
-	// +listType=set
-	Volumes []string `json:"volumes,omitempty"`
+	TargetPoolUUID string `json:"targetPoolUUID,omitempty"`
 
-	// Committed is set before the commit is first requested. It refuses an
-	// abort from then on, and does not stop the commit being resent until
-	// TaskID is recorded.
+	// Committed is set before the first commit is requested. It refuses an
+	// abort from then on, because a committed cutover cannot be taken back.
 	// +optional
 	Committed bool `json:"committed,omitempty"`
 
-	// Proceeded is set before the cutover is first released. The release is
-	// resent while the relationship is cutover_pending.
+	// Volumes are every volume moving together: the named one and those
+	// sharing its subsystem.
+	// +listType=map
+	// +listMapKey=volumeUUID
 	// +optional
-	Proceeded bool `json:"proceeded,omitempty"`
+	Volumes []RelocatedVolume `json:"volumes,omitempty"`
 
-	// TaskID is the control plane's task carrying the cutover, from the
-	// commit's 202 or from the 409 that refuses a second commit.
+	// PathJobs are the Jobs that connect the target's paths on the nodes
+	// consuming the subsystem, one per node.
 	// +optional
-	TaskID string `json:"taskID,omitempty"`
+	PathJobs []ValidationJob `json:"pathJobs,omitempty"`
 }
 ```
 
