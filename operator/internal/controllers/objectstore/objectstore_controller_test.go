@@ -90,9 +90,9 @@ func markCertificateReady(t *testing.T, cli client.Client, key client.ObjectKey,
 	if err := cli.Get(context.Background(), key, &cert); err != nil {
 		t.Fatalf("reading the Certificate to mark it Ready: %v", err)
 	}
-	status := "False"
+	status := string(metav1.ConditionFalse)
 	if ready {
-		status = "True"
+		status = string(metav1.ConditionTrue)
 	}
 	if err := unstructured.SetNestedSlice(cert.Object, []any{
 		map[string]any{"type": "Ready", "status": status},
