@@ -26,7 +26,7 @@ const (
 	// Exists only once the nfsd filesystem is mounted, which is the test.
 	nfsdControl = export.NFSDProcDir + "/threads"
 
-	// Where nfsdcld and rpc.idmapd look for the RPC pipe filesystem, which a host
+	// Where nfsdcld and rpc.idmapd look for the RPC pipe filesystem, which a system
 	// with nfs-utils mounts at boot.
 	rpcPipefsDir = NFSStateDir + "/rpc_pipefs"
 
@@ -37,7 +37,7 @@ const (
 	selfCheckTimeout = 30 * time.Second
 )
 
-// EnsureNFSD makes the host's NFS server ready to serve an export. Idempotent,
+// EnsureNFSD makes the guest's NFS server ready to serve an export. Idempotent,
 // and five reads when everything is already up. The steps report separately
 // because they fail for different reasons: a missing module is a kernel with no
 // NFS server, a failed mount or start is usually a lost privilege.
@@ -112,10 +112,8 @@ func ensureNFSDModule(ctx context.Context, run runner) error {
 
 // ensureNFSDFilesystem mounts the nfsd control filesystem if it is not there.
 //
-// In this container's own mount namespace, which is enough: nfsd is keyed by
-// network namespace and the plugin runs with hostNetwork, so what this mount
-// exposes is the host's nfsd. A hostPath would not be an option in any case,
-// because runc refuses every bind mount whose target is inside /proc.
+// The mount is made in the namespace the agent runs in, which in the guest is
+// the namespace nfsd serves from.
 func ensureNFSDFilesystem(ctx context.Context, run runner) error {
 	if _, err := os.Stat(nfsdControl); err == nil {
 		return nil
@@ -206,8 +204,8 @@ func selfCheckNFSD(ctx context.Context, run runner) error {
 // keeps a small stable-storage record of which clients held state, so that a
 // server restart can tell a genuinely reconnecting client from a network
 // partition's stale one (RFC 3530 §8.6.3). That record lives in
-// /var/lib/nfs/nfsdcld, which this package's caller mounts in from the host
-// specifically so it survives a container restart -- and that persistence is
+// /var/lib/nfs/nfsdcld, which the guest mounts from the state disk
+// specifically so it survives a guest restart -- and that persistence is
 // exactly what makes the ordering here matter. nfsd reads it the moment its
 // threads start, concludes (correctly, since the record is real) that it is
 // recovering rather than starting clean, and opens a grace period against it.
@@ -384,8 +382,8 @@ func processStatusIsZombie(status []byte) bool {
 	return false
 }
 
-// WithNFSD brings the host's NFS server up before an export is built on it.
-// Delete does not: tearing down on a host whose nfsd is gone is exactly the
+// WithNFSD brings the guest's NFS server up before an export is built on it.
+// Delete does not: tearing down where nfsd is gone is exactly the
 // case that has to converge.
 func WithNFSD(assembler exportAssembler) exportAssembler {
 	return nfsdAssembler{inner: assembler, run: run}
