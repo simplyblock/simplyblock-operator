@@ -109,6 +109,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	allowForced := spec["action"] == vrgActionFailover
 
+	// The backend names the volumes blocking a move by their own id, the last
+	// segment of a handle.
+	own := make(map[string]bool, len(handles))
+	for _, h := range handles {
+		own[h[strings.LastIndex(h, ":")+1:]] = true
+	}
+
 	pending := false
 	for _, h := range handles {
 		resp, err := r.Mover.Move(ctx, &sitev1.MoveRequest{Volume: h, ToSite: site, AllowForced: allowForced})
@@ -119,6 +126,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		case sitev1.MoveResponse_STATE_MOVED:
 		case sitev1.MoveResponse_STATE_REFUSED:
 			pending = true
+			// A store's volumes are moved one at a time, so a promote is refused
+			// while this VRG's other volumes on the store are still active on the
+			// old site. They are demoted in this same pass, and the next one
+			// promotes the store: ordering, not a problem to report.
+			if blockedOnlyBy(resp.GetBlockingVolumes(), own) {
+				log.Info("volume move waits on this VRG's other volumes of its store", "volume", h, "to", site)
+				continue
+			}
 			note := fmt.Sprintf("volume %s cannot be moved to site %s: %s", h, site, resp.GetReason())
 			if blocking := resp.GetBlockingVolumes(); len(blocking) > 0 {
 				note += "; still served on site " + resp.GetLedFrom() + ": " + strings.Join(blocking, ", ")
@@ -223,4 +238,18 @@ func (r *Reconciler) vrgsOfClaim(ctx context.Context, obj client.Object) []recon
 		}})
 	}
 	return reqs
+}
+
+// blockedOnlyBy reports whether a refusal names blocking volumes, all of them
+// in own.
+func blockedOnlyBy(blocking []string, own map[string]bool) bool {
+	if len(blocking) == 0 {
+		return false
+	}
+	for _, v := range blocking {
+		if !own[v] {
+			return false
+		}
+	}
+	return true
 }

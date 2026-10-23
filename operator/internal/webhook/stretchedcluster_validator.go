@@ -1,9 +1,11 @@
 // The StretchedCluster role-swap guard: a validating webhook on UPDATE that
 // refuses to swap the two sites' roles unless both sites' StorageClusters are
-// Online. A swap moves the cluster's cluster-wide operations from one site's
-// operator to the other's; landing it on a cluster still being created, or one
-// that is degraded, would hand them over mid-flight
-// (design-stretched-sync-replication-ramen.md §5.1, §11.1).
+// Online, or the leader's site is lost and fenced. A swap moves the cluster's
+// cluster-wide operations from one site's operator to the other's. Landing it
+// on a cluster still being created, or one that is degraded, would hand them
+// over mid-flight. When the leader's site is gone for long, handing them to the
+// survivor is the point (design-stretched-sync-replication-ramen.md §5.1, §11.1),
+// and the control plane's fence is what proves the old leader cannot act.
 
 package webhook
 
@@ -41,6 +43,9 @@ func (v *StretchedClusterValidator) Handle(_ context.Context, req admission.Requ
 	if !rolesSwapped(&oldObj, &newObj) {
 		return admission.Allowed("")
 	}
+	if lost := oldObj.Status.LostSite; lost != "" {
+		return swapWithALostSite(&oldObj, lost)
+	}
 	for _, site := range oldObj.Spec.Sites {
 		phase := projectedClusterPhase(&oldObj, site.Cluster)
 		if phase != string(simplyblockv1alpha2.StorageClusterPhaseOnline) {
@@ -52,6 +57,58 @@ func (v *StretchedClusterValidator) Handle(_ context.Context, req admission.Requ
 		}
 	}
 	return admission.Allowed("")
+}
+
+// fenceDone is the control plane's record of a lost site whose fence finished.
+const fenceDone = "done"
+
+// swapWithALostSite admits a swap away from a lost leader whose fence is done,
+// to a survivor whose StorageCluster works, and nothing else while a site is
+// recorded lost.
+func swapWithALostSite(sc *simplyblockv1alpha2.StretchedCluster, lost string) admission.Response {
+	var leader, survivor *simplyblockv1alpha2.StretchedSite
+	for i := range sc.Spec.Sites {
+		switch {
+		case sc.Spec.Sites[i].Site == lost:
+		case survivor == nil:
+			survivor = &sc.Spec.Sites[i]
+		}
+		if sc.Spec.Sites[i].Role == simplyblockv1alpha2.StretchedRoleLeader {
+			leader = &sc.Spec.Sites[i]
+		}
+	}
+	if leader == nil || leader.Site != lost || survivor == nil {
+		return admission.Denied(fmt.Sprintf(
+			"RoleSwapNotReady: the control plane records site %s of stretched cluster %s as lost, "+
+				"and a lost site cannot lead; the roles can be swapped only away from a lost leader", lost, sc.Name))
+	}
+	record := siteRecordOf(sc, survivor.Cluster)
+	if record != fenceDone {
+		return admission.Denied(fmt.Sprintf(
+			"RoleSwapNotReady: the leader site %s of stretched cluster %s is recorded lost, but its fence is %s, "+
+				"not done; until the control plane has fenced it, the old leader may still act, and a swap would "+
+				"make two leaders", lost, sc.Name, orNotReported(record)))
+	}
+	switch phase := projectedClusterPhase(sc, survivor.Cluster); phase {
+	case string(simplyblockv1alpha2.StorageClusterPhaseOnline), string(simplyblockv1alpha2.StorageClusterPhaseDegraded):
+		return admission.Allowed("")
+	default:
+		return admission.Denied(fmt.Sprintf(
+			"RoleSwapNotReady: site %s (%s) of stretched cluster %s reports its StorageCluster %s; "+
+				"it can take the lead from the lost site %s only once it is Online or Degraded",
+			survivor.Site, survivor.Cluster, sc.Name, orNotReported(phase), lost))
+	}
+}
+
+// siteRecordOf is the control plane's record of the lost site as the given
+// site's StorageCluster reports it.
+func siteRecordOf(sc *simplyblockv1alpha2.StretchedCluster, cluster string) string {
+	for _, s := range sc.Status.Sites {
+		if s.Cluster == cluster {
+			return s.SiteRecord
+		}
+	}
+	return ""
 }
 
 // rolesSwapped reports whether any site's role changed.

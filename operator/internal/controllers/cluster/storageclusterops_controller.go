@@ -123,6 +123,19 @@ type StorageClusterOpsReconciler struct {
 	Clusters ClusterCache
 	Nodes    NodeCache
 	Tasks    TaskCache
+
+	// Peer reaches the other site's operator of a stretched cluster over the
+	// site link. Nil without a site link.
+	Peer PeerSite
+}
+
+// PeerSite refreshes a storage node's pod on the other site of a stretched
+// cluster, where only that site's operator can (design-stretched-sync-
+// replication-ramen.md §11.3). peerCluster is the other site's managed cluster,
+// and since the line the replacement pod must be newer than. It reports whether
+// a replacement newer than since is Ready.
+type PeerSite interface {
+	RefreshNode(ctx context.Context, peerCluster, clusterUUID, nodeUUID string, since time.Time) (bool, error)
 }
 
 // NodeCache is the part of the storage-node subscription this package reads.

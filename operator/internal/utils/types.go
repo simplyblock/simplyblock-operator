@@ -56,10 +56,13 @@ type ClusterAddParams struct {
 	// SyncReplication opts the cluster into synchronous two-site replication.
 	// Deploy-time only (the backend accepts it only at cluster-create). Wire key
 	// must match the /api/v2/clusters/ endpoint (sbcli sync-replication branch).
-	SyncReplication bool  `json:"sync_replication,omitempty"`
-	SpdkVcpuCount   int   `json:"spdk_vcpu_count,omitempty"`
-	HugepagesMem    int64 `json:"hugepages_mem,omitempty"`
-	MaxSubsys       uint  `json:"max_subsys,omitempty"`
+	SyncReplication bool `json:"sync_replication,omitempty"`
+	// LeaderSite names the creating site the cluster's leader: a stretched
+	// cluster's leader sends its own site, any other cluster none.
+	LeaderSite    string `json:"leader_site,omitempty"`
+	SpdkVcpuCount int    `json:"spdk_vcpu_count,omitempty"`
+	HugepagesMem  int64  `json:"hugepages_mem,omitempty"`
+	MaxSubsys     uint   `json:"max_subsys,omitempty"`
 	// InlineChecksum enables inline CRC checksum validation for silent-data-error protection.
 	// Wire key must match the /api/v2/clusters/ endpoint from sbcli.
 	InlineChecksum bool `json:"inline_checksum,omitempty"`

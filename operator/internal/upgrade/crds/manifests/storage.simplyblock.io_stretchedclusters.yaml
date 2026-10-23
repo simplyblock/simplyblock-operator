@@ -421,6 +421,12 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              lostSite:
+                description: |-
+                  LostSite is the site the control plane records as out of service, as a
+                  surviving site's StorageCluster reports it. Empty while both sites serve.
+                  The roles can be swapped away from a lost leader once its fence is done.
+                type: string
               message:
                 description: |-
                   Message is the reason the phase is what it is: one sentence, replaced as

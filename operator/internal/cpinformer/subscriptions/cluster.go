@@ -56,6 +56,8 @@ type ClusterDTO struct {
 	SyncReplication bool   `json:"sync_replication"`
 	LostSite        string `json:"lost_site"`
 	LostSiteState   string `json:"lost_site_state"`
+	// LeaderSite is the site the record names as a stretched cluster's leader.
+	LeaderSite string `json:"leader_site"`
 }
 
 // ClusterSubscription streams every cluster, decodes them into an in-memory

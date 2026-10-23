@@ -430,6 +430,32 @@ func TestTheRequestIsReadyWhenBothSitesAreOnline(t *testing.T) {
 	}
 }
 
+// The lost site the control plane records is projected once on the request,
+// read from whichever site reports it, so the role-swap guard can tell a lost
+// leader from a lost follower (design-stretched-sync-replication-ramen.md §11.1).
+func TestTheLostSiteIsProjectedOnTheRequest(t *testing.T) {
+	sc := newStretched(func(s *simplyblockv1alpha2.StretchedCluster) { s.Spec.Approved = true })
+	r, cl, _ := newStretchedReconciler(t, sc)
+	got := reconcileStretched(t, r, cl, 2)
+	for _, site := range got.Spec.Sites {
+		project(t, cl, got, site.Cluster, site.Site, "draft", stretchedDraft(got, true))
+	}
+	got = reconcileStretched(t, r, cl, 1)
+	project(t, cl, got, strLeaderMC, strLeaderSite, "cluster",
+		projectedCluster(simplyblockv1alpha2.StorageClusterPhaseDegraded, "done"))
+	got = reconcileStretched(t, r, cl, 1)
+	if got.Status.LostSite != strFollowerSit {
+		t.Errorf("status.lostSite = %q, want %q as the leader site's StorageCluster reports it", got.Status.LostSite, strFollowerSit)
+	}
+
+	project(t, cl, got, strLeaderMC, strLeaderSite, "cluster",
+		projectedCluster(simplyblockv1alpha2.StorageClusterPhaseOnline, ""))
+	got = reconcileStretched(t, r, cl, 1)
+	if got.Status.LostSite != "" {
+		t.Errorf("status.lostSite = %q after the site returned, want empty", got.Status.LostSite)
+	}
+}
+
 // U-94: a changed discovery on one site starts another discovery on that site
 // only.
 func TestAChangedDiscoveryReRunsThatSiteOnly(t *testing.T) {

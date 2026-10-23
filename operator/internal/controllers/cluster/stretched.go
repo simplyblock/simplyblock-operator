@@ -11,6 +11,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -89,6 +90,12 @@ func (r *StorageClusterReconciler) followerPreflight(
 	if refusal := refuseFollowerAdoption(cluster, claim); refusal != "" {
 		return SyncReplicationMismatch, refusal, nil
 	}
+	if site := cluster.Spec.Stretched.Site; claim.LeaderSite == site {
+		return RoleConflict, fmt.Sprintf(
+			"follower site: backend cluster %s names this site, %s, as its leader site; adopting it as "+
+				"follower would make two leaders, so the adoption is held until the record names the "+
+				"other site", claim.UUID, site), nil
+	}
 
 	nodes, err := r.API.StorageNodes(webapi.WithBearerToken(ctx, claim.Secret), claim.UUID)
 	if err != nil {
@@ -119,7 +126,94 @@ func (r *StorageClusterReconciler) followerPreflight(
 				"of this site carries, so another installation holds the site; the adoption is held",
 			claim.UUID, strings.Join(foreign, ", "), cluster.Spec.Stretched.Site), nil
 	}
+	return r.workersReachable(ctx, cluster, claim, local.Items)
+}
+
+// workersReachable has the control plane probe the management addresses of the
+// workers this site's StorageNodes run on, which it must reach once they are
+// added as nodes (§5.4, P0-3). A control plane without the probe is not a
+// refusal: the node add reports an unreachable worker later.
+func (r *StorageClusterReconciler) workersReachable(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, claim adoption,
+	nodes []simplyblockv1alpha2.StorageNode,
+) (string, string, error) {
+	workerOf := map[string]string{}
+	var addresses []string
+	for i := range nodes {
+		node := &nodes[i]
+		if node.IsRemote() || node.Spec.ClusterRef != cluster.Name || node.Spec.WorkerNode == "" {
+			continue
+		}
+		var worker corev1.Node
+		if err := r.Get(ctx, client.ObjectKey{Name: node.Spec.WorkerNode}, &worker); err != nil {
+			return "", "", client.IgnoreNotFound(err)
+		}
+		for _, addr := range worker.Status.Addresses {
+			if addr.Type == corev1.NodeInternalIP && workerOf[addr.Address] == "" {
+				workerOf[addr.Address] = worker.Name
+				addresses = append(addresses, addr.Address)
+				break
+			}
+		}
+	}
+	if len(addresses) == 0 {
+		return "", "", nil
+	}
+	probed, err := r.API.Reachability(webapi.WithBearerToken(ctx, claim.Secret), claim.UUID, addresses)
+	if errors.Is(err, ErrReachabilityUnsupported) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("probing this site's workers from the control plane: %w", err)
+	}
+	var unreachable []string
+	for _, p := range probed {
+		if !p.Reachable {
+			unreachable = append(unreachable, fmt.Sprintf("%s (%s)", workerOf[p.Address], p.Address))
+		}
+	}
+	if len(unreachable) > 0 {
+		return WorkerUnreachable, fmt.Sprintf(
+			"follower site: the control plane of backend cluster %s does not reach worker(s) %s of site %s "+
+				"on the management network; their nodes could not be added, so the adoption is held",
+			claim.UUID, strings.Join(unreachable, ", "), cluster.Spec.Stretched.Site), nil
+	}
 	return "", "", nil
+}
+
+// creatingLeaderSite is the leader site a create names: a stretched cluster's
+// leader names its own site, any other cluster none.
+func creatingLeaderSite(cluster *simplyblockv1alpha2.StorageCluster) string {
+	if s := cluster.Spec.Stretched; s != nil && s.Role == simplyblockv1alpha2.StretchedRoleLeader {
+		return s.Site
+	}
+	return ""
+}
+
+// recordLeaderSite keeps the cluster record naming the site acting as leader,
+// so the record follows a role swap (§11.1): the leader writes its own site when
+// the record names another or none. The control plane refuses a site it
+// records as lost, and the leader does not ask for it. A failed write is
+// logged and tried again on the next pass.
+func (r *StorageClusterReconciler) recordLeaderSite(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, reading subscriptions.ClusterDTO,
+) {
+	s := cluster.Spec.Stretched
+	if s == nil || s.Role != simplyblockv1alpha2.StretchedRoleLeader ||
+		reading.LeaderSite == s.Site || reading.LostSite == s.Site {
+		return
+	}
+	if err := r.API.SetLeaderSite(ctx, cluster.Status.UUID, s.Site); err != nil {
+		logf.FromContext(ctx).Error(err, "the cluster record could not be set to name this site its leader",
+			"cluster", cluster.Name, "site", s.Site)
+		return
+	}
+	was := reading.LeaderSite
+	if was == "" {
+		was = "no site"
+	}
+	r.Recorder.Eventf(cluster, nil, corev1.EventTypeNormal, LeaderSiteRecorded, LeaderSiteRecorded,
+		"the cluster record now names site %s its leader, where it named %s", s.Site, was)
 }
 
 // refuseFollowerAdoption reports why a follower cannot take over what it was

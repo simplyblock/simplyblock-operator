@@ -63,6 +63,8 @@ type siteReading struct {
 	// SiteRecord is the control plane's record of a lost site as the site's
 	// StorageCluster reports it, empty while both sites serve.
 	SiteRecord string
+	// LostSite is the site that record is about, as the site reports it.
+	LostSite string
 }
 
 // discoveryName is the OperatorOps on the site, carrying a hash of the
@@ -232,6 +234,7 @@ func (f siteFlow) read(ctx context.Context, c client.Client, work *workv1.Manife
 			sc.Pool = cluster.Annotations[annotationStorageClusterDefaultPool]
 			if cluster.Status.Stretched != nil {
 				reading.SiteRecord = cluster.Status.Stretched.SiteRecord
+				reading.LostSite = cluster.Status.Stretched.LostSite
 			}
 		}
 	}

@@ -23,6 +23,9 @@ type ClusterResponse struct {
 	SyncReplication bool
 	LostSite        string
 	LostSiteState   string
+	// LeaderSite is the site the cluster record names as its leader, empty
+	// while unset (design-stretched-sync-replication-ramen.md §11.1).
+	LeaderSite string
 }
 
 type clusterResponsePayload struct {
@@ -38,6 +41,7 @@ type clusterResponsePayload struct {
 	SyncReplication   bool   `json:"sync_replication"`
 	LostSite          string `json:"lost_site"`
 	LostSiteState     string `json:"lost_site_state"`
+	LeaderSite        string `json:"leader_site"`
 }
 
 func ParseClusterResponse(body []byte) (ClusterResponse, error) {
@@ -63,6 +67,7 @@ func ParseClusterResponse(body []byte) (ClusterResponse, error) {
 		SyncReplication:   payload.SyncReplication,
 		LostSite:          payload.LostSite,
 		LostSiteState:     payload.LostSiteState,
+		LeaderSite:        payload.LeaderSite,
 	}, nil
 }
 

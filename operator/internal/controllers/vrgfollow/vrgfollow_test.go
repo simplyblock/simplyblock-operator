@@ -266,3 +266,25 @@ func TestAGoneVRGIsNotAnError(t *testing.T) {
 		t.Errorf("res %v, moves %v", res, mover.asked)
 	}
 }
+
+// Regression: 2026-10-23-vrg-own-volumes-refusal-warning: the volumes of one VRG
+// share a store, and they are moved one at a time, so the first promote is
+// refused while the VRG's other volumes are still active on the old site. That
+// is ordering, not a problem: it resolves on the next pass, and it was reported
+// as a SyncMoveRefused warning on every relocate (live 2026-10-23, 09-relocate.sh).
+func TestARefusalBlockedOnlyByTheVRGsOwnVolumesIsNotReported(t *testing.T) {
+	pvc1, pv1 := claim("one", csiDriver, handle(clusterUUID, "v1"), true)
+	pvc2, pv2 := claim("two", csiDriver, handle(clusterUUID, "v2"), true)
+	mover := &fakeMover{state: sitev1.MoveResponse_STATE_MOVED, refuse: map[string]*sitev1.MoveResponse{
+		handle(clusterUUID, "v1"): {State: sitev1.MoveResponse_STATE_REFUSED, LedFrom: "site-a",
+			Reason: "other volumes of the LVS are still active on site site-a", BlockingVolumes: []string{"v2"}},
+	}}
+	r, rec := newReconciler(t, mover, stretchedCluster(), vrg("sync", "primary", "Relocate"), pvc1, pv1, pvc2, pv2)
+
+	if res := reconcileOnce(t, r); res.RequeueAfter <= 0 {
+		t.Error("a move refused for ordering was not asked again")
+	}
+	if evs := drainEvents(rec); len(evs) != 0 {
+		t.Errorf("events %v; a refusal blocked only by the VRG's own volumes is not a problem to report", evs)
+	}
+}

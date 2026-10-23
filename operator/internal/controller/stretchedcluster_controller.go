@@ -134,6 +134,15 @@ func (r *StretchedClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	phase, message := stretchedPhase(sites, readings, reachable)
 	return r.setStretchedPhase(ctx, &sc, phase, message, func(s *simplyblockv1alpha2.StretchedClusterStatus) {
 		s.ClusterUUID = uuid
+		// Both sites read the one control-plane record; a lost site cannot report
+		// its own, so the survivor's reading is the one that names it.
+		s.LostSite = ""
+		for _, reading := range readings {
+			if reading.LostSite != "" {
+				s.LostSite = reading.LostSite
+				break
+			}
+		}
 		s.Sites = nil
 		for i, site := range sites {
 			reading := readings[i]

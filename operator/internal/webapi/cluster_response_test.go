@@ -71,3 +71,16 @@ func TestParseClusterResponseReadsTheSyncReplicationFacts(t *testing.T) {
 		t.Errorf("LostSite, LostSiteState = %q, %q, want site-a, fenced", resp.LostSite, resp.LostSiteState)
 	}
 }
+
+// The cluster record names its leader site, which a follower checks at adoption
+// and a leader keeps naming itself (design-stretched-sync-replication-ramen.md
+// §11.1).
+func TestParseClusterResponseReadsTheLeaderSite(t *testing.T) {
+	resp, err := ParseClusterResponse([]byte(`{"id": "cluster-1", "sync_replication": true, "leader_site": "site-a"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.LeaderSite != "site-a" {
+		t.Errorf("LeaderSite = %q, want site-a", resp.LeaderSite)
+	}
+}

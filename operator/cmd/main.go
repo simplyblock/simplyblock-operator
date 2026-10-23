@@ -26,6 +26,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"google.golang.org/grpc"
+
 	"github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/link"
 	atlasprom "github.com/simplyblock/atlas/prometheus"
@@ -36,6 +38,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/metricsapi"
 	"github.com/simplyblock/simplyblock-operator/internal/sitelink"
+	"github.com/simplyblock/simplyblock-operator/internal/sitesvc"
 
 	// Import all Kubernetes client auth plugins (e.g., Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -645,6 +648,10 @@ func main() {
 	// The site link is the elected replica's, so it runs as a leader-election
 	// runnable and the StorageCluster controller probes through it.
 	var siteLinkProber clustercontroller.SiteLinkProber
+	// peerSite reaches the other site's operator for the leader's rolling
+	// restart (design-stretched-sync-replication-ramen.md §11.3); nil without a
+	// site link.
+	var peerSite clustercontroller.PeerSite
 	if siteLinkEnabled {
 		siteKube, err := kubernetes.NewForConfig(mgr.GetConfig())
 		if err != nil {
@@ -659,13 +666,19 @@ func main() {
 			Kube:        siteKube,
 			Token:       link.TokenFile(siteLinkTokenPath),
 			Logger:      slog.Default().With("component", "site-link"),
-			Register:    switchoverServer.Register,
+			// The other site's operator asks this one to move volumes and to
+			// refresh this site's storage-node pods.
+			Register: func(srv grpc.ServiceRegistrar) {
+				switchoverServer.Register(srv)
+				(&sitesvc.Server{Client: mgr.GetClient(), Namespace: operatorNamespace}).Register(srv)
+			},
 		}
 		if err := mgr.Add(siteLink); err != nil {
 			setupLog.Error(err, "unable to add the site link")
 			os.Exit(1)
 		}
 		siteLinkProber = siteLink
+		peerSite = siteLink
 	}
 
 	if err := (&clustercontroller.StorageClusterReconciler{
@@ -984,6 +997,7 @@ func main() {
 		Clusters: clusterSubscription,
 		Nodes:    nodeSubscription,
 		Tasks:    taskSubscription,
+		Peer:     peerSite,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageClusterOps")
 		os.Exit(1)

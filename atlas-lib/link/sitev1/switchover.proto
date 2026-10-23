@@ -6,14 +6,13 @@ option go_package = "github.com/simplyblock/atlas/link/sitev1;sitev1";
 
 // SwitchoverService moves the leadership of a volume of a stretched cluster to
 // a site (design-stretched-sync-replication-ramen.md §9.3). Each site's
-// operator serves it: to its own node plugins over the link they already hold,
-// and to the other site's operator over the site link.
+// operator serves it: in process to its VRG follower, which moves a volume when
+// Ramen makes its VolumeReplicationGroup primary on the site, and to the other
+// site's operator over the site link.
 //
-// A node plugin asks for the move when a pod stages on its site for a volume
-// led from the other one, and holds the stage until the answer is MOVED. The
-// operator is the one caller of the backend's sync verbs and the one place that
-// polls, and it serializes moves per store, so two pods of one application
-// staging together produce one demote and one promote.
+// The operator is the one caller of the backend's sync verbs, and it serializes
+// moves per store, so the volumes of one store produce one demote and one
+// promote. It never polls: its caller asks again.
 service SwitchoverService {
   // Move moves the volume's leadership to to_site. It does not block on a
   // promote the backend is still running: the answer is IN_PROGRESS and the

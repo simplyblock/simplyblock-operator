@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	"github.com/simplyblock/atlas/link"
+	"github.com/simplyblock/atlas/link/sitev1"
 )
 
 const (
@@ -177,5 +178,36 @@ func (l *Link) tlsDialer(ctx context.Context) (link.Dialer, error) {
 			return nil, ctx.Err()
 		case <-time.After(caPoll):
 		}
+	}
+}
+
+// RefreshNode asks the operator of peerCluster, the other site's managed
+// cluster, to refresh node's storage-node pod there, and reports whether a pod
+// created after since is Ready (design-stretched-sync-replication-ramen.md
+// §11.3). A node with no pod on that site has nothing to refresh, the same as a
+// node of this site without one.
+func (l *Link) RefreshNode(ctx context.Context, peerCluster, clusterUUID, node string, since time.Time) (bool, error) {
+	l.mu.RLock()
+	agent := l.agent
+	l.mu.RUnlock()
+	if agent == nil || !agent.Linked() {
+		return false, fmt.Errorf("site link: not linked to this site's agent: %w", link.ErrNoSession)
+	}
+	conn, err := link.RemoteConn(agent, link.Remote(peerCluster, link.PeerKindOperator, ""))
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = conn.Close() }()
+	resp, err := sitev1.NewSiteServiceClient(conn).RefreshNode(ctx, &sitev1.RefreshNodeRequest{
+		ClusterUuid: clusterUUID, Node: node, SinceUnix: since.Unix(),
+	})
+	if err != nil {
+		return false, fmt.Errorf("site link: the operator of site %s: %w", peerCluster, err)
+	}
+	switch resp.GetState() {
+	case sitev1.RefreshNodeResponse_STATE_REFRESHED, sitev1.RefreshNodeResponse_STATE_NOT_FOUND:
+		return true, nil
+	default:
+		return false, nil
 	}
 }

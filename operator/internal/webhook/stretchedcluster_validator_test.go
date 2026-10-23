@@ -92,3 +92,60 @@ func TestAnUpdateThatSwapsNothingIsNotThisGuardsBusiness(t *testing.T) {
 		t.Fatalf("an approval was refused by the role-swap guard: %s", resp.Result.Message)
 	}
 }
+
+// lostLeader is the request with the leader site a lost: the hub cannot read its
+// StorageCluster, the survivor b reports Degraded, and the control plane records
+// a as lost with its record at state.
+func lostLeader(state string) *simplyblockv1alpha2.StretchedCluster {
+	sc := stretchedRequest("", simplyblockv1alpha2.StorageClusterPhaseDegraded)
+	sc.Status.LostSite = "a"
+	sc.Status.Sites[1].SiteRecord = state
+	return sc
+}
+
+// §11.1: when the leader's site is lost for long, the hub promotes the follower.
+// A swap away from a lost leader whose fence is done is the one swap admitted
+// with a site down.
+func TestARoleSwapAwayFromAFencedLostLeaderIsAdmitted(t *testing.T) {
+	old := lostLeader("done")
+	if resp := (&StretchedClusterValidator{}).Handle(context.Background(), updateOf(t, old, swapped(old))); !resp.Allowed {
+		t.Fatalf("a swap away from a fenced lost leader was refused: %s", resp.Result.Message)
+	}
+}
+
+// A lost leader the control plane has not fenced yet may still be running: a
+// swap then would make two leaders.
+func TestARoleSwapAwayFromALostLeaderNotYetFencedIsRefused(t *testing.T) {
+	for _, state := range []string{"draining", "down", "fencing"} {
+		t.Run(state, func(t *testing.T) {
+			old := lostLeader(state)
+			resp := (&StretchedClusterValidator{}).Handle(context.Background(), updateOf(t, old, swapped(old)))
+			if resp.Allowed {
+				t.Fatal("a swap was admitted before the lost leader's fence was done")
+			}
+			if !strings.Contains(resp.Result.Message, "fence") {
+				t.Errorf("the refusal does not say the fence is not done: %s", resp.Result.Message)
+			}
+		})
+	}
+}
+
+// A lost site cannot lead: a swap that hands the leader role to the site the
+// control plane records as lost is refused.
+func TestARoleSwapOntoTheLostSiteIsRefused(t *testing.T) {
+	old := stretchedRequest(simplyblockv1alpha2.StorageClusterPhaseDegraded, "")
+	old.Status.LostSite = "b"
+	old.Status.Sites[0].SiteRecord = "done"
+	if resp := (&StretchedClusterValidator{}).Handle(context.Background(), updateOf(t, old, swapped(old))); resp.Allowed {
+		t.Fatal("a swap that makes the lost site leader was admitted")
+	}
+}
+
+// The survivor must be a working cluster to take the lead.
+func TestARoleSwapToASurvivorStillCreatingIsRefused(t *testing.T) {
+	old := lostLeader("done")
+	old.Status.Sites[1].StorageCluster.Phase = string(simplyblockv1alpha2.StorageClusterPhaseCreating)
+	if resp := (&StretchedClusterValidator{}).Handle(context.Background(), updateOf(t, old, swapped(old))); resp.Allowed {
+		t.Fatal("a swap to a survivor still being created was admitted")
+	}
+}

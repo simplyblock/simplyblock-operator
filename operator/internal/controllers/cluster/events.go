@@ -54,6 +54,17 @@ const (
 	// cluster-wide operations to or from this site's operator.
 	RoleChanged = "RoleChanged"
 
+	// RoleConflict holds a follower handed a cluster whose record names the
+	// follower's own site as leader.
+	RoleConflict = "RoleConflict"
+
+	// LeaderSiteRecorded says the leader wrote its site to the cluster record.
+	LeaderSiteRecorded = "LeaderSiteRecorded"
+
+	// WorkerUnreachable holds a follower one of whose workers the control plane
+	// cannot reach.
+	WorkerUnreachable = "WorkerUnreachable"
+
 	// TaskCompleted and TaskCanceled are what remains of a control-plane task
 	// once it leaves status.tasks. The list is a window on the present and
 	// these are the record that something happened in it.

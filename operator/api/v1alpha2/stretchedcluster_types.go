@@ -210,6 +210,12 @@ type StretchedClusterStatus struct {
 	// +optional
 	ClusterUUID string `json:"clusterUUID,omitempty"`
 
+	// LostSite is the site the control plane records as out of service, as a
+	// surviving site's StorageCluster reports it. Empty while both sites serve.
+	// The roles can be swapped away from a lost leader once its fence is done.
+	// +optional
+	LostSite string `json:"lostSite,omitempty"`
+
 	// Sites reports each site, keyed by its managed cluster.
 	// +optional
 	// +kubebuilder:validation:MaxItems=2

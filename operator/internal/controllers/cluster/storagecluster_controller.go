@@ -497,6 +497,9 @@ type adoption struct {
 	// SyncReplication is whether the adopted cluster spans two sites, which a
 	// follower requires of the cluster it joins.
 	SyncReplication bool
+	// LeaderSite is the site the cluster record names as leader, which a
+	// follower refuses when it is its own.
+	LeaderSite string
 }
 
 // adopt takes over a backend cluster the operator did not create.
@@ -596,6 +599,7 @@ func (r *StorageClusterReconciler) upgradeClaim(
 		UUID: found.UUID, Secret: clusterSecret, NQN: found.NQN,
 		Status: found.Status, NDCS: found.NDCS, NPCS: found.NPCS,
 		FTT: found.MaxFaultTolerance, SyncReplication: found.SyncReplication,
+		LeaderSite: found.LeaderSite,
 	}, true, nil
 }
 
@@ -750,6 +754,7 @@ func (r *StorageClusterReconciler) sync(
 		log.Error(err, "the stretched status could not be computed", "cluster", cluster.Name)
 		return ctrl.Result{RequeueAfter: clusterResync}, nil
 	}
+	r.recordLeaderSite(readCtx, cluster, reading)
 	before := cluster.Status.Stretched.DeepCopy()
 
 	ftt := int32(reading.MaxFaultTolerance) //nolint:gosec // a fault tolerance is a small count
@@ -814,6 +819,7 @@ func (r *StorageClusterReconciler) reading(
 		SyncReplication:   response.SyncReplication,
 		LostSite:          response.LostSite,
 		LostSiteState:     response.LostSiteState,
+		LeaderSite:        response.LeaderSite,
 	}, nil
 }
 
@@ -1047,6 +1053,7 @@ func (r *StorageClusterReconciler) creationParams(
 		HashicorpVaultSettings: vault,
 		EnableFailureDomain:    ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains),
 		SyncReplication:        ptr.BoolFromOrFalse(cluster.Spec.EnableSyncReplication),
+		LeaderSite:             creatingLeaderSite(cluster),
 		InlineChecksum:         ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
 		Atomic4k:               ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
 		DeviceMode:             deviceMode(cluster.Spec.DeviceClass),
