@@ -7,6 +7,7 @@ package deployment
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -163,6 +164,9 @@ func anExpandedStretchedDocument(
 				Stretched:  &simplyblockv1alpha2.StretchedNodeSpec{Remote: true},
 			},
 		}
+		// The control plane names a node for its host and RPC port, and each
+		// peer here is on a host of its own.
+		peer.Status.Hostname = fmt.Sprintf("peer-host-%d_4420", i)
 		peer.Status.Status = "offline"
 		if i < onlinePeers {
 			peer.Status.Status = "online"
@@ -219,8 +223,8 @@ func TestAFollowerLeavesTheActivationToItsLeader(t *testing.T) {
 }
 
 // U-06 and U-07: the leader waits until the other site has ndcs+npcs online
-// nodes, the backend's precondition for activating a two-site cluster, and asks
-// for the activation at exactly that number.
+// nodes on at least three hosts, the backend's precondition for activating a
+// two-site cluster, and asks for the activation at exactly that point.
 func TestALeaderWaitsForThePeerSiteBeforeActivating(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
@@ -229,7 +233,8 @@ func TestALeaderWaitsForThePeerSiteBeforeActivating(t *testing.T) {
 	}{
 		{name: "no peer nodes yet", peers: 0, alive: 0},
 		{name: "one fewer than ndcs+npcs online", peers: 3, alive: 1},
-		{name: "exactly ndcs+npcs online", peers: 3, alive: 2, wantDone: true},
+		{name: "ndcs+npcs online on fewer than three hosts", peers: 3, alive: 2},
+		{name: "online on exactly three hosts", peers: 3, alive: 3, wantDone: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			config, r := anExpandedStretchedDocument(t, simplyblockv1alpha2.StretchedRoleLeader, tc.peers, tc.alive)
@@ -302,6 +307,50 @@ func TestASyncClustersGroupsStillNeedASite(t *testing.T) {
 		}
 	}
 	t.Fatalf("a standalone sync document's groups without a site passed validation (findings %+v)", findings)
+}
+
+// Regression: 2026-10-23-peer-site-host-count: the leader asked for the
+// activation once the other site had ndcs+npcs nodes online, and the backend
+// refused it ("site site-b has 2 online node(s) on 2 host(s), needs 2 node(s) on
+// 3 host(s)"): it also wants each site's nodes on at least three hosts. Nodes are
+// counted on a host by the host part of the name the control plane gives them
+// (<host>_<rpc port>), so two nodes of one machine are one host.
+func TestALeaderWaitsForThePeerSitesNodesToSpanThreeHosts(t *testing.T) {
+	config, r := anExpandedStretchedDocument(t, simplyblockv1alpha2.StretchedRoleLeader, 4, 4)
+	ctx := context.Background()
+	var peers simplyblockv1alpha2.StorageNodeList
+	if err := r.List(ctx, &peers); err != nil {
+		t.Fatalf("listing the nodes: %v", err)
+	}
+	for i := range peers.Items {
+		peer := &peers.Items[i]
+		if !peer.IsRemote() {
+			continue
+		}
+		// Two machines, each with two sockets: four nodes on two hosts.
+		host := "machine-1"
+		if strings.HasSuffix(peer.Name, "c") || strings.HasSuffix(peer.Name, "d") {
+			host = "machine-2"
+		}
+		peer.Status.Hostname = host + "_" + peer.Name[len(peer.Name)-1:]
+		if err := r.Update(ctx, peer); err != nil {
+			t.Fatalf("writing peer %s: %v", peer.Name, err)
+		}
+	}
+
+	done, err := r.activateCluster(ctx, config)
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if done {
+		t.Fatal("the leader activated with the other site's four online nodes on two hosts")
+	}
+	if n := raisedOps(t, r.Client); n != 0 {
+		t.Errorf("raised %d operations; the backend refuses an activation on fewer than three hosts", n)
+	}
+	if !emitted(r, WaitingForPeerSite) {
+		t.Error("a leader holding for its peer site's hosts emitted no WaitingForPeerSite")
+	}
 }
 
 // withActivatingStep puts the document on the Activating step with the given

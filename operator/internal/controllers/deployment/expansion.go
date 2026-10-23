@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -917,20 +918,42 @@ func (r *ClusterDeploymentConfigReconciler) stretchedActivation(
 		return false, false, fmt.Errorf("listing the peer site's nodes: %w", err)
 	}
 	online := 0
+	hosts := map[string]struct{}{}
 	for i := range nodes.Items {
 		node := &nodes.Items[i]
 		if node.Spec.ClusterRef == cluster.Name && node.IsRemote() &&
 			node.Status.Status == utils.NodeStatusOnline {
 			online++
+			if host := nodeHost(node.Status.Hostname); host != "" {
+				hosts[host] = struct{}{}
+			}
 		}
 	}
-	if online < need {
+	if online < need || len(hosts) < syncMinHostsPerSite {
 		r.emit(config, corev1.EventTypeNormal, WaitingForPeerSite, fmt.Sprintf(
-			"Site %s has %d of the %d online nodes the backend needs on each site before cluster %s can activate",
-			cluster.Spec.Stretched.PeerSite, online, need, cluster.Name))
+			"Site %s has %d online node(s) on %d host(s); the backend needs %d node(s) on %d host(s) "+
+				"on each site before cluster %s can activate",
+			cluster.Spec.Stretched.PeerSite, online, len(hosts), need, syncMinHostsPerSite, cluster.Name))
 		return true, false, nil
 	}
 	return false, false, nil
+}
+
+// syncMinHostsPerSite is the fewest hosts the backend activates a two-site
+// cluster's site on: a host-disjoint triplet per site. The backend asks for more
+// when a node's journal keeps more copies per site than that, and refuses the
+// activation then; the leader's next pass asks again.
+const syncMinHostsPerSite = 3
+
+// nodeHost is the host a backend node runs on, read from the name the control
+// plane gives it, which is the host's name and the node's RPC port joined by an
+// underscore. Two nodes of one machine are one host. An empty name, which a
+// node not yet read back has, names no host.
+func nodeHost(hostname string) string {
+	if i := strings.LastIndex(hostname, "_"); i > 0 {
+		return hostname[:i]
+	}
+	return hostname
 }
 
 // stripeWidth is ndcs+npcs, the number of online nodes the backend needs on each
