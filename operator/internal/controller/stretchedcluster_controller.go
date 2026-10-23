@@ -99,7 +99,7 @@ func (r *StretchedClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			"the request does not name exactly one Leader and one Follower", nil)
 	}
 
-	leaderReading, err := r.runSite(ctx, &sc, leader, follower.Site, "", "")
+	leaderReading, err := r.runSite(ctx, &sc, leader, follower, "", "")
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -123,7 +123,7 @@ func (r *StretchedClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			secret = found.Secret
 		}
 	}
-	followerReading, err := r.runSite(ctx, &sc, follower, leader.Site, uuid, secret)
+	followerReading, err := r.runSite(ctx, &sc, follower, leader, uuid, secret)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -180,7 +180,7 @@ func stretchedRoles(sc *simplyblockv1alpha2.StretchedCluster) (leader, follower 
 // controller adopts through.
 func (r *StretchedClusterReconciler) runSite(
 	ctx context.Context, sc *simplyblockv1alpha2.StretchedCluster,
-	site simplyblockv1alpha2.StretchedSite, peerSite, uuid, secret string,
+	site, peer simplyblockv1alpha2.StretchedSite, uuid, secret string,
 ) (siteReading, error) {
 	siteNS := orDefault(site.SiteNamespace, "simplyblock")
 	approved := sc.Spec.Approved
@@ -195,7 +195,9 @@ func (r *StretchedClusterReconciler) runSite(
 	template := sizingTemplate(sc.Spec.Sizing)
 	template["name"] = sc.Spec.ClusterName
 	template["enableSyncReplication"] = true
-	template["stretched"] = map[string]any{"site": site.Site, "peerSite": peerSite, "role": string(site.Role)}
+	template["stretched"] = map[string]any{
+		"site": site.Site, "peerSite": peer.Site, "peerCluster": peer.Cluster, "role": string(site.Role),
+	}
 
 	flow := siteFlow{
 		ManagedCluster: site.Cluster,

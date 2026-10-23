@@ -596,6 +596,13 @@ spec:
                       StorageCluster. Requires enableSyncReplication; every node group's site
                       must equal stretched.site.
                     properties:
+                      peerCluster:
+                        description: |-
+                          PeerCluster is the other site's managed cluster: the name the hub knows
+                          it by, and the one the site link reaches that site's operator by. Empty
+                          means the same as peerSite.
+                        maxLength: 63
+                        type: string
                       peerSite:
                         description: |-
                           PeerSite is the other site's backend name. Nodes the control plane reports

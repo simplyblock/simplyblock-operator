@@ -13,7 +13,7 @@
 | Phase       | Status                                                | Scope                                                                                                                                                                        | Sections       |
 |-------------|-------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------|
 | **Phase 1** | Implemented, but for §5.4's reachability check (P0-2) | Topology: the control plane on the OCM hub, one backend cluster whose nodes live in two Kubernetes clusters, a leader operator that creates it and a follower that adopts it | §3, §4, §5, §6 |
-| **Phase 2** | Planned                                               | The site link: the fleet add-on's agent as the forwarder, the hub as the relay, the operators and CSI plugins of both sites as peers of one gRPC fabric                      | §7             |
+| **Phase 2** | Implemented, not validated live                       | The site link: the fleet add-on's agent as the forwarder, the hub as the relay, the operators and CSI plugins of both sites as peers of one gRPC fabric                      | §7             |
 | **Phase 3** | Planned                                               | RamenDR in sync mode: the metro `DRPolicy`, the placement-driven flip on stage without `VolumeReplication`, cluster fencing through csi-addons `NetworkFence`                | §8, §9, §10    |
 | **Phase 4** | Planned                                               | Leader hand-over when the leader site is lost, and the day-two operations of a stretched cluster                                                                             | §11            |
 
@@ -27,7 +27,7 @@ Phase 1 stands the cluster up and is testable without Ramen: two sites, one cont
 | P0-2 | A site-level fence route, `POST /clusters/{id}/sites/{site}/fence` and its `unfence` and `status` siblings (§10.3, §12), and `site` on the volume create body (§9.5)                                                  | Control plane (`sbcli`) | Phase 3 fencing                                                                       | **New.** Today a site is fenced only as a side effect of a forced promote per LVS                                                                                                                                                                                                            |
 | P0-3 | The management network routes between the hub and every storage node of both sites, and the storage network routes between the two sites (§3.3)                                                                       | Infrastructure          | Everything                                                                            | A property of the deployment, verified by the preflight of §5.4                                                                                                                                                                                                                              |
 | P0-4 | An OCM hub with both sites registered as `ManagedCluster`s, `ramen-hub` on the hub and `ramen-dr-cluster` on each site, the csi-addons manager with the `NetworkFence` CRD on each site                               | Ecosystem               | Phase 3                                                                               | What `regression_test/22` stands up today, minus the `NetworkFence` CRD, which the chart does not yet ship                                                                                                                                                                                   |
-| P0-5 | The fleet component (`fleet/`): `fleet-manager` on the hub, the add-on template, `FleetMember`, `ClusterDeployment` ([`design-management-hub.md`](design-management-hub.md))                                          | This repository         | Phase 2 (the relay and the agent); classes and pools through `StorageClassDeployment` | Kinds and add-on exist; the agent is not built (the template's `registration` is still `null`). Phase 1 needs OCM only, as `StorageSiteDeployment` does                                                                                                                                      |
+| P0-5 | The fleet component (`fleet/`): `fleet-manager` on the hub, the add-on template, `FleetMember`, `ClusterDeployment` ([`design-management-hub.md`](design-management-hub.md))                                          | This repository         | Phase 2 (the relay and the agent); classes and pools through `StorageClassDeployment` | Kinds, add-on, and the agent exist. The agent is in the add-on template with its `KubeClient` registration, and the fleet manager runs the relay (§7.2, §7.3). Phase 1 needs OCM only, as `StorageSiteDeployment` does                                                                       |
 | P0-6 | An S3 store both sites reach, for Ramen's PV and PVC metadata (`DRCluster.spec.s3ProfileName`)                                                                                                                        | Infrastructure          | Phase 3                                                                               | `regression_test/22/05b-install-s3-store.sh`'s MinIO serves it in the lab                                                                                                                                                                                                                    |
 
 ---
@@ -400,17 +400,23 @@ Phase 1 needs no connection between the sites: payloads go down through `Manifes
 
 ### 7.2 The relay on the hub
 
-The fleet manager runs a link **Hub** (`link.NewHub`) on a TLS listener, fronted by a Service the add-on template names. Its `Authenticator` is the existing `KubeAuthenticator` against the hub's own API server, which works because the agents present hub-issued tokens (§7.3). The relay registers one new service, `RelayService` (Appendix C): a peer asks for a stream to another peer by `PeerID`, the relay opens a yamux stream to the target's session and splices the two. Over the spliced stream the caller runs an ordinary `grpc.ClientConn` against whatever the target registered, so a service a site operator serves to its own plugins is served to the other site's operator the same way, with the relay never parsing it.
+The fleet manager runs a link **Hub** (`link.NewHub`) on a TLS listener, fronted by a NodePort or LoadBalancer Service the members can reach, and is started with `--site-link-address`, the host and port they reach it at. Its `Authenticator` is `link.SiteAuthenticator`, which verifies an agent's token with a `TokenReview` against the hub's own API server and takes the site from the token's ServiceAccount namespace (§7.3). The relay registers one service, `RelayService` (Appendix C): a peer asks for a stream to another peer by its address, the relay sends it on to the target site's agent, and every hop splices the call it serves to the call it makes. Over the spliced stream the caller runs an ordinary `grpc.ClientConn` against whatever the target registered, so a service a site operator serves to its own plugins is served to the other site's operator the same way, with no hop parsing it past the first frame.
+
+For each `ManagedCluster`, the fleet manager writes two objects into the member's namespace on the hub: the ServiceAccount `simplyblock-site-link`, whose tokens the relay accepts, and the ConfigMap `simplyblock-site-link`, which names the relay's address and the CA of its serving certificate. The certificate is self-signed and kept in a Secret beside the manager, so a restart serves the same one every agent already trusts.
 
 The relay is leader-elected with the fleet manager, as the operator's hub is with the operator, and `Accepting` is wired to its leadership exactly as `link.HubConfig` describes. A site whose relay session drops redials; a peer that is not currently linked is `ErrNoSession`, retryable, and a reconciler requeues on it (`link/doc.go`).
 
 ### 7.3 The forwarder in the agent
 
-The fleet add-on's agent, the Deployment the add-on template reserves a place for ([`design-management-hub.md`](design-management-hub.md) §9), gains one job: it is the site's end of the site link. It dials the relay with `link.NewAgent`, identifying as `site/<member-name>`, with the token the add-on's `KubeClient` registration injects, a hub-issued ServiceAccount credential bound to the member's OCM namespace, which is why the relay can `TokenReview` it and why the identity is the member and not a claim.
+The fleet add-on's agent, a Deployment in the add-on template ([`design-management-hub.md`](design-management-hub.md) §9), is the site's end of the site link. It dials the relay with `link.NewAgent`, identifying as `site/<member-name>`.
+
+Its credential is a token for the `simplyblock-site-link` ServiceAccount in its own member namespace on the hub. The add-on's `KubeClient` registration gives the agent a client certificate for the hub, which a `TokenReview` cannot verify, so the agent uses that certificate for two things only: reading the relay endpoint ConfigMap and requesting the token (`serviceaccounts/token`), both in its own namespace, which is all the registration's hub ClusterRole (`simplyblock-site-link-agent`, bound with `CurrentCluster`) allows. The relay verifies the token and knows the site from its namespace. Open Cluster Management names a member's namespace after the member, and only that member's add-on can request a token there, which is why the identity is the member and not a claim. The token carries the site link's audience and is renewed well before it expires.
 
 Inside the site, the agent is a second hub: it listens on a Service in the operator's namespace, and the site's operator and CSI controller dial it as they dial the operator's own link today, with their own in-cluster tokens the agent verifies against the site's API server. A stream a local peer opens to a remote `PeerID` is forwarded up the agent's relay session; a stream the relay delivers for a local peer is forwarded down. The agent holds no service logic and no credentials for the control plane. It is a forwarder with two authenticated ends, and the only process on a site that speaks to the hub over anything but the Kubernetes API.
 
-The operator's own link to its plugins is untouched: node plugins and the controller keep dialing the operator. What the operator gains is a second registry, the remote one, reached through the agent, in which `site/b/operator` and `site/b/controller/<pod>` resolve.
+The agent serves its site's peers with a self-signed certificate whose CA it publishes as the ConfigMap `simplyblock-site-link-ca` in its own namespace, readable by every ServiceAccount of the member. Its local hub is a `KubeAuthenticator` that admits the operator's and the CSI controller's ServiceAccounts as the `operator` and `controller` kinds, with tokens projected for the site link's audience.
+
+The operator's own link to its plugins is untouched: node plugins and the controller keep dialing the operator. What the operator gains is a second link, reached through the agent, in which `site/b/operator` and `site/b/controller/<pod>` resolve. With the chart's `siteLink.enabled`, the elected operator replica links to the agent, and the `SimplyblockDriver` it renders gives the CSI controller plugin the same link. Both serve gRPC health to the other site, and the `StorageCluster` controller probes the other site's operator through it, addressed by `spec.stretched.peerCluster`, the other site's managed cluster, which the hub writes beside `peerSite`. The answer is `status.stretched.siteLink`, `Connected` or `Unreachable`, with a `SiteLinkChanged` event on each change.
 
 ### 7.4 Peers and identities
 
@@ -1098,7 +1104,7 @@ Print columns: `StorageNode` gains `Site` (`.spec.config.site`) and `Remote` (`.
 
 ## Appendix C: `site_link.proto`
 
-In `atlas-lib/link/proto/`, beside the services the link already carries.
+`RelayService` is `atlas-lib/link/sitev1/relay.proto` (package `atlas.link.site.v1`), beside the link's own handshake in `linkv1`. `SwitchoverService` and `SiteService` are the services Phases 3 and 4 run over it and are not built.
 
 ```proto
 package simplyblock.link.site.v1;
@@ -1107,13 +1113,25 @@ package simplyblock.link.site.v1;
 // relay splices it to the target's session and parses nothing further. The
 // stream then carries whatever gRPC the target registered.
 service RelayService {
-  rpc Open(stream RelayFrame) returns (stream RelayFrame);
+  rpc Open(stream OpenRequest) returns (stream OpenResponse);
 }
-message RelayFrame {
+// The caller's first frame names the two ends; every frame after it, in both
+// directions, is data. A hop that refuses the stream answers with a status
+// before any data moves, and an accepting target's first answer is empty.
+message OpenRequest {
   oneof kind {
-    OpenRequest open = 1;   // first frame only: target PeerID
+    StreamEnds ends = 1;
     bytes data = 2;
   }
+}
+message OpenResponse {
+  bytes data = 1;
+}
+// target and source are "site/<site>/<kind>[/<name>]"; a peer leaves source
+// empty and its forwarder sets it from the peer's verified identity.
+message StreamEnds {
+  string target = 1;
+  string source = 2;
 }
 
 // Served by each site's operator, locally to its node plugins and remotely

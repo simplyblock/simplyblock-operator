@@ -453,7 +453,9 @@ type frames interface {
 	closeSend() error
 }
 
-type clientFrames struct{ s sitev1.RelayService_OpenClient }
+type clientFrames struct {
+	s sitev1.RelayService_OpenClient
+}
 
 func (c clientFrames) send(data []byte) error {
 	return c.s.Send(&sitev1.OpenRequest{Kind: &sitev1.OpenRequest_Data{Data: data}})
@@ -466,7 +468,9 @@ func (c clientFrames) recv() ([]byte, error) {
 
 func (c clientFrames) closeSend() error { return c.s.CloseSend() }
 
-type serverFrames struct{ s sitev1.RelayService_OpenServer }
+type serverFrames struct {
+	s sitev1.RelayService_OpenServer
+}
 
 func (s serverFrames) send(data []byte) error { return s.s.Send(&sitev1.OpenResponse{Data: data}) }
 

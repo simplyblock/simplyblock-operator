@@ -13,10 +13,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/simplyblock/atlas/statemachine"
 
@@ -176,7 +178,35 @@ func (r *StorageClusterReconciler) stretchedStatus(
 			status.PeerNodesOnline++
 		}
 	}
+	status.SiteLink = r.probeSiteLink(ctx, cluster)
 	return status, nil
+}
+
+// siteLinkProbeTimeout bounds one check of the site link, which crosses the
+// relay twice and must not hold up the status write behind it.
+const siteLinkProbeTimeout = 5 * time.Second
+
+// probeSiteLink asks the other site's operator to answer over the site link,
+// addressed by its managed cluster's name, and reports whether it did. It
+// reports nothing when this operator runs no site link.
+func (r *StorageClusterReconciler) probeSiteLink(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+) simplyblockv1alpha2.StretchedSiteLink {
+	if r.SiteLink == nil {
+		return ""
+	}
+	peer := cluster.Spec.Stretched.PeerCluster
+	if peer == "" {
+		peer = cluster.Spec.Stretched.PeerSite
+	}
+	ctx, cancel := context.WithTimeout(ctx, siteLinkProbeTimeout)
+	defer cancel()
+	if err := r.SiteLink.ProbePeer(ctx, peer); err != nil {
+		logf.FromContext(ctx).Info("the site link does not reach the other site's operator",
+			"peer", peer, "error", err.Error())
+		return simplyblockv1alpha2.StretchedSiteLinkUnreachable
+	}
+	return simplyblockv1alpha2.StretchedSiteLinkConnected
 }
 
 // announceStretched raises the events a change of the stretched status is owed:
@@ -202,8 +232,25 @@ func (r *StorageClusterReconciler) announceStretched(
 		}
 		r.Recorder.Eventf(cluster, nil, eventType, SiteRecordChanged, SiteRecordChanged, "%s", message)
 	}
+	var wasLink simplyblockv1alpha2.StretchedSiteLink
+	if before != nil {
+		wasLink = before.SiteLink
+	}
+	if wasLink != after.SiteLink && after.SiteLink != "" {
+		eventType, message := corev1.EventTypeNormal, "the site link reaches the other site's operator"
+		if after.SiteLink == simplyblockv1alpha2.StretchedSiteLinkUnreachable {
+			eventType, message = corev1.EventTypeWarning, "the site link does not reach the other site's operator"
+		}
+		r.Recorder.Eventf(cluster, nil, eventType, SiteLinkChanged, SiteLinkChanged, "%s", message)
+	}
 	if wasRole != "" && wasRole != after.Role {
 		r.Recorder.Eventf(cluster, nil, corev1.EventTypeNormal, RoleChanged, RoleChanged,
 			"this site's role changed from %s to %s", wasRole, after.Role)
 	}
+}
+
+// SiteLinkProber checks the site link to another site's operator, named by its
+// managed cluster.
+type SiteLinkProber interface {
+	ProbePeer(ctx context.Context, site string) error
 }

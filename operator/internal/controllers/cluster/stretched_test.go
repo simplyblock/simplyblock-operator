@@ -8,6 +8,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -428,5 +429,61 @@ func TestARoleSwapLeavesATaskCancelAlone(t *testing.T) {
 	reconcileOps(t, r, 1)
 	if rec.has(RoleLost) {
 		t.Error("a task cancel on a follower was ended as RoleLost")
+	}
+}
+
+// fakeSiteLink answers a probe of the other site's operator with err, and
+// records which site it was asked about.
+type fakeSiteLink struct {
+	err   error
+	asked string
+}
+
+func (f *fakeSiteLink) ProbePeer(_ context.Context, site string) error {
+	f.asked = site
+	return f.err
+}
+
+// Design §7: a stretched site reports whether the site link reaches the other
+// site's operator, addressed by the other site's member name.
+func TestTheSiteLinkToThePeerSiteIsReported(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want simplyblockv1alpha2.StretchedSiteLink
+	}{
+		{name: "the peer answers", want: simplyblockv1alpha2.StretchedSiteLinkConnected},
+		{name: "the peer does not", err: errors.New("no live session"), want: simplyblockv1alpha2.StretchedSiteLinkUnreachable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &fakeControlPlane{
+				cluster: func(string) (webapi.ClusterResponse, error) { return syncCluster(), nil },
+			}
+			link := &fakeSiteLink{err: tc.err}
+			cluster := newTestCluster(asSite(simplyblockv1alpha2.StretchedRoleLeader))
+			cluster.Spec.Stretched.PeerCluster = "member-a"
+			r := newClusterReconciler(t, api, &recorder{}, cluster, clusterSecretOf())
+			r.SiteLink = link
+
+			got := reconcileCluster(t, r, 1).Status.Stretched
+			if got == nil || got.SiteLink != tc.want {
+				t.Errorf("status.stretched.siteLink = %+v, want %s", got, tc.want)
+			}
+			if link.asked != "member-a" {
+				t.Errorf("probed site %q, want the peer's member name member-a", link.asked)
+			}
+		})
+	}
+}
+
+// A cluster whose site link is not configured reports nothing about it.
+func TestNoSiteLinkReportsNothing(t *testing.T) {
+	api := &fakeControlPlane{
+		cluster: func(string) (webapi.ClusterResponse, error) { return syncCluster(), nil },
+	}
+	r := newClusterReconciler(t, api, &recorder{},
+		newTestCluster(asSite(simplyblockv1alpha2.StretchedRoleLeader)), clusterSecretOf())
+	if got := reconcileCluster(t, r, 1).Status.Stretched; got == nil || got.SiteLink != "" {
+		t.Errorf("status.stretched = %+v, want no siteLink without a site link", got)
 	}
 }

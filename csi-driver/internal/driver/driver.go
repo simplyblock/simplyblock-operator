@@ -154,6 +154,20 @@ func Run(conf *config.Config) {
 		}
 	}
 
+	// The site link, on a controller plugin of a stretched cluster's member.
+	// Like the operator link it is independent of the CSI server.
+	if conf.SiteLinkEnabled && conf.IsControllerServer && kubeClient != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		csilink.StartSiteLink(ctx, kubeClient, csilink.SiteLinkConfig{
+			Address:        conf.SiteLinkAddress,
+			AgentNamespace: conf.SiteLinkNamespace,
+			TokenFile:      conf.SiteLinkTokenFile,
+			ID:             link.ControllerPeer(conf.PodName),
+			InstanceUID:    conf.PodUID,
+		})
+	}
+
 	// The csi-addons Identity and Replication services register alongside the
 	// CSI services on the same socket. Identity is always registered (it just
 	// answers capability probes); Replication only when this process serves

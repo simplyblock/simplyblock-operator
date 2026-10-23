@@ -47,6 +47,9 @@ const (
 	// SiteRecordChanged says the control plane's record of a lost site changed:
 	// a site was recorded out, its drain or fence moved on, or it returned.
 	SiteRecordChanged = "SiteRecordChanged"
+	// SiteLinkChanged says whether the site link reaches the other site's
+	// operator changed: Normal when it does, Warning when it stops.
+	SiteLinkChanged = "SiteLinkChanged"
 	// RoleChanged says this site's stretched role changed, which moves the
 	// cluster-wide operations to or from this site's operator.
 	RoleChanged = "RoleChanged"

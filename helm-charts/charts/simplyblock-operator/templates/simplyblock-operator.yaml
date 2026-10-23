@@ -57,6 +57,14 @@ spec:
             {{- if .Values.csiLink.certSecret }}
             - --csi-link-cert-path=/etc/simplyblock/csi-link-certs
             {{- end }}
+            {{- if .Values.siteLink.enabled }}
+            # The site end of a stretched cluster's site link: the elected
+            # replica links to this site's fleet agent and, through it and the
+            # relay on the hub, reaches the other site's operator.
+            - --site-link
+            - --site-link-address={{ .Values.siteLink.address }}
+            - --site-link-namespace={{ .Values.siteLink.agentNamespace }}
+            {{- end }}
             {{- if .Values.volumeMigration.legacy }}
             # An upgrade turns this on so the migrations already raised against
             # the registered kind keep being driven. A rename and a scope change
@@ -80,6 +88,16 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            {{- if .Values.siteLink.enabled }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            {{- end }}
             - name: SIMPLYBLOCK_REBALANCER_IMAGE
               value: "{{ .Values.image.rebalancer.repository }}:{{ .Values.image.rebalancer.tag | default .Values.image.operator.tag }}"
             # The worker probe a discovery run creates as a Job per worker. It is
@@ -128,6 +146,11 @@ spec:
               name: csi-link-certs
               readOnly: true
             {{- end }}
+            {{- if .Values.siteLink.enabled }}
+            - mountPath: /var/run/secrets/simplyblock/site-link
+              name: site-link-token
+              readOnly: true
+            {{- end }}
             {{- if .Values.metricsAPI.enabled }}
             # Same arrangement as the webhook cert above, for the same reason:
             # cert-controller writes the aggregated API's serving cert only into
@@ -174,6 +197,17 @@ spec:
         # optional:true lets the pod start before the operator creates/populates it.
         # In cert-manager mode the operator writes the issued cert to disk itself,
         # so a writable emptyDir is required there instead.
+        {{- if .Values.siteLink.enabled }}
+        # Bound to this pod and to the site link's audience, so the fleet agent
+        # can tell this operator from any other holder of its ServiceAccount.
+        - name: site-link-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: simplyblock-site-link
+                  expirationSeconds: 3600
+        {{- end }}
         {{- if .Values.csiLink.certSecret }}
         # Optional. Set csiLink.certSecret to serve the link over TLS; the
         # Secret is the deployer's (a cert-manager Certificate, say) and its

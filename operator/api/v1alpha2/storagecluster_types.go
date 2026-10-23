@@ -671,6 +671,13 @@ type StretchedSpec struct {
 	// +k8s:immutable
 	PeerSite string `json:"peerSite"`
 
+	// PeerCluster is the other site's managed cluster: the name the hub knows
+	// it by, and the one the site link reaches that site's operator by. Empty
+	// means the same as peerSite.
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	PeerCluster string `json:"peerCluster,omitempty"`
+
 	// Role is Leader or Follower. A leader creates and activates the backend
 	// cluster and runs every cluster-wide operation; a follower adopts the
 	// cluster and manages only its own site's nodes. A change is a role swap,
@@ -706,7 +713,25 @@ type StretchedStatus struct {
 	// PeerNodesOnline is how many of them are online.
 	// +optional
 	PeerNodesOnline int32 `json:"peerNodesOnline,omitempty"`
+
+	// SiteLink is whether this site's operator reaches the other site's over
+	// the site link. Empty when the operator runs no site link.
+	// +optional
+	SiteLink StretchedSiteLink `json:"siteLink,omitempty"`
 }
+
+// StretchedSiteLink is the state of the site link to the other site's operator.
+// +kubebuilder:validation:Enum=Connected;Unreachable
+type StretchedSiteLink string
+
+const (
+	// StretchedSiteLinkConnected: the other site's operator answered over the
+	// site link on the last check.
+	StretchedSiteLinkConnected StretchedSiteLink = "Connected"
+	// StretchedSiteLinkUnreachable: it did not. The operator's log and the
+	// SiteLinkUnreachable event carry why.
+	StretchedSiteLinkUnreachable StretchedSiteLink = "Unreachable"
+)
 
 // StorageClusterSpec is the desired state of one simplyblock backend cluster.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.kms) || self.kms == oldSelf.kms",message="kms is immutable once set"

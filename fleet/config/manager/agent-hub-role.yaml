@@ -1,0 +1,17 @@
+# What a member's fleet agent may do on the hub. The add-on registration binds
+# it in the member's own namespace only (CurrentCluster), so an agent reads its
+# own site's relay endpoint and requests a token for its own site's link
+# ServiceAccount, and reaches no other member's.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simplyblock-site-link-agent
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["simplyblock-site-link"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    resourceNames: ["simplyblock-site-link"]
+    verbs: ["create"]

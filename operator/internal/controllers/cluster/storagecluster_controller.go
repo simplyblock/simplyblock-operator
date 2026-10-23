@@ -102,6 +102,10 @@ type StorageClusterReconciler struct {
 	API       ControlPlane
 	Namespace string
 
+	// SiteLink, when set, checks whether the other site's operator answers over
+	// the site link, for status.stretched.siteLink. Nil runs no check.
+	SiteLink SiteLinkProber
+
 	// Clusters is the cluster stream's cache, which is where every
 	// steady-state reading comes from (§4.4). It is root-scoped, so no
 	// reconciler opens it; it is optional, and a deployment without the

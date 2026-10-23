@@ -5,6 +5,12 @@ import (
 	"fmt"
 	"strings"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	authenticationv1 "k8s.io/api/authentication/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+
 	"github.com/simplyblock/atlas/errs"
 )
 
@@ -75,4 +81,64 @@ type peerContextKey struct{}
 func PeerFromContext(ctx context.Context) (PeerID, bool) {
 	id, ok := ctx.Value(peerContextKey{}).(PeerID)
 	return id, ok
+}
+
+// SiteAuthenticator is the relay's authenticator. A site's forwarder links with
+// a token for the site link's ServiceAccount in that site's namespace on the
+// hub, which the forwarder requests with the credentials the hub's add-on
+// registration gave it. The namespace is the site: Open Cluster Management names
+// a member's namespace on the hub after the member, and only that member's
+// add-on may request a token there.
+//
+// A forwarder claiming any other site, or a token for any other ServiceAccount,
+// is refused rather than corrected.
+type SiteAuthenticator struct {
+	// Client talks to the hub's API server. It needs create on tokenreviews.
+	Client kubernetes.Interface
+
+	// ServiceAccount is the site link's ServiceAccount name, the same in every
+	// member namespace.
+	ServiceAccount string
+
+	// Audiences, when set, is the audience the token must have been issued for.
+	Audiences []string
+}
+
+// Authenticate verifies a forwarder's token and returns the site it is for.
+func (a *SiteAuthenticator) Authenticate(ctx context.Context, token string, claim Claim) (Identity, error) {
+	if a.Client == nil || a.ServiceAccount == "" {
+		return Identity{}, status.Error(codes.Internal, "link: site authenticator is not configured")
+	}
+	if claim.ID.Kind != PeerKindSite {
+		return Identity{}, status.Errorf(codes.PermissionDenied, "link: only a site forwarder links to the relay, not a %s peer",
+			claim.ID.Kind)
+	}
+
+	review, err := a.Client.AuthenticationV1().TokenReviews().Create(ctx, &authenticationv1.TokenReview{
+		Spec: authenticationv1.TokenReviewSpec{Token: token, Audiences: a.Audiences},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		return Identity{}, status.Errorf(codes.Unavailable, "link: token review: %v", err)
+	}
+	if !review.Status.Authenticated {
+		reason := review.Status.Error
+		if reason == "" {
+			reason = "token not authenticated"
+		}
+		return Identity{}, status.Errorf(codes.Unauthenticated, "link: %s", reason)
+	}
+
+	namespace, account, err := splitServiceAccount(review.Status.User.Username)
+	if err != nil {
+		return Identity{}, status.Errorf(codes.PermissionDenied, "link: %v", err)
+	}
+	if account != a.ServiceAccount {
+		return Identity{}, status.Errorf(codes.PermissionDenied,
+			"link: ServiceAccount %s/%s is not the site link's", namespace, account)
+	}
+	if claim.ID.Name != "" && claim.ID.Name != namespace {
+		return Identity{}, status.Errorf(codes.PermissionDenied,
+			"link: forwarder claimed site %s but its token is for site %s", claim.ID.Name, namespace)
+	}
+	return Identity{ID: SitePeer(namespace), InstanceUID: claim.InstanceUID}, nil
 }

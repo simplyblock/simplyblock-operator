@@ -1,0 +1,62 @@
+# The fleet manager's permissions on the hub: the members it gives site-link
+# objects to, the TokenReviews its relay verifies agents with, its certificate
+# Secret, and its leader election.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: simplyblock-fleet-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simplyblock-fleet-manager
+rules:
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["managedclusters"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update"]
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: simplyblock-fleet-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: simplyblock-fleet-manager
+subjects:
+  - kind: ServiceAccount
+    name: simplyblock-fleet-manager
+    namespace: simplyblock
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: simplyblock-fleet-manager
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: simplyblock-fleet-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: simplyblock-fleet-manager
+subjects:
+  - kind: ServiceAccount
+    name: simplyblock-fleet-manager

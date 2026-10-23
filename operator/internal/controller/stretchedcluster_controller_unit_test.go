@@ -216,6 +216,28 @@ func TestEachDraftIsSizedAsOneSiteOfASyncCluster(t *testing.T) {
 	}
 }
 
+// Design §7: each draft's stretched block names the other site's managed
+// cluster, which is the name the site link addresses that site's operator by.
+func TestEachDraftNamesThePeersManagedCluster(t *testing.T) {
+	r, cl, _ := newStretchedReconciler(t, newStretched(nil))
+	got := reconcileStretched(t, r, cl, 2)
+	for _, site := range got.Spec.Sites {
+		project(t, cl, got, site.Cluster, site.Site, "draft", stretchedDraft(got, false))
+	}
+	got = reconcileStretched(t, r, cl, 2)
+	for _, site := range got.Spec.Sites {
+		tpl := draftApply(t, siteWork(t, cl, got, site.Cluster, site.Site))["cluster"].(map[string]any)
+		stretched, _ := tpl["stretched"].(map[string]any)
+		want := strLeaderMC
+		if site.Cluster == strLeaderMC {
+			want = strFollowerMC
+		}
+		if stretched["peerCluster"] != want {
+			t.Errorf("%s: stretched.peerCluster = %v, want %s", site.Cluster, stretched["peerCluster"], want)
+		}
+	}
+}
+
 // §5.4: a site whose StorageCluster holds in its preflight states why in its
 // status message, and the hub carries that reason into status.sites[], so the
 // hold reads from the hub without a site kubeconfig.
