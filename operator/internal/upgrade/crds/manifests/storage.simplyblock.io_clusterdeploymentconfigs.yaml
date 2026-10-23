@@ -93,8 +93,10 @@ spec:
                   guards are what carry documents written before the default existed.
                 type: boolean
               cluster:
-                description: Cluster is the StorageCluster to create. Ignored when
-                  ClusterRef is set.
+                description: |-
+                  Cluster is the StorageCluster to create, or the sizing of the members to
+                  add when ClusterRef names a supercluster, whose name is then not used.
+                  Ignored when ClusterRef names a standalone cluster or a member.
                 properties:
                   arbitration:
                     description: |-
@@ -691,8 +693,10 @@ spec:
                     && !(has(self.enableArbitration) && self.enableArbitration))
               clusterRef:
                 description: |-
-                  ClusterRef names an existing StorageCluster this document adds nodes to.
-                  Absent means the document creates the cluster in Cluster. Setting it to a
+                  ClusterRef names an existing StorageCluster this document adds to: the
+                  nodes of every node set to a standalone cluster or a member, and one new
+                  member per node set to a supercluster. Absent means the document creates
+                  the cluster in Cluster. Setting it to a
                   cluster that does not exist, or leaving it absent when one already does,
                   is refused rather than reconciled.
 
@@ -864,6 +868,78 @@ spec:
                     workers a document adds or grows together. It carries no sizing, because sizing
                     is uniform across a cluster and is stated once in ClusterTemplate.
                   properties:
+                    cluster:
+                      description: |-
+                        Cluster overrides the document's cluster template for the member cluster
+                        this node set becomes, for a node set whose hardware differs from the
+                        rest. A field left unset takes the template's value. Valid on a document
+                        with more than one node set, or one naming a cluster in clusterRef.
+                      properties:
+                        maxSubsystemCount:
+                          description: |-
+                            MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
+                            node of this member serves.
+                          format: int32
+                          maximum: 75
+                          minimum: 10
+                          type: integer
+                        minHugePagesSize:
+                          description: |-
+                            MinHugePagesSize is the smallest huge-page allocation each storage node of
+                            this member makes: 100G or 1T, where a bare number is gigabytes.
+                          maxLength: 32
+                          type: string
+                        nodesPerSocket:
+                          description: |-
+                            NodesPerSocket is how many storage nodes run per NUMA socket on this
+                            member's workers.
+                          format: int32
+                          maximum: 8
+                          minimum: 1
+                          type: integer
+                        socketsToUse:
+                          description: |-
+                            SocketsToUse are the NUMA sockets that run storage nodes on this member's
+                            workers. With NodesPerSocket it decides how many storage nodes each worker
+                            runs.
+                          items:
+                            maxLength: 16
+                            type: string
+                          maxItems: 16
+                          type: array
+                          x-kubernetes-list-type: set
+                        stripe:
+                          description: Stripe is this member's erasure-coding layout.
+                          properties:
+                            dataChunks:
+                              description: DataChunks is the number of data chunks
+                                per stripe (ndcs).
+                              format: int32
+                              minimum: 1
+                              type: integer
+                            parityChunks:
+                              description: |-
+                                ParityChunks is the number of parity chunks per stripe (npcs), and
+                                therefore how many chunk losses a stripe survives.
+                              format: int32
+                              minimum: 0
+                              type: integer
+                          type: object
+                          x-kubernetes-validations:
+                          - message: the erasure-coding scheme must be one of 1+0,
+                              1+1, 2+1, 4+1, 1+2, 2+2, or 4+2, written as dataChunks+parityChunks,
+                              and an unstated half is 1
+                            rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks)
+                              ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1],
+                              [4, 1], [1, 2], [2, 2], [4, 2]]'
+                        vcpuCount:
+                          description: |-
+                            VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
+                            this member.
+                          format: int32
+                          minimum: 4
+                          type: integer
+                      type: object
                     groups:
                       description: Groups are the sets of workers sharing one configuration.
                       items:
@@ -1016,23 +1092,26 @@ spec:
               rule: '!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf'
             - message: approval cannot be withdrawn
               rule: '!has(oldSelf.approved) || !oldSelf.approved || self.approved'
-            - message: 'every group must name the same device class: all nvme or all
-                block'
-              rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)))
-                || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))
+            - message: 'every group of a node set must name the same device class:
+                all nvme or all block'
+              rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))
+                || s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))
+            - message: a node set overrides the cluster template only when the document
+                has more than one node set or names a cluster in clusterRef
+              rule: size(self.nodeSets) > 1 || has(self.clusterRef) || self.nodeSets.all(s,
+                !has(s.cluster))
             - message: spec.cluster.openshift is what a deployment onto OpenShift
                 states, so spec.environment has to be OpenShift
               rule: '!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment)
                 && self.environment == ''OpenShift'')'
           status:
-            description: ClusterDeploymentConfigStatus is the observed state of the
-              document.
             properties:
               clusterRef:
                 description: |-
-                  ClusterRef names the StorageCluster the expansion produced or added to. It
-                  is a record rather than a dependency: nothing resolves it after expansion,
-                  which is what makes the document safe to delete.
+                  ClusterRef names the StorageCluster the expansion produced or added to,
+                  the supercluster when it produced one. It is a record rather than a
+                  dependency: nothing resolves it after expansion, which is what makes the
+                  document safe to delete.
                 type: string
               expansionStartedAt:
                 description: |-
@@ -1047,6 +1126,31 @@ spec:
                   which nothing in memory and no step deadline supplies.
                 format: date-time
                 type: string
+              members:
+                description: |-
+                  Members are the member clusters the expansion created or is creating, one
+                  per node set, when the document produces a supercluster. Each name is
+                  recorded before its member is created, so that a retry creates the same
+                  member rather than drawing another name.
+                items:
+                  description: |-
+                    ClusterDeploymentConfigStatus is the observed state of the document.
+                    ExpansionMember is a member cluster the expansion drew a name for.
+                  properties:
+                    cluster:
+                      description: Cluster is the member StorageCluster's name, <cluster>-<nodeset>-<suffix>.
+                      type: string
+                    nodeSet:
+                      description: NodeSet is the node set the member is made of.
+                      type: string
+                  required:
+                  - cluster
+                  - nodeSet
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - nodeSet
+                x-kubernetes-list-type: map
               message:
                 description: |-
                   Message is the reason the phase is what it is: one sentence, replaced as

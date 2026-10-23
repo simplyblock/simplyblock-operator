@@ -82,43 +82,8 @@ func (r *StoragePoolReconciler) reconcileDeletion(
 		}
 	}
 
-	classes, _, err := AssignedClasses(ctx, r.Client, p)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if authored := authoredClasses(classes); len(authored) > 0 {
-		r.event(p, corev1.EventTypeWarning, StorageClassStillAssigned,
-			"this pool cannot be deleted while %s assigned to it; "+
-				"delete %s and the pool goes on its own",
-			pluralClasses(authored), strings.Join(authored, ", "))
-		return r.hold(ctx, p, simplyblockv1alpha2.StoragePoolPhaseDeleting,
-			fmt.Sprintf("held: storage class %s is still assigned", strings.Join(authored, ", ")),
-			requeueHeld)
-	}
-
-	bound, err := r.boundVolumes(ctx, p)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if len(bound) > 0 {
-		r.event(p, corev1.EventTypeWarning, VolumesStillBound,
-			"this pool cannot be deleted while %d persistent volume(s) are bound to it, "+
-				"starting with %q; delete the claims and the pool goes on its own",
-			len(bound), bound[0])
-		return r.hold(ctx, p, simplyblockv1alpha2.StoragePoolPhaseDeleting,
-			fmt.Sprintf("held: %d persistent volume(s) still bound", len(bound)),
-			requeueHeld)
-	}
-
-	// Nothing holds it. The operator's own classes go first, because a class
-	// that outlived its pool provisions claims that then fail in the control
-	// plane rather than in Kubernetes.
-	for i := range classes {
-		class := &classes[i]
-		if err := r.Delete(ctx, class); err != nil && client.IgnoreNotFound(err) != nil {
-			return ctrl.Result{}, fmt.Errorf("delete the storage class %q: %w", class.Name, err)
-		}
-		log.Info("deleted the storage class the operator wrote for this pool", "class", class.Name)
+	if held, result, err := r.holdDeletion(ctx, p); held || err != nil {
+		return result, err
 	}
 
 	if p.Status.UUID != "" {
@@ -136,13 +101,61 @@ func (r *StoragePoolReconciler) reconcileDeletion(
 		// pool would have needed, and clearing them before the pool is gone
 		// would strip a running workload's access on the way to a delete that
 		// might yet fail.
-		if err := r.syncNodeLabels(ctx, p, nil); err != nil {
+		if err := r.syncNodeLabels(ctx, poolLabelID(p), nil); err != nil {
 			log.Error(err, "clearing the pool's node labels")
 			return ctrl.Result{RequeueAfter: requeueNotReady}, nil
 		}
 	}
 
 	return r.releaseFinalizer(ctx, p)
+}
+
+// holdDeletion holds the deletion while an authored class is assigned or a
+// volume is bound, and once nothing holds it deletes the classes the operator
+// wrote, which go before the backend pool because a class that outlived its
+// pool provisions claims that then fail in the control plane rather than in
+// Kubernetes.
+func (r *StoragePoolReconciler) holdDeletion(
+	ctx context.Context, p *simplyblockv1alpha2.StoragePool,
+) (bool, ctrl.Result, error) {
+	classes, _, err := AssignedClasses(ctx, r.Client, p)
+	if err != nil {
+		return false, ctrl.Result{}, err
+	}
+	if authored := authoredClasses(classes); len(authored) > 0 {
+		r.event(p, corev1.EventTypeWarning, StorageClassStillAssigned,
+			"this pool cannot be deleted while %s assigned to it; "+
+				"delete %s and the pool goes on its own",
+			pluralClasses(authored), strings.Join(authored, ", "))
+		result, err := r.hold(ctx, p, simplyblockv1alpha2.StoragePoolPhaseDeleting,
+			fmt.Sprintf("held: storage class %s is still assigned", strings.Join(authored, ", ")),
+			requeueHeld)
+		return true, result, err
+	}
+
+	bound, err := r.boundVolumes(ctx, p)
+	if err != nil {
+		return false, ctrl.Result{}, err
+	}
+	if len(bound) > 0 {
+		r.event(p, corev1.EventTypeWarning, VolumesStillBound,
+			"this pool cannot be deleted while %d persistent volume(s) are bound to it, "+
+				"starting with %q; delete the claims and the pool goes on its own",
+			len(bound), bound[0])
+		result, err := r.hold(ctx, p, simplyblockv1alpha2.StoragePoolPhaseDeleting,
+			fmt.Sprintf("held: %d persistent volume(s) still bound", len(bound)),
+			requeueHeld)
+		return true, result, err
+	}
+
+	for i := range classes {
+		class := &classes[i]
+		if err := r.Delete(ctx, class); err != nil && client.IgnoreNotFound(err) != nil {
+			return false, ctrl.Result{}, fmt.Errorf("delete the storage class %q: %w", class.Name, err)
+		}
+		logf.FromContext(ctx).Info("deleted the storage class the operator wrote for this pool", "class", class.Name)
+	}
+	return false, ctrl.Result{}, nil
 }
 
 func (r *StoragePoolReconciler) releaseFinalizer(
@@ -217,6 +230,17 @@ func (r *StoragePoolReconciler) boundVolumes(
 		return nil, fmt.Errorf("list the persistent volumes: %w", err)
 	}
 
+	segments := map[string]bool{p.Name: true}
+	if p.Status.UUID != "" {
+		segments[p.Status.UUID] = true
+	}
+	// A pool of a supercluster is a backend pool in each member, and a volume
+	// in any of them is a volume of this pool.
+	for _, row := range p.Status.Members {
+		if row.UUID != "" {
+			segments[row.UUID] = true
+		}
+	}
 	var bound []string
 	for i := range volumes.Items {
 		pv := &volumes.Items[i]
@@ -227,7 +251,7 @@ func (r *StoragePoolReconciler) boundVolumes(
 		if segment == "" {
 			continue
 		}
-		if segment == p.Status.UUID || segment == p.Name {
+		if segments[segment] {
 			bound = append(bound, pv.Name)
 		}
 	}

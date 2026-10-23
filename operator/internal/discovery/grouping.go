@@ -71,6 +71,12 @@ type Worker struct {
 	// what makes two workers groupable for the same reason the management
 	// interface is.
 	Data []string
+
+	// FailureDomain is the value of the failure-domain label on the worker's
+	// Node, empty when it carries none or one the field does not accept. It is
+	// part of what makes two workers groupable, because a NodeGroup names one
+	// failure domain for every worker it lists.
+	FailureDomain string
 }
 
 // Addresses is how the draft names this worker's devices, ascending and without
@@ -117,6 +123,9 @@ type Group struct {
 	// DataInterfaces are the interfaces every worker in the group carries data
 	// traffic on, empty when they serve data on the management interface.
 	DataInterfaces []string
+
+	// FailureDomain is the failure domain every worker in the group is in.
+	FailureDomain string
 }
 
 // Grouper puts workers into groups.
@@ -146,7 +155,7 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 
 	for _, worker := range workers {
 		addresses := worker.Addresses()
-		signature := worker.Class.signature(addresses, worker.Mgmt.Name, worker.Data)
+		signature := worker.Class.signature(addresses, worker.Mgmt.Name, worker.Data) + "\x00" + worker.FailureDomain
 
 		group, seen := bySignature[signature]
 		if !seen {
@@ -155,6 +164,7 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 				Addresses:      addresses,
 				MgmtInterface:  worker.Mgmt.Name,
 				DataInterfaces: worker.Data,
+				FailureDomain:  worker.FailureDomain,
 			}
 			bySignature[signature] = group
 			order = append(order, signature)
@@ -235,12 +245,12 @@ type NodeSetBuilder interface {
 	Build(groups []Group) []simplyblockv1alpha2.NodeSet
 }
 
-// SingleNodeSet puts every group into one node set.
+// SingleNodeSet puts every group into one node set, which the size split then
+// divides where it holds more workers than one member may.
 //
-// A node set is a rack, and nothing a probe reports says which rack a worker is
-// in: the Kubernetes API carries a zone label on some fleets and nothing on
-// most, and a zone is not a rack. So one set, named for what it is, and a
-// reviewer who knows the racks splits it.
+// A node set is a member cluster, and nothing a probe reports says how a fleet
+// is meant to be divided beyond its topology labels. So one set, named for what
+// it is, and a reviewer who knows the racks splits it.
 type SingleNodeSet struct {
 	// SetName is the node set's name. Empty is DefaultNodeSetName.
 	SetName string
@@ -251,56 +261,25 @@ type SingleNodeSet struct {
 // the racks can see there is nothing to preserve in renaming it.
 const DefaultNodeSetName = "discovered"
 
-// MaxGroupsPerNodeSet is what NodeSet.Groups accepts, mirrored from the API's
-// own marker. A draft that exceeds it is one the API server refuses, and the
-// refusal arrives at the create rather than in anything the run said.
-const MaxGroupsPerNodeSet = 64
-
 func (SingleNodeSet) Name() string { return "single node set" }
 
-// Build puts every group into one node set, and into as few more as the API
-// leaves it no choice about.
-//
-// One set is the intent: a node set is a rack, nothing a probe reports says
-// which rack a worker is in, and a reviewer who knows the racks splits it. The
-// overflow is not a second opinion about topology — it is arithmetic. A block
-// draft names each device by the persistent name only that device carries, so a
-// fleet of real hardware produces one group per worker, and past sixty-four
-// workers the set is larger than the field accepts.
-//
-// The alternative was a run that reports success and writes a document the API
-// server then refuses, for a limit nothing in the run mentioned. A split
-// document is valid, carries every worker, and is as easy to regroup as the
-// single one it would otherwise have been.
+// Build puts every group into one node set.
 func (b SingleNodeSet) Build(groups []Group) []simplyblockv1alpha2.NodeSet {
 	if len(groups) == 0 {
 		return nil
 	}
-
 	name := b.SetName
 	if name == "" {
 		name = DefaultNodeSetName
 	}
-
-	var sets []simplyblockv1alpha2.NodeSet
-	for chunk := range slices.Chunk(groups, MaxGroupsPerNodeSet) {
-		// The first set keeps the name a fleet that fits has always had, so
-		// nothing about the ordinary draft changes.
-		setName := name
-		if len(sets) > 0 {
-			setName = fmt.Sprintf("%s-%d", name, len(sets)+1)
-		}
-
-		set := simplyblockv1alpha2.NodeSet{
-			Name:   setName,
-			Groups: make([]simplyblockv1alpha2.NodeGroup, 0, len(chunk)),
-		}
-		for _, group := range chunk {
-			set.Groups = append(set.Groups, nodeGroupOf(group))
-		}
-		sets = append(sets, set)
+	set := simplyblockv1alpha2.NodeSet{
+		Name:   name,
+		Groups: make([]simplyblockv1alpha2.NodeGroup, 0, len(groups)),
 	}
-	return sets
+	for _, group := range groups {
+		set.Groups = append(set.Groups, nodeGroupOf(group))
+	}
+	return []simplyblockv1alpha2.NodeSet{set}
 }
 
 // nodeGroupOf renders one group as the API's NodeGroup.
@@ -315,6 +294,7 @@ func nodeGroupOf(group Group) simplyblockv1alpha2.NodeGroup {
 		Workers:        workers,
 		MgmtInterface:  group.MgmtInterface,
 		DataInterfaces: group.DataInterfaces,
+		FailureDomain:  group.FailureDomain,
 	}
 	if len(group.Addresses) > 0 {
 		selection := &simplyblockv1alpha2.DeviceSelection{}

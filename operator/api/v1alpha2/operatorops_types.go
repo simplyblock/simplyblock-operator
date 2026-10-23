@@ -197,6 +197,16 @@ type DiscoverSpec struct {
 	// +optional
 	EnableControlPlaneNodes *bool `json:"enableControlPlaneNodes,omitempty"`
 
+	// FailureDomainLabel is the Node label whose value becomes each worker's
+	// failure domain in the draft, for fleets that label racks or power feeds.
+	// Defaults to topology.kubernetes.io/zone. A worker without the label gets
+	// no failure domain, and the run reports it. A value that is not a valid
+	// failure domain is reported as well, naming the worker, and not used.
+	// +kubebuilder:validation:MaxLength=317
+	// +kubebuilder:default="topology.kubernetes.io/zone"
+	// +optional
+	FailureDomainLabel string `json:"failureDomainLabel,omitempty"`
+
 	// EnableLogicalBlockDevices scans a worker's available logical block devices
 	// instead of its available NVMe devices. It selects the class rather than
 	// adding one, because the draft a run writes describes one cluster and a

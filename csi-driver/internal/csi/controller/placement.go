@@ -6,6 +6,7 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	rand "math/rand/v2"
 	"strconv"
@@ -20,7 +21,9 @@ type clusterSelection struct {
 	topology  map[string]string
 }
 
-func (cs *Server) resolveClusterSelection(req *csi.CreateVolumeRequest) (*clusterSelection, error) {
+func (cs *Server) resolveClusterSelection(
+	ctx context.Context, req *csi.CreateVolumeRequest,
+) (*clusterSelection, error) {
 	params := req.GetParameters()
 	if params == nil {
 		return nil, fmt.Errorf("missing parameters in CreateVolumeRequest")
@@ -29,6 +32,11 @@ func (cs *Server) resolveClusterSelection(req *csi.CreateVolumeRequest) (*cluste
 	if id, ok := params[csicommon.ParamClusterID]; ok {
 		id = strings.TrimSpace(id)
 		if id != "" {
+			// A cluster_id the secret does not carry may name a
+			// supercluster, whose member the operator chooses.
+			if !inSecret(id) {
+				return cs.placeInSupercluster(ctx, req, id)
+			}
 			return &clusterSelection{clusterID: id}, nil
 		}
 	}

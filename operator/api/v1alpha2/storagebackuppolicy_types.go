@@ -119,9 +119,30 @@ type AttachedClaim struct {
 	// +optional
 	LvolID string `json:"lvolID,omitempty"`
 
+	// ClusterID is the backend cluster the claim's volume is in, whose policy
+	// it is attached to.
+	// +optional
+	ClusterID string `json:"clusterID,omitempty"`
+
 	// AttachedAt is when the claim started matching the selector.
 	// +optional
 	AttachedAt *metav1.Time `json:"attachedAt,omitempty"`
+}
+
+// BackupPolicyMemberStatus is the policy in one member cluster of a
+// supercluster.
+type BackupPolicyMemberStatus struct {
+	// Cluster is the member StorageCluster.
+	Cluster string `json:"cluster"`
+
+	// ClusterID is the member's backend cluster.
+	// +optional
+	ClusterID string `json:"clusterID,omitempty"`
+
+	// PolicyID is the control plane's identifier for the policy in that
+	// member.
+	// +optional
+	PolicyID string `json:"policyID,omitempty"`
 }
 
 // StorageBackupPolicyStatus is the observed state of the policy.
@@ -138,6 +159,15 @@ type StorageBackupPolicyStatus struct {
 	// PolicyID is the control plane's identifier for the policy.
 	// +optional
 	PolicyID string `json:"policyID,omitempty"`
+
+	// Members is the policy in each member, when spec.clusterRef names a
+	// supercluster: one control-plane policy per member, each covering the
+	// claims whose volumes are in that member. ClusterID and PolicyID stay
+	// empty for such a policy.
+	// +optional
+	// +listType=map
+	// +listMapKey=cluster
+	Members []BackupPolicyMemberStatus `json:"members,omitempty"`
 
 	// AttachedClaims are the claims the policy currently covers. Detaching one
 	// stops new backups being taken and deletes none of the existing ones.

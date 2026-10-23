@@ -12,7 +12,9 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/csi-driver/internal/clusters"
+	"github.com/simplyblock/csi-driver/internal/controlplane"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
@@ -148,7 +150,16 @@ func (cs *Server) handleVolumeSource(
 	// Use raw bytes to avoid decimal/binary unit ambiguity in clone sizing.
 	newSize := strconv.FormatInt(sizeBytes, 10)
 	klog.Infof("CloneVolume : cloneName=%s", cloneName)
-	volumeID, err := sbclient.CloneVolume(ctx, spdkVol.VolumeID, cloneName, newSize, pvcFullName)
+	var volumeID string
+	err = cs.onActiveVolume(ctx, srcVolumeID, spdkVol, sbclient,
+		func(h *lvol.Handle, c *controlplane.ClusterClient) error {
+			id, err := c.CloneVolume(ctx, h.VolumeID, cloneName, newSize, pvcFullName)
+			if err == nil {
+				// The clone lands beside the volume it was taken of.
+				volumeID, spdkVol, sbclient = id, h, c
+			}
+			return err
+		})
 	if err != nil {
 		if !classifyCreateVolumeError(err).IsIdempotent() {
 			klog.Errorf("error cloning volume: %v", err)

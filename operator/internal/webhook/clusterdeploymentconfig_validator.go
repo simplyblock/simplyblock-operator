@@ -195,7 +195,7 @@ func (v *ClusterDeploymentConfigValidator) checkApproval(
 	// describes. It is the one check here that nothing downstream repeats: the
 	// control plane validates the scheme on the cluster create, which lands after
 	// this edit, and its activation gate counts devices rather than nodes.
-	stripe, err := deployment.StripeChecks(ctx, v.Client, namespace, config)
+	stripe, err := deployment.ClusterStripeChecks(ctx, v.Client, namespace, config)
 	if err != nil {
 		return nil, err
 	}

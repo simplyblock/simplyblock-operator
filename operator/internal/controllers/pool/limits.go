@@ -18,6 +18,7 @@ package pool
 import (
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -108,12 +109,34 @@ func limitsStatusFromDTO(dto poolDTO) *simplyblockv1alpha2.PoolLimitsStatus {
 	iops := int32(dto.MaxRwIOPS)
 	rw, rd, wr := int32(dto.MaxRwMbytes), int32(dto.MaxRMbytes), int32(dto.MaxWMbytes)
 	return &simplyblockv1alpha2.PoolLimitsStatus{
-		Host: dto.QoSHost,
-		IOPS: &iops,
+		Host:     dto.QoSHost,
+		Capacity: capacityString(dto.MaxSize),
+		IOPS:     &iops,
 		Throughput: &simplyblockv1alpha2.ThroughputLimits{
 			Read: &rd, Write: &wr, ReadWrite: &rw,
 		},
 	}
+}
+
+// capacityString writes a byte count as a quantity, and zero, the control
+// plane's unlimited, as nothing.
+func capacityString(bytes int64) string {
+	if bytes <= 0 {
+		return ""
+	}
+	return resource.NewQuantity(bytes, resource.DecimalSI).String()
+}
+
+// capacityBytes reads a quantity capacityString wrote back as a byte count.
+func capacityBytes(quantity string) int64 {
+	if quantity == "" {
+		return 0
+	}
+	q, err := resource.ParseQuantity(quantity)
+	if err != nil {
+		return 0
+	}
+	return q.Value()
 }
 
 func nodeNames(nodes []corev1.Node) []string {

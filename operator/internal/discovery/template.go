@@ -175,6 +175,28 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 			"is created and never re-applies it, so a cluster created without this is "+
 			"one nobody can turn it on for.")
 	}
+	if len(seed.SocketsToUse) > 0 {
+		out.Template.SocketsToUse = slices.Clone(seed.SocketsToUse)
+		out.Notes = append(out.Notes, statedNote("socketsToUse", strings.Join(seed.SocketsToUse, ", ")))
+	}
+	if seed.NodesPerSocket != nil {
+		out.Template.NodesPerSocket = seed.NodesPerSocket
+		out.Notes = append(out.Notes, statedNote("nodesPerSocket", fmt.Sprintf("%d", *seed.NodesPerSocket)))
+	}
+	if seed.EnableFailureDomains != nil {
+		out.Template.EnableFailureDomains = seed.EnableFailureDomains
+		out.Notes = append(out.Notes, statedNote("enableFailureDomains", enabled(*seed.EnableFailureDomains)))
+	} else if plan.FailureDomains {
+		if refused := failureDomainLayoutRefusal(plan, erasurecoding.SchemeOf(out.Template.Stripe)); refused != "" {
+			out.Notes = append(out.Notes, "enableFailureDomains is off although every worker carries "+
+				"a failure domain, because the control plane would refuse to activate the cluster: "+
+				refused)
+		} else {
+			out.Template.EnableFailureDomains = ptr.To(true)
+			out.Notes = append(out.Notes, "enableFailureDomains is on, because every worker carries a "+
+				"failure domain, and each group names its workers' domain")
+		}
+	}
 	if seed.EnableAtomicity4K != nil {
 		out.Template.EnableAtomicity4K = seed.EnableAtomicity4K
 		out.Notes = append(out.Notes, statedNote("enableAtomicity4K",
@@ -195,6 +217,34 @@ func statedNote(field, value string) string {
 	return fmt.Sprintf(
 		"%s is %s, stated by this installation's bootstrap configuration rather than "+
 			"derived from what this run found.", field, value)
+}
+
+// failureDomainLayoutRefusal is why the control plane would refuse to activate
+// a cluster of the plan in failure-domain mode, or "" when it would not. Each
+// node set is a cluster of its own, so each is answered on its own.
+func failureDomainLayoutRefusal(plan Plan, scheme erasurecoding.Scheme) string {
+	for _, set := range plan.NodeSets {
+		hosts := map[string]map[string]struct{}{}
+		for _, group := range set.Groups {
+			if hosts[group.FailureDomain] == nil {
+				hosts[group.FailureDomain] = map[string]struct{}{}
+			}
+			for _, worker := range group.Workers {
+				hosts[group.FailureDomain][worker] = struct{}{}
+			}
+		}
+		layout := make(map[string]int, len(hosts))
+		for domain, workers := range hosts {
+			layout[domain] = len(workers)
+		}
+		if refused := erasurecoding.FailureDomainViolation(scheme, layout); refused != "" {
+			if len(plan.NodeSets) > 1 {
+				return fmt.Sprintf("node set %s: %s", set.Name, refused)
+			}
+			return refused
+		}
+	}
+	return ""
 }
 
 // describeStripe reads a seeded layout back as a reviewer would write it, and
@@ -252,13 +302,32 @@ func enabled(on bool) string {
 // stripe on its own device, so its scheme follows from the devices the worker
 // hands over for data (all of them, less the one a proposed journal device
 // takes): three or more carry 2+1, two carry 1+1, and one carries only 1+0.
+//
+// A draft of several node sets is a supercluster, each node set a member that
+// stripes across its own nodes alone (design-superclusters.md §5.1), so the
+// ladder is walked for the smallest node set. The cluster mode is one per
+// document until a node set can override it, so such a draft proposes neither
+// single-node nor two-node mode: a one-worker tier would otherwise make every
+// member single-node.
 func stripeFor(plan Plan, journalDevice bool) (*simplyblockv1alpha2.StripeSpec, erasurecoding.Topology, string) {
 	nodes := fleetSize(plan)
+	members := len(plan.NodeSets) > 1
+	if members {
+		nodes = smallestNodeSet(plan)
+	}
 
 	var topology erasurecoding.Topology
 	var note string
 	scheme := erasurecoding.Scheme{DataChunks: 2, ParityChunks: 1}
 	switch {
+	case members && nodes < 3:
+		scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 0}
+		note = memberStripeNote(scheme, nodes)
+	case members:
+		if nodes < scheme.MinimumNodes() {
+			scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 1}
+		}
+		note = memberStripeNote(scheme, nodes)
 	case nodes == 1:
 		devices := dataDevices(plan, journalDevice)
 		switch {
@@ -389,6 +458,34 @@ func alternativesFor(chosen erasurecoding.Scheme, nodes int) []string {
 // fleetSize is how many storage nodes the draft produces, which is one per
 // worker: the template proposes neither socketsToUse nor nodesPerSocket, so
 // every worker runs a single node.
+// smallestNodeSet is the worker count of the draft's smallest node set.
+func smallestNodeSet(plan Plan) int {
+	smallest := 0
+	for i, set := range plan.NodeSets {
+		workers := map[string]struct{}{}
+		for _, group := range set.Groups {
+			for _, worker := range group.Workers {
+				workers[worker] = struct{}{}
+			}
+		}
+		if i == 0 || len(workers) < smallest {
+			smallest = len(workers)
+		}
+	}
+	return smallest
+}
+
+// memberStripeNote accounts for the proposal of a draft of several node sets.
+func memberStripeNote(scheme erasurecoding.Scheme, nodes int) string {
+	return fmt.Sprintf(
+		"stripe is %s: the draft has several node sets, and each becomes a member cluster of a "+
+			"supercluster that stripes across its own nodes alone, so the scheme is one the "+
+			"smallest node set, of %d storage %s, carries. Delete the node sets you do not want, "+
+			"or widen the stripe if every node set you keep carries more. A cluster's stripe "+
+			"cannot be changed afterward",
+		scheme, nodes, plural(nodes, "node", "nodes"))
+}
+
 func fleetSize(plan Plan) int {
 	workers := map[string]struct{}{}
 	for _, set := range plan.NodeSets {

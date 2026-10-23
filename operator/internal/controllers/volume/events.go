@@ -77,3 +77,32 @@ const (
 	// volume, and has.
 	ReasonCleanupBlocked = "CleanupBlocked"
 )
+
+// The reasons of a Relocate, which moves a volume to another member of its
+// supercluster (design-superclusters.md §8.2).
+const (
+	// ReasonTargetMemberNotReady is a target member not accepting volumes
+	// yet. A fact about now, which is why the move waits rather than fails.
+	ReasonTargetMemberNotReady = "TargetMemberNotReady"
+
+	ReasonReplicationStarted = "ReplicationStarted"
+
+	// ReasonPathAttachHeld is a consuming node that could not connect the
+	// target's paths. The cutover is not released for it, and its Job is
+	// retried.
+	ReasonPathAttachHeld = "PathAttachHeld"
+
+	// ReasonCutoverWithoutPaths is the control plane cutting a volume over on
+	// its own timeout while consuming nodes did not hold the target's paths.
+	// Their pods lose the volume until they are restarted, and the operation
+	// fails once the volume is marked.
+	ReasonCutoverWithoutPaths = "CutoverWithoutPaths"
+
+	// ReasonRelocationAbortIgnored is an abort that arrived after the commit.
+	// A committed cutover cannot be taken back, so the move carries on.
+	ReasonRelocationAbortIgnored = "RelocationAbortIgnored"
+
+	// ReasonHandleUnresolved is a moved volume whose handle does not resolve
+	// to the target member after the cutover.
+	ReasonHandleUnresolved = "HandleUnresolved"
+)

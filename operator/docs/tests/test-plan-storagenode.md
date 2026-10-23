@@ -195,21 +195,23 @@ File: `operator/internal/controllers/node/syncstatus_test.go`
 
 ### Entity: Deletion (design §4.5)
 
-File: `operator/internal/controllers/node/syncstatus_test.go`
+File: `operator/internal/controllers/node/syncstatus_test.go`, and
+`cluster_gone_teardown_test.go` beside it for U-533
 
-| #        | Scenario                                                                         | Type       | Test                                                |
-|----------|----------------------------------------------------------------------------------|------------|-----------------------------------------------------|
-| U-53     | A node that never got a UUID: the finalizer is removed with no operation raised  | Boundary   | `TestANodeThatWasNeverProvisionedIsDeletedOutright` |
-| U-54     | An online node deleted: a `Remove` operation is raised and owned by the node     | Positive   | `TestANodeWithDataOnItIsDrainedBeforeItGoes`        |
-| U-55     | A second reconcile while the drain runs: no second operation is created          | Negative   | —                                                   |
-| ~~U-56~~ | ~~`status.activeOpsRef` still set: the finalizer is held~~                       | Negative   | Superseded by U-282                                 |
-| U-57     | The raised operation failed: the finalizer is held rather than force-removed     | Negative   | —                                                   |
-| U-58     | A suspended node deleted: a `Remove` operation is still raised                   | Positive   | —                                                   |
-| ~~U-59~~ | ~~An offline node deleted: no operation is raised and the finalizer is removed~~ | Boundary   | Superseded by U-282                                 |
-| U-282    | A drain that has not reached a terminal phase holds the finalizer                | Regression | `TestANodeWithDataOnItIsDrainedBeforeItGoes`        |
-| U-283    | The drain finished: the finalizer is released and the object goes                | Positive   | `TestANodeWithDataOnItIsDrainedBeforeItGoes`        |
-| U-284    | A cordoned worker raises a `HostMaintenance` operation the node owns             | Positive   | `TestACordonedWorkerRaisesItsMaintenanceWindow`     |
-| U-285    | A second pass finds the window it raised rather than raising another             | Negative   | `TestACordonedWorkerRaisesItsMaintenanceWindow`     |
+| #        | Scenario                                                                                                                                  | Type       | Test                                                   |
+|----------|-------------------------------------------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------|
+| U-53     | A node that never got a UUID: the finalizer is removed with no operation raised                                                           | Boundary   | `TestANodeThatWasNeverProvisionedIsDeletedOutright`    |
+| U-54     | An online node deleted: a `Remove` operation is raised and owned by the node                                                              | Positive   | `TestANodeWithDataOnItIsDrainedBeforeItGoes`           |
+| U-55     | A second reconcile while the drain runs: no second operation is created                                                                   | Negative   | —                                                      |
+| ~~U-56~~ | ~~`status.activeOpsRef` still set: the finalizer is held~~                                                                                | Negative   | Superseded by U-282                                    |
+| U-57     | The raised operation failed: the finalizer is held rather than force-removed                                                              | Negative   | —                                                      |
+| U-58     | A suspended node deleted: a `Remove` operation is still raised                                                                            | Positive   | —                                                      |
+| ~~U-59~~ | ~~An offline node deleted: no operation is raised and the finalizer is removed~~                                                          | Boundary   | Superseded by U-282                                    |
+| U-282    | A drain that has not reached a terminal phase holds the finalizer                                                                         | Regression | `TestANodeWithDataOnItIsDrainedBeforeItGoes`           |
+| U-283    | The drain finished: the finalizer is released and the object goes                                                                         | Positive   | `TestANodeWithDataOnItIsDrainedBeforeItGoes`           |
+| U-284    | A cordoned worker raises a `HostMaintenance` operation the node owns                                                                      | Positive   | `TestACordonedWorkerRaisesItsMaintenanceWindow`        |
+| U-285    | A second pass finds the window it raised rather than raising another                                                                      | Negative   | `TestACordonedWorkerRaisesItsMaintenanceWindow`        |
+| U-533    | A node deleted after its cluster is released with no removal raised and no control-plane call, since the forced cluster delete removed it | Positive   | `TestANodeWhoseClusterIsGoneIsReleasedWithoutARemoval` |
 
 `U-282` is the regression row for
 `2026-09-17-node-teardown-reads-an-unheld-lock-as-a-finished-drain`: the teardown
@@ -1030,7 +1032,7 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 432       | 327     | 105         |
+| Unit        | 433       | 328     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |

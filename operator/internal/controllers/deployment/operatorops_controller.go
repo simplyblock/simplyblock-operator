@@ -652,6 +652,11 @@ func (r *OperatorOpsReconciler) write(
 	for _, refusal := range plan.RefusalLines() {
 		r.event(ops, corev1.EventTypeNormal, DeviceDeclined, refusal)
 	}
+	// What the draft leaves for a reviewer to correct, such as topology only
+	// some workers carry, under the reason the generator found it under.
+	for _, found := range plan.Findings {
+		r.event(ops, corev1.EventTypeWarning, found.Reason, found.Message)
+	}
 
 	ops.Status.ConfigRef = config.Name
 	ops.Status.Message = fmt.Sprintf("wrote %s awaiting approval: %s", config.Name, plan.Summary())

@@ -84,6 +84,17 @@ type StorageBackupOpsReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
 	API      RestoreClient
+
+	// Placement chooses the member a restore into a supercluster lands in
+	// (design-superclusters.md §9.5). Nil refuses such a restore.
+	Placement MemberChooser
+}
+
+// MemberChooser places a volume the operator creates among a supercluster's
+// members. The placement service satisfies it.
+type MemberChooser interface {
+	Choose(ctx context.Context, supercluster *simplyblockv1alpha2.StorageCluster,
+		poolName, volumeName string, size int64) (string, error)
 }
 
 // RestoreClient is the control-plane surface a restore needs: the copy back,

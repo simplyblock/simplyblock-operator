@@ -144,24 +144,39 @@ func (r *StorageBackupPolicyReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, r.Update(ctx, &policy)
 	}
 
-	clusterID, err := utils.ResolveClusterUUID(ctx, r.Client, policy.Namespace, policy.Spec.ClusterRef)
+	targets, aggregate, err := r.targets(ctx, &policy)
 	if err != nil {
 		return r.hold(ctx, &policy, fmt.Sprintf("waiting for cluster %s: %v", policy.Spec.ClusterRef, err))
 	}
 
-	policyID, err := r.ensurePolicy(ctx, clusterID, &policy)
-	if err != nil {
-		return r.fail(ctx, &policy, clusterID, fmt.Sprintf("the control plane refused the policy: %v", err))
+	policyIDs := make(map[string]string, len(targets))
+	members := make([]simplyblockv1alpha2.BackupPolicyMemberStatus, 0, len(targets))
+	for _, target := range targets {
+		policyID, err := r.ensurePolicy(ctx, target.ClusterID, recordedPolicyID(&policy, target.ClusterID), &policy)
+		if err != nil {
+			// A policy on a supercluster names no cluster of its own, even
+			// when one member refuses it.
+			failed := target.ClusterID
+			if aggregate {
+				failed = ""
+			}
+			return r.fail(ctx, &policy, failed,
+				fmt.Sprintf("the control plane of cluster %s refused the policy: %v", target.Cluster, err))
+		}
+		policyIDs[target.ClusterID] = policyID
+		members = append(members, simplyblockv1alpha2.BackupPolicyMemberStatus{
+			Cluster: target.Cluster, ClusterID: target.ClusterID, PolicyID: policyID,
+		})
 	}
 
 	// A consistency-group policy covers a whole group as one unit rather than a
 	// set of independent claims, so it attaches to the group rather than
 	// reconciling per-claim membership (§7.1).
 	if policy.Spec.ConsistencyGroupName != "" {
-		return r.reconcileGroupPolicy(ctx, clusterID, policyID, &policy)
+		return r.reconcileGroupPolicy(ctx, targets, policyIDs, aggregate, members, &policy)
 	}
 
-	attached, err := r.reconcileMembership(ctx, clusterID, policyID, &policy)
+	attached, err := r.reconcileMembership(ctx, policyIDs, &policy)
 	if err != nil {
 		return r.hold(ctx, &policy, fmt.Sprintf("the membership could not be reconciled: %v", err))
 	}
@@ -176,8 +191,13 @@ func (r *StorageBackupPolicyReconciler) Reconcile(ctx context.Context, req ctrl.
 	return ctrl.Result{RequeueAfter: policyRetry}, r.writeStatus(ctx, &policy,
 		func(status *simplyblockv1alpha2.StorageBackupPolicyStatus) {
 			status.Phase = simplyblockv1alpha2.StorageBackupPolicyPhaseActive
-			status.ClusterID = clusterID
-			status.PolicyID = policyID
+			// A policy on a supercluster has one backend policy per member
+			// and none of its own (design-superclusters.md §9.5).
+			if aggregate {
+				status.ClusterID, status.PolicyID, status.Members = "", "", members
+			} else {
+				status.ClusterID, status.PolicyID, status.Members = members[0].ClusterID, members[0].PolicyID, nil
+			}
 			status.AttachedClaims = attached
 			status.Message = fmt.Sprintf("The policy is active and covers %d claim(s)", len(attached))
 			status.LastBackupAt = r.lastBackupAt(ctx, &policy)
@@ -190,31 +210,102 @@ func (r *StorageBackupPolicyReconciler) Reconcile(ctx context.Context, req ctrl.
 // The group is resolved by name each pass rather than recorded, because it is
 // born from its first labeled member and may not exist when the policy is first
 // reconciled. A group that is not there yet holds the policy in Pending rather
-// than failing it: the attachment is made once the group appears.
+// than failing it: the attachment is made once the group appears. On a
+// supercluster the group lives in one member, the one placement put its first
+// volume in (design-superclusters.md §9.3), and the policy is attached there.
 func (r *StorageBackupPolicyReconciler) reconcileGroupPolicy(
-	ctx context.Context, clusterID, policyID string, policy *simplyblockv1alpha2.StorageBackupPolicy,
+	ctx context.Context, targets []policyTarget, policyIDs map[string]string, aggregate bool,
+	members []simplyblockv1alpha2.BackupPolicyMemberStatus, policy *simplyblockv1alpha2.StorageBackupPolicy,
 ) (ctrl.Result, error) {
-	groupID, err := r.API.ConsistencyGroupByName(ctx, clusterID, policy.Spec.ConsistencyGroupName)
+	name := policy.Spec.ConsistencyGroupName
+	for _, target := range targets {
+		groupID, err := r.API.ConsistencyGroupByName(ctx, target.ClusterID, name)
+		if errors.Is(err, errs.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return r.hold(ctx, policy, fmt.Sprintf("waiting for consistency group %s: %v", name, err))
+		}
+		policyID := policyIDs[target.ClusterID]
+		if err := r.API.AttachBackupPolicyToConsistencyGroup(ctx, target.ClusterID, policyID, groupID); err != nil {
+			return r.hold(ctx, policy, fmt.Sprintf(
+				"could not attach the policy to consistency group %s: %v", name, err))
+		}
+		return ctrl.Result{RequeueAfter: policyRetry}, r.writeStatus(ctx, policy,
+			func(status *simplyblockv1alpha2.StorageBackupPolicyStatus) {
+				status.Phase = simplyblockv1alpha2.StorageBackupPolicyPhaseActive
+				status.ClusterID = target.ClusterID
+				status.PolicyID = policyID
+				status.Members = nil
+				if aggregate {
+					status.Members = members
+				}
+				status.AttachedClaims = nil
+				status.Message = fmt.Sprintf(
+					"The policy is active and backs up consistency group %s as one unit", name)
+				status.LastBackupAt = r.lastBackupAt(ctx, policy)
+			})
+	}
+	return r.hold(ctx, policy, fmt.Sprintf("waiting for consistency group %s: no cluster of the policy holds it yet", name))
+}
+
+// policyTarget is one backend cluster the policy is created in.
+type policyTarget struct {
+	Cluster   string
+	ClusterID string
+}
+
+// targets are the backend clusters the policy is created in: its cluster, or
+// for a supercluster, every member with a backend cluster. The second result
+// says whether the policy names a supercluster.
+func (r *StorageBackupPolicyReconciler) targets(
+	ctx context.Context, policy *simplyblockv1alpha2.StorageBackupPolicy,
+) ([]policyTarget, bool, error) {
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: policy.Namespace, Name: policy.Spec.ClusterRef}
+	if err := r.Get(ctx, key, &cluster); err == nil && cluster.Spec.Supercluster != nil {
+		members, err := utils.SuperclusterMembers(ctx, r.Client, &cluster)
+		if err != nil {
+			return nil, true, err
+		}
+		targets := make([]policyTarget, 0, len(members))
+		for i := range members {
+			if members[i].Status.UUID != "" {
+				targets = append(targets, policyTarget{Cluster: members[i].Name, ClusterID: members[i].Status.UUID})
+			}
+		}
+		if len(targets) == 0 {
+			return nil, true, fmt.Errorf("supercluster %s has no member with a backend cluster yet", cluster.Name)
+		}
+		return targets, true, nil
+	}
+	clusterID, err := utils.ResolveClusterUUID(ctx, r.Client, policy.Namespace, policy.Spec.ClusterRef)
 	if err != nil {
-		return r.hold(ctx, policy, fmt.Sprintf(
-			"waiting for consistency group %s: %v", policy.Spec.ConsistencyGroupName, err))
+		return nil, false, err
 	}
-	if err := r.API.AttachBackupPolicyToConsistencyGroup(ctx, clusterID, policyID, groupID); err != nil {
-		return r.hold(ctx, policy, fmt.Sprintf(
-			"could not attach the policy to consistency group %s: %v",
-			policy.Spec.ConsistencyGroupName, err))
+	return []policyTarget{{Cluster: policy.Spec.ClusterRef, ClusterID: clusterID}}, false, nil
+}
+
+// recordedPolicyID is the policy status records for a backend cluster.
+func recordedPolicyID(policy *simplyblockv1alpha2.StorageBackupPolicy, clusterID string) string {
+	if policy.Status.ClusterID == clusterID {
+		return policy.Status.PolicyID
 	}
-	return ctrl.Result{RequeueAfter: policyRetry}, r.writeStatus(ctx, policy,
-		func(status *simplyblockv1alpha2.StorageBackupPolicyStatus) {
-			status.Phase = simplyblockv1alpha2.StorageBackupPolicyPhaseActive
-			status.ClusterID = clusterID
-			status.PolicyID = policyID
-			status.AttachedClaims = nil
-			status.Message = fmt.Sprintf(
-				"The policy is active and backs up consistency group %s as one unit",
-				policy.Spec.ConsistencyGroupName)
-			status.LastBackupAt = r.lastBackupAt(ctx, policy)
-		})
+	for _, row := range policy.Status.Members {
+		if row.ClusterID == clusterID {
+			return row.PolicyID
+		}
+	}
+	return ""
+}
+
+// attachmentCluster is the backend cluster a recorded attachment is in. An
+// attachment recorded before the cluster was is the policy's own cluster's.
+func attachmentCluster(policy *simplyblockv1alpha2.StorageBackupPolicy, claim simplyblockv1alpha2.AttachedClaim) string {
+	if claim.ClusterID != "" {
+		return claim.ClusterID
+	}
+	return policy.Status.ClusterID
 }
 
 // ensurePolicy returns the control plane's identifier for this policy, creating
@@ -225,9 +316,9 @@ func (r *StorageBackupPolicyReconciler) reconcileGroupPolicy(
 // already there rather than leaving an orphan behind, and it works because the
 // control-plane policy is named after the object that asked for it.
 func (r *StorageBackupPolicyReconciler) ensurePolicy(
-	ctx context.Context, clusterID string, policy *simplyblockv1alpha2.StorageBackupPolicy,
+	ctx context.Context, clusterID, recorded string, policy *simplyblockv1alpha2.StorageBackupPolicy,
 ) (string, error) {
-	if recorded := policy.Status.PolicyID; recorded != "" {
+	if recorded != "" {
 		policies, err := r.API.ListBackupPolicies(ctx, clusterID)
 		if err != nil {
 			return "", err
@@ -264,11 +355,11 @@ func (r *StorageBackupPolicyReconciler) ensurePolicy(
 // failed is retried on the next pass. What it does do is leave the returned set
 // without that claim, so the status says what is actually covered.
 func (r *StorageBackupPolicyReconciler) reconcileMembership(
-	ctx context.Context, clusterID, policyID string, policy *simplyblockv1alpha2.StorageBackupPolicy,
+	ctx context.Context, policyIDs map[string]string, policy *simplyblockv1alpha2.StorageBackupPolicy,
 ) ([]simplyblockv1alpha2.AttachedClaim, error) {
 	log := logf.FromContext(ctx)
 
-	desired, err := r.selectedClaims(ctx, clusterID, policy)
+	desired, err := r.selectedClaims(ctx, policyIDs, policy)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +376,7 @@ func (r *StorageBackupPolicyReconciler) reconcileMembership(
 			covered = append(covered, claim)
 			continue
 		}
-		if err := r.API.AttachBackupPolicy(ctx, clusterID, policyID, claim.LvolID); err != nil {
+		if err := r.API.AttachBackupPolicy(ctx, claim.ClusterID, policyIDs[claim.ClusterID], claim.LvolID); err != nil {
 			log.Error(err, "could not attach a claim to the backup policy",
 				"policy", policy.Name, "claim", claim.Name)
 			failures = append(failures, claim.Name)
@@ -301,7 +392,12 @@ func (r *StorageBackupPolicyReconciler) reconcileMembership(
 		if containsAttachment(desired, claim) {
 			continue
 		}
-		if err := r.API.DetachBackupPolicy(ctx, clusterID, policyID, claim.LvolID); err != nil {
+		cluster := attachmentCluster(policy, claim)
+		policyID := policyIDs[cluster]
+		if policyID == "" {
+			policyID = recordedPolicyID(policy, cluster)
+		}
+		if err := r.API.DetachBackupPolicy(ctx, cluster, policyID, claim.LvolID); err != nil {
 			log.Error(err, "could not detach a claim from the backup policy",
 				"policy", policy.Name, "claim", claim.Name)
 			// The claim is still attached, so it is still covered and the next
@@ -330,7 +426,7 @@ func (r *StorageBackupPolicyReconciler) reconcileMembership(
 // back up more than its author intended, and the failure would be a bill rather
 // than an error.
 func (r *StorageBackupPolicyReconciler) selectedClaims(
-	ctx context.Context, clusterID string, policy *simplyblockv1alpha2.StorageBackupPolicy,
+	ctx context.Context, policyIDs map[string]string, policy *simplyblockv1alpha2.StorageBackupPolicy,
 ) ([]simplyblockv1alpha2.AttachedClaim, error) {
 	if policy.Spec.ClaimSelector == nil {
 		return nil, nil
@@ -357,7 +453,7 @@ func (r *StorageBackupPolicyReconciler) selectedClaims(
 		if claim.DeletionTimestamp != nil {
 			continue
 		}
-		volume, lvolID, err := r.volumeBehind(ctx, claim, clusterID)
+		volume, clusterID, lvolID, err := r.volumeBehind(ctx, claim, policyIDs)
 		if err != nil {
 			r.Recorder.Eventf(policy, nil, corev1.EventTypeWarning,
 				ReasonClaimNotEligible, ReasonClaimNotEligible,
@@ -369,36 +465,37 @@ func (r *StorageBackupPolicyReconciler) selectedClaims(
 			Name:                 claim.Name,
 			PersistentVolumeName: volume,
 			LvolID:               lvolID,
+			ClusterID:            clusterID,
 		})
 	}
 	return selected, nil
 }
 
-// volumeBehind returns the PersistentVolume name and the logical volume of a
-// claim, refusing a claim this cluster does not back. A claim provisioned by
-// another cluster would otherwise be attached to a policy whose control plane
-// has never heard of its volume.
+// volumeBehind returns the PersistentVolume name, the backend cluster, and the
+// logical volume of a claim, refusing a claim in none of the policy's
+// clusters. A claim provisioned by another cluster would otherwise be attached
+// to a policy whose control plane has never heard of its volume.
 func (r *StorageBackupPolicyReconciler) volumeBehind(
-	ctx context.Context, claim *corev1.PersistentVolumeClaim, clusterID string,
-) (volumeName, lvolID string, err error) {
+	ctx context.Context, claim *corev1.PersistentVolumeClaim, policyIDs map[string]string,
+) (volumeName, clusterID, lvolID string, err error) {
 	if claim.Spec.VolumeName == "" {
-		return "", "", errors.New("the claim is not bound yet")
+		return "", "", "", errors.New("the claim is not bound yet")
 	}
 	var pv corev1.PersistentVolume
 	if err := r.Get(ctx, client.ObjectKey{Name: claim.Spec.VolumeName}, &pv); err != nil {
-		return "", "", fmt.Errorf("read the volume %s: %w", claim.Spec.VolumeName, err)
+		return "", "", "", fmt.Errorf("read the volume %s: %w", claim.Spec.VolumeName, err)
 	}
 	if pv.Spec.CSI == nil {
-		return "", "", fmt.Errorf("the volume %s is not a CSI volume", pv.Name)
+		return "", "", "", fmt.Errorf("the volume %s is not a CSI volume", pv.Name)
 	}
 	handle, wellFormed := lvol.ParseHandle(lvol.VolumeHandle(pv.Spec.CSI.VolumeHandle))
 	if !wellFormed {
-		return "", "", fmt.Errorf("the volume %s carries an unreadable handle %q", pv.Name, pv.Spec.CSI.VolumeHandle)
+		return "", "", "", fmt.Errorf("the volume %s carries an unreadable handle %q", pv.Name, pv.Spec.CSI.VolumeHandle)
 	}
-	if handle.ClusterID != clusterID {
-		return "", "", fmt.Errorf("the volume %s belongs to cluster %s", pv.Name, handle.ClusterID)
+	if _, ok := policyIDs[handle.ClusterID]; !ok {
+		return "", "", "", fmt.Errorf("the volume %s belongs to cluster %s", pv.Name, handle.ClusterID)
 	}
-	return pv.Name, handle.VolumeID, nil
+	return pv.Name, handle.ClusterID, handle.VolumeID, nil
 }
 
 // publishCoverage records how much protection the policy's claims actually have.
@@ -488,17 +585,34 @@ func (r *StorageBackupPolicyReconciler) teardown(
 		return ctrl.Result{}, nil
 	}
 
-	clusterID, policyID := policy.Status.ClusterID, policy.Status.PolicyID
-	if clusterID != "" && policyID != "" {
-		for _, claim := range policy.Status.AttachedClaims {
-			if err := r.API.DetachBackupPolicy(ctx, clusterID, policyID, claim.LvolID); err != nil {
-				logf.FromContext(ctx).Error(err, "could not detach a claim while deleting the policy",
-					"policy", policy.Name, "claim", claim.Name)
-				return ctrl.Result{RequeueAfter: policyRetry}, nil
-			}
+	for _, claim := range policy.Status.AttachedClaims {
+		cluster := attachmentCluster(policy, claim)
+		policyID := recordedPolicyID(policy, cluster)
+		if cluster == "" || policyID == "" {
+			continue
 		}
-		if err := r.API.DeleteBackupPolicy(ctx, clusterID, policyID); err != nil {
-			logf.FromContext(ctx).Error(err, "could not delete the backup policy", "policy", policy.Name)
+		if err := r.API.DetachBackupPolicy(ctx, cluster, policyID, claim.LvolID); err != nil {
+			logf.FromContext(ctx).Error(err, "could not detach a claim while deleting the policy",
+				"policy", policy.Name, "claim", claim.Name)
+			return ctrl.Result{RequeueAfter: policyRetry}, nil
+		}
+	}
+	// The policy's own backend policy, or one in each member of a
+	// supercluster.
+	backends := make([]simplyblockv1alpha2.BackupPolicyMemberStatus, 0, len(policy.Status.Members)+1)
+	if policy.Status.ClusterID != "" && policy.Status.PolicyID != "" {
+		backends = append(backends, simplyblockv1alpha2.BackupPolicyMemberStatus{
+			ClusterID: policy.Status.ClusterID, PolicyID: policy.Status.PolicyID,
+		})
+	}
+	backends = append(backends, policy.Status.Members...)
+	for _, backend := range backends {
+		if backend.ClusterID == "" || backend.PolicyID == "" {
+			continue
+		}
+		if err := r.API.DeleteBackupPolicy(ctx, backend.ClusterID, backend.PolicyID); err != nil {
+			logf.FromContext(ctx).Error(err, "could not delete the backup policy",
+				"policy", policy.Name, "cluster", backend.ClusterID)
 			return ctrl.Result{RequeueAfter: policyRetry}, nil
 		}
 	}

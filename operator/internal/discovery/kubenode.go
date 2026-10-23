@@ -70,6 +70,10 @@ type KubeNode struct {
 
 	Role NodeRole
 
+	// Labels are the node's labels, which carry the topology a draft is laid out
+	// by: the region, and the failure-domain label the run names.
+	Labels map[string]string
+
 	// Roles is every role the labels name, which is how a combined deployment
 	// marks a machine that is both a control-plane node and a worker. Role is the
 	// most restrictive of them; this is what a draft reports.
@@ -114,6 +118,7 @@ func KubeNodeOf(node corev1.Node) KubeNode {
 		Unschedulable:          node.Spec.Unschedulable,
 		Role:                   RoleOf(node),
 		Roles:                  RolesOf(node),
+		Labels:                 node.Labels,
 	}
 
 	for _, address := range node.Status.Addresses {

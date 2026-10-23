@@ -22,6 +22,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	atlaskube "github.com/simplyblock/atlas/kube"
+
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -29,7 +31,7 @@ import (
 // operator's own rotator writes it.
 func aServingSecret() *corev1.Secret {
 	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-		Name:      utils.SecretNameStorageNodeSetAPITLS,
+		Name:      atlaskube.ConstantWorkloadNames().NodeAPITLSSecret,
 		Namespace: enrollNamespace,
 	}}
 }

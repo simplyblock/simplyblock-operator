@@ -333,3 +333,39 @@ func keys(m map[string]map[string]any) []string {
 	}
 	return out
 }
+
+// A site whose draft expands into a supercluster mirrors the supercluster: its
+// aggregate identifier, which the hub's class names in cluster_id, and its
+// default pool, whose name the class carries (design-superclusters.md §9.7).
+func TestStorageSiteDeploymentMirrorsASupercluster(t *testing.T) {
+	r, cl := newStorageSiteDeploymentReconciler(t, newSiteDeployment(func(sd *simplyblockv1alpha2.StorageSiteDeployment) {
+		sd.Spec.Approved = true
+	}))
+	sd := reconcileSD(t, r, cl, 2)
+	projectSiteObject(t, cl, sd, "draft", siteDraft(true, simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanded,
+		func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+			c.Status.ClusterRef = "prod"
+			c.Status.NodeRefs = []string{"sn-1", "sn-2", "sn-3"}
+		}))
+	sd = reconcileSD(t, r, cl, 1)
+	supercluster := &simplyblockv1alpha2.StorageCluster{
+		TypeMeta: metav1.TypeMeta{APIVersion: simplyblockv1alpha2.GroupVersion.String(), Kind: "StorageCluster"},
+		ObjectMeta: metav1.ObjectMeta{Name: "prod", Namespace: "simplyblock", Annotations: map[string]string{
+			annotationStorageClusterDefaultPool: "prod-default",
+		}},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{Supercluster: &simplyblockv1alpha2.SuperclusterSpec{}},
+	}
+	supercluster.Status.UUID = "0d6f1b2e-1f0a-4c71-9a0e-5b7d2c3e4f50"
+	supercluster.Status.Phase = simplyblockv1alpha2.StorageClusterPhaseOnline
+	projectSiteObject(t, cl, sd, "cluster", supercluster)
+
+	sd = reconcileSD(t, r, cl, 1)
+
+	got := sd.Status.StorageCluster
+	if got == nil || got.UUID != supercluster.Status.UUID || got.Pool != "prod-default" {
+		t.Fatalf("storageCluster = %+v, want the supercluster's identifier and default pool", got)
+	}
+	if sd.Status.Phase != simplyblockv1alpha2.StorageSiteDeploymentPhaseOnline {
+		t.Errorf("phase = %q (%s), want Online", sd.Status.Phase, sd.Status.Message)
+	}
+}

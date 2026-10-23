@@ -550,7 +550,7 @@ func (r *StorageNodeReconciler) checkHost(
 		return stepAdopting, true, nil
 	}
 
-	answers, err := r.Workload.HostAnswers(ctx, node.Namespace, node.Spec.WorkerNode)
+	answers, err := r.Workload.HostAnswers(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode)
 	if err != nil {
 		return stepCheckingHost, false, err
 	}
@@ -1293,6 +1293,22 @@ func (r *StorageNodeReconciler) teardown(
 		return ctrl.Result{}, r.Update(ctx, node)
 	}
 
+	// A cluster's finalizer is released only after the control plane deleted
+	// the backend cluster with force, which shut down and deleted every node
+	// of it. A node whose StorageCluster is gone has no backend node left,
+	// and a removal raised against it would wait on a cluster that is not
+	// there for as long as the operator ran.
+	var cluster simplyblockv1alpha2.StorageCluster
+	err := r.Get(ctx, client.ObjectKey{Namespace: node.Namespace, Name: node.Spec.ClusterRef}, &cluster)
+	switch {
+	case apierrors.IsNotFound(err):
+		r.unregister(node)
+		controllerutil.RemoveFinalizer(node, NodeFinalizer)
+		return ctrl.Result{}, r.Update(ctx, node)
+	case err != nil:
+		return ctrl.Result{}, err
+	}
+
 	if _, err := r.ensureOps(ctx, node,
 		simplyblockv1alpha2.StorageNodeOpsActionRemove, node.Name+"-remove"); err != nil {
 		return ctrl.Result{}, err
@@ -1579,7 +1595,7 @@ func (r *StorageNodeReconciler) addParams(
 	}
 
 	params := utils.StorageNodeSetAddParams{
-		NodeAddress:      r.Workload.NodeAddress(ctx, node.Spec.WorkerNode, node.Namespace),
+		NodeAddress:      r.Workload.NodeAddress(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode),
 		InterfaceName:    workload.MgmtInterface,
 		SPDKImage:        config.SpdkImage,
 		SPDKProxyImage:   config.SpdkProxyImage,

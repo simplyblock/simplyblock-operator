@@ -222,6 +222,16 @@ spec:
                               condition for whichever class is scanned, and so widens what is reported,
                               where every member of the filter narrows it.
                             type: boolean
+                          failureDomainLabel:
+                            default: topology.kubernetes.io/zone
+                            description: |-
+                              FailureDomainLabel is the Node label whose value becomes each worker's
+                              failure domain in the draft, for fleets that label racks or power feeds.
+                              Defaults to topology.kubernetes.io/zone. A worker without the label gets
+                              no failure domain, and the run reports it. A value that is not a valid
+                              failure domain is reported as well, naming the worker, and not used.
+                            maxLength: 317
+                            type: string
                           forceJournalDevice:
                             description: |-
                               ForceJournalDevice makes the run dedicate a journal device even where the
@@ -374,9 +384,11 @@ spec:
                           rule: self == oldSelf
                       backupRef:
                         description: |-
-                          BackupRef names the StorageBackup this operation acts on. Its namespace
-                          defaults to this operation's. A backup in another namespace needs the
-                          requesting user to be allowed to read it there.
+                          BackupRef names the single StorageBackup this operation acts on. Its
+                          namespace defaults to this operation's. A backup in another namespace needs
+                          the requesting user to be allowed to read it there. Set exactly one of this
+                          and GroupBackupID: an operation acts on one backup or on a whole group
+                          backup.
                         properties:
                           name:
                             description: Name is the object's name.
@@ -407,6 +419,49 @@ spec:
                           name:
                             description: Name is the referenced object's name.
                             maxLength: 63
+                            minLength: 1
+                            type: string
+                          namespace:
+                            description: |-
+                              Namespace is the object's namespace. When it is empty, the namespace of the
+                              object that holds the reference.
+                            maxLength: 63
+                            type: string
+                        required:
+                        - name
+                        type: object
+                        x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                      groupBackupID:
+                        description: |-
+                          GroupBackupID restores a whole consistency-group backup instead of the
+                          single backup named by BackupRef, producing one PersistentVolumeClaim per
+                          member labeled into one restored consistency group. Its value is the
+                          control-plane group backup id carried by the storage.simplyblock.io/group-backup-id
+                          label on the member StorageBackups, which are resolved beside the cluster,
+                          so a requester in another namespace needs to be allowed to list
+                          StorageBackups there. It is the path for a group backup no request object
+                          stands for: one a StorageBackupPolicy scheduled, or one imported. Set
+                          exactly one of this, GroupBackupRef, and BackupRef.
+                        maxLength: 253
+                        type: string
+                        x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                      groupBackupRef:
+                        description: |-
+                          GroupBackupRef restores the whole group backup a StorageGroupBackup
+                          produced. Its namespace defaults to this operation's, and a
+                          StorageGroupBackup in another namespace needs the requesting user to be
+                          allowed to read it there, the same rule as BackupRef. The member copies are
+                          recorded beside the StorageGroupBackup, so restoring a group taken in an
+                          application's namespace needs no access to any other namespace's backups.
+                          Set exactly one of this, GroupBackupID, and BackupRef.
+                        properties:
+                          name:
+                            description: Name is the object's name.
+                            maxLength: 253
                             minLength: 1
                             type: string
                           namespace:
@@ -478,9 +533,20 @@ spec:
                           rule: '!has(oldSelf.claimAnnotations) || has(self.claimAnnotations)'
                     required:
                     - action
-                    - backupRef
                     - clusterRef
                     type: object
+                    x-kubernetes-validations:
+                    - message: field backupRef is immutable once set
+                      rule: '!has(oldSelf.backupRef) || has(self.backupRef)'
+                    - message: field groupBackupID is immutable once set
+                      rule: '!has(oldSelf.groupBackupID) || has(self.groupBackupID)'
+                    - message: field groupBackupRef is immutable once set
+                      rule: '!has(oldSelf.groupBackupRef) || has(self.groupBackupRef)'
+                    - message: 'set exactly one of backupRef, groupBackupRef and groupBackupID:
+                        an operation acts on a single backup or on one whole group
+                        backup'
+                      rule: '(has(self.backupRef) ? 1 : 0) + (has(self.groupBackupID)
+                        ? 1 : 0) + (has(self.groupBackupRef) ? 1 : 0) == 1'
                   storageClusterOps:
                     description: StorageClusterOps runs a cluster-level operation.
                     properties:

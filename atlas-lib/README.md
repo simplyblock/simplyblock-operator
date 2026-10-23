@@ -119,7 +119,11 @@ atlas/
 │   ├── volumes.go          create / clone / list / resize / delete / connection
 │   ├── pools.go            storage pools (incl. by-name lookup)
 │   ├── storagenodes.go     storage nodes + their data NICs
-│   └── migrations.go       subsystem migrations: create / get / list / continue / cancel, of a volume or a whole subsystem
+│   ├── consistencygroups.go consistency groups: by members, by name, member handles
+│   ├── migrations.go       subsystem migrations: create / get / list / continue / cancel, of a volume or a whole subsystem
+│   ├── volumemove.go       moving a volume to another cluster: start / stop / commit / release the cutover
+│   ├── chain.go            WalkChain: from a handle to the volume serving it, across relationships
+│   └── tasks.go            control-plane tasks: read one, as a caller waiting on queued work
 ├── link/                   gRPC operator ↔ CSI, over connections the CSI driver opens
 │   ├── doc.go              why the connection runs backwards, and how gRPC still works on it
 │   ├── session.go          Session: yamux-multiplexed link, gRPC server + client on both ends
@@ -127,6 +131,7 @@ atlas/
 │   ├── agent.go            Agent: the CSI side; dials, identifies, serves, reconnects
 │   ├── registry.go         Registry: who is linked right now (ErrNoSession when not)
 │   ├── peer.go             PeerKind/PeerID/Claim/Identity/Peer
+│   ├── peercontext.go      hub services: refused before Hello, PeerFromContext names the caller
 │   ├── auth.go             Authenticator iface, bearer-token plumbing, TokenSource
 │   ├── kubeauth.go         KubeAuthenticator: TokenReview → the pod's node, not the peer's word
 │   ├── dial.go             TLSFileDialer / TLSDialer / InsecureDialer
@@ -145,6 +150,10 @@ atlas/
 │   └── conntrackrpc/       FlowService: served by the CSI node plugin, called by the operator
 │       ├── conntrackrpc.go NewServer(conntrack.Forget), Remote(conn).Forget
 │       └── conntrackv1/    the FlowService protocol (buf-generated, committed)
+├── placement/
+│   └── placementrpc/       PlacementService: served by the operator, called by the CSI controller
+│       ├── placementrpc.go NewServer(Placer), Remote(conn).Place; controllers only
+│       └── placementv1/    the PlacementService protocol (buf-generated, committed)
 ├── prometheus/             The telemetry simplyblock exports about itself (PromQL)
 │   ├── doc.go              Why this is not part of controlplane, and how fresh a value is
 │   ├── client.go           Provider, New, NewWithAPI (the test seam), query helpers

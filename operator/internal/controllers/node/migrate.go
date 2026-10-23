@@ -160,7 +160,7 @@ func (r *StorageNodeOpsReconciler) migrateRelocate(
 		force = *ops.Spec.Force
 	}
 	params := RestartParams{
-		NodeAddress:    r.Workload.NodeAddress(ctx, target, node.Namespace),
+		NodeAddress:    r.Workload.NodeAddress(ctx, node.Namespace, node.Spec.ClusterRef, target),
 		Force:          force,
 		ReattachVolume: boolValue(ops.Spec.ReattachVolume),
 		NewSsdPcie:     ops.Spec.MigrateParams().NewSsdPcie,

@@ -416,3 +416,35 @@ func TestARefusedColocationIsANormalEvent(t *testing.T) {
 	}
 	requireEvent(t, recorder, "ConsistencyGroupColocationDeferred")
 }
+
+// U-169: a label added later naming a group that lives in another cluster is
+// refused with a Warning naming that cluster, not held as a group that does
+// not exist yet. A group lives in one backend cluster, so the volume has to be
+// relocated there before it can join (design-superclusters.md §9.3).
+func TestALateLabelNamingAGroupInAnotherClusterIsRefused(t *testing.T) {
+	const otherCluster = "33333333-3333-3333-3333-333333333333"
+	here := &fakeMembership{}
+	there := &fakeMembership{groupsByName: map[string]*controlplane.ConsistencyGroupSummary{
+		"orders": {ID: "g-1", Name: "orders"},
+	}}
+	watcher, pvc, recorder := watcherFixture(t, map[string]string{consistencyGroupLabel: "orders"}, testDriver, here)
+	watcher.clientFor = func(_ context.Context, clusterID, _ string) (membershipClient, error) {
+		if clusterID == otherCluster {
+			return there, nil
+		}
+		return here, nil
+	}
+	watcher.listClusters = func() ([]string, error) { return []string{testCluster, otherCluster}, nil }
+
+	if err := watcher.reconcile(context.Background(), pvc); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	event := <-recorder.Events
+	if !strings.Contains(event, "Warning ConsistencyGroupInAnotherCluster") || !strings.Contains(event, otherCluster) {
+		t.Errorf("event = %q, want a Warning naming cluster %s", event, otherCluster)
+	}
+	if len(here.joined) != 0 || len(there.joined) != 0 {
+		t.Errorf("a join was sent: here %v, there %v", here.joined, there.joined)
+	}
+}

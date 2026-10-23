@@ -656,17 +656,23 @@ const (
 // +kubebuilder:validation:XValidation:rule="(has(self.clusterMode) && self.clusterMode == 'Dual') || (!has(self.arbitration) && !(has(self.enableArbitration) && self.enableArbitration))",message="enableArbitration and arbitration are only valid when clusterMode is Dual"
 // +kubebuilder:validation:XValidation:rule="(has(self.clusterMode) && self.clusterMode == 'Single') == (has(oldSelf.clusterMode) && oldSelf.clusterMode == 'Single')",message="clusterMode cannot be changed to or from Single: the control plane fixes it when the cluster is created"
 // +kubebuilder:validation:XValidation:rule="!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomicity4K requires enableChecksumValidation to be true"
+// +kubebuilder:validation:XValidation:rule="has(self.supercluster) || (has(self.maxSubsystemCount) && has(self.vcpuCount))",message="maxSubsystemCount and vcpuCount are required unless the cluster is a supercluster"
+// +kubebuilder:validation:XValidation:rule="has(self.supercluster) == has(oldSelf.supercluster)",message="a cluster cannot become a supercluster, or stop being one, after creation"
+// +kubebuilder:validation:XValidation:rule="has(self.superclusterRef) == has(oldSelf.superclusterRef) && (!has(self.superclusterRef) || self.superclusterRef == oldSelf.superclusterRef)",message="superclusterRef is set at creation and never changed"
+// +kubebuilder:validation:XValidation:rule="!(has(self.supercluster) && has(self.superclusterRef))",message="a supercluster cannot be a member of another"
+// +kubebuilder:validation:XValidation:rule="has(self.superclusterRef) || !has(self.disablePlacement)",message="disablePlacement is valid only on a member"
 type StorageClusterSpec struct {
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
 	// node. It is the cluster's and no node carries a copy: every node's
 	// configuration is generated from this field, so changing it reaches the
 	// nodes that already exist as each of them next restarts.
-	// Required: it sizes huge pages, and a node that receives no value fails
-	// config generation outright rather than falling back to a default.
-	// +kubebuilder:validation:Required
+	// Required on every cluster except a supercluster: it sizes huge pages, and
+	// a node that receives no value fails config generation outright rather
+	// than falling back to a default.
 	// +kubebuilder:validation:Minimum=10
 	// +kubebuilder:validation:Maximum=75
-	MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
+	// +optional
+	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
 
 	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node,
 	// as an explicit core count rather than a percentage. Unlike
@@ -677,10 +683,11 @@ type StorageClusterSpec struct {
 	//
 	// The floor is 4 rather than a hardware limit: a node must carry one core
 	// beyond this budget for the system, and the control plane's core layout
-	// assigns no NVMe-oF poller core at all for a 2-vCPU budget.
-	// +kubebuilder:validation:Required
+	// assigns no NVMe-oF poller core at all for a 2-vCPU budget. Required on
+	// every cluster except a supercluster.
 	// +kubebuilder:validation:Minimum=4
-	VCPUCount *int32 `json:"vcpuCount"`
+	// +optional
+	VCPUCount *int32 `json:"vcpuCount,omitempty"`
 
 	// MinHugePagesSize is the smallest huge-page allocation each storage node
 	// makes, as a size string such as 100G or 1T, where a bare number is
@@ -909,6 +916,28 @@ type StorageClusterSpec struct {
 	// clusterMode is Dual.
 	// +optional
 	Arbitration *ArbitrationSpec `json:"arbitration,omitempty"`
+
+	// Supercluster makes this cluster a supercluster: one cluster to
+	// Kubernetes, made of the StorageClusters in this namespace whose
+	// superclusterRef names it, each with its own nodes and data. A new volume
+	// is placed in one member and stays there unless it is moved. A supercluster
+	// carries no nodes and no sizing, and may carry only this field and the
+	// capacity thresholds. Set at creation and never added or removed.
+	// +optional
+	Supercluster *SuperclusterSpec `json:"supercluster,omitempty"`
+
+	// SuperclusterRef makes this cluster a member of the named supercluster in
+	// this namespace. The supercluster has to exist when the member is
+	// created. Set at creation and never changed.
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	SuperclusterRef string `json:"superclusterRef,omitempty"`
+
+	// DisablePlacement stops new volumes being placed in this member. Volumes
+	// already in it stay where they are and keep working. Valid only on a
+	// member.
+	// +optional
+	DisablePlacement *bool `json:"disablePlacement,omitempty"`
 }
 
 // StorageClusterStatus is the observed state of one backend cluster.
@@ -943,7 +972,9 @@ type StorageClusterStatus struct {
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
 	// UUID is the backend cluster UUID. Empty means the cluster has not been
-	// created or adopted, and non-empty means steady state.
+	// created or adopted, and non-empty means steady state. On a supercluster
+	// it is the aggregate's identifier, the object's metadata.uid, which a
+	// StorageClass names in cluster_id and the control plane does not know.
 	// +optional
 	UUID string `json:"uuid,omitempty"`
 
@@ -1060,15 +1091,162 @@ type StorageClusterStatus struct {
 	// +optional
 	Message string `json:"message,omitempty"`
 
-	// ObservedGeneration is the generation the rest of this status was computed
-	// from, so a stale status can be told from a current one.
-	// +optional
 	// Arbitration is the two-node arbiter's record as the operator last read
 	// it; set only when spec.enableArbitration is on.
 	// +optional
 	Arbitration *ArbitrationStatus `json:"arbitration,omitempty"`
 
+	// Role is what this cluster is within a supercluster: Standalone,
+	// Supercluster, or PlacementGroup for a member.
+	// +optional
+	Role StorageClusterRole `json:"role,omitempty"`
+
+	// WorkloadNames are the names this cluster's workload is reached by,
+	// recorded before the workload exists and never changed afterward,
+	// because every storage node's hostname is built from them. A cluster
+	// created before they were recorded is given the constant names.
+	// +optional
+	WorkloadNames *WorkloadNames `json:"workloadNames,omitempty"`
+
+	// Members is each member as last read, on a supercluster only.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Members []SuperclusterMemberStatus `json:"members,omitempty"`
+
+	// MemberCount is the number of members, on a supercluster only.
+	// +optional
+	MemberCount *int32 `json:"memberCount,omitempty"`
+
+	// Capacity is the members' capacity summed, on a supercluster only.
+	// +optional
+	Capacity *AggregateCapacity `json:"capacity,omitempty"`
+
+	// ObservedGeneration is the generation the rest of this status was computed
+	// from, so a stale status can be told from a current one.
+	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+}
+
+// PlacementStrategy is how the operator ranks the members of a supercluster
+// when it places a new volume.
+// +kubebuilder:validation:Enum=MostAvailableCapacity;LeastProvisioned;LeastVolumes
+type PlacementStrategy string
+
+const (
+	// PlacementMostAvailableCapacity places a volume in the member with the most
+	// free physical capacity.
+	PlacementMostAvailableCapacity PlacementStrategy = "MostAvailableCapacity"
+
+	// PlacementLeastProvisioned places a volume in the member with the lowest
+	// ratio of provisioned to physical capacity.
+	PlacementLeastProvisioned PlacementStrategy = "LeastProvisioned"
+
+	// PlacementLeastVolumes places a volume in the member holding the fewest
+	// volumes.
+	PlacementLeastVolumes PlacementStrategy = "LeastVolumes"
+)
+
+// StorageClusterRole is what a StorageCluster is within a supercluster.
+// +kubebuilder:validation:Enum=Standalone;Supercluster;PlacementGroup
+type StorageClusterRole string
+
+const (
+	// StorageClusterRoleStandalone is an ordinary cluster that belongs to no
+	// supercluster.
+	StorageClusterRoleStandalone StorageClusterRole = "Standalone"
+
+	// StorageClusterRoleSupercluster is a cluster made of member clusters, with
+	// no nodes of its own.
+	StorageClusterRoleSupercluster StorageClusterRole = "Supercluster"
+
+	// StorageClusterRolePlacementGroup is an ordinary cluster that belongs to
+	// a supercluster, one of the groups its volumes are placed in.
+	StorageClusterRolePlacementGroup StorageClusterRole = "PlacementGroup"
+)
+
+// SuperclusterPlacement is how a supercluster places new volumes.
+type SuperclusterPlacement struct {
+	// Strategy ranks the members that can take a new volume. Defaults to
+	// MostAvailableCapacity.
+	// +kubebuilder:default=MostAvailableCapacity
+	// +optional
+	Strategy PlacementStrategy `json:"strategy,omitempty"`
+}
+
+// SuperclusterSpec makes a StorageCluster a supercluster: one cluster to
+// Kubernetes, made of the member clusters whose superclusterRef names it.
+type SuperclusterSpec struct {
+	// Placement is how new volumes are placed among the members.
+	// +optional
+	Placement *SuperclusterPlacement `json:"placement,omitempty"`
+}
+
+// AggregateCapacity is capacity summed over a supercluster's members, in bytes.
+type AggregateCapacity struct {
+	// TotalBytes is the physical capacity.
+	// +optional
+	TotalBytes *int64 `json:"totalBytes,omitempty"`
+
+	// UsedBytes is the physical capacity in use.
+	// +optional
+	UsedBytes *int64 `json:"usedBytes,omitempty"`
+
+	// ProvisionedBytes is the capacity promised to volumes.
+	// +optional
+	ProvisionedBytes *int64 `json:"provisionedBytes,omitempty"`
+}
+
+// WorkloadNames are the Services a cluster's storage nodes are reached through,
+// their serving-certificate Secrets, and the suffix a node's hostname carries in
+// both Services. A node's hostname is <worker><suffix>.<service>.<namespace>.svc.
+type WorkloadNames struct {
+	// NodeAPIService is the headless Service of the storage-node API.
+	// +kubebuilder:validation:MaxLength=63
+	NodeAPIService string `json:"nodeAPIService"`
+
+	// NodeAPITLSSecret is the storage-node API's serving-certificate Secret.
+	// +kubebuilder:validation:MaxLength=253
+	NodeAPITLSSecret string `json:"nodeAPITLSSecret"`
+
+	// SpdkProxyService is the headless Service of the SPDK proxy.
+	// +kubebuilder:validation:MaxLength=63
+	SpdkProxyService string `json:"spdkProxyService"`
+
+	// SpdkProxyTLSSecret is the SPDK proxy's serving-certificate Secret.
+	// +kubebuilder:validation:MaxLength=253
+	SpdkProxyTLSSecret string `json:"spdkProxyTLSSecret"`
+
+	// NodeLabelSuffix is appended to a node's hostname in both Services, so
+	// that members of one supercluster on one worker have distinct hostnames.
+	// Empty for every other cluster.
+	// +kubebuilder:validation:MaxLength=4
+	// +optional
+	NodeLabelSuffix string `json:"nodeLabelSuffix,omitempty"`
+}
+
+// SuperclusterMemberStatus is one member as the supercluster last read it.
+type SuperclusterMemberStatus struct {
+	// Name is the member StorageCluster.
+	Name string `json:"name"`
+
+	// UUID is the member's backend cluster UUID, empty until it is created.
+	// +optional
+	UUID string `json:"uuid,omitempty"`
+
+	// Phase is the member's own phase.
+	// +optional
+	Phase StorageClusterPhase `json:"phase,omitempty"`
+
+	// PlacementEligible says whether new volumes may be placed in this member:
+	// placement not disabled, not being removed, serving, and holding every pool
+	// of the supercluster.
+	// +optional
+	PlacementEligible bool `json:"placementEligible,omitempty"`
+
+	// Capacity is the member's own capacity reading.
+	// +optional
+	Capacity *AggregateCapacity `json:"capacity,omitempty"`
 }
 
 // FailureDomainIndex is one failure-domain label and the control plane's index
@@ -1117,6 +1295,8 @@ type FailureDomainIndex struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=stc
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
+// +kubebuilder:printcolumn:name="Role",type=string,JSONPath=".status.role"
+// +kubebuilder:printcolumn:name="Members",type=integer,JSONPath=".status.memberCount",priority=1
 // +kubebuilder:printcolumn:name="Step",type=string,JSONPath=".status.step.state"
 // +kubebuilder:printcolumn:name="Status",type=string,JSONPath=".status.status"
 // +kubebuilder:printcolumn:name="EC",type=string,JSONPath=".status.erasureCodingScheme"
@@ -1124,9 +1304,10 @@ type FailureDomainIndex struct {
 // +kubebuilder:printcolumn:name="UUID",type=string,JSONPath=".status.uuid"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
-// StorageCluster is one simplyblock backend cluster. It owns the storage nodes
-// beneath it, the pools carved out of it, and the Kubernetes workload its nodes
-// run as.
+// StorageCluster is one simplyblock backend cluster, or a supercluster that
+// aggregates several of them. A backend cluster owns the storage nodes beneath
+// it, the pools carved out of it, and the Kubernetes workload its nodes run as.
+// A supercluster has no nodes: its members do.
 type StorageCluster struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

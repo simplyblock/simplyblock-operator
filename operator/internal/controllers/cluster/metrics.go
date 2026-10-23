@@ -25,7 +25,10 @@ package cluster
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
+	"k8s.io/apimachinery/pkg/types"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 // operationBuckets span the range a cluster operation actually takes: an
@@ -118,6 +121,25 @@ var (
 		},
 		[]string{"cluster", "phase"},
 	)
+
+	// superclusterMembers counts a supercluster's members by whether
+	// placement may choose them. The notServing series is the alert that a
+	// supercluster runs on fewer members than it was built with.
+	superclusterMembers = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "simplyblock_supercluster_member_count",
+			Help: "Members of a supercluster by state: eligible, cordoned (placement disabled), or notServing.",
+		},
+		[]string{"namespace", "supercluster", "state"},
+	)
+
+	superclusterCapacityBytes = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "simplyblock_supercluster_capacity_bytes",
+			Help: "A supercluster's members' combined total, used, and provisioned bytes.",
+		},
+		[]string{"namespace", "supercluster", "kind"},
+	)
 )
 
 func init() {
@@ -132,5 +154,47 @@ func init() {
 		rollingRestartNodeIndex,
 		rollingRestartNodeCount,
 		clusterPhaseState,
+		superclusterMembers,
+		superclusterCapacityBytes,
 	)
+}
+
+// observeSupercluster publishes a supercluster's member states and combined
+// capacity. Every state is written on every pass, so a state that drops to
+// zero reads as zero rather than as its last nonzero value, and a capacity the
+// status no longer reports is removed rather than left at its last value.
+func observeSupercluster(supercluster *simplyblockv1alpha2.StorageCluster, rollup superclusterRollup) {
+	counts := map[string]float64{"eligible": 0, "cordoned": 0, "notServing": 0}
+	for _, row := range rollup.Members {
+		switch {
+		case row.PlacementEligible:
+			counts["eligible"]++
+		case isServing(row.Phase):
+			counts["cordoned"]++
+		default:
+			counts["notServing"]++
+		}
+	}
+	for state, n := range counts {
+		superclusterMembers.WithLabelValues(supercluster.Namespace, supercluster.Name, state).Set(n)
+	}
+
+	var total, used, provisioned *int64
+	if c := rollup.Capacity; c != nil {
+		total, used, provisioned = c.TotalBytes, c.UsedBytes, c.ProvisionedBytes
+	}
+	for kind, v := range map[string]*int64{"total": total, "used": used, "provisioned": provisioned} {
+		if v == nil {
+			superclusterCapacityBytes.DeleteLabelValues(supercluster.Namespace, supercluster.Name, kind)
+			continue
+		}
+		superclusterCapacityBytes.WithLabelValues(supercluster.Namespace, supercluster.Name, kind).Set(float64(*v))
+	}
+}
+
+// forgetSupercluster removes a deleted supercluster's series.
+func forgetSupercluster(key types.NamespacedName) {
+	labels := prometheus.Labels{"namespace": key.Namespace, "supercluster": key.Name}
+	superclusterMembers.DeletePartialMatch(labels)
+	superclusterCapacityBytes.DeletePartialMatch(labels)
 }

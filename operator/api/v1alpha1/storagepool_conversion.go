@@ -80,6 +80,8 @@ const (
 	annoStatusActiveOpsRef        = "storage.simplyblock.io/conversion-status.activeOpsRef"
 	annoStatusMessage             = "storage.simplyblock.io/conversion-status.message"
 	annoStatusObservedGeneraton   = "storage.simplyblock.io/conversion-status.observedGeneration"
+	annoStatusMembers             = "storage.simplyblock.io/conversion-status.members"
+	annoStatusLimitsCapacity      = "storage.simplyblock.io/conversion-status.limits.capacity"
 
 	// enableDHCHAP is stashed for a narrower reason than the rest: v1alpha1 has
 	// a field for it, but a bool rather than a pointer, so it can say true and
@@ -193,6 +195,8 @@ func stashHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StoragePool) error {
 		{annoStatusActiveOpsRef, status.ActiveOpsRef},
 		{annoStatusMessage, status.Message},
 		{annoStatusObservedGeneraton, status.ObservedGeneration},
+		{annoStatusMembers, status.Members},
+		{annoStatusLimitsCapacity, limitsCapacity(status.Limits)},
 	} {
 		if err := stash(meta, field.key, field.value); err != nil {
 			return err
@@ -266,12 +270,29 @@ func restoreHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StoragePool) error {
 		{annoStatusActiveOpsRef, &dst.Status.ActiveOpsRef},
 		{annoStatusMessage, &dst.Status.Message},
 		{annoStatusObservedGeneraton, &dst.Status.ObservedGeneration},
+		{annoStatusMembers, &dst.Status.Members},
 	} {
 		if err := unstash(meta, field.key, field.target); err != nil {
 			return err
 		}
 	}
+	var capacity string
+	if err := unstash(meta, annoStatusLimitsCapacity, &capacity); err != nil {
+		return err
+	}
+	if capacity != "" && dst.Status.Limits != nil {
+		dst.Status.Limits.Capacity = capacity
+	}
 	return nil
+}
+
+// limitsCapacity is the enforced capacity the hub reports, which this version's
+// QoS status has no field for.
+func limitsCapacity(limits *v1alpha2.PoolLimitsStatus) string {
+	if limits == nil {
+		return ""
+	}
+	return limits.Capacity
 }
 
 // stash writes one value as JSON, or removes the annotation when the value is

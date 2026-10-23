@@ -55,6 +55,11 @@ type Planner struct {
 	// KubeNodesOf. It is optional: a plan without it is built from the probe
 	// reports alone, and the workers carry a zero KubeNode.
 	KubeNodes map[string]KubeNode
+
+	// SlotsPerWorker is how many storage nodes each worker runs, which decides
+	// how many workers a member holds. Zero is one, the layout of a draft that
+	// states none; a discovery run states none.
+	SlotsPerWorker int32
 }
 
 // Plan is what a run concluded: the draft to write, and why it looks like that.
@@ -71,6 +76,45 @@ type Plan struct {
 	// Refusals is every device and every worker declined, with the rule and
 	// the reason. It is the run's account of itself.
 	Refusals []Refusal
+
+	// Findings are what the draft leaves for a reviewer to correct: topology
+	// the Kubernetes API does not carry for every worker, or carries in a
+	// shape the draft cannot use.
+	Findings []Finding
+
+	// FailureDomains reports whether every worker carries a failure domain, so
+	// that the template enables them.
+	FailureDomains bool
+}
+
+// The reasons a finding is raised under.
+const (
+	// TopologyIncomplete names the workers without a failure domain in a fleet
+	// where others have one.
+	TopologyIncomplete = "TopologyIncomplete"
+
+	// FailureDomainInvalid names a worker whose failure-domain label carries a
+	// value the failureDomain field does not accept.
+	FailureDomainInvalid = "FailureDomainInvalid"
+
+	// PlacementGroupLabelIncomplete names the workers without a placement-group
+	// label in a partition where others carry one.
+	PlacementGroupLabelIncomplete = "PlacementGroupLabelIncomplete"
+
+	// PlacementGroupInvalid names a placement-group value that cannot be a node
+	// set name, or whose workers cannot share a member.
+	PlacementGroupInvalid = "PlacementGroupInvalid"
+)
+
+// PlacementGroupLabel assigns a worker to a member: workers carrying one value
+// form one node set named by the value.
+const PlacementGroupLabel = "storage.simplyblock.io/placement-group"
+
+// Finding is one thing the draft leaves for a reviewer, under the reason its
+// event is raised with.
+type Finding struct {
+	Reason  string
+	Message string
 }
 
 // Summary is the sentence a run's status carries.
@@ -544,9 +588,12 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 	var misaligned []Refusal
 	plan.Workers, misaligned = alignNetworks(plan.Workers)
 	plan.Refusals = append(plan.Refusals, misaligned...)
+	plan.assignFailureDomains(failureDomainLabelOf(run))
 
 	if len(plan.Workers) > 0 {
-		plan.NodeSets = builder.Build(grouper.Group(plan.Workers))
+		var found []Finding
+		plan.NodeSets, found = splitMembers(builder.Build(grouper.Group(plan.Workers)), plan.Workers, grouper, p.SlotsPerWorker)
+		plan.Findings = append(plan.Findings, found...)
 	}
 	return plan
 }

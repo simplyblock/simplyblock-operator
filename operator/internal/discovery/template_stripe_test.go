@@ -172,3 +172,32 @@ func TestASingleWorkerIsProposedBySchemeOfItsDevices(t *testing.T) {
 		}
 	}
 }
+
+// A draft of several node sets is a supercluster, each node set a member that
+// stripes across its own nodes alone (design-superclusters.md §5.1), so the
+// proposal is one the smallest node set carries. The cluster mode is one per
+// document, so a one-worker tier does not make every member single-node.
+func TestADraftOfSeveralNodeSetsIsSizedForTheSmallest(t *testing.T) {
+	plan := Plan{NodeSets: []simplyblockv1alpha2.NodeSet{
+		{Name: "discovered", Groups: []simplyblockv1alpha2.NodeGroup{{
+			Name: "group-1", Workers: []string{"worker-1", "worker-2", "worker-3", "worker-4", "worker-5"},
+		}}},
+		{Name: "infra", Groups: []simplyblockv1alpha2.NodeGroup{{
+			Name: "group-1", Workers: []string{"infra-1", "infra-2", "infra-3"},
+		}}},
+		{Name: "control-plane", Groups: []simplyblockv1alpha2.NodeGroup{{
+			Name: "group-1", Workers: []string{"master-1"},
+		}}},
+	}}
+
+	template, err := ClusterTemplateFor("a-cluster", plan, TemplateOptions{})
+	if err != nil {
+		t.Fatalf("the fleet was refused: %v", err)
+	}
+	if got := erasurecoding.SchemeOf(template.Template.Stripe).String(); got != "1+0" {
+		t.Errorf("proposed %s, want the 1+0 a one-worker member carries", got)
+	}
+	if template.Template.ClusterMode != "" {
+		t.Errorf("clusterMode = %s, want unset for a document of several members", template.Template.ClusterMode)
+	}
+}

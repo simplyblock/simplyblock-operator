@@ -16,6 +16,8 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+
+	atlaskube "github.com/simplyblock/atlas/kube"
 )
 
 func managedControlPlaneSingleton() *simplyblockv1alpha2.ControlPlane {
@@ -64,7 +66,7 @@ func TestNodeAddressUsesTheWorkersRealIPWhenTheControlPlaneIsManaged(t *testing.
 		Build()
 	w := &Workload{Client: c}
 
-	got := w.NodeAddress(context.Background(), opsWorker, opsNamespace)
+	got := w.NodeAddress(context.Background(), opsNamespace, opsCluster, opsWorker)
 
 	if want := "192.168.10.112:5000"; got != want {
 		t.Errorf("NodeAddress = %q, want %q", got, want)
@@ -81,9 +83,9 @@ func TestNodeAddressKeepsTheDNSNameForALocalControlPlane(t *testing.T) {
 		Build()
 	w := &Workload{Client: c}
 
-	got := w.NodeAddress(context.Background(), opsWorker, opsNamespace)
+	got := w.NodeAddress(context.Background(), opsNamespace, opsCluster, opsWorker)
 
-	if want := utils.StorageNodeSetAPIAddress(opsWorker, opsNamespace); got != want {
+	if want := utils.StorageNodeSetAPIAddress(opsWorker, opsNamespace, atlaskube.ConstantWorkloadNames()); got != want {
 		t.Errorf("NodeAddress = %q, want the per-pod DNS name %q", got, want)
 	}
 }
@@ -98,9 +100,9 @@ func TestNodeAddressFallsBackToDNSWhenTheControlPlaneCannotBeRead(t *testing.T) 
 		Build()
 	w := &Workload{Client: c}
 
-	got := w.NodeAddress(context.Background(), opsWorker, opsNamespace)
+	got := w.NodeAddress(context.Background(), opsNamespace, opsCluster, opsWorker)
 
-	if want := utils.StorageNodeSetAPIAddress(opsWorker, opsNamespace); got != want {
+	if want := utils.StorageNodeSetAPIAddress(opsWorker, opsNamespace, atlaskube.ConstantWorkloadNames()); got != want {
 		t.Errorf("NodeAddress = %q, want the per-pod DNS name %q", got, want)
 	}
 }
@@ -115,9 +117,9 @@ func TestNodeAddressFallsBackToDNSWhenTheWorkerNodeCannotBeRead(t *testing.T) {
 		Build()
 	w := &Workload{Client: c}
 
-	got := w.NodeAddress(context.Background(), opsWorker, opsNamespace)
+	got := w.NodeAddress(context.Background(), opsNamespace, opsCluster, opsWorker)
 
-	if want := utils.StorageNodeSetAPIAddress(opsWorker, opsNamespace); got != want {
+	if want := utils.StorageNodeSetAPIAddress(opsWorker, opsNamespace, atlaskube.ConstantWorkloadNames()); got != want {
 		t.Errorf("NodeAddress = %q, want the per-pod DNS name %q", got, want)
 	}
 }

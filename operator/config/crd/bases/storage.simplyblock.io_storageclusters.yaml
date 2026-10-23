@@ -593,6 +593,13 @@ spec:
         - jsonPath: .status.phase
           name: Phase
           type: string
+        - jsonPath: .status.role
+          name: Role
+          type: string
+        - jsonPath: .status.memberCount
+          name: Members
+          priority: 1
+          type: integer
         - jsonPath: .status.step.state
           name: Step
           type: string
@@ -616,9 +623,10 @@ spec:
       schema:
         openAPIV3Schema:
           description: |-
-            StorageCluster is one simplyblock backend cluster. It owns the storage nodes
-            beneath it, the pools carved out of it, and the Kubernetes workload its nodes
-            run as.
+            StorageCluster is one simplyblock backend cluster, or a supercluster that
+            aggregates several of them. A backend cluster owns the storage nodes beneath
+            it, the pools carved out of it, and the Kubernetes workload its nodes run as.
+            A supercluster has no nodes: its members do.
           properties:
             apiVersion:
               description: |-
@@ -790,6 +798,12 @@ spec:
                     cannot be turned off, since a drain, a rebalance, and a device
                     replacement are all performed by moving volumes.
                   type: boolean
+                disablePlacement:
+                  description: |-
+                    DisablePlacement stops new volumes being placed in this member. Volumes
+                    already in it stay where they are and keep working. Valid only on a
+                    member.
+                  type: boolean
                 enableArbitration:
                   description: |-
                     EnableArbitration turns on the control plane's two-node arbitration:
@@ -909,8 +923,9 @@ spec:
                     node. It is the cluster's and no node carries a copy: every node's
                     configuration is generated from this field, so changing it reaches the
                     nodes that already exist as each of them next restarts.
-                    Required: it sizes huge pages, and a node that receives no value fails
-                    config generation outright rather than falling back to a default.
+                    Required on every cluster except a supercluster: it sizes huge pages, and
+                    a node that receives no value fails config generation outright rather
+                    than falling back to a default.
                   format: int32
                   maximum: 75
                   minimum: 10
@@ -1310,6 +1325,37 @@ spec:
                       rule: self == oldSelf
                     - message: the erasure-coding scheme must be one of 1+0, 1+1, 2+1, 4+1, 1+2, 2+2, or 4+2, written as dataChunks+parityChunks, and an unstated half is 1
                       rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks) ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4, 1], [1, 2], [2, 2], [4, 2]]'
+                supercluster:
+                  description: |-
+                    Supercluster makes this cluster a supercluster: one cluster to
+                    Kubernetes, made of the StorageClusters in this namespace whose
+                    superclusterRef names it, each with its own nodes and data. A new volume
+                    is placed in one member and stays there unless it is moved. A supercluster
+                    carries no nodes and no sizing, and may carry only this field and the
+                    capacity thresholds. Set at creation and never added or removed.
+                  properties:
+                    placement:
+                      description: Placement is how new volumes are placed among the members.
+                      properties:
+                        strategy:
+                          default: MostAvailableCapacity
+                          description: |-
+                            Strategy ranks the members that can take a new volume. Defaults to
+                            MostAvailableCapacity.
+                          enum:
+                            - MostAvailableCapacity
+                            - LeastProvisioned
+                            - LeastVolumes
+                          type: string
+                      type: object
+                  type: object
+                superclusterRef:
+                  description: |-
+                    SuperclusterRef makes this cluster a member of the named supercluster in
+                    this namespace. The supercluster has to exist when the member is
+                    created. Set at creation and never changed.
+                  maxLength: 63
+                  type: string
                 vcpuCount:
                   description: |-
                     VCPUCount is the number of vCPUs allocated to SPDK on each storage node,
@@ -1321,7 +1367,8 @@ spec:
 
                     The floor is 4 rather than a hardware limit: a node must carry one core
                     beyond this budget for the system, and the control plane's core layout
-                    assigns no NVMe-oF poller core at all for a 2-vCPU budget.
+                    assigns no NVMe-oF poller core at all for a 2-vCPU budget. Required on
+                    every cluster except a supercluster.
                   format: int32
                   minimum: 4
                   type: integer
@@ -1491,9 +1538,6 @@ spec:
                       format: int64
                       type: integer
                   type: object
-              required:
-                - maxSubsystemCount
-                - vcpuCount
               type: object
               x-kubernetes-validations:
                 - message: field stripe is immutable once set
@@ -1524,6 +1568,16 @@ spec:
                   rule: (has(self.clusterMode) && self.clusterMode == 'Single') == (has(oldSelf.clusterMode) && oldSelf.clusterMode == 'Single')
                 - message: enableAtomicity4K requires enableChecksumValidation to be true
                   rule: '!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)'
+                - message: maxSubsystemCount and vcpuCount are required unless the cluster is a supercluster
+                  rule: has(self.supercluster) || (has(self.maxSubsystemCount) && has(self.vcpuCount))
+                - message: a cluster cannot become a supercluster, or stop being one, after creation
+                  rule: has(self.supercluster) == has(oldSelf.supercluster)
+                - message: superclusterRef is set at creation and never changed
+                  rule: has(self.superclusterRef) == has(oldSelf.superclusterRef) && (!has(self.superclusterRef) || self.superclusterRef == oldSelf.superclusterRef)
+                - message: a supercluster cannot be a member of another
+                  rule: '!(has(self.supercluster) && has(self.superclusterRef))'
+                - message: disablePlacement is valid only on a member
+                  rule: has(self.superclusterRef) || !has(self.disablePlacement)
             status:
               properties:
                 activeOpsRef:
@@ -1533,8 +1587,6 @@ spec:
                   type: string
                 arbitration:
                   description: |-
-                    ObservedGeneration is the generation the rest of this status was computed
-                    from, so a stale status can be told from a current one.
                     Arbitration is the two-node arbiter's record as the operator last read
                     it; set only when spec.enableArbitration is on.
                   properties:
@@ -1591,6 +1643,22 @@ spec:
                         State is the arbiter's state: steady, deciding, partitioned, degraded or
                         healing.
                       type: string
+                  type: object
+                capacity:
+                  description: Capacity is the members' capacity summed, on a supercluster only.
+                  properties:
+                    provisionedBytes:
+                      description: ProvisionedBytes is the capacity promised to volumes.
+                      format: int64
+                      type: integer
+                    totalBytes:
+                      description: TotalBytes is the physical capacity.
+                      format: int64
+                      type: integer
+                    usedBytes:
+                      description: UsedBytes is the physical capacity in use.
+                      format: int64
+                      type: integer
                   type: object
                 clusterName:
                   description: ClusterName is the resolved backend name.
@@ -1660,6 +1728,64 @@ spec:
                     violating redundancy, as the control plane reports it.
                   format: int32
                   type: integer
+                memberCount:
+                  description: MemberCount is the number of members, on a supercluster only.
+                  format: int32
+                  type: integer
+                members:
+                  description: Members is each member as last read, on a supercluster only.
+                  items:
+                    description: SuperclusterMemberStatus is one member as the supercluster last read it.
+                    properties:
+                      capacity:
+                        description: Capacity is the member's own capacity reading.
+                        properties:
+                          provisionedBytes:
+                            description: ProvisionedBytes is the capacity promised to volumes.
+                            format: int64
+                            type: integer
+                          totalBytes:
+                            description: TotalBytes is the physical capacity.
+                            format: int64
+                            type: integer
+                          usedBytes:
+                            description: UsedBytes is the physical capacity in use.
+                            format: int64
+                            type: integer
+                        type: object
+                      name:
+                        description: Name is the member StorageCluster.
+                        type: string
+                      phase:
+                        description: Phase is the member's own phase.
+                        enum:
+                          - Pending
+                          - Creating
+                          - Provisioning
+                          - Activating
+                          - Online
+                          - Shrinking
+                          - Rebalancing
+                          - Degraded
+                          - Unavailable
+                          - Suspended
+                        type: string
+                      placementEligible:
+                        description: |-
+                          PlacementEligible says whether new volumes may be placed in this member:
+                          placement not disabled, not being removed, serving, and holding every pool
+                          of the supercluster.
+                        type: boolean
+                      uuid:
+                        description: UUID is the member's backend cluster UUID, empty until it is created.
+                        type: string
+                    required:
+                      - name
+                    type: object
+                  type: array
+                  x-kubernetes-list-map-keys:
+                    - name
+                  x-kubernetes-list-type: map
                 message:
                   description: |-
                     Message is the reason the phase is what it is: one sentence, replaced as
@@ -1669,6 +1795,9 @@ spec:
                   description: NQN is the cluster subsystem qualified name.
                   type: string
                 observedGeneration:
+                  description: |-
+                    ObservedGeneration is the generation the rest of this status was computed
+                    from, so a stale status can be told from a current one.
                   format: int64
                   type: integer
                 phase:
@@ -1800,6 +1929,15 @@ spec:
                     - imbalancePercent
                     - maxDeviationPct
                   type: object
+                role:
+                  description: |-
+                    Role is what this cluster is within a supercluster: Standalone,
+                    Supercluster, or PlacementGroup for a member.
+                  enum:
+                    - Standalone
+                    - Supercluster
+                    - PlacementGroup
+                  type: string
                 status:
                   description: |-
                     Status is the lifecycle the control plane reports, and its values are the
@@ -1901,7 +2039,9 @@ spec:
                 uuid:
                   description: |-
                     UUID is the backend cluster UUID. Empty means the cluster has not been
-                    created or adopted, and non-empty means steady state.
+                    created or adopted, and non-empty means steady state. On a supercluster
+                    it is the aggregate's identifier, the object's metadata.uid, which a
+                    StorageClass names in cluster_id and the control plane does not know.
                   type: string
                 volumeMoveGeneration:
                   description: |-
@@ -1909,6 +2049,42 @@ spec:
                     successful terminal phase and by nothing else, so it only grows.
                   format: int64
                   type: integer
+                workloadNames:
+                  description: |-
+                    WorkloadNames are the names this cluster's workload is reached by,
+                    recorded before the workload exists and never changed afterward,
+                    because every storage node's hostname is built from them. A cluster
+                    created before they were recorded is given the constant names.
+                  properties:
+                    nodeAPIService:
+                      description: NodeAPIService is the headless Service of the storage-node API.
+                      maxLength: 63
+                      type: string
+                    nodeAPITLSSecret:
+                      description: NodeAPITLSSecret is the storage-node API's serving-certificate Secret.
+                      maxLength: 253
+                      type: string
+                    nodeLabelSuffix:
+                      description: |-
+                        NodeLabelSuffix is appended to a node's hostname in both Services, so
+                        that members of one supercluster on one worker have distinct hostnames.
+                        Empty for every other cluster.
+                      maxLength: 4
+                      type: string
+                    spdkProxyService:
+                      description: SpdkProxyService is the headless Service of the SPDK proxy.
+                      maxLength: 63
+                      type: string
+                    spdkProxyTLSSecret:
+                      description: SpdkProxyTLSSecret is the SPDK proxy's serving-certificate Secret.
+                      maxLength: 253
+                      type: string
+                  required:
+                    - nodeAPIService
+                    - nodeAPITLSSecret
+                    - spdkProxyService
+                    - spdkProxyTLSSecret
+                  type: object
               type: object
           type: object
           x-kubernetes-validations:

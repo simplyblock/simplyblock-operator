@@ -13,11 +13,11 @@ package cluster
 import (
 	"testing"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/erasurecoding"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // statusSuspended is the control plane's own spelling of a cluster that is not
@@ -26,7 +26,7 @@ const statusSuspended = "suspended"
 
 // suspendedCluster is a control-plane reading of a cluster that is not active,
 // which is the only state an activation is asked for from.
-func suspendedCluster() webapi.ClusterResponse {
+func suspendedCluster() atlascp.Cluster {
 	reading := activeCluster()
 	reading.Status = statusSuspended
 	return reading
@@ -59,7 +59,7 @@ func withStripe(data, parity int32) func(*simplyblockv1alpha2.StorageCluster) {
 // spare to rebuild onto. Two nodes is a cluster that survives no failure it was
 // configured to survive, so the activation waits rather than firing.
 func TestAnActivationBelowTheStripesMinimumIsHeld(t *testing.T) {
-	api := &fakeControlPlane{cluster: func(string) (webapi.ClusterResponse, error) {
+	api := &fakeControlPlane{cluster: func(string) (atlascp.Cluster, error) {
 		return suspendedCluster(), nil
 	}}
 	rec := &recorder{}
@@ -85,7 +85,7 @@ func TestAnActivationBelowTheStripesMinimumIsHeld(t *testing.T) {
 // The same cluster with the third node is activated, because the hold is on the
 // node count and not on the stripe.
 func TestAnActivationWithTheNodesTheStripeNeedsIsRequested(t *testing.T) {
-	api := &fakeControlPlane{cluster: func(string) (webapi.ClusterResponse, error) {
+	api := &fakeControlPlane{cluster: func(string) (atlascp.Cluster, error) {
 		return suspendedCluster(), nil
 	}}
 	r := newOpsReconciler(t, api, &recorder{},
@@ -106,7 +106,7 @@ func TestAnActivationWithTheNodesTheStripeNeedsIsRequested(t *testing.T) {
 // one whose layout is already the fact; holding a re-activation on it would wedge
 // a cluster that is serving.
 func TestAReactivationOfALiveClusterIsNotHeld(t *testing.T) {
-	api := &fakeControlPlane{cluster: func(string) (webapi.ClusterResponse, error) {
+	api := &fakeControlPlane{cluster: func(string) (atlascp.Cluster, error) {
 		return activeCluster(), nil
 	}}
 	r := newOpsReconciler(t, api, &recorder{},

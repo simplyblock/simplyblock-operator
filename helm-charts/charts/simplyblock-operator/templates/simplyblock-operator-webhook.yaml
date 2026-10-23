@@ -295,6 +295,25 @@ webhooks:
       name: simplyblock-operator-webhook-service
       namespace: {{ .Release.Namespace }}
       path: /validate-storage-simplyblock-io-v1alpha2-storagecluster
+  failurePolicy: Ignore
+  name: vstoragecluster-delete.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - DELETE
+    resources:
+    - storageclusters
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-storage-simplyblock-io-v1alpha2-storagecluster
   failurePolicy: Fail
   name: vstoragecluster.simplyblock.io
   rules:

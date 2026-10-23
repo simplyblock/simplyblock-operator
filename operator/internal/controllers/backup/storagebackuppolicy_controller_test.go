@@ -336,3 +336,27 @@ func TestAnExplicitlyEmptySelectorCoversTheWholeNamespace(t *testing.T) {
 		t.Errorf("attached %v, want the namespace's claim", api.attaches)
 	}
 }
+
+// An attached claim records the backend cluster its volume is in, which is the
+// cluster whose policy it is attached to and the one a detach is sent to.
+func TestAnAttachedClaimRecordsItsCluster(t *testing.T) {
+	api := &fakeControlPlane{createdID: testPolicyID}
+	objs := make([]client.Object, 0, 4)
+	objs = append(objs, testClusterObject(), policyObject(&metav1.LabelSelector{
+		MatchLabels: map[string]string{"backup": "nightly"},
+	}))
+	objs = append(objs, coveredClaim("wanted", testLvolID, map[string]string{"backup": "nightly"})...)
+	r := policyReconciler(t, api, objs...)
+
+	if _, err := r.Reconcile(context.Background(), policyRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var policy simplyblockv1alpha2.StorageBackupPolicy
+	if err := r.Get(context.Background(), policyRequest().NamespacedName, &policy); err != nil {
+		t.Fatal(err)
+	}
+	if len(policy.Status.AttachedClaims) != 1 || policy.Status.AttachedClaims[0].ClusterID != testClusterID {
+		t.Errorf("attachedClaims = %+v, want the claim recorded in cluster %s", policy.Status.AttachedClaims, testClusterID)
+	}
+}

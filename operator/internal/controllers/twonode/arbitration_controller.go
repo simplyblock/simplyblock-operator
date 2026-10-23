@@ -18,8 +18,10 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/simplyblock/atlas/ptr"
 
@@ -116,6 +118,11 @@ func (r *ArbitrationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.Get(ctx, req.NamespacedName, &cluster); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	// A supercluster has no nodes and its UUID names no backend cluster, so
+	// there is nothing to arbitrate and its status is another reconciler's.
+	if cluster.Spec.Supercluster != nil {
+		return ctrl.Result{}, nil
+	}
 	nodes, err := r.storageNodes(ctx, &cluster)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -198,7 +205,11 @@ func (r *ArbitrationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 // SetupWithManager registers the reconciler on StorageClusters.
 func (r *ArbitrationReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha2.StorageCluster{}).
+		For(&simplyblockv1alpha2.StorageCluster{},
+			builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
+				cluster, ok := obj.(*simplyblockv1alpha2.StorageCluster)
+				return ok && cluster.Spec.Supercluster == nil
+			}))).
 		Named("twonode-arbitration").
 		Complete(r)
 }

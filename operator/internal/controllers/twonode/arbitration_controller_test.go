@@ -279,3 +279,31 @@ func TestFailedFencingReportIsRetried(t *testing.T) {
 		t.Fatalf("reportedFenced %v", rf)
 	}
 }
+
+// I-08: a supercluster has no nodes and no backend cluster, so arbitration
+// neither reads it nor writes its status, which belongs to the supercluster
+// reconciler.
+func TestArbitrationLeavesASuperclusterAlone(t *testing.T) {
+	r, c := setup(t, &fakeAPI{}, nil)
+	var cluster simplyblockv1alpha2.StorageCluster
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cluster); err != nil {
+		t.Fatal(err)
+	}
+	cluster.Spec = simplyblockv1alpha2.StorageClusterSpec{Supercluster: &simplyblockv1alpha2.SuperclusterSpec{}}
+	if err := c.Update(context.Background(), &cluster); err != nil {
+		t.Fatal(err)
+	}
+	cluster.Status.Arbitration = &simplyblockv1alpha2.ArbitrationStatus{Message: "left by somebody else"}
+	if err := c.Status().Update(context.Background(), &cluster); err != nil {
+		t.Fatal(err)
+	}
+
+	reconcile(t, r)
+
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cluster); err != nil {
+		t.Fatal(err)
+	}
+	if cluster.Status.Arbitration == nil {
+		t.Error("arbitration rewrote the status of a supercluster")
+	}
+}

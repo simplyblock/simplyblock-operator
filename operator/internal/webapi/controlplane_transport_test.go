@@ -10,6 +10,7 @@
 package webapi
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -108,5 +109,23 @@ func TestAPlaintextDeploymentHandsOverNoTransport(t *testing.T) {
 func TestTransportOfNilIsNil(t *testing.T) {
 	if transportOf(nil) != nil {
 		t.Error("a nil client reported a transport")
+	}
+}
+
+// A call through the atlas-lib client authenticates the way Do does: as the
+// cluster when the context carries its secret, and as this operator otherwise,
+// over this client's own endpoint and connection.
+func TestTheAtlasConfigAuthenticatesTheWayDoDoes(t *testing.T) {
+	transport := &http.Transport{}
+	c := &Client{BaseURL: "https://cp.example:8443", HttpClient: &http.Client{Transport: transport}, saToken: "sa-token"}
+
+	asOperator := c.AtlasConfig(context.Background())
+	if asOperator.Endpoint != c.BaseURL || asOperator.Token != "sa-token" || asOperator.Transport != transport {
+		t.Errorf("AtlasConfig = %+v, want the endpoint, the service-account token, and the transport", asOperator)
+	}
+
+	asCluster := c.AtlasConfig(WithBearerToken(context.Background(), "cluster-secret"))
+	if asCluster.Token != "cluster-secret" {
+		t.Errorf("token = %q, want the cluster secret the context carries", asCluster.Token)
 	}
 }

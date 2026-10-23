@@ -662,6 +662,15 @@ func (ns *Server) refreshVolumeContext(ctx context.Context, volumeID string, vc 
 	if err != nil {
 		return
 	}
+	// A moved volume resolves from the handle its PersistentVolume's mark
+	// names, and the volume context then names that volume's cluster.
+	pv, _ := ns.manager.PersistentVolumeByLogicalVolumeID(ctx, spdkVol.VolumeID)
+	if start := resolutionStart(volumeID, pv); start != volumeID {
+		if marked, perr := csicommon.ParseVolumeHandle(start); perr == nil {
+			spdkVol = marked
+			vc[csicommon.ParamClusterID] = marked.ClusterID
+		}
+	}
 	vc["poolID"] = spdkVol.PoolRef
 
 	sbcClient, clientErr := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef)

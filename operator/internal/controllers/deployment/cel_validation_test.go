@@ -15,6 +15,7 @@ package deployment
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -367,5 +368,85 @@ func TestATemplateTakesArbitrationOnlyWhenDual(t *testing.T) {
 				_ = apiClient.Delete(context.Background(), config)
 			}
 		})
+	}
+}
+
+// Each node set of a supercluster's document becomes a member with a DaemonSet
+// of its own, so the device class is one per node set rather than one per
+// document (design-superclusters.md §5.1): two node sets may differ, and two
+// groups of one node set may not.
+func TestTheDeviceClassIsOnePerNodeSet(t *testing.T) {
+	apiClient := apiServer(t)
+	group := func(name, worker string, devices simplyblockv1alpha2.DeviceSelection) simplyblockv1alpha2.NodeGroup {
+		return simplyblockv1alpha2.NodeGroup{Name: name, Workers: []string{worker}, Devices: &devices}
+	}
+	nvme := simplyblockv1alpha2.DeviceSelection{NVMe: []string{"0000:00:02.0"}}
+	block := simplyblockv1alpha2.DeviceSelection{Block: []string{"/dev/sdb"}}
+
+	config := aStoredDocument(t, apiClient, "per-set-class")
+	config.Spec.NodeSets = []simplyblockv1alpha2.NodeSet{
+		{Name: "fast", Groups: []simplyblockv1alpha2.NodeGroup{group("g", "worker-1", nvme)}},
+		{Name: "dense", Groups: []simplyblockv1alpha2.NodeGroup{group("g", "worker-2", block)}},
+	}
+	if err := apiClient.Update(context.Background(), config); err != nil {
+		t.Fatalf("two node sets of two device classes were refused: %v", err)
+	}
+
+	config.Spec.NodeSets[1].Groups = append(config.Spec.NodeSets[1].Groups, group("h", "worker-3", nvme))
+	err := apiClient.Update(context.Background(), config)
+	if err == nil || !strings.Contains(err.Error(), "device class") {
+		t.Errorf("a node set mixing device classes was admitted, or refused for another reason: %v", err)
+	}
+}
+
+// A node set overrides the cluster template only where the node set is a
+// member of its own: a document of one node set creating one cluster states
+// that cluster's sizing in the template (design-superclusters.md §5.8).
+func TestANodeSetOverridesTheTemplateOnlyWhenItIsAMember(t *testing.T) {
+	apiClient := apiServer(t)
+	group := simplyblockv1alpha2.NodeGroup{
+		Name: "g", Workers: []string{"worker-1"},
+		Devices: &simplyblockv1alpha2.DeviceSelection{NVMe: []string{"0000:00:02.0"}},
+	}
+	overrides := &simplyblockv1alpha2.NodeSetClusterOverrides{VCPUCount: ptr.To(int32(8))}
+
+	config := aStoredDocument(t, apiClient, "overrides")
+	config.Spec.NodeSets[0].Cluster = overrides
+	err := apiClient.Update(context.Background(), config)
+	if err == nil || !strings.Contains(err.Error(), "overrides the cluster template") {
+		t.Errorf("a single node set overriding the template was admitted, or refused for another reason: %v", err)
+	}
+
+	config = aStoredDocument(t, apiClient, "member-overrides")
+	config.Spec.NodeSets = append(config.Spec.NodeSets,
+		simplyblockv1alpha2.NodeSet{Name: "dense", Groups: []simplyblockv1alpha2.NodeGroup{group}, Cluster: overrides})
+	if err := apiClient.Update(context.Background(), config); err != nil {
+		t.Errorf("a member's node set overriding the template was refused: %v", err)
+	}
+}
+
+// An override is held to the floor the template is: four vCPUs.
+func TestANodeSetsVCPUOverrideIsHeldToTheTemplatesFloor(t *testing.T) {
+	apiClient := apiServer(t)
+	group := simplyblockv1alpha2.NodeGroup{
+		Name: "g", Workers: []string{"worker-1"},
+		Devices: &simplyblockv1alpha2.DeviceSelection{NVMe: []string{"0000:00:02.0"}},
+	}
+	for _, tc := range []struct {
+		vcpu  int32
+		admit bool
+	}{{4, true}, {3, false}} {
+		config := aStoredDocument(t, apiClient, fmt.Sprintf("vcpu-floor-%d", tc.vcpu))
+		config.Spec.NodeSets = append(config.Spec.NodeSets, simplyblockv1alpha2.NodeSet{
+			Name: "dense", Groups: []simplyblockv1alpha2.NodeGroup{group},
+			Cluster: &simplyblockv1alpha2.NodeSetClusterOverrides{VCPUCount: ptr.To(tc.vcpu)},
+		})
+		err := apiClient.Update(context.Background(), config)
+		if tc.admit && err != nil {
+			t.Errorf("vcpuCount %d was refused: %v", tc.vcpu, err)
+		}
+		if !tc.admit && (err == nil || !strings.Contains(err.Error(), "vcpuCount")) {
+			t.Errorf("vcpuCount %d was admitted, or refused for another reason: %v", tc.vcpu, err)
+		}
 	}
 }

@@ -183,6 +183,10 @@ type StoragePoolSpec struct {
 	// reference, so deleting the cluster deletes its pools, held behind each
 	// pool's own finalizer while classes are assigned or volumes are bound.
 	//
+	// A supercluster may be named: the pool is then created in every member
+	// under this pool's name, and spec.limits.capacity is divided evenly among
+	// the members that accept new volumes.
+	//
 	// Immutable from creation: which cluster a pool is in is its identity.
 	//
 	// The maximum is what a StorageCluster name may be rather than what a
@@ -229,6 +233,11 @@ type PoolLimitsStatus struct {
 	// +optional
 	Host string `json:"host,omitempty"`
 
+	// Capacity is the capacity limit the control plane is enforcing, written
+	// as a quantity. Empty is unlimited.
+	// +optional
+	Capacity string `json:"capacity,omitempty"`
+
 	// IOPS is the combined ceiling the control plane is enforcing.
 	// +optional
 	IOPS *int32 `json:"iops,omitempty"`
@@ -238,16 +247,48 @@ type PoolLimitsStatus struct {
 	Throughput *ThroughputLimits `json:"throughput,omitempty"`
 }
 
+// PoolMemberStatus is the pool in one member cluster of a supercluster.
+type PoolMemberStatus struct {
+	// Cluster is the member StorageCluster.
+	Cluster string `json:"cluster"`
+
+	// UUID is the backend pool UUID in that member, empty until it is created.
+	// +optional
+	UUID string `json:"uuid,omitempty"`
+
+	// Phase is this member's pool's phase.
+	// +optional
+	Phase StoragePoolPhase `json:"phase,omitempty"`
+
+	// Limits are what the member's control plane enforces for its pool. Its
+	// capacity is this member's share of spec.limits.capacity.
+	// +optional
+	Limits *PoolLimitsStatus `json:"limits,omitempty"`
+
+	// Message says why the phase is what it is.
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
 // StoragePoolStatus is the observed state of one pool.
 type StoragePoolStatus struct {
 	// Phase is the operator's own view of this pool.
 	// +optional
 	Phase StoragePoolPhase `json:"phase,omitempty"`
 
-	// UUID is the backend pool UUID. Empty means the pool has not been created,
-	// and it is the field the controller branches on.
+	// UUID is the backend pool UUID. Empty means the pool has not been created.
+	// A pool of a supercluster has one backend pool in each member and none of
+	// its own, so its UUID stays empty and Members carries each member's.
 	// +optional
 	UUID string `json:"uuid,omitempty"`
+
+	// Members is the pool in each member, when spec.clusterRef names a
+	// supercluster. The pool is Ready once every member that accepts new
+	// volumes holds it.
+	// +optional
+	// +listType=map
+	// +listMapKey=cluster
+	Members []PoolMemberStatus `json:"members,omitempty"`
 
 	// Status is the lifecycle the control plane reports, in the control plane's
 	// own spelling, which is why it carries no Enum here.

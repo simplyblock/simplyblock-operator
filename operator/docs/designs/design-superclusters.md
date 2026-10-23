@@ -10,13 +10,57 @@
 
 ## Phasing Overview
 
-| Phase                   | Status  | Scope                                                                                                                              | Blocked by                                                                                                           |
-|-------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
-| **Phase 1** (§4–§6)     | Planned | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | Superclusters and a second standalone cluster in a namespace: P0-4. Workers shared between members: P0-3 and §16 Q11 |
-| **Phase 2** (§7)        | Planned | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | IOPS and throughput ceilings: P0-5                                                                                   |
-| **Phase 3** (§8.1–§8.3) | Planned | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                                                                                    |
-| **Phase 4** (§8.4)      | Planned | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3                                                                                                              |
-| **Phase 5** (§7.5)      | Planned | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2, P0-5                                                                                                        |
+| Phase                   | Status  | Scope                                                                                                                              | Blocked by                                                                                                       |
+|-------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------|
+| **Phase 1** (§4–§6)     | Built   | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | A new cluster, on a control plane without P0-4. Workers shared between members, which are outside it: P0-3, P0-6 |
+| **Phase 2** (§7)        | Built   | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | IOPS and throughput ceilings: P0-5                                                                               |
+| **Phase 3** (§8.1–§8.3) | Built   | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                                                                                |
+| **Phase 4** (§8.4)      | Planned | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3                                                                                                          |
+| **Phase 5** (§7.5)      | Planned | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2, P0-5                                                                                                    |
+
+**Phase 1 is built:** the API of §4.1 and its status (§4.3), the admission rules
+of §4.2 and §4.4 except the deletion of a member holding volumes, the
+supercluster reconciler with its roll-up, events, and two gauges (§10.1, §13),
+`status.role` on every cluster, `ErrAggregateCluster` from the resolver (§15),
+the predicates that keep the rebalancer, arbitration, and the workload
+reconciler off a supercluster (§10.3), the workload names of §6.1, the shared
+Services and certificate of §6.2, with which the one-cluster-per-namespace rule
+is gone, and the whole of §5: the expansion of a document of several node sets
+into a supercluster and its members, one member's first node adds at a time
+(§5.1 to §5.4), the discovery generator's split (§5.5), growth into a
+supercluster or a member (§5.6), topology (§5.7), and per-node-set overrides
+(§5.8). Workers shared between members are outside Phase 1: they wait on P0-3,
+whose agent half is on sbcli's branch, and on P0-6. A `StorageClusterOps` on a
+supercluster fails before any control-plane call until the walk of §9.6 exists.
+
+**Phase 2 is built:** pools fan out to the members (§7.1): a pool on a
+supercluster is admitted and created in every member, the capacity ceiling is
+divided among the members accepting volumes, a member is placement-eligible
+once it holds every pool, and the supercluster has a default pool whose class
+names it. The operator places (§7.2, §7.3): `PlacementService` runs on the
+link, ranks the members by the strategy from the readings the supercluster
+reconciler hands it, records the member on the claim before answering, and
+keeps a consistency group in one member (§9.3). The CSI controller asks it when
+a class's `cluster_id` names no cluster in its secret, sends a clone's source
+cluster with the request (§9.2), creates the volume in the member answered, and
+refuses a late group label whose group another member holds. Backup policies fan
+out per member, and a restore into a supercluster is placed among the members
+(§9.5). A site deployment mirrors the supercluster (§9.7), and a pNFS export
+serves the volume of the member it was placed in. The IOPS and throughput half
+of the pool ceiling waits on P0-5, as every pool's does.
+
+**Phase 3 is built:** `PersistentVolumeOps` carries the action `Relocate`
+(§8.1), admitted only to another member of the volume's supercluster that
+accepts volumes, and refused for an encrypted volume or one in a consistency
+group. The controller drives the steps of §8.2 against atlas-lib's
+`controlplane` client, cutting the volumes of one subsystem over one at a time,
+and marks every moved PV with `storage.simplyblock.io/relocated-to`. The CSI
+driver follows a moved volume for expand, snapshot, and clone, stages it from
+its mark, and deletes the volume the mark names with the PV (§8.3). The control
+plane's side is on sbcli's `superclusters` branch: a repeated commit answers 409
+naming its task, a start names the destination pool and refuses a destination
+it cannot use, and replication into a single-node cluster finishes (§11). An
+encrypted volume waits on P0-1.
 
 Each phase ships on its own. Phase 1 produces a supercluster that reports one
 status and lets an administrator name the members directly, which is already
@@ -28,20 +72,24 @@ members, and Phase 5 makes a pool's QoS ceiling follow its load across members.
 
 ## Phase 0 — External Prerequisites
 
-| #    | Prerequisite                                                                                                                                                                                                                                                                                                                                                                                                                                       | Kind                    | Blocks                                                                       | Status          |
-|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|------------------------------------------------------------------------------|-----------------|
-| P0-1 | A cross-cluster move of an encrypted volume creates the target volume with a crypto layer and carries its data encryption key to the target's path before the source is deleted. Without it, `delete_source` deletes the only key (§9.4)                                                                                                                                                                                                           | Control plane (`sbcli`) | Phase 3 for encrypted volumes                                                | Not established |
-| P0-2 | Data-plane reachability between the members' storage networks, since the move attaches the target node's transfer hub over NVMe-oF (§8.2)                                                                                                                                                                                                                                                                                                          | Node OS                 | Phase 3                                                                      | Per site        |
-| P0-3 | The storage-node API (node agent) runs on the pod network. It reads the host's interfaces from the host network namespace, and its hostname, cloud instance, and topology from the Node object                                                                                                                                                                                                                                                     | Node agent (`sbcli`)    | Workers shared between members (§5.1)                                        | Rewrite planned |
-| P0-4 | `POST /api/v2/clusters/` accepts the workload names (§6.1), the cluster record keeps them, and node hostnames and the SPDK pod's certificate Secret are built from them. A record without them resolves to the constant names                                                                                                                                                                                                                      | Control plane (`sbcli`) | Superclusters, and a second standalone cluster in a namespace (§6.1)         | Not established |
-| P0-5 | Pool-wide IOPS and throughput limits enforced by SPDK without corrupting the volumes that share them. Today, the `PoolLimits` CEL rule refuses both (`operator/api/v1alpha2/storagepool_types.go`), because SPDK freed the pool's limits array while volumes still used it: the IOPS limit went unenforced, the throughput limit applied per volume, and SPDK crashed on every storage node (regression `2026-09-30-pool-qos-limits-corrupt-spdk`) | Data plane (SPDK)       | IOPS and throughput ceilings on a pool of a supercluster (§7.1), and Phase 5 | Not established |
+| #    | Prerequisite                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Kind                            | Blocks                                                                       | Status                                                                                          |
+|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------|------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------|
+| P0-1 | A cross-cluster move of an encrypted volume creates the target volume with a crypto layer and carries its data encryption key to the target's path before the source is deleted. Without it, `delete_source` deletes the only key (§9.4)                                                                                                                                                                                                                                                                | Control plane (`sbcli`)         | Phase 3 for encrypted volumes                                                | Not established                                                                                 |
+| P0-2 | Data-plane reachability between the members' storage networks, since the move attaches the target node's transfer hub over NVMe-oF (§8.2)                                                                                                                                                                                                                                                                                                                                                               | Node OS                         | Phase 3                                                                      | Per site                                                                                        |
+| P0-3 | The storage-node API (node agent) runs on the pod network. It reads the host's interfaces from the host network namespace, and its hostname, cloud instance, and topology from the Node object                                                                                                                                                                                                                                                                                                          | Node agent (`sbcli`)            | Workers shared between members (§5.1)                                        | Agent half on sbcli `superclusters` (69833969a); the operator still runs it on the host network |
+| P0-4 | `POST /api/v2/clusters/` accepts the workload names (§6.1), the cluster record keeps them, and node hostnames and the SPDK pod's certificate Secret are built from them. A record without them resolves to the constant names                                                                                                                                                                                                                                                                           | Control plane (`sbcli`)         | Every new cluster (§6.1)                                                     | Built in sbcli#1512, not released                                                               |
+| P0-5 | Pool-wide IOPS and throughput limits enforced by SPDK without corrupting the volumes that share them. Today, the `PoolLimits` CEL rule refuses both (`operator/api/v1alpha2/storagepool_types.go`), because SPDK freed the pool's limits array while volumes still used it: the IOPS limit went unenforced, the throughput limit applied per volume, and SPDK crashed on every storage node (regression `2026-09-30-pool-qos-limits-corrupt-spdk`)                                                      | Data plane (SPDK)               | IOPS and throughput ceilings on a pool of a supercluster (§7.1), and Phase 5 | Not established                                                                                 |
+| P0-6 | Per-cluster host state on a shared worker. The node agent keeps one node configuration per host under `/var/simplyblock` (`sn_config_file`, `cluster_id`, `allowed_list`, core and huge-page layout) and configures core isolation, the kubelet's CPU manager, and huge pages for the whole host. Two members on one worker need that state kept per cluster and the host-wide settings merged across them, and on OpenShift one MachineConfigPool for the worker rather than one per cluster (§16 Q14) | Node agent (`sbcli`), OpenShift | Workers shared between members (§5.1)                                        | Not established                                                                                 |
 
 Without P0-1 an encrypted volume is refused as a move candidate at admission, and
 refused again before replication starts, because a move deletes its key (§9.4).
 P0-2 is a property of the site, checked by the move's validation step rather than
 assumed. Without P0-3 every agent binds the same host port, so a worker serves one
 member (§5.1). Without P0-4 the control plane reaches nodes only through the
-constant Service names, so only a cluster recorded with them can be created.
+constant Service names, which only a cluster created before §6.1 or adopted from
+Helm carries, so no new cluster can be created.
+Without P0-6 a worker serves one member: what P0-3 and §16 Q11 give two
+members' agents and SPDK pods, the host state under them does not.
 Without P0-5 the `PoolLimits` rule stays, so a pool of a supercluster, like every
 pool, carries a capacity limit only.
 
@@ -135,7 +183,7 @@ fixed by the request path and the pool.
 **The operator models one cluster per namespace, and one cluster per deployment
 document.** `operator/internal/webhook/storagecluster_validator.go` refuses a
 second `StorageCluster` in a namespace, because the storage-node workload carries
-constant names (`atlas-lib/kube.StorageNodeSetAPIServiceName`, the SPDK proxy
+constant names (`simplyblock-storage-node-api`, the SPDK proxy
 Service, and their certificate Secrets). A `ClusterDeploymentConfig` may list several node sets with several
 groups each, but every group expands into one cluster, and validation refuses
 groups that disagree on interfaces (`conflictingInterfaces` in
@@ -222,7 +270,7 @@ volume between nodes of one cluster.
 │  ┌────────────────────────────────────────────────────────────────────┐  │
 │  │ SuperclusterReconciler (StorageCluster with spec.supercluster)     │  │
 │  │  1. list the members naming it, roll up their status               │  │
-│  │  2. poll each member's capacity                                    │  │
+│  │  2. read each member's capacity from the metrics exporter (Q13)    │  │
 │  │  3. own the shared Services and serving certificate (§6.2)         │  │
 │  └────────────────────────────────────────────────────────────────────┘  │
 │  ┌────────────────────────────────────────────────────────────────────┐  │
@@ -357,13 +405,13 @@ namespace whose `spec.superclusterRef` names it, through a field index.
 **The phase rolls up.** A supercluster uses the existing `StorageClusterPhase`
 values, so a dashboard reading the phase column needs no new vocabulary.
 
-| Members                                                         | Supercluster phase |
-|-----------------------------------------------------------------|--------------------|
-| No member yet, or any member still `Pending` or `Creating`      | `Provisioning`     |
-| Every member `Online`                                           | `Online`           |
-| At least one member serving, at least one not `Online`          | `Degraded`         |
-| No member serving, at least one `Suspended`, none `Unavailable` | `Suspended`        |
-| No member serving, otherwise                                    | `Unavailable`      |
+| Members                                                                                                 | Supercluster phase |
+|---------------------------------------------------------------------------------------------------------|--------------------|
+| No member yet, or any member not yet activated (`Pending`, `Creating`, `Provisioning`, or `Activating`) | `Provisioning`     |
+| Every member `Online`                                                                                   | `Online`           |
+| At least one member serving, at least one not `Online`                                                  | `Degraded`         |
+| No member serving, at least one `Suspended`, none `Unavailable`                                         | `Suspended`        |
+| No member serving, otherwise                                                                            | `Unavailable`      |
 
 "Serving" is `Online`, `Degraded`, `Rebalancing`, or `Shrinking`. A member that
 is rebalancing makes the supercluster `Degraded`, and the member row in
@@ -386,10 +434,16 @@ gains these rules, each refusing with a message that names the object:
 | Deleting a supercluster that has members is refused                                          | Every member names it in an immutable field                |
 | Deleting a member whose pools report bound volumes is refused, outside `RemoveMember` (§8.4) | Removal moves the volumes first                            |
 
+The two delete rules fail open, under a webhook entry of their own with
+`failurePolicy: Ignore`, while every other rule fails closed. An uninstall that
+removes the operator before its clusters would otherwise leave every cluster
+behind a webhook nothing answers, and the worst a missed delete check costs is a
+supercluster deleted while members still name it.
+
 The rule that refused a second `StorageCluster` in a namespace is removed. Every
-cluster records its workload names, and only the first standalone cluster in a
-namespace takes the constant ones (§6.1), so clusters of any kind share a
-namespace freely.
+cluster records its workload names, and only a cluster that predates the record
+keeps the constant ones (§6.1), so clusters of any kind share a namespace
+freely.
 
 ### 4.5 Example
 
@@ -487,11 +541,13 @@ are disjoint. An overlap is a `WorkerOverlap` finding naming the worker and both
 shared worker is in a failure domain of every member it serves, and its loss takes
 its storage nodes from each of them.
 
-Sharing needs two things the members cannot provide themselves. Each member's
+Sharing needs three things the members cannot provide themselves. Each member's
 node agent on the worker binds its port in its own pod, which needs the agent on
-the pod network (P0-3). The members' SPDK pods keep host networking and must be
-handed disjoint ports, which is an open decision (§16 Q11). Until both hold, a
-worker appears in one group across the whole document, as today.
+the pod network (P0-3). The members' SPDK pods keep host networking and are
+handed disjoint ports, each member a base port of its own (§16 Q11). The host
+state the agent keeps and configures is per host today, and two members need it
+per cluster (P0-6). Until all three hold, a worker appears in one group across
+the whole document, as today.
 
 ### 5.2 Size limits
 
@@ -510,12 +566,10 @@ worker count times its slots per worker, and a node set may list at most
 `floor(32 / slots)` workers. The control plane does not enforce the limit, and
 enforcing it there is outside this design.
 
-| Limit                               | Value         | Refused at approval with |
-|-------------------------------------|---------------|--------------------------|
-| Storage nodes per node set (member) | 32            | `MemberTooLarge`         |
-| Cluster name (`spec.cluster.name`)  | 35 characters | API server (`MaxLength`) |
-| Node set name                       | 23 characters | API server (`MaxLength`) |
-| Member name                         | DNS label     | `MemberNameInvalid`      |
+| Limit                                       | Value     | Refused at approval with |
+|---------------------------------------------|-----------|--------------------------|
+| Storage nodes per node set (member)         | 32        | `MemberTooLarge`         |
+| Member name, `<cluster>-<nodeset>-<suffix>` | DNS label | `MemberNameInvalid`      |
 
 **The storage-node limit holds for an ordinary cluster too.** A one-node-set
 document listing more than 32 storage nodes is refused with `MemberTooLarge`,
@@ -541,13 +595,12 @@ already exists is drawn again, and so is a suffix another member of the same
 supercluster carries, because the suffix tells members apart in node hostnames
 (§6.2).
 
-**The name limits make every member name fit.** A cluster name of at most 35
-characters, a node set name of at most 23, the suffix, and two hyphens make a
-member name of at most 63, which is what a `StorageCluster` name may be. Both
-limits are `MaxLength` markers, so an oversized name is refused by the API server
-([Appendix F](#appendix-f-clusterdeploymentconfig_typesgo)). Validation refuses a
-member name that is not a DNS label with `MemberNameInvalid`, naming the node
-set. `StorageNode.spec.nodeSet` already records the node set, so every node names
+**A member name is checked at approval.** Validation refuses a document whose
+member name, `<cluster>-<nodeset>-<suffix>`, is not a DNS label of at most 63
+characters with `MemberNameInvalid`, naming the node set. The cluster and node set
+names carry no `MaxLength` of their own, because discovery already drafts cluster
+names longer than the 35 characters that would leave every node set room: a long
+cluster name leaves its node sets less, and the finding says so before approval. `StorageNode.spec.nodeSet` already records the node set, so every node names
 the part of the document it came from.
 
 ### 5.4 The expansion machine
@@ -596,6 +649,17 @@ creates no second member.
 nodes of all members, so the document's printcolumn names the object an
 administrator works with.
 
+**A member's first node adds run one member at a time.** On OpenShift every
+backend cluster gets a MachineConfigPool of its own, and its first node add on a
+worker reboots the worker to apply the CPU topology. A pool limits how many of
+its own workers reboot at once, but no pool knows the others, so members adding
+their first nodes together reboot every worker at once, including the ones the
+control plane and FoundationDB run on, and the control plane is down until they
+return (seen on dev-ocp with four single-node members). The expansion therefore
+starts a member's nodes only once every earlier member's nodes are online, in
+node-set order, and `CreatingNodes` is given an activation's worth of time for
+each member before the last (§16 Q12).
+
 **Activation runs per member and finishes with the last.** A member whose nodes
 are all online is activated without waiting for the others, because members are
 independent clusters and an activation is per cluster.
@@ -637,8 +701,8 @@ once per role tier:
    (`infra`, `discovered`, or `control-plane`). A tier that needs several numbers
    them from one, as `discovered-1`, `discovered-2`, and so on, in dealing order.
    A tier spanning several regions carries the region before the number, as
-   `discovered-eu-west-1-1`. A generated name is cut to the 23 characters a node
-   set name may have, keeping its number (§5.3).
+   `discovered-eu-west-1-1`. A generated name is cut so that the member name it
+   makes stays a DNS label, keeping its number (§5.3).
 
 | Workers | Slots per worker | Members | Workers per member |
 |---------|------------------|---------|--------------------|
@@ -663,7 +727,10 @@ scheme's minimum, which is today's behavior for a small fleet.
 infrastructure nodes and its workers is drafted as an `infra` block and a
 `discovered` block, so that a reviewer chooses a tier by deleting a block.
 Approving both approves a supercluster of two members, and the draft's
-`status.message` names the members a reviewer is about to approve.
+`status.message` names the members a reviewer is about to approve. Such a draft
+proposes the stripe its smallest node set carries, and neither single-node nor
+two-node mode, because the cluster template, and with it the mode, is one per
+document until a node set can override it (§5.8).
 
 ### 5.6 Growth
 
@@ -729,7 +796,7 @@ When every worker of a partition carries it, workers with one value form one nod
 set named by the value, and the generator does not count, size, or deal that
 partition. Partitioning still applies (§5.5 step 1), so a value whose workers
 span two regions or two hardware classes is a finding naming the value. A value
-that is not a node set name (a DNS label of at most 23 characters) is a finding
+that is not a node set name (a DNS label that leaves its member name one) is a finding
 naming the workers that carry it. A labeled node set over the storage-node limit
 is drafted with `MemberTooLarge`, which approval refuses (§5.2). When only some
 workers of a partition carry the label, the unlabeled workers are split as usual
@@ -737,16 +804,27 @@ and the draft carries the finding `PlacementGroupLabelIncomplete`, naming them.
 
 **Missing topology is reported, never guessed.**
 
-| Workers in one partition           | Draft                                                                           |
-|------------------------------------|---------------------------------------------------------------------------------|
-| All carry the failure-domain label | Failure domains set, and `enableFailureDomains` set on the template             |
-| None carries it                    | Failure domains unset, `enableFailureDomains` unset, members dealt by name only |
-| Some carry it                      | Drafted, with the finding `TopologyIncomplete` naming the unlabeled workers     |
-| None carries the region label      | One unnamed region, which is today's behavior                                   |
+| Workers in one partition           | Draft                                                                                                 |
+|------------------------------------|-------------------------------------------------------------------------------------------------------|
+| All carry the failure-domain label | Failure domains set, and `enableFailureDomains` set on the template when the layout activates (below) |
+| None carries it                    | Failure domains unset, `enableFailureDomains` unset, members dealt by name only                       |
+| Some carry it                      | Drafted, with the finding `TopologyIncomplete` naming the unlabeled workers                           |
+| None carries the region label      | One unnamed region, which is today's behavior                                                         |
 
 A partial labeling is a finding rather than a refusal, because the draft is a
 proposal for a reviewer to correct, and labeling the missing workers and running
 discovery again is the correction.
+
+**Failure-domain mode is proposed only for a layout the control plane
+activates.** The control plane activates a new cluster in failure-domain mode
+only with at least parity+2 distinct domains and the same number of workers in
+each, and it checks this after the cluster is created and every node added.
+A fleet labeled otherwise keeps its failure domains on the groups, and the draft
+leaves `enableFailureDomains` off with a note giving the reason. Four workers
+sharing one zone, as a single-zone lab labels them, is the common case.
+Approval holds a document that creates a cluster to the same rule, per member,
+with the finding `FailureDomainLayout`. A growth document is not held to it,
+because the control plane checks it at a fresh activation alone.
 
 **Approval checks the region boundary on every document**, including one written
 by hand. `Validating` reads the region label of every worker a node set lists and
@@ -799,9 +877,10 @@ node sets into one document, or written by hand.
 
 ### 6.1 Workload names
 
-Two Services carry constant names today, `simplyblock-storage-node-api` and
-`simplyblock-spdk-proxy`, and so do their serving-certificate Secrets
-(`utils.SecretNameStorageNodeSetAPITLS` and `utils.SecretNameSpdkProxyTLS`).
+Before this design, two Services carried constant names,
+`simplyblock-storage-node-api` and `simplyblock-spdk-proxy`, and so did their
+serving-certificate Secrets, `simplyblock-storage-node-api-tls` and
+`simplyblock-spdk-proxy-tls`.
 Node hostnames are built from the storage-node API Service's name, as
 `<node-hostname>.<service>.<namespace>.svc`, so the name is part of every node's
 identity in the control plane.
@@ -828,27 +907,45 @@ before this design has a backend cluster (`status.uuid` set) and no
 `status.workloadNames`, and its workload carries the constant names, because no
 other names existed. The operator writes the constant names into its record on
 the first reconcile after the upgrade, so the default is applied once and then
-read like any other record.
+read like any other record. A cluster adopted from a Helm deployment through its
+upgrade Secret records the constant names too, because its backend cluster has
+run under them all along.
 
 **A new cluster's record is written before its workload exists.** The operator
 fills `status.workloadNames` before it creates any workload object or the backend
 cluster:
 
-| Cluster                                                | Services                                                 | Node label suffix                     |
-|--------------------------------------------------------|----------------------------------------------------------|---------------------------------------|
-| Standalone, constant names unclaimed in the namespace  | `simplyblock-storage-node-api`, `simplyblock-spdk-proxy` | none                                  |
-| Standalone, constant names recorded by another cluster | `sb-<name>-node-api`, `sb-<name>-spdk-proxy`             | none                                  |
-| Supercluster                                           | `sb-<name>-node-api`, `sb-<name>-spdk-proxy`             | none, it has no nodes                 |
-| Member                                                 | its supercluster's                                       | `-<suffix>`, its three letters (§5.3) |
+| Cluster      | Services                                     | Node label suffix                     |
+|--------------|----------------------------------------------|---------------------------------------|
+| Standalone   | `sb-<name>-node-api`, `sb-<name>-spdk-proxy` | none                                  |
+| Supercluster | `sb-<name>-node-api`, `sb-<name>-spdk-proxy` | none, it has no nodes                 |
+| Member       | its supercluster's                           | `-<suffix>`, its three letters (§5.3) |
 
-Each certificate Secret is its Service's name with `-tls`. A derived name that
-would exceed 63 characters is cut to 40 characters of `<name>` followed by eight
-characters of its hash, so every name stays a valid Service name whatever the
-cluster name. The functions that derive them are in `atlas-lib/kube`. Two
-standalone clusters created at once may both find the constant names unclaimed.
-The Service decides between them: a cluster that finds
-`simplyblock-storage-node-api` controller-owned by another cluster before its own
-backend cluster exists rewrites its record to derived names.
+Every new cluster takes names of its own, including the first in its namespace,
+so no cluster holds names that the next one has to avoid, and the constant names
+belong only to clusters that were running before the record existed.
+
+Each certificate Secret is its Service's name with `-tls`. A derived Service name
+is held to a DNS label by `atlas-lib/kube.Formula`: a dot in the cluster name
+becomes a hyphen, and a name that would exceed 63 characters keeps as much of
+`<name>` as fits, followed by an eight-character digest of the whole name, so two
+names sharing a prefix stay apart. The functions that derive the names are in
+`atlas-lib/kube` (`ConstantWorkloadNames`, `DerivedWorkloadNames`, and
+`MemberWorkloadNames`). A member's suffix is the three letters the expansion
+draws onto its name (§5.3), and a member written by hand, whose name carries no
+drawn suffix, takes three characters of a digest of its name. The workload
+reconciler never takes over a Service another object controls, so two clusters
+whose names derive one Service, such as `a.b` and `a-b`, leave the second
+without a workload rather than handing it the first one's nodes.
+
+**Two objects stay shared within a namespace.** The SPDK pod template names the
+ServiceAccount `simplyblock-storage-node-sa`, so every cluster in a namespace
+runs as it. Each cluster holds an owner reference on it without controlling it,
+so it lives until the last of them is deleted. The SPDK pods are created by the
+control plane and carry no cluster label, so a cluster publishes the pods named
+for its own UUID, `snode-spdk-pod-<port>-<first six of the UUID>`, and a pod
+from a template older than sbcli 25.10.5, which names no cluster, as it did
+before.
 
 **The control plane learns the names at cluster creation.** The operator sends
 the record in the body of `POST /api/v2/clusters/`, beside the `cr_name` and
@@ -857,8 +954,13 @@ builds node hostnames from the recorded Services and node label suffix, and
 passes the recorded SPDK proxy Secret to the node agent when it starts an SPDK
 pod. A cluster record without the fields uses the constant names and no suffix,
 which is the rule the operator applies, so a cluster created before either side
-was upgraded resolves the same names on both. Until sbcli accepts the fields
-(P0-4), only a cluster whose record holds the constant names can be created.
+was upgraded resolves the same names on both. A control plane without P0-4
+accepts the body and drops the fields, so the operator compares the names in the
+create response, or in the list entry it adopts, with its record. A cluster whose
+names the control plane did not keep is held `Unavailable` with a
+`WorkloadNamesNotRecorded` event before its status records a backend cluster,
+which on such a control plane is every new cluster. An operator release with
+this design therefore requires an sbcli release with P0-4.
 
 ### 6.2 A supercluster's members share its Services and certificate
 
@@ -881,11 +983,22 @@ name and one certificate, and mTLS peers present and accept one identity across
 the supercluster, so a volume moved between members and a host connected to
 several members need nothing per member. A member added later joins the existing
 certificate with no reissue, because the certificate names the Service and not
-the members.
+the members. The issuer writes the Secret without an owner, so the cluster whose
+Services it serves, the supercluster or a standalone cluster, makes itself an
+owner of it once it exists, and deleting the cluster deletes it.
 
 **A member's own workload is everything else**: its DaemonSet, its ConfigMaps,
-and its EndpointSlice, each named for the member as a standalone cluster's are
-today.
+and its EndpointSlices, each named for the member as a standalone cluster's are
+today. Its SPDK proxies are published one slice per RPC port, named
+`<member>-spdk-proxy-endpoints-<port>`, because the members' SPDK pods may answer
+on one port. Until P0-3 moves the node agent onto the pod network, a member's
+storage-node API slice lists its workers' addresses, as a standalone cluster's
+does, which is sound while no worker serves two members.
+
+**A member waits for the shared Services.** It claims its creation, and its
+workload builds anything, only once both Services exist, and their certificate
+Secrets where TLS is on. Neither belongs to the member, so it looks again every
+ten seconds rather than waiting on an event.
 
 ---
 
@@ -906,8 +1019,15 @@ of its supercluster before it is placement-eligible (§10.1).
 pool across every member, so a pool limited to 100k IOPS delivers at most 100k
 IOPS however many members it spans. The control plane enforces QoS per backend
 pool, so the operator writes each member's backend pool a share of the ceiling.
-Phase 2 splits the ceiling evenly over the placement-eligible members, and §7.5
-specifies the demand-driven shares that replace the even split.
+Phase 2 splits the ceiling evenly over the members that accept volumes, which
+are serving and not `disablePlacement`, and §7.5 specifies the demand-driven
+shares that replace the even split. The remainder of the division goes one unit
+at a time to the first members in name order, so the shares sum to the ceiling.
+A member that accepts no volumes keeps the share its backend pool enforces,
+because its volumes stay and may grow, so while a member is out of placement
+the applied shares sum to more than the ceiling by that member's share. A
+member without the pool yet is created with the share it would have once it
+accepts volumes, because a share of zero is the control plane's unlimited.
 
 **Only the capacity ceiling is split until P0-5 holds.** `PoolLimits` refuses
 `iops` and `throughput` on every pool today, after SPDK failed to enforce them
@@ -920,10 +1040,21 @@ names the Kubernetes nodes that consume the pool, not the workers that serve it:
 `syncAllowedHosts` in `storagepool_controller.go` derives each node's host NQN
 from its UID. A volume of the pool may be placed in any member and consumed from
 any allowed node, so each member's backend pool admits the full resolved list,
-including nodes that run no storage node at all.
+including nodes that run no storage node at all. The allowed-node label a class
+turns into node affinity carries the pool's object UID rather than a backend
+UUID, because the pool has one backend pool per member and one class serves
+all of them.
 
-**The generated StorageClass names the supercluster in `cluster_id`.** The pool
-controller writes the supercluster's `status.uuid` there, as it writes a
+**A pool counts toward eligibility once the pool controller has reached it.**
+A member lacks a pool when the pool reports rows for its members and the
+member's row is not `Ready`. A pool with no rows yet, created a moment ago, is
+required of no member, so creating a pool does not take every member out of
+placement until its first pass.
+
+**The generated StorageClass names the supercluster in `cluster_id`.** The
+supercluster reconciler creates the supercluster's default pool once, as the
+cluster reconciler does a cluster's, and the pool controller writes the class
+for it with the supercluster's `status.uuid`, as it writes a
 cluster's UUID for an ordinary cluster, so a class names a supercluster and a
 cluster the same way, and a hub-side class does too (§9.7). Every member is an
 ordinary entry in `simplyblock-csi-secret-v2`, where the cluster controller
@@ -944,7 +1075,10 @@ sets on the provisioner it deploys (`operator/internal/controllers/driver/worklo
 A request without them fails with `FailedPrecondition`, as a pNFS volume does
 today (`csi-driver/internal/csi/controller/pnfs.go`). The service is declared in
 `atlas-lib/placement/placementrpc/placementv1/placement.proto`, beside the
-link's other services, and is the first one the operator serves to a peer.
+link's other services, and is the first one the operator serves to a peer. The
+hub answers it only on a session that has completed Hello, and the service
+refuses every peer that is not a CSI controller with `PermissionDenied`,
+because a placement writes a record on a claim.
 
 The operator answers from the supercluster reconciler's readings:
 
@@ -968,7 +1102,9 @@ The operator answers from the supercluster reconciler's readings:
    read from its workers' `Node` labels. When the request carries a preferred
    topology, candidates narrow to members in the preferred segment's region,
    then to the requisite segments' regions, and fall back to every eligible
-   member only when neither leaves a candidate with room.
+   member only when neither leaves a candidate with room. A member whose
+   workers carry no region, or disagree, matches any region, as an unlabeled
+   worker does at approval (§5.7).
 6. Take each member's free capacity from the latest reading, less the sizes the
    operator has placed in it since that reading, so a burst of provisions spreads
    instead of landing on the member that was emptiest a minute ago. A reading
@@ -1009,7 +1145,10 @@ volume is visible there yet or not, so a create whose outcome is unknown is
 retried in the member it was sent to and nowhere else. The record lives as long
 as the PVC and survives an operator restart. A recorded member that has since
 left placement is still returned: the retry succeeds there or keeps failing
-there, and is never moved to another member.
+there, and is never moved to another member. A record naming a cluster that is
+no longer a member of the supercluster fails the call with
+`FailedPrecondition`, because the volume may exist there and placing it again
+would make a second one.
 
 **Without a record, the operator looks for the name in every member of the
 aggregate**, including members not eligible for placement, through the control
@@ -1072,18 +1211,27 @@ its target so that it could carry one.
 	TargetClusterRef string `json:"targetClusterRef"`
 ```
 
-Admission requires that the target is a member of the same supercluster as the
-volume's current member, that it is a different member, and that it is
-placement-eligible. A volume in a member of no supercluster is refused: moving
-between unrelated clusters is replication's business
-([`design-csi-addons-replication.md`](design-csi-addons-replication.md)).
+Admission requires that the target exists, is a member of the same
+supercluster as the volume's current member, is a different member, and does not
+set `disablePlacement`. A volume in a member of no supercluster is refused:
+moving between unrelated clusters is replication's business
+([`design-csi-addons-replication.md`](design-csi-addons-replication.md)). A
+volume whose claim carries a consistency-group label is refused, because a
+group's members stay in one member (§9.3), and an encrypted volume is refused
+with `EncryptedVolumeNotMovable` until P0-1 holds (§9.4). Each of these is fixed
+for the request's life. Whether the target is serving is not: the controller
+holds in `Validating` with `TargetMemberNotReady` until it accepts volumes. The
+pairing of `action` and `relocate`, and the immutability of `targetClusterRef`,
+are the type's own rules.
 
 The lock is the same annotation on the subsystem's volumes that `Migrate` takes
 ([`design-persistentvolumeops.md`](crd-redesign/design-persistentvolumeops.md)
-§6), so a `Migrate` and a `Relocate` of one volume exclude each other. Volumes
-sharing a subsystem move together, because the control plane requires them to
-replicate to the same target node, and the operation lists every volume it moves
-in `status.relocate.volumes`.
+§6), so a `Migrate` and a `Relocate` of one volume exclude each other. A
+`Relocate` does not take the per-cluster migration slot, which serializes the
+control plane's migrations inside one cluster. Volumes sharing a subsystem move
+together, because the control plane requires them to replicate to the same
+target node, and the operation lists every volume it moves in
+`status.relocate.volumes`.
 
 ### 8.2 The step machine
 
@@ -1097,44 +1245,71 @@ target's paths on every consuming host while the relationship is
   action=Relocate received
     │
     ▼
-  Validating       ← target eligible, capacity for every volume of the subsystem,
-    │                no group membership (§9.3), not encrypted unless P0-1 holds
+  Validating       ← target serving, its pool of the source's supercluster pool,
+    │                every volume of the subsystem, none in a group (§9.3),
+    │                none encrypted unless P0-1 holds
     │  clean
     ▼
   Replicating      ← POST …/replication/start  mode=migration,
-    │                replication_cluster_id=<target>; poll …/replication/status
-    │  in sync
+    │                replication_cluster_id, replication_pool_id, interval_min=1;
+    │                poll …/replication/status
+    │  every volume in sync
     ▼
-  Committing       ← POST …/replication/commit  delete_source=true  (write-ahead
-    │                status.relocate.committed before the call)
-    │  202 or 409, the task recorded in status.relocate.taskID
+  Committing       ← POST …/replication/commit  delete_source=true  per volume
+    │                (write-ahead status.relocate.committed before the first)
+    │  202 or 409, each volume's task recorded
     ▼
-  AttachingPaths   ← relationship cutover_pending; GET …/connect returns the
-    │                target's paths beside the source's; one preconnect Job per
-    │                consuming node, the Job the replication slot uses
+  AwaitingCutover  ← the control plane converges the next volume's delta and
+    │                prepares its cutover; the cutover task's report is the
+    │                operation's message
+    │  the volume's relationship cutover_pending
+    ▼
+  AttachingPaths   ← GET …/connect returns the target's paths beside the source's;
+    │                one preconnect Job per consuming node, the Job the
+    │                replication slot uses
     │  every Job succeeded
     ▼
-  Proceeding       ← POST …/replication/cutover-proceed  (write-ahead
-    │                status.relocate.proceeded before the call)
-    │
+  Proceeding       ← POST …/replication/cutover-proceed  (write-ahead the
+    │                volume's proceeded before the call), resent while pending
+    │  the target serves the volume ─── another volume left ──▶ AwaitingCutover
     ▼
-  Verifying        ← task finished; the relationship names the target as active;
-    │                the original handle resolves through it (§8.3); every moved
-    │                PV marked relocated-to (§8.3); Jobs deleted
+  Verifying        ← every task finished; each PV's handle resolves into the
+    │                target (§8.3); every moved PV marked relocated-to; Jobs
+    │                deleted
     ▼
   phase: Succeeded
 ```
 
-| Condition                                           | Step                                      | Result                                                                                                                                                                                                                                                                            |
-|-----------------------------------------------------|-------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `abort: true`                                       | Before `Committing`                       | `POST …/replication/stop`, phase `Aborted`                                                                                                                                                                                                                                        |
-| `abort: true`                                       | `Committing` or later                     | Ignored with an event: a committed cutover cannot be undone                                                                                                                                                                                                                       |
-| Operator restart                                    | Any                                       | Resumes from `status.step`. The commit is resent until a task is recorded, and the proceed while the relationship is `cutover_pending`                                                                                                                                            |
-| Start, commit, or proceed returns 5xx or times out  | `Replicating`, `Committing`, `Proceeding` | Retried with backoff, no step advance. A timed-out commit or proceed is retried by the same rule as a restart                                                                                                                                                                     |
-| Start returns 4xx                                   | `Replicating`                             | Phase `Failed`, the control plane's message in `status.message`                                                                                                                                                                                                                   |
-| A consuming node's Job fails                        | `AttachingPaths`                          | Retried with `PathAttachHeld`, and `cutover-proceed` is not sent. After `REPL_CUTOVER_PROCEED_TIMEOUT_SEC` (120 s) the control plane cuts over alone, and a node without the target's paths reaches it through the relationship on its next stage, with an I/O pause on that node |
-| Commit task reports failure                         | `Verifying`                               | Phase `Failed`, with the control plane's relationship state reported                                                                                                                                                                                                              |
-| The original handle does not resolve after the move | `Verifying`                               | Phase `Failed` with `HandleUnresolved`                                                                                                                                                                                                                                            |
+| Condition                                                                                                                          | Step                                      | Result                                                                                                                                                                                                                                                       |
+|------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `abort: true`                                                                                                                      | Before `Committing`                       | `POST …/replication/stop`, phase `Aborted`                                                                                                                                                                                                                   |
+| `abort: true`                                                                                                                      | `Committing` or later                     | Ignored with an event: a committed cutover cannot be undone                                                                                                                                                                                                  |
+| Operator restart                                                                                                                   | Any                                       | Resumes from `status.step`. The commit is resent until a task is recorded, and the proceed while the relationship is `cutover_pending`                                                                                                                       |
+| Start, commit, or proceed returns 5xx or times out                                                                                 | `Replicating`, `Committing`, `Proceeding` | Retried with backoff, no step advance. A timed-out commit or proceed is retried by the same rule as a restart                                                                                                                                                |
+| Start returns 4xx                                                                                                                  | `Replicating`                             | Phase `Failed`, the control plane's message in `status.message`                                                                                                                                                                                              |
+| A consuming node's Job fails                                                                                                       | `AttachingPaths`                          | Retried with `PathAttachHeld`, and `cutover-proceed` is not sent                                                                                                                                                                                             |
+| The control plane cuts over alone after `REPL_CUTOVER_PROCEED_TIMEOUT_SEC` (120 s) while a consuming node lacks the target's paths | `AwaitingCutover`, `AttachingPaths`       | The node is recorded in `status.relocate.nodesMissingPaths` with `CutoverWithoutPaths`. `Verifying` marks the PV, so a restaged pod reaches the target, and then the phase is `Failed` naming the nodes, whose pods lost the volume until they are restarted |
+| Commit task reports failure                                                                                                        | `Verifying`                               | Phase `Failed`, with the control plane's relationship state reported                                                                                                                                                                                         |
+| The original handle does not resolve after the move                                                                                | `Verifying`                               | Phase `Failed` with `HandleUnresolved`                                                                                                                                                                                                                       |
+
+**The volumes of one subsystem cut over one at a time.** The control plane
+holds one cutover per lvstore, so a commit of every volume queues their cutovers,
+and each reaches `cutover_pending` after the one before it is done. The
+operation records a task, a release, and the outcome per volume, and runs
+`AwaitingCutover`, `AttachingPaths`, and `Proceeding` once for each. The paths
+belong to the subsystem, so the Jobs that connected them for the first volume
+serve the rest. The relationship record appears only when a cutover is
+prepared, after the delta has converged, and `AwaitingCutover` waits for it.
+Under a steady write load the convergence runs every one of the control
+plane's shrink rounds, which takes minutes, so it is a step of its own whose
+message reports the round rather than an `AttachingPaths` that attaches
+nothing.
+
+**The target pool is the source pool's counterpart.** A supercluster's
+`StoragePool` records one backend pool per member (§7.1). The entry naming the
+source member and the handle's pool identifies the supercluster pool, and its
+entry for the target member is where the volumes land. The start names it, so
+the control plane does not fall back to the target's first active pool.
 
 **`committed` and `proceeded` record intent, and the backend records
 acceptance.** Each flag is written before its first call, so a restart knows the
@@ -1144,10 +1319,13 @@ write and the request, or a request that times out, leaves the operator unable t
 tell from its own status whether the control plane received it:
 
 - **The commit is resent until a task is recorded.** Every reconcile in
-  `Committing` without `status.relocate.taskID` sends the commit again. The
+  `Committing` for a volume without a recorded task sends the commit again. The
   first commit the control plane accepts returns 202 and its task, and every
-  later one returns 409 naming the same task (§11), so a resend never starts a
-  second cutover and always ends with the task recorded.
+  later one returns 409 naming the same task, including after the cutover has
+  finished (§11), so a resend never starts a second cutover and always ends
+  with the task recorded. A commit answered 404 found the source already
+  deleted by its own cutover, and the relationship's `cutover_done` records
+  the volume as moved.
 - **The proceed is resent while the relationship is `cutover_pending`.** Every
   reconcile in `Proceeding` reads the relationship's state, sends
   `cutover-proceed` while it is still `cutover_pending`, and advances to
@@ -1171,13 +1349,14 @@ replication calls resolve through it (`resolveChain` in
 the chain's retired members (`deleteRetiredReplicaChain`) but never its active
 volume, which Phase 3 changes for a relocated PV (below).
 
-Four controller calls address the handle directly and fail with not-found once
-the source is deleted: `ControllerExpandVolume`, `CreateSnapshot`, clone from a
-volume, and `ControllerPublishVolume` with its unpublish. Phase 3 routes them
-through the same chain resolution, so a relocated volume behaves like a
-failed-over one for every call. The resolution moves to `atlas-lib/controlplane`,
-because the operator's `Verifying` step asserts the same mapping the driver
-follows, and two copies of a chain walk are two answers to where a volume is.
+Three controller calls address the handle directly and fail with not-found once
+the source is deleted: `ControllerExpandVolume`, `CreateSnapshot`, and a clone
+from a volume. The driver does not implement `ControllerPublishVolume`. Each of
+the three tries the handle and, on a 404, follows the chain to the volume
+serving it, so a volume that never moved costs nothing. The walk is
+`controlplane.WalkChain` in atlas-lib, because the operator's `Verifying` step
+asserts the same mapping the driver follows, and two copies of a chain walk are
+two answers to where a volume is.
 
 **DeleteVolume deletes the destination only of a PV marked as relocated.**
 `deleteRetiredReplicaChain` never deletes the relationship's active volume
@@ -1313,9 +1492,10 @@ The control plane places a clone on its snapshot's node, logical volume store,
 and pool, and has no cross-cluster clone except through replication. A clone
 therefore lands in its source member whatever the class says, which the driver
 already does (`clone.go` uses the snapshot's cluster). When the class names a
-supercluster, the driver checks that the source member belongs to it and refuses
-the clone with `InvalidArgument` otherwise, so that a clone cannot leave the
-aggregate its class promises. A clone into a full member fails with
+supercluster, the driver sends the source's cluster with `Place`, and the
+operator answers that cluster when it is a member, recording it on the claim
+like any placement, and refuses the clone with `InvalidArgument` otherwise, so
+that a clone cannot leave the aggregate its class promises. A clone into a full member fails with
 `ResourceExhausted` and the source member named.
 
 ### 9.3 Groups need one lvstore
@@ -1337,10 +1517,13 @@ is bounded by its lvstore's room, not by the supercluster's: a group whose pin i
 full fails the create in its member and is not spilled to another.
 
 **A label added later joins only within the member.** The membership watcher in
-the CSI controller resolves the group in the volume's own cluster. A volume in
-another member is refused with a Warning event on the PVC naming the member that
-holds the group. Relocating the volume into that member first (§8) is the remedy,
-after which the existing colocation path moves it onto the pin.
+the CSI controller resolves the group in the volume's own cluster. When that
+cluster has no group of the name, it asks the other clusters of its secret, and a
+volume whose group another member holds is refused with the Warning event
+`ConsistencyGroupInAnotherCluster` on the PVC, naming that member's cluster
+UUID, since the driver knows the members only by their entries in the secret.
+Relocating the volume into that member first (§8) is the remedy, after which the
+existing colocation path moves it onto the pin.
 
 **Relocation refuses a volume that belongs to a group**, because moving one
 member of a consistency group off its lvstore breaks the group.
@@ -1381,10 +1564,16 @@ inherit both checks, so a member holding encrypted volumes is never deleted.
 ### 9.5 Backups
 
 A `StorageBackupPolicy` naming a supercluster fans out into one backend policy
-per member, recorded per member in the policy's status. Backup identifiers are
+per member, recorded per member in the policy's `status.members`, and each
+claim the selector matches is attached to the policy of the member its volume
+is in, which `status.attachedClaims[].clusterID` records. A member added later
+receives the policy on the next pass. Backup identifiers are
 not scoped by cluster in the control plane, so a backup taken in one member can
 be restored into another, and a restore through a supercluster class places the
-new volume by §7.2. A backup store is one per cluster, and the template writes
+new volume by §7.2. A `StorageBackupOps` restore whose `clusterRef` names a
+supercluster is placed by the same ranking in `Validating`, which records the
+member and that member's backend pool of the target pool before the control
+plane is asked for the copy, so a restart restores into the member chosen first. A backup store is one per cluster, and the template writes
 the same store to every member.
 
 ### 9.6 Cluster operations
@@ -1489,21 +1678,21 @@ from `persistentvolumeclaim_controller.go`, and the PV `patch` verb from
 
 ## 11. Backend API Requirements
 
-| Method | Endpoint                                                                                      | Notes                                                                                                                                                                                                                              |
-|--------|-----------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| GET    | `/api/v2/clusters/`                                                                           | Exists. Used to check that every member is on the same control plane                                                                                                                                                               |
-| GET    | `/api/v2/clusters/{cluster_id}/capacity`                                                      | Exists. Polled by the supercluster controller and read by the CSI driver at `CreateVolume`                                                                                                                                         |
-| POST   | `/api/v2/clusters/{cluster_id}/storage-pools/`                                                | Exists. Called once per member per pool. Idempotent by name: a 409 on an existing pool is success                                                                                                                                  |
-| POST   | `/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/start` | Exists. Body `replication_cluster_id`, `mode: migration`. A repeat on a running relationship must not start a second                                                                                                               |
-| GET    | `…/volumes/{volume_id}/replication/status`                                                    | Exists. Polled in `Replicating`                                                                                                                                                                                                    |
-| POST   | `…/volumes/{volume_id}/replication/stop`                                                      | Exists. Abort before commit                                                                                                                                                                                                        |
-| POST   | `…/volumes/{volume_id}/replication/commit`                                                    | Exists. Body `delete_source: true`. Returns 202 and a task location. Must refuse a second commit with 409 naming the running task, rather than run it twice                                                                        |
-| GET    | `/api/v2/clusters/{cluster_id}/tasks/{task_id}`                                               | Exists. Polled in `Verifying`                                                                                                                                                                                                      |
-| GET    | `/api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}`                           | Exists. Maps a source volume to its active volume after a commit with `delete_source`. Read by the CSI driver's chain resolution and by `Verifying`                                                                                |
-| GET    | `…/volumes/{volume_id}/connect`                                                               | Exists. While the relationship is `cutover_pending`, returns the target's paths beside the source's. Read in `AttachingPaths`                                                                                                      |
-| POST   | `…/volumes/{volume_id}/replication/cutover-proceed`                                           | Exists. Releases the cutover once every consuming host holds the target's paths. The control plane waits for it up to `REPL_CUTOVER_PROCEED_TIMEOUT_SEC` (120 s). Resent while the relationship is `cutover_pending`               |
-| —      | Key carried with an encrypted volume                                                          | **Not established (P0-1).** No key handling is defined for replication, and `delete_source` deletes the source's key (§9.4, §16 Q10)                                                                                               |
-| POST   | `/api/v2/clusters/`                                                                           | **Not established (P0-4).** Body gains the workload names of §6.1: the storage-node API and SPDK proxy Services, the SPDK proxy certificate Secret, and the node label suffix. Absent fields mean the constant names and no suffix |
+| Method | Endpoint                                                                                      | Notes                                                                                                                                                                                                                                                                                                                                                                                                                     |
+|--------|-----------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| GET    | `/api/v2/clusters/`                                                                           | Exists. Used to check that every member is on the same control plane                                                                                                                                                                                                                                                                                                                                                      |
+| GET    | `/api/v2/clusters/{cluster_id}/capacity`                                                      | Exists. Not read by the supercluster controller, which reads the metrics exporter instead (§16 Q13). Read by the CSI driver at `CreateVolume`                                                                                                                                                                                                                                                                             |
+| POST   | `/api/v2/clusters/{cluster_id}/storage-pools/`                                                | Exists. Called once per member per pool. Idempotent by name: a 409 on an existing pool is success                                                                                                                                                                                                                                                                                                                         |
+| POST   | `/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/start` | Exists. Body `replication_cluster_id`, `replication_pool_id`, `mode: migration`, `interval_min`. Refuses with 400 and the reason a destination it cannot use: an unknown cluster, the volume's own, a pool of another cluster, a destination other than the one the volume replicates to, and a migration of an encrypted volume. `replication_pool_id` and the refusals are built on sbcli `superclusters`, not released |
+| GET    | `…/volumes/{volume_id}/replication/status`                                                    | Exists. Polled in `Replicating`                                                                                                                                                                                                                                                                                                                                                                                           |
+| POST   | `…/volumes/{volume_id}/replication/stop`                                                      | Exists. Abort before commit                                                                                                                                                                                                                                                                                                                                                                                               |
+| POST   | `…/volumes/{volume_id}/replication/commit`                                                    | Exists. Body `delete_source: true`. Returns 202 and a task location. A second commit, while the cutover task is queued or running or after it finished, returns 409 naming the task in `Location` and the body, built on sbcli `superclusters` and not released; the released control plane answers 500 and, after a finished cutover, starts a second one                                                                |
+| GET    | `/api/v2/clusters/{cluster_id}/tasks/{task_id}`                                               | Exists. Polled in `Verifying`                                                                                                                                                                                                                                                                                                                                                                                             |
+| GET    | `/api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}`                           | Exists. Maps a source volume to its active volume after a commit with `delete_source`. Read by the CSI driver's chain resolution and by `AttachingPaths`, `Proceeding`, and `Verifying`. The record is written when a cutover is prepared, so it is 404 until then                                                                                                                                                        |
+| GET    | `…/volumes/{volume_id}/connect`                                                               | Exists. While the relationship is `cutover_pending`, returns the target's paths beside the source's. Read in `AttachingPaths`                                                                                                                                                                                                                                                                                             |
+| POST   | `…/volumes/{volume_id}/replication/cutover-proceed`                                           | Exists. Releases the cutover once every consuming host holds the target's paths. The control plane waits for it up to `REPL_CUTOVER_PROCEED_TIMEOUT_SEC` (120 s). Resent while the relationship is `cutover_pending`, and 404 when no cutover is pending                                                                                                                                                                  |
+| —      | Key carried with an encrypted volume                                                          | **Not established (P0-1).** No key handling is defined for replication, and `delete_source` deletes the source's key (§9.4, §16 Q10)                                                                                                                                                                                                                                                                                      |
+| POST   | `/api/v2/clusters/`                                                                           | **Built in sbcli#1512, not released (P0-4).** Body gains the workload names of §6.1: the storage-node API and SPDK proxy Services, the SPDK proxy certificate Secret, and the node label suffix. Absent fields mean the constant names and no suffix                                                                                                                                                                      |
 
 The CSI driver authenticates to each member with that member's entry in
 `clusters`, as today. No admin token crosses a cluster boundary.
@@ -1559,14 +1748,14 @@ it answers `ResourceExhausted`, rate-limited to one per minute per supercluster.
 
 ### 13.2 Prometheus metrics
 
-| Metric                                                | Labels                              | Description                                                            |
-|-------------------------------------------------------|-------------------------------------|------------------------------------------------------------------------|
-| `simplyblock_supercluster_members`                    | `supercluster`, `state`             | Gauge of members by `eligible`, `cordoned`, `notServing`, `missing`    |
-| `simplyblock_supercluster_capacity_bytes`             | `supercluster`, `kind`              | Gauge of combined `total`, `used`, and `provisioned` bytes             |
-| `simplyblock_supercluster_placement_decisions_total`  | `supercluster`, `cluster`, `result` | Counter of `CreateVolume` placements by chosen member, or `exhausted`  |
-| `simplyblock_supercluster_placement_duration_seconds` | `supercluster`                      | Histogram of member selection time, lookup and capacity reads included |
-| `simplyblock_relocation_operations_total`             | `supercluster`, `result`            | Counter of `Relocate` operations by `succeeded`, `failed`, `aborted`   |
-| `simplyblock_relocation_duration_seconds`             | `supercluster`                      | Histogram from `Replicating` to `Succeeded`                            |
+| Metric                                                | Labels                                           | Description                                                            |
+|-------------------------------------------------------|--------------------------------------------------|------------------------------------------------------------------------|
+| `simplyblock_supercluster_member_count`               | `namespace`, `supercluster`, `state`             | Gauge of members by `eligible`, `cordoned`, `notServing`, `missing`    |
+| `simplyblock_supercluster_capacity_bytes`             | `namespace`, `supercluster`, `kind`              | Gauge of combined `total`, `used`, and `provisioned` bytes             |
+| `simplyblock_supercluster_placement_decisions_total`  | `namespace`, `supercluster`, `cluster`, `result` | Counter of `CreateVolume` placements by chosen member, or `exhausted`  |
+| `simplyblock_supercluster_placement_duration_seconds` | `namespace`, `supercluster`                      | Histogram of member selection time, lookup and capacity reads included |
+| `simplyblock_relocation_operations_total`             | `supercluster`, `result`                         | Counter of `Relocate` operations by `succeeded`, `failed`, `aborted`   |
+| `simplyblock_relocation_duration_seconds`             | `supercluster`                                   | Histogram from `Replicating` to `Succeeded`                            |
 
 Existing per-cluster series gain a `supercluster` label on members, empty on
 standalone clusters, so a dashboard groups a supercluster's members with one
@@ -1578,7 +1767,7 @@ volume while another sits empty is a strategy or a capacity-reading problem, and
 nothing else shows it. `simplyblock_supercluster_placement_duration_seconds` is the alert
 for a slow member, because the name lookup in every member sits on the
 `CreateVolume` path and one slow member slows every provision. The `notServing`
-series of `simplyblock_supercluster_members` is the alert that a supercluster is
+series of `simplyblock_supercluster_member_count` is the alert that a supercluster is
 running on fewer members than it was built with.
 
 ---
@@ -1616,11 +1805,12 @@ data unavailability, so neither group's scenarios may be cut.
 **An existing cluster keeps its workload names.** A cluster without
 `status.workloadNames` is recorded with the constant names, and an sbcli cluster
 record without them resolves the same (§6.1), so no running cluster's node
-hostnames change. A new standalone cluster takes the constant names when no other
-cluster in its namespace has them, and the rule refusing a second cluster in a
-namespace is removed. `TestASecondClusterInOneNamespaceIsRefused` in
-`operator/internal/webhook/storagecluster_validator_test.go` asserts the removed
-rule and is rewritten to admit the second cluster.
+hostnames change. Every new cluster takes names of its own, and the rule refusing
+a second cluster in a namespace is removed. An operator with this design creates
+no cluster on a control plane without P0-4, so it ships with an sbcli release
+that has it. `TestASecondClusterInOneNamespaceIsAdmitted` in
+`operator/internal/webhook/storagecluster_validator_test.go` replaces the test
+that asserted the removed rule.
 
 **`ClusterDeploymentConfig` and discovery need no migration.** Neither has
 shipped in a release: both arrive in 26.4, and this design lands between its
@@ -1651,19 +1841,22 @@ repository's spell check.
 
 ## 16. Open Questions
 
-| #   | Question                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Owner                       |
-|-----|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------|
-| 1   | ~~**A control-plane aggregate**~~ **Resolved.** The aggregate stays out of the control plane. It is orchestration in the operator and the CSI driver, and the control plane learns of it only when a requirement needs it to. None of this design's mechanisms does (§2, Non-Goals).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Resolved                    |
-| 2   | ~~**Per-member layout overrides**~~ **Resolved.** A node set overrides the template's sizing and erasure-coding scheme for its member, which is what makes a mixed supercluster of NVMe and logical block members possible. Groups within a node set stay in one hardware category (§5.8).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Resolved                    |
-| 3   | ~~**Member names for long node set names**~~ **Resolved.** A cluster name is at most 35 characters and a node set name at most 23, and the member suffix is three random letters, so every member name fits (§5.3).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Resolved                    |
-| 4   | ~~**Aggregate pool ceilings**~~ **Resolved.** A pool's ceiling is the supercluster's. Phase 2 splits it evenly over the members and Phase 5 divides it by demand (§7.1, §7.5).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Resolved                    |
-| 5   | **Replication with a supercluster on either side:** a pair whose source is a supercluster means one relationship per member, and a supercluster target needs a member mapping. Which shape, and is it needed in the first release?                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Operator team, Backend team |
-| 6   | ~~**Placement affinity for groups**~~ **Resolved.** A group is the PVC label `storage.simplyblock.io/consistency-group`, which the control plane already pins to one node and lvstore. Placement sends a labeled volume to the member that holds the group, and the member's control plane places it on the pin (§7.2, §9.3).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Resolved                    |
-| 7   | ~~**Fan-out cluster operations**~~ **Resolved.** Restart, shutdown, and start on a supercluster walk its members one at a time in order of member name and hold on a member that fails (§9.6).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Resolved                    |
-| 8   | ~~**Site deployments**~~ **Resolved.** The hub's StorageClass names the supercluster in `cluster_id`, through the supercluster's `status.uuid` (§9.7).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Resolved                    |
-| 9   | ~~**Volume names across members**~~ **Resolved.** Not relevant: volumes are created through Kubernetes, whose PV names are unique.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Resolved                    |
-| 10  | **Encryption across a cross-cluster move:** replication lands an encrypted volume's ciphertext in a target volume without a crypto layer, and `delete_source` deletes the only key, so the data is permanently lost (§9.4). The same path is reachable through replication's own `commit` with `delete_source` and through failover of encrypted volumes, outside this design. What carries the key to the target (P0-1), and is the existing replication path guarded against it?                                                                                                                                                                                                                                                                                                                                                 | Backend team                |
-| 11  | **Port separation for SPDK pods on a shared worker:** SPDK pods keep host networking, and each cluster hands out NVMe-oF, RPC, and firewall ports by counting up from its own `nvmfBasePort`, `rpcBasePort`, and `snodeApiPort` (`get_next_nvmf_port`, `get_next_lvstore_ports`, and `get_next_fw_port` in sbcli), skipping only the ports that cluster uses. Members sharing a worker (§5.1) therefore need disjoint ports. The candidates are three. The operator assigns each member a port range, which needs an upper bound the control plane does not enforce today. The operator gives each member distinct base ports with a fixed spacing, which needs no control-plane change and holds while no member counts past the spacing. The control plane allocates ports per host across clusters. Which, and with what width? | Operator team, Backend team |
+| #   | Question                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Owner                       |
+|-----|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------|
+| 1   | ~~**A control-plane aggregate**~~ **Resolved.** The aggregate stays out of the control plane. It is orchestration in the operator and the CSI driver, and the control plane learns of it only when a requirement needs it to. None of this design's mechanisms does (§2, Non-Goals).                                                                                                                                                                                                                                            | Resolved                    |
+| 2   | ~~**Per-member layout overrides**~~ **Resolved.** A node set overrides the template's sizing and erasure-coding scheme for its member, which is what makes a mixed supercluster of NVMe and logical block members possible. Groups within a node set stay in one hardware category (§5.8).                                                                                                                                                                                                                                      | Resolved                    |
+| 3   | ~~**Member names for long node set names**~~ **Resolved.** The member suffix is three random letters, and a member name that is not a DNS label is a finding at approval (§5.3).                                                                                                                                                                                                                                                                                                                                                | Resolved                    |
+| 4   | ~~**Aggregate pool ceilings**~~ **Resolved.** A pool's ceiling is the supercluster's. Phase 2 splits it evenly over the members and Phase 5 divides it by demand (§7.1, §7.5).                                                                                                                                                                                                                                                                                                                                                  | Resolved                    |
+| 5   | **Replication with a supercluster on either side:** a pair whose source is a supercluster means one relationship per member, and a supercluster target needs a member mapping. Which shape, and is it needed in the first release?                                                                                                                                                                                                                                                                                              | Operator team, Backend team |
+| 6   | ~~**Placement affinity for groups**~~ **Resolved.** A group is the PVC label `storage.simplyblock.io/consistency-group`, which the control plane already pins to one node and lvstore. Placement sends a labeled volume to the member that holds the group, and the member's control plane places it on the pin (§7.2, §9.3).                                                                                                                                                                                                   | Resolved                    |
+| 7   | ~~**Fan-out cluster operations**~~ **Resolved.** Restart, shutdown, and start on a supercluster walk its members one at a time in order of member name and hold on a member that fails (§9.6).                                                                                                                                                                                                                                                                                                                                  | Resolved                    |
+| 8   | ~~**Site deployments**~~ **Resolved.** The hub's StorageClass names the supercluster in `cluster_id`, through the supercluster's `status.uuid` (§9.7).                                                                                                                                                                                                                                                                                                                                                                          | Resolved                    |
+| 9   | ~~**Volume names across members**~~ **Resolved.** Not relevant: volumes are created through Kubernetes, whose PV names are unique.                                                                                                                                                                                                                                                                                                                                                                                              | Resolved                    |
+| 10  | **Encryption across a cross-cluster move:** replication lands an encrypted volume's ciphertext in a target volume without a crypto layer, and `delete_source` deletes the only key, so the data is permanently lost (§9.4). The same path is reachable through replication's own `commit` with `delete_source` and through failover of encrypted volumes, outside this design. What carries the key to the target (P0-1), and is the existing replication path guarded against it?                                              | Backend team                |
+| 11  | ~~**Port separation for SPDK pods on a shared worker**~~ **Resolved.** Each member gets an `nvmfBasePort` of its own, 250 apart from the others', skipping a range that holds a well-known host port (6443, 6641 and 6642, 9000 to 9999, 10250 to 10260). Every SPDK port a cluster hands out, RPC included, comes from one pool counting up from that base, about four per storage node, so 250 holds a member of 32 nodes with room for replacements, and no control-plane change is needed. Built with shared workers (P0-6) | Resolved                    |
+| 12  | ~~**Serializing members' first node adds**~~ **Resolved.** The expansion orders members: a member's nodes are created once every node of the members before it is online (§5.4). A member created by hand is not ordered against the others, and its first adds are the administrator's to time                                                                                                                                                                                                                                 | Resolved                    |
+| 13  | ~~**The capacity source of the rollup**~~ **Resolved.** The supercluster controller reads each member's capacity from the Prometheus exporter, as the `storageclustermetrics` API does, and not from the control plane, which answers `GET /capacity` with a 500 for a cluster that has recorded none yet. Without a reachable exporter, `status.capacity`, the capacity metric, and `AggregateCapacityThreshold` stay unset                                                                                                    | Resolved                    |
+| 14  | **A shared worker on OpenShift:** the control plane moves each cluster's workers into a MachineConfigPool of its own (`storage-<uuid6>`), and a node belongs to one pool, so two members on one worker would select it twice and degrade the Machine Config Operator. Whether one pool per worker set, a pool the operator owns, or no pool move for a member's second cluster                                                                                                                                                  | Operator team, Backend team |
 
 ---
 
@@ -1930,11 +2123,25 @@ type PoolMemberStatus struct {
 	// +optional
 	Phase StoragePoolPhase `json:"phase,omitempty"`
 
-	// Limits are the share of the pool's ceiling this member's backend pool
-	// currently enforces. The shares of all members sum to the pool's limits.
+	// Limits are what the member's control plane enforces for its pool. Its
+	// capacity is this member's share of spec.limits.capacity.
 	// +optional
 	Limits *PoolLimitsStatus `json:"limits,omitempty"`
+
+	// Message says why the phase is what it is.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
+```
+
+`PoolLimitsStatus` gains the capacity the control plane enforces, read from the
+pool's `max_size`, which is how a member's applied share is read back:
+
+```go
+	// Capacity is the capacity limit the control plane is enforcing, written
+	// as a quantity. Empty is unlimited.
+	// +optional
+	Capacity string `json:"capacity,omitempty"`
 ```
 
 ```go
@@ -1969,14 +2176,15 @@ const (
 	PersistentVolumeOpsActionRelocate PersistentVolumeOpsAction = "Relocate"
 )
 
-// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Replicating;Committing;AttachingPaths;Proceeding
+// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Replicating;Committing;AwaitingCutover;AttachingPaths;Proceeding
 type PersistentVolumeOpsStep string
 
 const (
-	PersistentVolumeOpsStepReplicating    PersistentVolumeOpsStep = "Replicating"
-	PersistentVolumeOpsStepCommitting     PersistentVolumeOpsStep = "Committing"
-	PersistentVolumeOpsStepAttachingPaths PersistentVolumeOpsStep = "AttachingPaths"
-	PersistentVolumeOpsStepProceeding     PersistentVolumeOpsStep = "Proceeding"
+	PersistentVolumeOpsStepReplicating     PersistentVolumeOpsStep = "Replicating"
+	PersistentVolumeOpsStepCommitting      PersistentVolumeOpsStep = "Committing"
+	PersistentVolumeOpsStepAwaitingCutover PersistentVolumeOpsStep = "AwaitingCutover"
+	PersistentVolumeOpsStepAttachingPaths  PersistentVolumeOpsStep = "AttachingPaths"
+	PersistentVolumeOpsStepProceeding      PersistentVolumeOpsStep = "Proceeding"
 )
 
 // RelocateVolumeSpec is where a Relocate moves the volume.
@@ -1985,9 +2193,40 @@ type RelocateVolumeSpec struct {
 	// It must be a different member of the same supercluster as the volume's
 	// current cluster, and must accept new volumes.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	// +k8s:immutable
 	TargetClusterRef string `json:"targetClusterRef"`
+}
+
+// RelocatedVolume is one volume a Relocate moves, and how far its cutover is.
+type RelocatedVolume struct {
+	// VolumeUUID is the volume's backend UUID in the source member.
+	// +kubebuilder:validation:Required
+	VolumeUUID string `json:"volumeUUID"`
+
+	// PersistentVolumeName is the PersistentVolume carrying the volume, when one
+	// does. It is what the volume's new location is recorded on.
+	// +optional
+	PersistentVolumeName string `json:"persistentVolumeName,omitempty"`
+
+	// TaskID is the control plane's task carrying the volume's cutover and the
+	// deletion of its source, from the commit's answer.
+	// +optional
+	TaskID string `json:"taskID,omitempty"`
+
+	// Proceeded is set before the volume's cutover is first released. The
+	// release is resent while the cutover waits for it.
+	// +optional
+	Proceeded bool `json:"proceeded,omitempty"`
+
+	// CutOver is set once the target serves the volume.
+	// +optional
+	CutOver bool `json:"cutOver,omitempty"`
+
+	// TargetVolumeUUID is the volume's backend UUID in the target member.
+	// +optional
+	TargetVolumeUUID string `json:"targetVolumeUUID,omitempty"`
 }
 
 // RelocateStatus is the progress of a Relocate.
@@ -2000,27 +2239,33 @@ type RelocateStatus struct {
 	// +optional
 	TargetClusterUUID string `json:"targetClusterUUID,omitempty"`
 
-	// Volumes are every volume moving together, the requested one and those
-	// sharing its subsystem, by backend UUID.
+	// TargetPoolUUID is the pool in the target member the volumes land in: the
+	// target's pool of the same supercluster pool as the source's.
 	// +optional
-	// +listType=set
-	Volumes []string `json:"volumes,omitempty"`
+	TargetPoolUUID string `json:"targetPoolUUID,omitempty"`
 
-	// Committed is set before the commit is first requested. It refuses an
-	// abort from then on, and does not stop the commit being resent until
-	// TaskID is recorded.
+	// Committed is set before the first commit is requested. It refuses an
+	// abort from then on, because a committed cutover cannot be taken back.
 	// +optional
 	Committed bool `json:"committed,omitempty"`
 
-	// Proceeded is set before the cutover is first released. The release is
-	// resent while the relationship is cutover_pending.
+	// Volumes are every volume moving together: the named one and those
+	// sharing its subsystem.
+	// +listType=map
+	// +listMapKey=volumeUUID
 	// +optional
-	Proceeded bool `json:"proceeded,omitempty"`
+	Volumes []RelocatedVolume `json:"volumes,omitempty"`
 
-	// TaskID is the control plane's task carrying the cutover, from the
-	// commit's 202 or from the 409 that refuses a second commit.
+	// PathJobs are the Jobs that connect the target's paths on the nodes
+	// consuming the subsystem, one per node.
 	// +optional
-	TaskID string `json:"taskID,omitempty"`
+	PathJobs []ValidationJob `json:"pathJobs,omitempty"`
+
+	// NodesMissingPaths are the consuming nodes that did not hold the target's
+	// paths when the control plane cut a volume over without waiting for them.
+	// +listType=set
+	// +optional
+	NodesMissingPaths []string `json:"nodesMissingPaths,omitempty"`
 }
 ```
 
@@ -2174,11 +2419,9 @@ The fields changed and added on `NodeSet`:
 
 ```go
 	// Name is the node set's name, and the middle of the member cluster's name
-	// when the node set becomes a member, as <cluster>-<nodeset>-<suffix>. At
-	// most 23 characters, so that a member name fits beside a cluster name of 35
-	// and a suffix of three.
+	// when the node set becomes a member, as <cluster>-<nodeset>-<suffix>, which
+	// validation holds to a DNS label at approval.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MaxLength=23
 	Name string `json:"name"`
 
 	// Cluster overrides the document's cluster template for this node set's
@@ -2194,10 +2437,8 @@ The field changed on `ClusterTemplate`, and the rules changed on
 
 ```go
 	// Name is the StorageCluster's name, or the supercluster's when the document
-	// has more than one node set. At most 35 characters, so that every member
-	// name derived from it fits.
+	// has more than one node set.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MaxLength=35
 	Name string `json:"name"`
 ```
 

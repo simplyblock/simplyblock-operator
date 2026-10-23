@@ -766,8 +766,10 @@ spec:
                   guards are what carry documents written before the default existed.
                 type: boolean
               cluster:
-                description: Cluster is the StorageCluster to create. Ignored when
-                  ClusterRef is set.
+                description: |-
+                  Cluster is the StorageCluster to create, or the sizing of the members to
+                  add when ClusterRef names a supercluster, whose name is then not used.
+                  Ignored when ClusterRef names a standalone cluster or a member.
                 properties:
                   arbitration:
                     description: |-
@@ -1364,8 +1366,10 @@ spec:
                     && !(has(self.enableArbitration) && self.enableArbitration))
               clusterRef:
                 description: |-
-                  ClusterRef names an existing StorageCluster this document adds nodes to.
-                  Absent means the document creates the cluster in Cluster. Setting it to a
+                  ClusterRef names an existing StorageCluster this document adds to: the
+                  nodes of every node set to a standalone cluster or a member, and one new
+                  member per node set to a supercluster. Absent means the document creates
+                  the cluster in Cluster. Setting it to a
                   cluster that does not exist, or leaving it absent when one already does,
                   is refused rather than reconciled.
 
@@ -1537,6 +1541,78 @@ spec:
                     workers a document adds or grows together. It carries no sizing, because sizing
                     is uniform across a cluster and is stated once in ClusterTemplate.
                   properties:
+                    cluster:
+                      description: |-
+                        Cluster overrides the document's cluster template for the member cluster
+                        this node set becomes, for a node set whose hardware differs from the
+                        rest. A field left unset takes the template's value. Valid on a document
+                        with more than one node set, or one naming a cluster in clusterRef.
+                      properties:
+                        maxSubsystemCount:
+                          description: |-
+                            MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
+                            node of this member serves.
+                          format: int32
+                          maximum: 75
+                          minimum: 10
+                          type: integer
+                        minHugePagesSize:
+                          description: |-
+                            MinHugePagesSize is the smallest huge-page allocation each storage node of
+                            this member makes: 100G or 1T, where a bare number is gigabytes.
+                          maxLength: 32
+                          type: string
+                        nodesPerSocket:
+                          description: |-
+                            NodesPerSocket is how many storage nodes run per NUMA socket on this
+                            member's workers.
+                          format: int32
+                          maximum: 8
+                          minimum: 1
+                          type: integer
+                        socketsToUse:
+                          description: |-
+                            SocketsToUse are the NUMA sockets that run storage nodes on this member's
+                            workers. With NodesPerSocket it decides how many storage nodes each worker
+                            runs.
+                          items:
+                            maxLength: 16
+                            type: string
+                          maxItems: 16
+                          type: array
+                          x-kubernetes-list-type: set
+                        stripe:
+                          description: Stripe is this member's erasure-coding layout.
+                          properties:
+                            dataChunks:
+                              description: DataChunks is the number of data chunks
+                                per stripe (ndcs).
+                              format: int32
+                              minimum: 1
+                              type: integer
+                            parityChunks:
+                              description: |-
+                                ParityChunks is the number of parity chunks per stripe (npcs), and
+                                therefore how many chunk losses a stripe survives.
+                              format: int32
+                              minimum: 0
+                              type: integer
+                          type: object
+                          x-kubernetes-validations:
+                          - message: the erasure-coding scheme must be one of 1+0,
+                              1+1, 2+1, 4+1, 1+2, 2+2, or 4+2, written as dataChunks+parityChunks,
+                              and an unstated half is 1
+                            rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks)
+                              ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1],
+                              [4, 1], [1, 2], [2, 2], [4, 2]]'
+                        vcpuCount:
+                          description: |-
+                            VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
+                            this member.
+                          format: int32
+                          minimum: 4
+                          type: integer
+                      type: object
                     groups:
                       description: Groups are the sets of workers sharing one configuration.
                       items:
@@ -1689,23 +1765,26 @@ spec:
               rule: '!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf'
             - message: approval cannot be withdrawn
               rule: '!has(oldSelf.approved) || !oldSelf.approved || self.approved'
-            - message: 'every group must name the same device class: all nvme or all
-                block'
-              rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)))
-                || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))
+            - message: 'every group of a node set must name the same device class:
+                all nvme or all block'
+              rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))
+                || s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))
+            - message: a node set overrides the cluster template only when the document
+                has more than one node set or names a cluster in clusterRef
+              rule: size(self.nodeSets) > 1 || has(self.clusterRef) || self.nodeSets.all(s,
+                !has(s.cluster))
             - message: spec.cluster.openshift is what a deployment onto OpenShift
                 states, so spec.environment has to be OpenShift
               rule: '!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment)
                 && self.environment == ''OpenShift'')'
           status:
-            description: ClusterDeploymentConfigStatus is the observed state of the
-              document.
             properties:
               clusterRef:
                 description: |-
-                  ClusterRef names the StorageCluster the expansion produced or added to. It
-                  is a record rather than a dependency: nothing resolves it after expansion,
-                  which is what makes the document safe to delete.
+                  ClusterRef names the StorageCluster the expansion produced or added to,
+                  the supercluster when it produced one. It is a record rather than a
+                  dependency: nothing resolves it after expansion, which is what makes the
+                  document safe to delete.
                 type: string
               expansionStartedAt:
                 description: |-
@@ -1720,6 +1799,31 @@ spec:
                   which nothing in memory and no step deadline supplies.
                 format: date-time
                 type: string
+              members:
+                description: |-
+                  Members are the member clusters the expansion created or is creating, one
+                  per node set, when the document produces a supercluster. Each name is
+                  recorded before its member is created, so that a retry creates the same
+                  member rather than drawing another name.
+                items:
+                  description: |-
+                    ClusterDeploymentConfigStatus is the observed state of the document.
+                    ExpansionMember is a member cluster the expansion drew a name for.
+                  properties:
+                    cluster:
+                      description: Cluster is the member StorageCluster's name, <cluster>-<nodeset>-<suffix>.
+                      type: string
+                    nodeSet:
+                      description: NodeSet is the node set the member is made of.
+                      type: string
+                  required:
+                  - cluster
+                  - nodeSet
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - nodeSet
+                x-kubernetes-list-type: map
               message:
                 description: |-
                   Message is the reason the phase is what it is: one sentence, replaced as
@@ -3247,6 +3351,16 @@ spec:
                       condition for whichever class is scanned, and so widens what is reported,
                       where every member of the filter narrows it.
                     type: boolean
+                  failureDomainLabel:
+                    default: topology.kubernetes.io/zone
+                    description: |-
+                      FailureDomainLabel is the Node label whose value becomes each worker's
+                      failure domain in the draft, for fleets that label racks or power feeds.
+                      Defaults to topology.kubernetes.io/zone. A worker without the label gets
+                      no failure domain, and the run reports it. A value that is not a valid
+                      failure domain is reported as well, naming the worker, and not used.
+                    maxLength: 317
+                    type: string
                   forceJournalDevice:
                     description: |-
                       ForceJournalDevice makes the run dedicate a journal device even where the
@@ -3506,6 +3620,9 @@ spec:
     - jsonPath: .spec.migrate.targetNodeRef.name
       name: Target
       type: string
+    - jsonPath: .spec.relocate.targetClusterRef
+      name: Target Cluster
+      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
@@ -3554,7 +3671,8 @@ spec:
               PersistentVolume.
 
               The action and its parameter block have to agree: Migrate requires
-              spec.migrate, and no other action accepts it.
+              spec.migrate and Relocate requires spec.relocate, and neither action
+              accepts the other's block.
             properties:
               abort:
                 description: |-
@@ -3569,6 +3687,7 @@ spec:
                   what it was doing halfway through would have a status describing neither.
                 enum:
                 - Migrate
+                - Relocate
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -3652,6 +3771,23 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              relocate:
+                description: Relocate parameterizes action Relocate.
+                properties:
+                  targetClusterRef:
+                    description: |-
+                      TargetClusterRef names the member StorageCluster to move the volume to,
+                      in the namespace of the volume's current member. It must be another
+                      member of the same supercluster, and must accept new volumes.
+                    maxLength: 63
+                    minLength: 1
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                required:
+                - targetClusterRef
+                type: object
             required:
             - action
             - persistentVolumeName
@@ -3661,6 +3797,9 @@ spec:
               rule: '!has(oldSelf.creatorRef) || has(self.creatorRef)'
             - message: migrate is required for action Migrate and must be absent otherwise
               rule: 'self.action == ''Migrate'' ? has(self.migrate) : !has(self.migrate)'
+            - message: relocate is required for action Relocate and must be absent
+                otherwise
+              rule: 'self.action == ''Relocate'' ? has(self.relocate) : !has(self.relocate)'
           status:
             description: PersistentVolumeOpsStatus is the observed state of one volume
               operation.
@@ -3841,6 +3980,116 @@ spec:
                 - Failed
                 - Aborted
                 type: string
+              relocate:
+                description: Relocate is the progress of a Relocate.
+                properties:
+                  committed:
+                    description: |-
+                      Committed is set before the first commit is requested. It refuses an
+                      abort from then on, because a committed cutover cannot be taken back.
+                    type: boolean
+                  nodesMissingPaths:
+                    description: |-
+                      NodesMissingPaths are the consuming nodes that did not hold the target's
+                      paths when the control plane cut a volume over without waiting for them.
+                      Pods on these nodes lose the volume until they are restarted, and the
+                      operation fails once the volume's new location is recorded.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  pathJobs:
+                    description: |-
+                      PathJobs are the Jobs that connect the target's paths on the nodes
+                      consuming the subsystem, one per node.
+                    items:
+                      description: |-
+                        ValidationJob is one Job started to check a path is reachable from one node.
+
+                        It is tracked so that Verifying can delete every Job the operation started,
+                        including after a restart. The namespace is recorded for the same reason
+                        spec.migrate.targetNodeRef carries one: a Job is namespaced and this object
+                        is not, so a name alone would not locate it.
+                      properties:
+                        name:
+                          type: string
+                        namespace:
+                          type: string
+                        node:
+                          description: |-
+                            Node is the worker the Job is pinned to, which is a node consuming one of
+                            the migrated subsystem's volumes.
+                          type: string
+                        succeeded:
+                          description: |-
+                            Succeeded records a node whose paths were checked and found ready, so a
+                            restart does not run the check again on a node that already passed and
+                            whose Job its own TTL may already have reaped.
+                          type: boolean
+                      required:
+                      - name
+                      - namespace
+                      type: object
+                    type: array
+                  sourceClusterUUID:
+                    description: SourceClusterUUID is the member the volume started
+                      in.
+                    type: string
+                  targetClusterUUID:
+                    description: TargetClusterUUID is the member the volume is moving
+                      to.
+                    type: string
+                  targetPoolUUID:
+                    description: |-
+                      TargetPoolUUID is the pool in the target member the volumes land in: the
+                      target's pool of the same supercluster pool as the source's.
+                    type: string
+                  volumes:
+                    description: |-
+                      Volumes are every volume moving together: the named one and those
+                      sharing its subsystem.
+                    items:
+                      description: |-
+                        RelocatedVolume is one volume a Relocate moves, and how far its cutover is.
+
+                        The control plane cuts the volumes of one subsystem over one at a time, so
+                        each carries its own task and its own release rather than the operation
+                        carrying one for all of them.
+                      properties:
+                        cutOver:
+                          description: CutOver is set once the target serves the volume.
+                          type: boolean
+                        persistentVolumeName:
+                          description: |-
+                            PersistentVolumeName is the PersistentVolume carrying the volume, when one
+                            does. It is what the volume's new location is recorded on.
+                          type: string
+                        proceeded:
+                          description: |-
+                            Proceeded is set before the volume's cutover is first released. The
+                            release is resent while the cutover waits for it.
+                          type: boolean
+                        targetVolumeUUID:
+                          description: TargetVolumeUUID is the volume's backend UUID
+                            in the target member.
+                          type: string
+                        taskID:
+                          description: |-
+                            TaskID is the control plane's task carrying the volume's cutover and the
+                            deletion of its source, from the commit's answer.
+                          type: string
+                        volumeUUID:
+                          description: VolumeUUID is the volume's backend UUID in
+                            the source member.
+                          type: string
+                      required:
+                      - volumeUUID
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - volumeUUID
+                    x-kubernetes-list-type: map
+                type: object
               startedAt:
                 description: StartedAt is when the operation began.
                 format: date-time
@@ -3890,7 +4139,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'',''Verifying'']'
+                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'',''Verifying'',''Replicating'',''Committing'',''AwaitingCutover'',''AttachingPaths'',''Proceeding'']'
             type: object
         type: object
     served: true
@@ -5953,6 +6202,11 @@ spec:
                         selector.
                       format: date-time
                       type: string
+                    clusterID:
+                      description: |-
+                        ClusterID is the backend cluster the claim's volume is in, whose policy
+                        it is attached to.
+                      type: string
                     lvolID:
                       description: |-
                         LvolID is the logical volume the control plane attached the policy to. It
@@ -5981,6 +6235,35 @@ spec:
                   policy, and it is what an age alert is computed from.
                 format: date-time
                 type: string
+              members:
+                description: |-
+                  Members is the policy in each member, when spec.clusterRef names a
+                  supercluster: one control-plane policy per member, each covering the
+                  claims whose volumes are in that member. ClusterID and PolicyID stay
+                  empty for such a policy.
+                items:
+                  description: |-
+                    BackupPolicyMemberStatus is the policy in one member cluster of a
+                    supercluster.
+                  properties:
+                    cluster:
+                      description: Cluster is the member StorageCluster.
+                      type: string
+                    clusterID:
+                      description: ClusterID is the member's backend cluster.
+                      type: string
+                    policyID:
+                      description: |-
+                        PolicyID is the control plane's identifier for the policy in that
+                        member.
+                      type: string
+                  required:
+                  - cluster
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - cluster
+                x-kubernetes-list-type: map
               message:
                 description: |-
                   Message is the reason the phase is what it is: one sentence, replaced as
@@ -7532,6 +7815,13 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.role
+      name: Role
+      type: string
+    - jsonPath: .status.memberCount
+      name: Members
+      priority: 1
+      type: integer
     - jsonPath: .status.step.state
       name: Step
       type: string
@@ -7555,9 +7845,10 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          StorageCluster is one simplyblock backend cluster. It owns the storage nodes
-          beneath it, the pools carved out of it, and the Kubernetes workload its nodes
-          run as.
+          StorageCluster is one simplyblock backend cluster, or a supercluster that
+          aggregates several of them. A backend cluster owns the storage nodes beneath
+          it, the pools carved out of it, and the Kubernetes workload its nodes run as.
+          A supercluster has no nodes: its members do.
         properties:
           apiVersion:
             description: |-
@@ -7734,6 +8025,12 @@ spec:
                   cannot be turned off, since a drain, a rebalance, and a device
                   replacement are all performed by moving volumes.
                 type: boolean
+              disablePlacement:
+                description: |-
+                  DisablePlacement stops new volumes being placed in this member. Volumes
+                  already in it stay where they are and keep working. Valid only on a
+                  member.
+                type: boolean
               enableArbitration:
                 description: |-
                   EnableArbitration turns on the control plane's two-node arbitration:
@@ -7854,8 +8151,9 @@ spec:
                   node. It is the cluster's and no node carries a copy: every node's
                   configuration is generated from this field, so changing it reaches the
                   nodes that already exist as each of them next restarts.
-                  Required: it sizes huge pages, and a node that receives no value fails
-                  config generation outright rather than falling back to a default.
+                  Required on every cluster except a supercluster: it sizes huge pages, and
+                  a node that receives no value fails config generation outright rather
+                  than falling back to a default.
                 format: int32
                 maximum: 75
                 minimum: 10
@@ -8264,6 +8562,38 @@ spec:
                   rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks)
                     ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4, 1], [1,
                     2], [2, 2], [4, 2]]'
+              supercluster:
+                description: |-
+                  Supercluster makes this cluster a supercluster: one cluster to
+                  Kubernetes, made of the StorageClusters in this namespace whose
+                  superclusterRef names it, each with its own nodes and data. A new volume
+                  is placed in one member and stays there unless it is moved. A supercluster
+                  carries no nodes and no sizing, and may carry only this field and the
+                  capacity thresholds. Set at creation and never added or removed.
+                properties:
+                  placement:
+                    description: Placement is how new volumes are placed among the
+                      members.
+                    properties:
+                      strategy:
+                        default: MostAvailableCapacity
+                        description: |-
+                          Strategy ranks the members that can take a new volume. Defaults to
+                          MostAvailableCapacity.
+                        enum:
+                        - MostAvailableCapacity
+                        - LeastProvisioned
+                        - LeastVolumes
+                        type: string
+                    type: object
+                type: object
+              superclusterRef:
+                description: |-
+                  SuperclusterRef makes this cluster a member of the named supercluster in
+                  this namespace. The supercluster has to exist when the member is
+                  created. Set at creation and never changed.
+                maxLength: 63
+                type: string
               vcpuCount:
                 description: |-
                   VCPUCount is the number of vCPUs allocated to SPDK on each storage node,
@@ -8275,7 +8605,8 @@ spec:
 
                   The floor is 4 rather than a hardware limit: a node must carry one core
                   beyond this budget for the system, and the control plane's core layout
-                  assigns no NVMe-oF poller core at all for a 2-vCPU budget.
+                  assigns no NVMe-oF poller core at all for a 2-vCPU budget. Required on
+                  every cluster except a supercluster.
                 format: int32
                 minimum: 4
                 type: integer
@@ -8449,9 +8780,6 @@ spec:
                     format: int64
                     type: integer
                 type: object
-            required:
-            - maxSubsystemCount
-            - vcpuCount
             type: object
             x-kubernetes-validations:
             - message: field stripe is immutable once set
@@ -8487,6 +8815,19 @@ spec:
             - message: enableAtomicity4K requires enableChecksumValidation to be true
               rule: '!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation)
                 && self.enableChecksumValidation)'
+            - message: maxSubsystemCount and vcpuCount are required unless the cluster
+                is a supercluster
+              rule: has(self.supercluster) || (has(self.maxSubsystemCount) && has(self.vcpuCount))
+            - message: a cluster cannot become a supercluster, or stop being one,
+                after creation
+              rule: has(self.supercluster) == has(oldSelf.supercluster)
+            - message: superclusterRef is set at creation and never changed
+              rule: has(self.superclusterRef) == has(oldSelf.superclusterRef) && (!has(self.superclusterRef)
+                || self.superclusterRef == oldSelf.superclusterRef)
+            - message: a supercluster cannot be a member of another
+              rule: '!(has(self.supercluster) && has(self.superclusterRef))'
+            - message: disablePlacement is valid only on a member
+              rule: has(self.superclusterRef) || !has(self.disablePlacement)
           status:
             properties:
               activeOpsRef:
@@ -8496,8 +8837,6 @@ spec:
                 type: string
               arbitration:
                 description: |-
-                  ObservedGeneration is the generation the rest of this status was computed
-                  from, so a stale status can be told from a current one.
                   Arbitration is the two-node arbiter's record as the operator last read
                   it; set only when spec.enableArbitration is on.
                 properties:
@@ -8558,6 +8897,23 @@ spec:
                       State is the arbiter's state: steady, deciding, partitioned, degraded or
                       healing.
                     type: string
+                type: object
+              capacity:
+                description: Capacity is the members' capacity summed, on a supercluster
+                  only.
+                properties:
+                  provisionedBytes:
+                    description: ProvisionedBytes is the capacity promised to volumes.
+                    format: int64
+                    type: integer
+                  totalBytes:
+                    description: TotalBytes is the physical capacity.
+                    format: int64
+                    type: integer
+                  usedBytes:
+                    description: UsedBytes is the physical capacity in use.
+                    format: int64
+                    type: integer
                 type: object
               clusterName:
                 description: ClusterName is the resolved backend name.
@@ -8627,6 +8983,69 @@ spec:
                   violating redundancy, as the control plane reports it.
                 format: int32
                 type: integer
+              memberCount:
+                description: MemberCount is the number of members, on a supercluster
+                  only.
+                format: int32
+                type: integer
+              members:
+                description: Members is each member as last read, on a supercluster
+                  only.
+                items:
+                  description: SuperclusterMemberStatus is one member as the supercluster
+                    last read it.
+                  properties:
+                    capacity:
+                      description: Capacity is the member's own capacity reading.
+                      properties:
+                        provisionedBytes:
+                          description: ProvisionedBytes is the capacity promised to
+                            volumes.
+                          format: int64
+                          type: integer
+                        totalBytes:
+                          description: TotalBytes is the physical capacity.
+                          format: int64
+                          type: integer
+                        usedBytes:
+                          description: UsedBytes is the physical capacity in use.
+                          format: int64
+                          type: integer
+                      type: object
+                    name:
+                      description: Name is the member StorageCluster.
+                      type: string
+                    phase:
+                      description: Phase is the member's own phase.
+                      enum:
+                      - Pending
+                      - Creating
+                      - Provisioning
+                      - Activating
+                      - Online
+                      - Shrinking
+                      - Rebalancing
+                      - Degraded
+                      - Unavailable
+                      - Suspended
+                      type: string
+                    placementEligible:
+                      description: |-
+                        PlacementEligible says whether new volumes may be placed in this member:
+                        placement not disabled, not being removed, serving, and holding every pool
+                        of the supercluster.
+                      type: boolean
+                    uuid:
+                      description: UUID is the member's backend cluster UUID, empty
+                        until it is created.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               message:
                 description: |-
                   Message is the reason the phase is what it is: one sentence, replaced as
@@ -8636,6 +9055,9 @@ spec:
                 description: NQN is the cluster subsystem qualified name.
                 type: string
               observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation the rest of this status was computed
+                  from, so a stale status can be told from a current one.
                 format: int64
                 type: integer
               phase:
@@ -8768,6 +9190,15 @@ spec:
                 - imbalancePercent
                 - maxDeviationPct
                 type: object
+              role:
+                description: |-
+                  Role is what this cluster is within a supercluster: Standalone,
+                  Supercluster, or PlacementGroup for a member.
+                enum:
+                - Standalone
+                - Supercluster
+                - PlacementGroup
+                type: string
               status:
                 description: |-
                   Status is the lifecycle the control plane reports, and its values are the
@@ -8870,7 +9301,9 @@ spec:
               uuid:
                 description: |-
                   UUID is the backend cluster UUID. Empty means the cluster has not been
-                  created or adopted, and non-empty means steady state.
+                  created or adopted, and non-empty means steady state. On a supercluster
+                  it is the aggregate's identifier, the object's metadata.uid, which a
+                  StorageClass names in cluster_id and the control plane does not know.
                 type: string
               volumeMoveGeneration:
                 description: |-
@@ -8878,6 +9311,46 @@ spec:
                   successful terminal phase and by nothing else, so it only grows.
                 format: int64
                 type: integer
+              workloadNames:
+                description: |-
+                  WorkloadNames are the names this cluster's workload is reached by,
+                  recorded before the workload exists and never changed afterward,
+                  because every storage node's hostname is built from them. A cluster
+                  created before they were recorded is given the constant names.
+                properties:
+                  nodeAPIService:
+                    description: NodeAPIService is the headless Service of the storage-node
+                      API.
+                    maxLength: 63
+                    type: string
+                  nodeAPITLSSecret:
+                    description: NodeAPITLSSecret is the storage-node API's serving-certificate
+                      Secret.
+                    maxLength: 253
+                    type: string
+                  nodeLabelSuffix:
+                    description: |-
+                      NodeLabelSuffix is appended to a node's hostname in both Services, so
+                      that members of one supercluster on one worker have distinct hostnames.
+                      Empty for every other cluster.
+                    maxLength: 4
+                    type: string
+                  spdkProxyService:
+                    description: SpdkProxyService is the headless Service of the SPDK
+                      proxy.
+                    maxLength: 63
+                    type: string
+                  spdkProxyTLSSecret:
+                    description: SpdkProxyTLSSecret is the SPDK proxy's serving-certificate
+                      Secret.
+                    maxLength: 253
+                    type: string
+                required:
+                - nodeAPIService
+                - nodeAPITLSSecret
+                - spdkProxyService
+                - spdkProxyTLSSecret
+                type: object
             type: object
         type: object
         x-kubernetes-validations:
@@ -12450,6 +12923,10 @@ spec:
                   reference, so deleting the cluster deletes its pools, held behind each
                   pool's own finalizer while classes are assigned or volumes are bound.
 
+                  A supercluster may be named: the pool is then created in every member
+                  under this pool's name, and spec.limits.capacity is divided evenly among
+                  the members that accept new volumes.
+
                   Immutable from creation: which cluster a pool is in is its identity.
 
                   The maximum is what a StorageCluster name may be rather than what a
@@ -12655,6 +13132,11 @@ spec:
                 description: Limits is what the control plane reports the ceilings
                   to be.
                 properties:
+                  capacity:
+                    description: |-
+                      Capacity is the capacity limit the control plane is enforcing, written
+                      as a quantity. Empty is unlimited.
+                    type: string
                   host:
                     description: Host is the backend host enforcing the pool's QoS.
                     type: string
@@ -12687,6 +13169,84 @@ spec:
                         type: integer
                     type: object
                 type: object
+              members:
+                description: |-
+                  Members is the pool in each member, when spec.clusterRef names a
+                  supercluster. The pool is Ready once every member that accepts new
+                  volumes holds it.
+                items:
+                  description: PoolMemberStatus is the pool in one member cluster
+                    of a supercluster.
+                  properties:
+                    cluster:
+                      description: Cluster is the member StorageCluster.
+                      type: string
+                    limits:
+                      description: |-
+                        Limits are what the member's control plane enforces for its pool. Its
+                        capacity is this member's share of spec.limits.capacity.
+                      properties:
+                        capacity:
+                          description: |-
+                            Capacity is the capacity limit the control plane is enforcing, written
+                            as a quantity. Empty is unlimited.
+                          type: string
+                        host:
+                          description: Host is the backend host enforcing the pool's
+                            QoS.
+                          type: string
+                        iops:
+                          description: IOPS is the combined ceiling the control plane
+                            is enforcing.
+                          format: int32
+                          type: integer
+                        throughput:
+                          description: Throughput is the throughput ceiling the control
+                            plane is enforcing.
+                          properties:
+                            read:
+                              description: Read is the read-only ceiling, written
+                                as max_read_mbytes_per_sec.
+                              format: int32
+                              minimum: 0
+                              type: integer
+                            readWrite:
+                              description: |-
+                                ReadWrite is the ceiling on both directions together, written as
+                                max_mbytes_per_sec. It is not an access mode, which is the confusion the
+                                older class key qos_rw_mbytes invited.
+                              format: int32
+                              minimum: 0
+                              type: integer
+                            write:
+                              description: Write is the write-only ceiling, written
+                                as max_write_mbytes_per_sec.
+                              format: int32
+                              minimum: 0
+                              type: integer
+                          type: object
+                      type: object
+                    message:
+                      description: Message says why the phase is what it is.
+                      type: string
+                    phase:
+                      description: Phase is this member's pool's phase.
+                      enum:
+                      - Pending
+                      - Ready
+                      - Deleting
+                      type: string
+                    uuid:
+                      description: UUID is the backend pool UUID in that member, empty
+                        until it is created.
+                      type: string
+                  required:
+                  - cluster
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - cluster
+                x-kubernetes-list-type: map
               message:
                 description: |-
                   Message is the reason the phase is what it is: one sentence, replaced as
@@ -12724,8 +13284,9 @@ spec:
                 x-kubernetes-list-type: set
               uuid:
                 description: |-
-                  UUID is the backend pool UUID. Empty means the pool has not been created,
-                  and it is the field the controller branches on.
+                  UUID is the backend pool UUID. Empty means the pool has not been created.
+                  A pool of a supercluster has one backend pool in each member and none of
+                  its own, so its UUID stays empty and Members carries each member's.
                 type: string
             type: object
         type: object
@@ -13609,7 +14170,7 @@ spec:
                   message:
                     description: |-
                       Message is what the site says about the draft: validation findings while
-                      it is a draft, the expansion's step afterwards.
+                      it is a draft, the expansion's step afterward.
                     type: string
                   name:
                     description: Name is the ClusterDeploymentConfig on the site.
@@ -13622,14 +14183,90 @@ spec:
                     type: array
                     x-kubernetes-list-type: set
                   nodeSets:
-                    description: NodeSets are the nodes and devices the discovery
-                      found, for review.
+                    description: |-
+                      NodeSets are the nodes and devices the discovery found, for review. At
+                      most 64, as on the deployment config the draft is.
                     items:
                       description: |-
                         NodeSet is the organizational grouping of a deployment, usually a rack: the
                         workers a document adds or grows together. It carries no sizing, because sizing
                         is uniform across a cluster and is stated once in ClusterTemplate.
                       properties:
+                        cluster:
+                          description: |-
+                            Cluster overrides the document's cluster template for the member cluster
+                            this node set becomes, for a node set whose hardware differs from the
+                            rest. A field left unset takes the template's value. Valid on a document
+                            with more than one node set, or one naming a cluster in clusterRef.
+                          properties:
+                            maxSubsystemCount:
+                              description: |-
+                                MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
+                                node of this member serves.
+                              format: int32
+                              maximum: 75
+                              minimum: 10
+                              type: integer
+                            minHugePagesSize:
+                              description: |-
+                                MinHugePagesSize is the smallest huge-page allocation each storage node of
+                                this member makes: 100G or 1T, where a bare number is gigabytes.
+                              maxLength: 32
+                              type: string
+                            nodesPerSocket:
+                              description: |-
+                                NodesPerSocket is how many storage nodes run per NUMA socket on this
+                                member's workers.
+                              format: int32
+                              maximum: 8
+                              minimum: 1
+                              type: integer
+                            socketsToUse:
+                              description: |-
+                                SocketsToUse are the NUMA sockets that run storage nodes on this member's
+                                workers. With NodesPerSocket it decides how many storage nodes each worker
+                                runs.
+                              items:
+                                maxLength: 16
+                                type: string
+                              maxItems: 16
+                              type: array
+                              x-kubernetes-list-type: set
+                            stripe:
+                              description: Stripe is this member's erasure-coding
+                                layout.
+                              properties:
+                                dataChunks:
+                                  description: DataChunks is the number of data chunks
+                                    per stripe (ndcs).
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                parityChunks:
+                                  description: |-
+                                    ParityChunks is the number of parity chunks per stripe (npcs), and
+                                    therefore how many chunk losses a stripe survives.
+                                  format: int32
+                                  minimum: 0
+                                  type: integer
+                              type: object
+                              x-kubernetes-validations:
+                              - message: the erasure-coding scheme must be one of
+                                  1+0, 1+1, 2+1, 4+1, 1+2, 2+2, or 4+2, written as
+                                  dataChunks+parityChunks, and an unstated half is
+                                  1
+                                rule: '[has(self.dataChunks) ? self.dataChunks : 1,
+                                  has(self.parityChunks) ? self.parityChunks : 1]
+                                  in [[1, 0], [1, 1], [2, 1], [4, 1], [1, 2], [2,
+                                  2], [4, 2]]'
+                            vcpuCount:
+                              description: |-
+                                VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
+                                this member.
+                              format: int32
+                              minimum: 4
+                              type: integer
+                          type: object
                         groups:
                           description: Groups are the sets of workers sharing one
                             configuration.
@@ -13772,6 +14409,7 @@ spec:
                       - groups
                       - name
                       type: object
+                    maxItems: 64
                     type: array
                   phase:
                     description: |-
@@ -16302,6 +16940,25 @@ webhooks:
     - CREATE
     resources:
     - storagebackuppolicies
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
+      path: /validate-storage-simplyblock-io-v1alpha2-storagecluster
+  failurePolicy: Ignore
+  name: vstoragecluster-delete.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - DELETE
+    resources:
+    - storageclusters
   sideEffects: None
 - admissionReviewVersions:
   - v1
