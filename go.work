@@ -7,6 +7,7 @@ use (
 	./control-center/mock
 	./csi-driver
 	./fleet
+	./gateway
 	./operator
 	./support-tool
 	./test/integration
