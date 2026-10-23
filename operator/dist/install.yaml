@@ -2910,24 +2910,6 @@ spec:
                               served. It is consulted only when the control plane serves TLS issued by
                               cert-manager. Unset is on.
                             type: boolean
-                          installEBSCSIDriver:
-                            default: true
-                            description: |-
-                              InstallEBSCSIDriver installs the AWS EBS CSI driver on Amazon EKS when
-                              the cluster has no CSIDriver ebs.csi.aws.com, neither the EKS add-on nor
-                              a driver installed some other way. It is consulted only on EKS, and only
-                              while the control plane's volumes name no StorageClass. The node role, or
-                              the role in eksRoleARN, needs the AWS managed policy
-                              AmazonEBSCSIDriverPolicy. Unset is on.
-                            type: boolean
-                          installEBSStorageClass:
-                            default: true
-                            description: |-
-                              InstallEBSStorageClass creates the gp3 StorageClass simplyblock-gp3 on
-                              Amazon EKS when no StorageClass of the EBS CSI driver provisions gp3
-                              volumes. An existing one, under any name, is used instead. The class is
-                              made the default only when the cluster has no default class. Unset is on.
-                            type: boolean
                           installFoundationDBCRDs:
                             default: true
                             description: |-
@@ -3310,15 +3292,6 @@ spec:
                 x-kubernetes-validations:
                 - message: unknown step
                   rule: '!has(self.state) || self.state in [''ApplyingFoundationDB'',''AwaitingFoundationDB'',''BuildingIndices'',''ApplyingDatastore'',''ApplyingAPI'',''AwaitingAPI'',''Installed'']'
-              storageClassName:
-                description: |-
-                  StorageClassName is the StorageClass the operator chose for the control
-                  plane's volumes (FoundationDB, the object store, and Prometheus) when
-                  spec.source.local.foundationDB.storageClassName names none: on Amazon
-                  EKS, a gp3 class of the EBS CSI driver. It is chosen once, before the
-                  database is first applied, and never changed afterwards, because the
-                  volumes cannot move to another class.
-                type: string
               version:
                 description: Version is the version the management API reports.
                 type: string
@@ -3601,6 +3574,374 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+  name: objectstores.objectstore.simplyblock.io
+spec:
+  group: objectstore.simplyblock.io
+  names:
+    kind: ObjectStore
+    listKind: ObjectStoreList
+    plural: objectstores
+    shortNames:
+    - s3store
+    singular: objectstore
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.replicas
+      name: Replicas
+      type: integer
+    - jsonPath: .status.readyReplicas
+      name: Ready
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ObjectStore is the desired existence of one S3 gateway: its Deployment,
+          its Service, and that Service's serving certificate. Every gateway pod
+          carries the label objectstore.simplyblock.io/instance=<name>, which is how
+          S3BucketReconciler finds them without reading this object.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ObjectStoreSpec is the desired state of one S3 gateway's
+              workload.
+            properties:
+              envFrom:
+                description: |-
+                  EnvFrom is injected into the gateway container's environment
+                  unmodified: the gateway's own credentials and Vault-backed IAM
+                  configuration. This operator reads none of it.
+                items:
+                  description: EnvFromSource represents the source of a set of ConfigMaps
+                    or Secrets
+                  properties:
+                    configMapRef:
+                      description: The ConfigMap to select from
+                      properties:
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                        optional:
+                          description: Specify whether the ConfigMap must be defined
+                          type: boolean
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    prefix:
+                      description: |-
+                        Optional text to prepend to the name of each environment variable.
+                        May consist of any printable ASCII characters except '='.
+                      type: string
+                    secretRef:
+                      description: The Secret to select from
+                      properties:
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                        optional:
+                          description: Specify whether the Secret must be defined
+                          type: boolean
+                      type: object
+                      x-kubernetes-map-type: atomic
+                  type: object
+                type: array
+              image:
+                description: |-
+                  Image is the gateway image: embedgw plus the simplyblock POSIX backend.
+                  Required: unlike the CSI driver and the operator, this repository and
+                  the gateway's are not released together, so there is no sensible
+                  default.
+                pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
+                type: string
+              imagePullPolicy:
+                default: Always
+                description: |-
+                  ImagePullPolicy controls when that image is pulled. Defaults to Always:
+                  the default tag is a moving one, and IfNotPresent against a tag that
+                  moved leaves workers at different versions invisibly.
+                enum:
+                - Always
+                - Never
+                - IfNotPresent
+                type: string
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                description: |-
+                  NodeSelector restricts which workers run gateway pods. Empty means
+                  every schedulable worker: ordinary Deployment scheduling, no
+                  gateway-specific node-pool concept.
+                type: object
+              port:
+                description: |-
+                  Port is the gateway's listening port, used as both the container port
+                  and the Service's port.
+                format: int32
+                maximum: 65535
+                minimum: 1
+                type: integer
+              replicas:
+                default: 1
+                description: Replicas is the gateway Deployment's replica count.
+                format: int32
+                minimum: 1
+                type: integer
+              resources:
+                description: |-
+                  Resources are the gateway container's requests and limits. Unset
+                  enforces no limits.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              tlsProvider:
+                default: OpenShift
+                description: |-
+                  TLSProvider selects how the Service's serving certificate is issued.
+                  Always issued: an S3 gateway is assumed to always serve over TLS.
+                enum:
+                - OpenShift
+                - cert-manager
+                type: string
+              tolerations:
+                description: Tolerations let gateway pods schedule onto tainted nodes.
+                items:
+                  description: |-
+                    The pod this Toleration is attached to tolerates any taint that matches
+                    the triple <key,value,effect> using the matching operator <operator>.
+                  properties:
+                    effect:
+                      description: |-
+                        Effect indicates the taint effect to match. Empty means match all taint effects.
+                        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                      type: string
+                    key:
+                      description: |-
+                        Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                      type: string
+                    operator:
+                      description: |-
+                        Operator represents a key's relationship to the value.
+                        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                        Exists is equivalent to wildcard for value, so that a pod can
+                        tolerate all taints of a particular category.
+                        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                      type: string
+                    tolerationSeconds:
+                      description: |-
+                        TolerationSeconds represents the period of time the toleration (which must be
+                        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                        it is not set, which means tolerate the taint forever (do not evict). Zero and
+                        negative values will be treated as 0 (evict immediately) by the system.
+                      format: int64
+                      type: integer
+                    value:
+                      description: |-
+                        Value is the taint value the toleration matches to.
+                        If the operator is Exists, the value should be empty, otherwise just a regular string.
+                      type: string
+                  type: object
+                type: array
+            required:
+            - image
+            - port
+            type: object
+          status:
+            description: ObjectStoreStatus is what the gateway's provisioning currently
+              is.
+            properties:
+              conditions:
+                description: |-
+                  Conditions carries why an ObjectStore is Degraded, which a phase
+                  alone cannot express. Expected types: DeploymentAvailable,
+                  CertificateReady.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              message:
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the operator's own view of the deployment.
+                enum:
+                - Pending
+                - Provisioning
+                - Ready
+                - Degraded
+                type: string
+              phaseDeadline:
+                description: |-
+                  PhaseDeadline is when the current phase gives up waiting and degrades,
+                  carried in status rather than only in memory so a restarted operator
+                  resumes the same deadline instead of granting a fresh one (§6, a design
+                  gap the same field closed for S3BucketStatus: see
+                  design-bucket-provisioning.md's own appendix note).
+                format: date-time
+                type: string
+              readyReplicas:
+                description: |-
+                  ReadyReplicas mirrors Deployment.Status.ReadyReplicas, so a reader
+                  does not have to look at the owned Deployment to answer "how many
+                  gateway pods are actually serving."
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: operatorops.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -3858,110 +4199,6 @@ spec:
                       address, ascending, so two runs over one unchanged fleet propose the same
                       document.
                     type: boolean
-                  network:
-                    description: |-
-                      Network states the cluster network the draft proposes. Absent, a run
-                      proposes spdkOnHostNetwork, binding the host's primary NIC on workers with
-                      no additional interface. Set podNetwork: true to run the SPDK pods on the
-                      pod network instead. A cluster's network is fixed once it is created.
-                    properties:
-                      data:
-                        description: |-
-                          Data are the Multus networks the storage nodes serve volumes on, each a
-                          NetworkAttachmentDefinition the pod attaches to besides the pod network, which
-                          podNetwork must therefore state.
-                        items:
-                          description: |-
-                            StorageNetwork is one data network a storage node's SPDK pod attaches to
-                            through a NetworkAttachmentDefinition.
-                          properties:
-                            networkAttachmentRef:
-                              description: |-
-                                NetworkAttachmentRef is the Multus NetworkAttachmentDefinition in the
-                                namespace of the storage cluster, and the key the nodes' addresses and
-                                status use. The pod attaches to it and takes the interface the definition's
-                                plugin creates.
-                              properties:
-                                addressPool:
-                                  description: |-
-                                    AddressPool is the range the operator takes each node's address on this
-                                    network from. Unset, the network takes the address the NIC the definition
-                                    moves holds on the worker.
-                                  properties:
-                                    first:
-                                      description: |-
-                                        First is the lowest address the operator may hand out. Unset, the range
-                                        starts at the subnet's first host address. It is set together with Last.
-                                      maxLength: 15
-                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
-                                      type: string
-                                    last:
-                                      description: |-
-                                        Last is the highest address the operator may hand out. Unset, the range
-                                        ends at the subnet's last host address. It is set together with First.
-                                      maxLength: 15
-                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
-                                      type: string
-                                    subnet:
-                                      description: |-
-                                        Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
-                                        length is the one each node's address carries.
-                                      maxLength: 18
-                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$
-                                      type: string
-                                  required:
-                                  - subnet
-                                  type: object
-                                  x-kubernetes-validations:
-                                  - message: first and last are set together
-                                    rule: has(self.first) == has(self.last)
-                                  - message: first and last must lie inside subnet
-                                    rule: '!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first))
-                                      && cidr(self.subnet).containsIP(ip(self.last)))'
-                                name:
-                                  description: Name is the definition's name.
-                                  maxLength: 253
-                                  minLength: 1
-                                  type: string
-                              required:
-                              - name
-                              type: object
-                          required:
-                          - networkAttachmentRef
-                          type: object
-                        maxItems: 8
-                        type: array
-                        x-kubernetes-list-type: atomic
-                      podNetwork:
-                        description: |-
-                          PodNetwork puts the SPDK pods on the cluster CNI's network. Alone, the pod's
-                          one interface carries the RPC and the data, and a Service in front of the pod
-                          is the address peers and clients hold, since the pod's own address changes on
-                          every restart. The control plane keeps the Service and the ports it carries.
-                          With data networks, the RPC stays on that interface and the data moves to the
-                          networks' interfaces, whose addresses are stable, so no Service is kept.
-                        type: boolean
-                      spdkOnHostNetwork:
-                        description: |-
-                          SpdkOnHostNetwork runs the SPDK pods on the host network, where they bind
-                          host NICs. The NICs' names are not stated here, because a fleet's workers
-                          do not agree on what their NICs are called: each node names its own in
-                          its spec.config.dataInterfaces, which is allowed only in this mode.
-                        type: boolean
-                    type: object
-                    x-kubernetes-validations:
-                    - message: one of podNetwork and spdkOnHostNetwork must be set
-                      rule: (has(self.podNetwork) && self.podNetwork) || (has(self.spdkOnHostNetwork)
-                        && self.spdkOnHostNetwork)
-                    - message: podNetwork and spdkOnHostNetwork are exclusive
-                      rule: '!(has(self.podNetwork) && self.podNetwork && has(self.spdkOnHostNetwork)
-                        && self.spdkOnHostNetwork)'
-                    - message: 'data networks require podNetwork: true'
-                      rule: '!has(self.data) || self.data.size() == 0 || (has(self.podNetwork)
-                        && self.podNetwork)'
-                    - message: data networks must name distinct NetworkAttachmentDefinitions
-                      rule: '!has(self.data) || self.data.all(a, self.data.exists_one(b,
-                        b.networkAttachmentRef.name == a.networkAttachmentRef.name))'
                   networkAttachment:
                     description: |-
                       NetworkAttachment attaches the proposed storage nodes through Multus
@@ -4090,10 +4327,6 @@ spec:
                     state one or the other
                   rule: '!(has(self.workers) && size(self.workers) > 0 && has(self.nodeSelector)
                     && size(self.nodeSelector) > 0)'
-                - message: network.spdkOnHostNetwork cannot be combined with networkAttachment,
-                    which attaches the storage nodes through Multus
-                  rule: '!has(self.network) || !has(self.network.spdkOnHostNetwork)
-                    || !self.network.spdkOnHostNetwork || !has(self.networkAttachment)'
             required:
             - action
             type: object
@@ -5610,6 +5843,223 @@ spec:
               targetNQN:
                 description: TargetNQN is the NVMe NQN on the target cluster (populated
                   after failover).
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: s3buckets.objectstore.simplyblock.io
+spec:
+  group: objectstore.simplyblock.io
+  names:
+    kind: S3Bucket
+    listKind: S3BucketList
+    plural: s3buckets
+    shortNames:
+    - s3bkt
+    singular: s3bucket
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.bucketName
+      name: Bucket
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.persistentVolumeClaimName
+      name: PVC
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          S3Bucket is the desired existence of one S3 bucket: its backing volume,
+          its pNFS export, and the per-node mount deliveries that make its gateway's
+          pods see it.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: S3BucketSpec is the desired state of one S3 bucket's backing
+              volume.
+            properties:
+              bucketName:
+                description: |-
+                  BucketName is the S3 bucket name as presented to clients, validated
+                  against the S3 bucket-naming grammar rather than the Kubernetes
+                  object-name grammar, since the two disagree on underscores and case.
+                  Immutable.
+                pattern: ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              capacityBytes:
+                description: |-
+                  CapacityBytes is the backing volume's requested size. An increase
+                  reconciles to a PVC expansion. A decrease is rejected, the same
+                  restriction the PVC it wraps already carries.
+                format: int64
+                type: integer
+              objectStoreRef:
+                description: |-
+                  ObjectStoreRef names the ObjectStore whose gateway Deployment serves
+                  this bucket. Immutable: a bucket does not move between gateways.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              storageClassName:
+                description: |-
+                  StorageClassName names the StorageClass the backing PVC is created
+                  against. It must select the pnfs fstype, or the bucket never leaves
+                  Pending: versitygw's --bucketlinks mapping depends on every gateway
+                  pod sharing this volume RWX. Immutable.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+            required:
+            - bucketName
+            - capacityBytes
+            - objectStoreRef
+            - storageClassName
+            type: object
+          status:
+            description: S3BucketStatus is what the bucket's provisioning currently
+              is.
+            properties:
+              conditions:
+                description: |-
+                  Conditions carries why a bucket is Degraded, which a phase alone
+                  cannot express. Expected types: VolumeBound, ExportReady,
+                  MountDelivered.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              message:
+                type: string
+              mountDeliveredNodes:
+                description: |-
+                  MountDeliveredNodes lists the nodes whose CSI node plugin has
+                  confirmed this bucket staged and published, mirrored from the
+                  ObjectStore's gateway Deployment's pod placement. Observed, not
+                  desired.
+                items:
+                  type: string
+                type: array
+              nfsExportName:
+                description: |-
+                  NFSExportName is the NFSExport CR the CSI controller created for the
+                  PVC, found by matching its spec.volumeRef against the bound
+                  PersistentVolume's CSI volume handle. Empty until the PVC is Bound.
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              persistentVolumeClaimName:
+                description: |-
+                  PersistentVolumeClaimName is the PVC this reconciler created for the
+                  bucket's backing volume, recorded rather than recomputed so a later
+                  change to the naming scheme cannot orphan an existing bucket's volume.
+                type: string
+              phase:
+                description: Phase is the bucket's lifecycle position.
+                enum:
+                - Pending
+                - Provisioning
+                - Ready
+                - Degraded
+                - Deleting
+                type: string
+              phaseDeadline:
+                description: |-
+                  PhaseDeadline is when the current phase must be given up on. Persisted
+                  so an operator restarted mid-Provisioning resumes the same deadline
+                  rather than granting a fresh one every time it comes back up.
+                format: date-time
                 type: string
             type: object
         type: object
@@ -19245,6 +19695,7 @@ rules:
   - ""
   resources:
   - configmaps
+  - persistentvolumeclaims
   - secrets
   - serviceaccounts
   - services
@@ -19282,17 +19733,6 @@ rules:
   - get
   - patch
   - update
-- apiGroups:
-  - ""
-  resources:
-  - persistentvolumeclaims
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - update
-  - watch
 - apiGroups:
   - ""
   resources:
@@ -19549,6 +19989,32 @@ rules:
   - create
   - get
   - list
+  - update
+- apiGroups:
+  - objectstore.simplyblock.io
+  resources:
+  - objectstores
+  - s3buckets
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - objectstore.simplyblock.io
+  resources:
+  - objectstores/status
+  - s3buckets/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - objectstore.simplyblock.io
+  resources:
+  - s3buckets/finalizers
+  verbs:
   - update
 - apiGroups:
   - operator.openshift.io
