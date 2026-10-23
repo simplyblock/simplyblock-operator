@@ -63,6 +63,15 @@ const (
 	conditionMountDelivered = "MountDelivered"
 )
 
+// Why a bucket went Degraded. Each one is both the condition's reason and the
+// event's, and toDegraded maps them to the condition they belong on.
+const (
+	reasonObjectStoreNotFound = "ObjectStoreNotFound"
+	reasonNoMatchingExport    = "NoMatchingExport"
+	reasonExportDegraded      = "ExportDegraded"
+	reasonMountDeliveryFailed = "MountDeliveryFailed"
+)
+
 // The controller's cadence, in one place so it can be read and tuned.
 const (
 	// No PersistentVolumeClaim is Bound yet. A StorageClass that never binds
@@ -109,7 +118,7 @@ func (r *S3BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	if !bucket.DeletionTimestamp.IsZero() {
-		return r.reconcileDelete(ctx, &bucket)
+		return ctrl.Result{}, r.reconcileDelete(ctx, &bucket)
 	}
 
 	// Degraded is terminal on purpose, the same reason NFSExport's is: it is
@@ -231,9 +240,9 @@ func (r *S3BucketReconciler) reconcileProvisioning(
 		return ctrl.Result{}, err
 	}
 	if !exists {
-		r.event(bucket, corev1.EventTypeWarning, "ObjectStoreNotFound",
+		r.event(bucket, corev1.EventTypeWarning, reasonObjectStoreNotFound,
 			fmt.Sprintf("ObjectStore %q does not exist", bucket.Spec.ObjectStoreRef))
-		return ctrl.Result{}, r.toDegraded(ctx, bucket, sm, "ObjectStoreNotFound",
+		return ctrl.Result{}, r.toDegraded(ctx, bucket, sm, reasonObjectStoreNotFound,
 			fmt.Sprintf("spec.objectStoreRef %q does not resolve to an ObjectStore", bucket.Spec.ObjectStoreRef))
 	}
 
@@ -248,7 +257,7 @@ func (r *S3BucketReconciler) reconcileProvisioning(
 	}
 
 	if export.Status.Phase == simplyblockv1alpha2.NFSExportPhaseDegraded {
-		return ctrl.Result{}, r.toDegraded(ctx, bucket, sm, "ExportDegraded",
+		return ctrl.Result{}, r.toDegraded(ctx, bucket, sm, reasonExportDegraded,
 			fmt.Sprintf("NFSExport %s is Degraded: %s", export.Name, export.Status.Message))
 	}
 	if export.Status.Phase != simplyblockv1alpha2.NFSExportPhaseReady {
@@ -307,19 +316,19 @@ func (r *S3BucketReconciler) provisioningFailure(
 	ctx context.Context, bucket *objectstorev1alpha1.S3Bucket,
 ) (reason, message string) {
 	if exists, err := r.objectStoreExists(ctx, bucket); err == nil && !exists {
-		return "ObjectStoreNotFound", fmt.Sprintf("spec.objectStoreRef %q does not resolve to an ObjectStore", bucket.Spec.ObjectStoreRef)
+		return reasonObjectStoreNotFound, fmt.Sprintf("spec.objectStoreRef %q does not resolve to an ObjectStore", bucket.Spec.ObjectStoreRef)
 	}
 	if export, err := r.matchingNFSExport(ctx, bucket); err == nil {
 		if export == nil {
-			return "NoMatchingExport", "no NFSExport appeared referencing the bound volume within the deadline"
+			return reasonNoMatchingExport, "no NFSExport appeared referencing the bound volume within the deadline"
 		}
 		if export.Status.Phase != simplyblockv1alpha2.NFSExportPhaseReady {
-			return "NoMatchingExport", fmt.Sprintf("NFSExport %s did not reach Ready within the deadline", export.Name)
+			return reasonNoMatchingExport, fmt.Sprintf("NFSExport %s did not reach Ready within the deadline", export.Name)
 		}
 	}
 	// NFSExport is Ready, so the only thing left Provisioning could still be
 	// waiting on is mount delivery.
-	return "MountDeliveryFailed", "mount delivery was not confirmed on every node within the deadline"
+	return reasonMountDeliveryFailed, "mount delivery was not confirmed on every node within the deadline"
 }
 
 // toDegraded parks the bucket and says why, in a condition and an event.
@@ -335,9 +344,9 @@ func (r *S3BucketReconciler) toDegraded(
 	r.event(bucket, corev1.EventTypeWarning, reason, message)
 	conditionType := conditionExportReady
 	switch reason {
-	case "ObjectStoreNotFound":
+	case reasonObjectStoreNotFound:
 		conditionType = conditionObjectStoreOK
-	case "MountDeliveryFailed":
+	case reasonMountDeliveryFailed:
 		conditionType = conditionMountDelivered
 	}
 	return r.writeStatus(ctx, bucket, func(s *objectstorev1alpha1.S3BucketStatus) {
@@ -461,11 +470,9 @@ func (r *S3BucketReconciler) objectStoreExists(
 // reconcileDelete releases the PVC and drops the finalizer, on every path
 // including the one where nothing was ever provisioned, withdrawing the
 // mount from every node status.mountDeliveredNodes still names first.
-func (r *S3BucketReconciler) reconcileDelete(
-	ctx context.Context, bucket *objectstorev1alpha1.S3Bucket,
-) (ctrl.Result, error) {
+func (r *S3BucketReconciler) reconcileDelete(ctx context.Context, bucket *objectstorev1alpha1.S3Bucket) error {
 	if !controllerutil.ContainsFinalizer(bucket, objectstorev1alpha1.S3BucketFinalizer) {
-		return ctrl.Result{}, nil
+		return nil
 	}
 
 	if bucket.Status.Phase != phaseDeleting {
@@ -483,7 +490,7 @@ func (r *S3BucketReconciler) reconcileDelete(
 			break
 		}
 		if err := r.withdrawFromNode(ctx, bucket, node); err != nil {
-			return ctrl.Result{}, fmt.Errorf("withdrawing bucket from node %s: %w", node, err)
+			return fmt.Errorf("withdrawing bucket from node %s: %w", node, err)
 		}
 	}
 
@@ -492,11 +499,11 @@ func (r *S3BucketReconciler) reconcileDelete(
 			Name: bucket.Status.PersistentVolumeClaimName, Namespace: bucket.Namespace,
 		}}
 		if err := r.Delete(ctx, pvc); err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("deleting PersistentVolumeClaim %s: %w", pvc.Name, err)
+			return fmt.Errorf("deleting PersistentVolumeClaim %s: %w", pvc.Name, err)
 		}
 	}
 
-	return ctrl.Result{}, r.releaseFinalizer(ctx, bucket)
+	return r.releaseFinalizer(ctx, bucket)
 }
 
 // withdrawFromNode asks one node's CSI plugin to withdraw this bucket's

@@ -140,7 +140,7 @@ func TestRunServesAPutGetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObject: %v", err)
 	}
-	defer got.Body.Close()
+	defer func() { _ = got.Body.Close() }()
 	gotBytes, err := io.ReadAll(got.Body)
 	if err != nil {
 		t.Fatalf("reading the object body: %v", err)
