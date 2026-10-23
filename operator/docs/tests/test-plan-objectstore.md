@@ -52,7 +52,7 @@ File: `internal/controllers/objectstore/objectstore_build_unit_test.go`
 
 | #    | Function              | Scenario                                                                                                 | Type     | Test                                                          |
 |------|-----------------------|----------------------------------------------------------------------------------------------------------|----------|---------------------------------------------------------------|
-| U-09 | `buildDeployment`     | Pod template carries label `objectstore.simplyblock.io/instance=<name>`                                  | Positive | `TestBuildDeploymentCarriesTheGatewayInstanceLabel`           |
+| U-09 | `buildDeployment`     | Pod template carries label `storage.simplyblock.io/objectstore=<name>`                                  | Positive | `TestBuildDeploymentCarriesTheGatewayInstanceLabel`           |
 | U-10 | `buildDeployment`     | `spec.envFrom` copied onto the gateway container's `envFrom` unmodified                                  | Positive | `TestBuildDeploymentCopiesEnvFromUnmodified`                  |
 | U-11 | `buildDeployment`     | `spec.replicas` unset → Deployment requests 1 replica (default)                                          | Boundary | `TestBuildDeploymentDefaultsReplicasToOne`                    |
 | U-12 | `buildService`        | `ClusterIP`, single port `spec.port`, selector matches the Deployment's pod label                        | Positive | `TestBuildServiceIsClusterIPOnSpecPortSelectingTheDeployment` |
