@@ -158,3 +158,21 @@ of them, so retentionPeriod is divided across that many: 7d over 3 indices is
 {{- end }}
 {{- printf "%dh" $perIndex }}
 {{- end -}}
+
+{{/*
+The Secret holding the CSI link's serving certificate, or nothing when the link
+is served in plaintext.
+
+csiLink.certSecret names one the deployer provides. Otherwise the link follows
+tls.enabled like everything else in this chart: the certificate is issued into
+simplyblock-csi-link-tls, by the chart's ClusterIssuer under cert-manager
+(csi-link-svc.yaml) or by the service-CA operator on OpenShift (the Service's
+serving-cert annotation).
+*/}}
+{{- define "simplyblock.csiLinkCertSecret" -}}
+{{- if .Values.csiLink.certSecret -}}
+{{ .Values.csiLink.certSecret }}
+{{- else if .Values.tls.enabled -}}
+simplyblock-csi-link-tls
+{{- end -}}
+{{- end -}}
