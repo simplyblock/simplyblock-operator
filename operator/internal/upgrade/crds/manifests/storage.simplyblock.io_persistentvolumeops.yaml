@@ -26,6 +26,9 @@ spec:
     - jsonPath: .spec.migrate.targetNodeRef.name
       name: Target
       type: string
+    - jsonPath: .spec.relocate.targetClusterRef
+      name: Target Cluster
+      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
@@ -74,7 +77,8 @@ spec:
               PersistentVolume.
 
               The action and its parameter block have to agree: Migrate requires
-              spec.migrate, and no other action accepts it.
+              spec.migrate and Relocate requires spec.relocate, and neither action
+              accepts the other's block.
             properties:
               abort:
                 description: |-
@@ -89,6 +93,7 @@ spec:
                   what it was doing halfway through would have a status describing neither.
                 enum:
                 - Migrate
+                - Relocate
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -172,6 +177,23 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              relocate:
+                description: Relocate parameterizes action Relocate.
+                properties:
+                  targetClusterRef:
+                    description: |-
+                      TargetClusterRef names the member StorageCluster to move the volume to,
+                      in the namespace of the volume's current member. It must be another
+                      member of the same supercluster, and must accept new volumes.
+                    maxLength: 63
+                    minLength: 1
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                required:
+                - targetClusterRef
+                type: object
             required:
             - action
             - persistentVolumeName
@@ -181,6 +203,9 @@ spec:
               rule: '!has(oldSelf.creatorRef) || has(self.creatorRef)'
             - message: migrate is required for action Migrate and must be absent otherwise
               rule: 'self.action == ''Migrate'' ? has(self.migrate) : !has(self.migrate)'
+            - message: relocate is required for action Relocate and must be absent
+                otherwise
+              rule: 'self.action == ''Relocate'' ? has(self.relocate) : !has(self.relocate)'
           status:
             description: PersistentVolumeOpsStatus is the observed state of one volume
               operation.
@@ -410,7 +435,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'',''Verifying'']'
+                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'',''Verifying'',''Replicating'',''Committing'',''AttachingPaths'',''Proceeding'']'
             type: object
         type: object
     served: true

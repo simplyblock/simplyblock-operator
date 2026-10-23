@@ -85,16 +85,20 @@ const PersistentVolumeOpsTargetNodeLabel = "storage.simplyblock.io/target-node"
 const PinnedVolumeLabel = "storage.simplyblock.io/pinned-volume-pv"
 
 // PersistentVolumeOpsAction is the operation a PersistentVolumeOps performs.
-// The kind is named for its target rather than for the action so that carrying
-// a second one later would not rename it. It carries one, and no second one is
-// planned.
-// +kubebuilder:validation:Enum=Migrate
+// The kind is named for its target rather than for the action, so that a
+// second action did not rename it.
+// +kubebuilder:validation:Enum=Migrate;Relocate
 type PersistentVolumeOpsAction string
 
 const (
 	// PersistentVolumeOpsActionMigrate moves the volume's backing logical
 	// volume to a different storage node.
 	PersistentVolumeOpsActionMigrate PersistentVolumeOpsAction = "Migrate"
+
+	// PersistentVolumeOpsActionRelocate moves the volume to another member
+	// cluster of its supercluster, together with every volume sharing its
+	// NVMe-oF subsystem.
+	PersistentVolumeOpsActionRelocate PersistentVolumeOpsAction = "Relocate"
 )
 
 // PersistentVolumeOpsPhase is the operation's own progress. Succeeded rather
@@ -124,7 +128,7 @@ const (
 // registered kind merges these with the phases above into one enum, so that
 // Validating sits beside Completed and neither can be read without the other's
 // values in mind.
-// +kubebuilder:validation:Enum=Validating;Migrating;Verifying
+// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Replicating;Committing;AttachingPaths;Proceeding
 type PersistentVolumeOpsStep string
 
 const (
@@ -143,6 +147,20 @@ const (
 	// restart into it: paths that outlived their Jobs poisoned the data path
 	// and blocked every later migration of the volume.
 	PersistentVolumeOpsStepVerifying PersistentVolumeOpsStep = "Verifying"
+
+	// PersistentVolumeOpsStepReplicating replicates every volume of the
+	// subsystem into the target cluster until it is in sync.
+	PersistentVolumeOpsStepReplicating PersistentVolumeOpsStep = "Replicating"
+	// PersistentVolumeOpsStepCommitting asks the control plane to cut each
+	// volume over to the target and delete its source afterward.
+	PersistentVolumeOpsStepCommitting PersistentVolumeOpsStep = "Committing"
+	// PersistentVolumeOpsStepAttachingPaths connects the target's paths on
+	// every node consuming the subsystem while a volume's cutover waits for
+	// them.
+	PersistentVolumeOpsStepAttachingPaths PersistentVolumeOpsStep = "AttachingPaths"
+	// PersistentVolumeOpsStepProceeding releases a volume's cutover once its
+	// consumers hold the target's paths.
+	PersistentVolumeOpsStepProceeding PersistentVolumeOpsStep = "Proceeding"
 )
 
 // StorageNodeReference locates a StorageNode from a cluster-scoped object.
@@ -180,6 +198,18 @@ type MigrateVolumeSpec struct {
 	TargetNodeRef StorageNodeReference `json:"targetNodeRef"`
 }
 
+// RelocateVolumeSpec parameterizes the Relocate action.
+type RelocateVolumeSpec struct {
+	// TargetClusterRef names the member StorageCluster to move the volume to,
+	// in the namespace of the volume's current member. It must be another
+	// member of the same supercluster, and must accept new volumes.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +k8s:immutable
+	TargetClusterRef string `json:"targetClusterRef"`
+}
+
 // CreatorReference names the object that created a PersistentVolumeOps.
 //
 // It exists because a cluster-scoped object cannot be owned by a namespaced
@@ -212,8 +242,10 @@ type CreatorReference struct {
 // PersistentVolume.
 //
 // The action and its parameter block have to agree: Migrate requires
-// spec.migrate, and no other action accepts it.
+// spec.migrate and Relocate requires spec.relocate, and neither action
+// accepts the other's block.
 // +kubebuilder:validation:XValidation:rule="self.action == 'Migrate' ? has(self.migrate) : !has(self.migrate)",message="migrate is required for action Migrate and must be absent otherwise"
+// +kubebuilder:validation:XValidation:rule="self.action == 'Relocate' ? has(self.relocate) : !has(self.relocate)",message="relocate is required for action Relocate and must be absent otherwise"
 type PersistentVolumeOpsSpec struct {
 	// PersistentVolumeName names the PersistentVolume this operation acts on.
 	// It is a name rather than a reference because a PersistentVolume is
@@ -241,6 +273,10 @@ type PersistentVolumeOpsSpec struct {
 	// Migrate parameterizes action Migrate.
 	// +optional
 	Migrate *MigrateVolumeSpec `json:"migrate,omitempty"`
+
+	// Relocate parameterizes action Relocate.
+	// +optional
+	Relocate *RelocateVolumeSpec `json:"relocate,omitempty"`
 
 	// CreatorRef names the object that created this one, and that object's
 	// finalizer is what aborts and deletes this one when it goes. Absent on an
@@ -389,7 +425,7 @@ type PersistentVolumeOpsStatus struct {
 	// Step is the position of the running action's state machine. It is
 	// persisted before the side effect that step performs, so a step reported
 	// here is a step that started.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating','Verifying']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating','Verifying','Replicating','Committing','AttachingPaths','Proceeding']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
@@ -432,6 +468,7 @@ type PersistentVolumeOpsStatus struct {
 // +kubebuilder:printcolumn:name="Volume",type=string,JSONPath=".spec.persistentVolumeName"
 // +kubebuilder:printcolumn:name="Action",type=string,JSONPath=".spec.action"
 // +kubebuilder:printcolumn:name="Target",type=string,JSONPath=".spec.migrate.targetNodeRef.name"
+// +kubebuilder:printcolumn:name="Target Cluster",type=string,JSONPath=".spec.relocate.targetClusterRef"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Step",type=string,JSONPath=".status.step.state"
 // +kubebuilder:printcolumn:name="Message",type=string,JSONPath=".status.message",priority=1
