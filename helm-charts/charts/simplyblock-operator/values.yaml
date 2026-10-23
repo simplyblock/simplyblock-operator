@@ -31,9 +31,11 @@ image:
     tag: "main"
     pullPolicy: Always
   rebalancer:
-    repository: quay.io/simplyblock-io/simplyblock-rebalancer
-    # tag defaults to the operator tag so the rebalancer stays in lockstep with
-    # the operator; set explicitly to pin a different rebalancer image tag.
+    # Empty pins nothing: the operator runs the rebalancer from its own registry
+    # and tag, so the two stay in lockstep wherever the operator is pulled from.
+    # A repository pins it at the operator's tag, and a tag pins it in the
+    # operator's registry.
+    repository: ""
     tag: ""
   numaResource:
     repository: quay.io/simplyblock-io/numa-resource-plugin

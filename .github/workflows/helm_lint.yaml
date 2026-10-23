@@ -48,6 +48,11 @@ jobs:
           make -C operator yq
           helm-charts/scripts/test-observability-values.sh
 
+      - name: Image values
+        run: |
+          make -C operator yq
+          helm-charts/scripts/test-image-values.sh
+
       - name: KMS setup script
         run: helm-charts/scripts/test-setup-kms.sh
 
