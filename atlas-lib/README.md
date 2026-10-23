@@ -120,7 +120,10 @@ atlas/
 │   ├── pools.go            storage pools (incl. by-name lookup)
 │   ├── storagenodes.go     storage nodes + their data NICs
 │   ├── consistencygroups.go consistency groups: by members, by name, member handles
-│   └── migrations.go       subsystem migrations: create / get / list / continue / cancel, of a volume or a whole subsystem
+│   ├── migrations.go       subsystem migrations: create / get / list / continue / cancel, of a volume or a whole subsystem
+│   ├── volumemove.go       moving a volume to another cluster: start / stop / commit / release the cutover
+│   ├── chain.go            WalkChain: from a handle to the volume serving it, across relationships
+│   └── tasks.go            control-plane tasks: read one, as a caller waiting on queued work
 ├── link/                   gRPC operator ↔ CSI, over connections the CSI driver opens
 │   ├── doc.go              why the connection runs backwards, and how gRPC still works on it
 │   ├── session.go          Session: yamux-multiplexed link, gRPC server + client on both ends

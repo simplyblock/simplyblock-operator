@@ -256,6 +256,13 @@ type Relationship struct {
 	// is garbage, and the active one must never be touched through a stale
 	// handle. Empty when the backend predates the field.
 	ActiveLvolID string
+
+	// State is where the pairing is: replicating, cutover_pending,
+	// cutover_done, or failed_over (the Relationship* constants).
+	State string
+
+	// Mode is the pairing's declared intent, failover or migration.
+	Mode string
 }
 
 // GetVolumeReplicationRelationship resolves h to its replication pairing.
@@ -298,5 +305,7 @@ func (c *Client) GetVolumeReplicationRelationship(ctx context.Context, h lvol.Vo
 		TargetPoolID:    uuidPtrString(d.TargetPoolId),
 		TargetLvolID:    uuidPtrString(d.TargetLvolId),
 		ActiveLvolID:    uuidPtrString(d.ActiveLvolId),
+		State:           string(d.State),
+		Mode:            string(d.Mode),
 	}, nil
 }
