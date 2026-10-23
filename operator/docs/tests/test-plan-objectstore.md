@@ -69,8 +69,11 @@ registry rule is left to test.
 ## 2. Integration Tests
 
 Run the full `ObjectStoreReconciler` reconcile loop against `envtest`, with
-cert-manager's CRDs installed (`internal/controllers/objectstore/testdata/cert-manager-crds.yaml`,
-vendored from cert-manager v1.21.2's own release), exercising both TLS providers.
+the cert-manager `Certificate` CRD installed
+(`internal/controllers/objectstore/testdata/certificate-crd.yaml`, a minimal
+fixture: the reconciler reads and writes Certificates as unstructured objects,
+so nothing below the group, version, and kind is validated), exercising both
+TLS providers.
 `Deployment.status` and the Certificate's `status.conditions` are set by the test
 directly, since `envtest` runs no kubelet and no cert-manager controller either.
 
