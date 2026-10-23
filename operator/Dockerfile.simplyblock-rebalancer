@@ -66,10 +66,12 @@ COPY --from=builder /workspace/simplyblock-rebalancer /usr/local/bin/simplyblock
 # Run as non-root (uid 65532, gid 0) to satisfy OpenShift SCC and Red Hat
 # certification requirements. sudo grants nvme-cli and fio the kernel-level
 # access they require (NVMe-fabrics, raw block devices).
-# !pam_acct_mgmt: pam_unix's account check reads /etc/shadow, which UBI ships
-# mode 0000 and which sudo run by uid 65532 cannot read, so every sudo failed
-# with "PAM account management error ... a password is required". The NOPASSWD
-# rule is the whole authorisation; the PAM account step adds nothing to it.
+# !pam_acct_mgmt: pam_unix's account check runs the unix_chkpwd helper to read
+# /etc/shadow (mode 0000). On Ubuntu 24.04 hosts the host's AppArmor profile
+# "unix-chkpwd" attaches to that helper inside the container too and denies it
+# dac_override/dac_read_search, so every sudo failed with "PAM account
+# management error ... a password is required". The NOPASSWD rule is the whole
+# authorisation; the PAM account step adds nothing to it.
 RUN groupadd --gid 65532 nonroot \
     && useradd --uid 65532 --gid 65532 --no-create-home --shell /sbin/nologin nonroot \
     && printf '%s\n' \
