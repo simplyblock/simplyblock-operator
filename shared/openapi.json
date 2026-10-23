@@ -260,6 +260,7 @@
       },
       "delete": {
         "summary": "Clusters:Delete",
+        "description": "Delete an empty cluster, or with force bring it down completely: every\nstorage node shut down and deleted without migration, every pool deleted\nwith its volumes, then the cluster.",
         "operationId": "clusters_delete_api_v2_clusters__cluster_id___delete",
         "security": [
           {
@@ -275,6 +276,16 @@
               "type": "string",
               "format": "uuid",
               "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Force"
             }
           }
         ],
@@ -5262,6 +5273,9 @@
           "204": {
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Bad Request"
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -5544,6 +5558,9 @@
         "responses": {
           "202": {
             "description": "Successful Response"
+          },
+          "409": {
+            "description": "Conflict"
           },
           "422": {
             "description": "Validation Error",
@@ -13491,6 +13508,18 @@
               }
             ],
             "title": "Replication Cluster Id"
+          },
+          "replication_pool_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replication Pool Id"
           },
           "mode": {
             "anyOf": [

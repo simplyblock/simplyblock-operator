@@ -1938,6 +1938,7 @@ type ReplicationStartParams struct {
 	IntervalMin          *int                        `json:"interval_min,omitempty"`
 	Mode                 *ReplicationStartParamsMode `json:"mode,omitempty"`
 	ReplicationClusterId *openapi_types.UUID         `json:"replication_cluster_id,omitempty"`
+	ReplicationPoolId    *openapi_types.UUID         `json:"replication_pool_id,omitempty"`
 }
 
 // ReplicationStartParamsMode defines model for ReplicationStartParams.Mode.
@@ -2488,6 +2489,11 @@ type ClustersCreateApiV2ClustersPostParams struct {
 
 // ClustersCreateApiV2ClustersPostParamsResponseFormat defines parameters for ClustersCreateApiV2ClustersPost.
 type ClustersCreateApiV2ClustersPostParamsResponseFormat string
+
+// ClustersDeleteApiV2ClustersClusterIdDeleteParams defines parameters for ClustersDeleteApiV2ClustersClusterIdDelete.
+type ClustersDeleteApiV2ClustersClusterIdDeleteParams struct {
+	Force *bool `form:"force,omitempty" json:"force,omitempty"`
+}
 
 // ClustersDetailApiV2ClustersClusterIdGetParams defines parameters for ClustersDetailApiV2ClustersClusterIdGet.
 type ClustersDetailApiV2ClustersClusterIdGetParams struct {
@@ -3442,8 +3448,12 @@ type ClientInterface interface {
 
 	// ClustersDeleteApiV2ClustersClusterIdDelete Clusters:Delete
 	//
+	// Delete an empty cluster, or with force bring it down completely: every
+	// storage node shut down and deleted without migration, every pool deleted
+	// with its volumes, then the cluster.
+	//
 	// Corresponds with DELETE /api/v2/clusters/{cluster_id}/ (the `ClustersDeleteApiV2ClustersClusterIdDelete` operationId).
-	ClustersDeleteApiV2ClustersClusterIdDelete(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ClustersDeleteApiV2ClustersClusterIdDelete(ctx context.Context, clusterId openapi_types.UUID, params *ClustersDeleteApiV2ClustersClusterIdDeleteParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersDetailApiV2ClustersClusterIdGet Clusters:Detail
 	//
@@ -5093,9 +5103,13 @@ func (c *Client) ClustersCreateApiV2ClustersPost(ctx context.Context, params *Cl
 
 // ClustersDeleteApiV2ClustersClusterIdDelete Clusters:Delete
 //
+// Delete an empty cluster, or with force bring it down completely: every
+// storage node shut down and deleted without migration, every pool deleted
+// with its volumes, then the cluster.
+//
 // Corresponds with DELETE /api/v2/clusters/{cluster_id}/ (the `ClustersDeleteApiV2ClustersClusterIdDelete` operationId).
-func (c *Client) ClustersDeleteApiV2ClustersClusterIdDelete(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewClustersDeleteApiV2ClustersClusterIdDeleteRequest(c.Server, clusterId)
+func (c *Client) ClustersDeleteApiV2ClustersClusterIdDelete(ctx context.Context, clusterId openapi_types.UUID, params *ClustersDeleteApiV2ClustersClusterIdDeleteParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersDeleteApiV2ClustersClusterIdDeleteRequest(c.Server, clusterId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -8865,7 +8879,7 @@ func NewClustersCreateApiV2ClustersPostRequestWithBody(server string, params *Cl
 }
 
 // NewClustersDeleteApiV2ClustersClusterIdDeleteRequest constructs an http.Request for the ClustersDeleteApiV2ClustersClusterIdDelete method
-func NewClustersDeleteApiV2ClustersClusterIdDeleteRequest(server string, clusterId openapi_types.UUID) (*http.Request, error) {
+func NewClustersDeleteApiV2ClustersClusterIdDeleteRequest(server string, clusterId openapi_types.UUID, params *ClustersDeleteApiV2ClustersClusterIdDeleteParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -8888,6 +8902,33 @@ func NewClustersDeleteApiV2ClustersClusterIdDeleteRequest(server string, cluster
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Force != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "force", *params.Force, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
@@ -17433,10 +17474,14 @@ type ClientWithResponsesInterface interface {
 
 	// ClustersDeleteApiV2ClustersClusterIdDeleteWithResponse Clusters:Delete
 	//
+	// Delete an empty cluster, or with force bring it down completely: every
+	// storage node shut down and deleted without migration, every pool deleted
+	// with its volumes, then the cluster.
+	//
 	// Returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with DELETE /api/v2/clusters/{cluster_id}/ (the `ClustersDeleteApiV2ClustersClusterIdDelete` operationId).
-	ClustersDeleteApiV2ClustersClusterIdDeleteWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersDeleteApiV2ClustersClusterIdDeleteResponse, error)
+	ClustersDeleteApiV2ClustersClusterIdDeleteWithResponse(ctx context.Context, clusterId openapi_types.UUID, params *ClustersDeleteApiV2ClustersClusterIdDeleteParams, reqEditors ...RequestEditorFn) (*ClustersDeleteApiV2ClustersClusterIdDeleteResponse, error)
 
 	// ClustersDetailApiV2ClustersClusterIdGetWithResponse Clusters:Detail
 	//
@@ -26551,11 +26596,15 @@ func (c *ClientWithResponses) ClustersCreateApiV2ClustersPostWithResponse(ctx co
 
 // ClustersDeleteApiV2ClustersClusterIdDeleteWithResponse Clusters:Delete
 //
+// Delete an empty cluster, or with force bring it down completely: every
+// storage node shut down and deleted without migration, every pool deleted
+// with its volumes, then the cluster.
+//
 // Returns a wrapper object for the known response body format(s).
 //
 // Corresponds with DELETE /api/v2/clusters/{cluster_id}/ (the `ClustersDeleteApiV2ClustersClusterIdDelete` operationId).
-func (c *ClientWithResponses) ClustersDeleteApiV2ClustersClusterIdDeleteWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersDeleteApiV2ClustersClusterIdDeleteResponse, error) {
-	rsp, err := c.ClustersDeleteApiV2ClustersClusterIdDelete(ctx, clusterId, reqEditors...)
+func (c *ClientWithResponses) ClustersDeleteApiV2ClustersClusterIdDeleteWithResponse(ctx context.Context, clusterId openapi_types.UUID, params *ClustersDeleteApiV2ClustersClusterIdDeleteParams, reqEditors ...RequestEditorFn) (*ClustersDeleteApiV2ClustersClusterIdDeleteResponse, error) {
+	rsp, err := c.ClustersDeleteApiV2ClustersClusterIdDelete(ctx, clusterId, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -33944,6 +33993,9 @@ func ParseClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStor
 	case rsp.StatusCode == 202:
 		break // No content-type
 
+	case rsp.StatusCode == 409:
+		break // No content-type
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest HTTPValidationError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -34090,6 +34142,9 @@ func ParseClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStora
 
 	switch {
 	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case rsp.StatusCode == 400:
 		break // No content-type
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
