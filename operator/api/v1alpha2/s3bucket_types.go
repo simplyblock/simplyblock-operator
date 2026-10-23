@@ -3,7 +3,7 @@
 // per-node mount deliveries that make its gateway's pods see it
 // (design-bucket-provisioning.md §4, Appendix A).
 
-package v1alpha1
+package v1alpha2
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -12,7 +12,7 @@ import (
 // S3BucketFinalizer keeps the record alive until its PVC is released and its
 // per-node mount deliveries are withdrawn. Without it a direct delete orphans
 // a mounted export and a volume nothing describes any longer.
-const S3BucketFinalizer = "objectstore.simplyblock.io/s3bucket"
+const S3BucketFinalizer = "storage.simplyblock.io/s3bucket"
 
 // S3BucketPhase is the lifecycle phase of a bucket's provisioning.
 // +kubebuilder:validation:Enum=Pending;Provisioning;Ready;Degraded;Deleting

@@ -19,7 +19,6 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -48,10 +47,10 @@ func expectEvent(t *testing.T, recorder *events.FakeRecorder, reason string) {
 // testObjectStoreNamed is a valid ObjectStore fixture, filling the required
 // fields this package's own reconciler never reads (only existence matters
 // to it): the real values are design-objectstore.md's own concern.
-func testObjectStoreNamed(name string) *objectstorev1alpha1.ObjectStore {
-	return &objectstorev1alpha1.ObjectStore{
+func testObjectStoreNamed(name string) *simplyblockv1alpha2.ObjectStore {
+	return &simplyblockv1alpha2.ObjectStore{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec:       objectstorev1alpha1.ObjectStoreSpec{Image: "quay.io/simplyblock-io/objectstore:latest", Port: 8000},
+		Spec:       simplyblockv1alpha2.ObjectStoreSpec{Image: "quay.io/simplyblock-io/objectstore:latest", Port: 8000},
 	}
 }
 
@@ -59,15 +58,15 @@ func testObjectStoreNamed(name string) *objectstorev1alpha1.ObjectStore {
 // where W-08's fakes make progress between calls in their own background
 // goroutines, until cond holds or the budget runs out.
 func reconcileBucketUntil(
-	t *testing.T, r *S3BucketReconciler, key client.ObjectKey, cond func(*objectstorev1alpha1.S3Bucket) bool,
-) *objectstorev1alpha1.S3Bucket {
+	t *testing.T, r *S3BucketReconciler, key client.ObjectKey, cond func(*simplyblockv1alpha2.S3Bucket) bool,
+) *simplyblockv1alpha2.S3Bucket {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := r.Reconcile(context.Background(), ctrlRequestKey(key)); err != nil {
 			t.Fatalf("Reconcile: %v", err)
 		}
-		var got objectstorev1alpha1.S3Bucket
+		var got simplyblockv1alpha2.S3Bucket
 		if err := r.Get(context.Background(), key, &got); err != nil {
 			t.Fatalf("reading the bucket back: %v", err)
 		}
@@ -91,9 +90,9 @@ func TestS3BucketCreatesThePVC(t *testing.T) {
 	if err := cli.Create(ctx, store); err != nil {
 		t.Fatalf("creating the ObjectStore: %v", err)
 	}
-	bucket := &objectstorev1alpha1.S3Bucket{
+	bucket := &simplyblockv1alpha2.S3Bucket{
 		ObjectMeta: metav1.ObjectMeta{Name: "i01-bucket", Namespace: "default"},
-		Spec: objectstorev1alpha1.S3BucketSpec{
+		Spec: simplyblockv1alpha2.S3BucketSpec{
 			ObjectStoreRef: store.Name, BucketName: "i01-bucket",
 			CapacityBytes: 50 * 1 << 20, StorageClassName: fakeStorageClassName,
 		},
@@ -140,9 +139,9 @@ func TestS3BucketReachesReadyOnceExportIsReady(t *testing.T) {
 	if err := cli.Create(ctx, store); err != nil {
 		t.Fatalf("creating the ObjectStore: %v", err)
 	}
-	bucket := &objectstorev1alpha1.S3Bucket{
+	bucket := &simplyblockv1alpha2.S3Bucket{
 		ObjectMeta: metav1.ObjectMeta{Name: "i02-bucket", Namespace: "default"},
-		Spec: objectstorev1alpha1.S3BucketSpec{
+		Spec: simplyblockv1alpha2.S3BucketSpec{
 			ObjectStoreRef: store.Name, BucketName: "i02-bucket",
 			CapacityBytes: 50 * 1 << 20, StorageClassName: fakeStorageClassName,
 		},
@@ -160,7 +159,7 @@ func TestS3BucketReachesReadyOnceExportIsReady(t *testing.T) {
 		Registry: newFakePeerRegistry(ctx, t),
 	}
 	key := client.ObjectKeyFromObject(bucket)
-	got := reconcileBucketUntil(t, r, key, func(b *objectstorev1alpha1.S3Bucket) bool {
+	got := reconcileBucketUntil(t, r, key, func(b *simplyblockv1alpha2.S3Bucket) bool {
 		return b.Status.Phase == phaseReady
 	})
 	if got.Status.NFSExportName == "" {
@@ -182,9 +181,9 @@ func TestS3BucketStaysPendingOnUnknownStorageClass(t *testing.T) {
 	if err := cli.Create(ctx, store); err != nil {
 		t.Fatalf("creating the ObjectStore: %v", err)
 	}
-	bucket := &objectstorev1alpha1.S3Bucket{
+	bucket := &simplyblockv1alpha2.S3Bucket{
 		ObjectMeta: metav1.ObjectMeta{Name: "i03-bucket", Namespace: "default"},
-		Spec: objectstorev1alpha1.S3BucketSpec{
+		Spec: simplyblockv1alpha2.S3BucketSpec{
 			ObjectStoreRef: store.Name, BucketName: "i03-bucket",
 			CapacityBytes: 50 * 1 << 20, StorageClassName: "does-not-exist",
 		},
@@ -201,7 +200,7 @@ func TestS3BucketStaysPendingOnUnknownStorageClass(t *testing.T) {
 			t.Fatalf("Reconcile: %v", err)
 		}
 	}
-	var got objectstorev1alpha1.S3Bucket
+	var got simplyblockv1alpha2.S3Bucket
 	if err := cli.Get(ctx, key, &got); err != nil {
 		t.Fatalf("reading the bucket back: %v", err)
 	}
@@ -225,9 +224,9 @@ func TestS3BucketDegradesWhenNoExportAppears(t *testing.T) {
 	if err := cli.Create(ctx, store); err != nil {
 		t.Fatalf("creating the ObjectStore: %v", err)
 	}
-	bucket := &objectstorev1alpha1.S3Bucket{
+	bucket := &simplyblockv1alpha2.S3Bucket{
 		ObjectMeta: metav1.ObjectMeta{Name: "i04-bucket", Namespace: "default"},
-		Spec: objectstorev1alpha1.S3BucketSpec{
+		Spec: simplyblockv1alpha2.S3BucketSpec{
 			ObjectStoreRef: store.Name, BucketName: "i04-bucket",
 			CapacityBytes: 50 * 1 << 20, StorageClassName: fakeStorageClassName,
 		},
@@ -239,7 +238,7 @@ func TestS3BucketDegradesWhenNoExportAppears(t *testing.T) {
 	recorder := events.NewFakeRecorder(16)
 	r := &S3BucketReconciler{Client: cli, Scheme: cli.Scheme(), Recorder: recorder}
 	key := client.ObjectKeyFromObject(bucket)
-	reconcileBucketUntil(t, r, key, func(b *objectstorev1alpha1.S3Bucket) bool {
+	reconcileBucketUntil(t, r, key, func(b *simplyblockv1alpha2.S3Bucket) bool {
 		return b.Status.Phase == phaseProvisioning
 	})
 
@@ -247,7 +246,7 @@ func TestS3BucketDegradesWhenNoExportAppears(t *testing.T) {
 	// s3BucketProvisioningDeadline for real.
 	forcePastDeadline(t, cli, key)
 
-	got := reconcileBucketUntil(t, r, key, func(b *objectstorev1alpha1.S3Bucket) bool {
+	got := reconcileBucketUntil(t, r, key, func(b *simplyblockv1alpha2.S3Bucket) bool {
 		return b.Status.Phase == phaseDegraded
 	})
 	if got.Status.Message == "" {
@@ -265,9 +264,9 @@ func TestS3BucketDegradesWhenObjectStoreMissing(t *testing.T) {
 	startFakeCSIBinder(ctx, t, cli)
 	// Deliberately no ObjectStore created.
 
-	bucket := &objectstorev1alpha1.S3Bucket{
+	bucket := &simplyblockv1alpha2.S3Bucket{
 		ObjectMeta: metav1.ObjectMeta{Name: "i05-bucket", Namespace: "default"},
-		Spec: objectstorev1alpha1.S3BucketSpec{
+		Spec: simplyblockv1alpha2.S3BucketSpec{
 			ObjectStoreRef: "does-not-exist", BucketName: "i05-bucket",
 			CapacityBytes: 50 * 1 << 20, StorageClassName: fakeStorageClassName,
 		},
@@ -279,7 +278,7 @@ func TestS3BucketDegradesWhenObjectStoreMissing(t *testing.T) {
 	recorder := events.NewFakeRecorder(16)
 	r := &S3BucketReconciler{Client: cli, Scheme: cli.Scheme(), Recorder: recorder}
 	key := client.ObjectKeyFromObject(bucket)
-	got := reconcileBucketUntil(t, r, key, func(b *objectstorev1alpha1.S3Bucket) bool {
+	got := reconcileBucketUntil(t, r, key, func(b *simplyblockv1alpha2.S3Bucket) bool {
 		return b.Status.Phase == phaseDegraded
 	})
 	cond := findCondition(got.Status.Conditions, conditionObjectStoreOK)
@@ -306,9 +305,9 @@ func TestS3BucketDegradesWhenMountDeliveryNeverConfirms(t *testing.T) {
 	if err := cli.Create(ctx, store); err != nil {
 		t.Fatalf("creating the ObjectStore: %v", err)
 	}
-	bucket := &objectstorev1alpha1.S3Bucket{
+	bucket := &simplyblockv1alpha2.S3Bucket{
 		ObjectMeta: metav1.ObjectMeta{Name: "i12-bucket", Namespace: "default"},
-		Spec: objectstorev1alpha1.S3BucketSpec{
+		Spec: simplyblockv1alpha2.S3BucketSpec{
 			ObjectStoreRef: store.Name, BucketName: "i12-bucket",
 			CapacityBytes: 50 * 1 << 20, StorageClassName: fakeStorageClassName,
 		},
@@ -323,7 +322,7 @@ func TestS3BucketDegradesWhenMountDeliveryNeverConfirms(t *testing.T) {
 	// Ready.
 	r := &S3BucketReconciler{Client: cli, Scheme: cli.Scheme(), Recorder: recorder}
 	key := client.ObjectKeyFromObject(bucket)
-	reconcileBucketUntil(t, r, key, func(b *objectstorev1alpha1.S3Bucket) bool {
+	reconcileBucketUntil(t, r, key, func(b *simplyblockv1alpha2.S3Bucket) bool {
 		return b.Status.Phase == phaseProvisioning
 	})
 	// Wait for the fake NFSExport creator's own background ticker to carry
@@ -332,7 +331,7 @@ func TestS3BucketDegradesWhenMountDeliveryNeverConfirms(t *testing.T) {
 	// tests share this apiserver), so forcing the deadline past below lands
 	// on MountDeliveryFailed rather than racing NoMatchingExport.
 	waitFor(t, "the matching NFSExport to reach Ready", func() bool {
-		var b objectstorev1alpha1.S3Bucket
+		var b simplyblockv1alpha2.S3Bucket
 		if err := cli.Get(ctx, key, &b); err != nil {
 			return false
 		}
@@ -342,7 +341,7 @@ func TestS3BucketDegradesWhenMountDeliveryNeverConfirms(t *testing.T) {
 
 	forcePastDeadline(t, cli, key)
 
-	got := reconcileBucketUntil(t, r, key, func(b *objectstorev1alpha1.S3Bucket) bool {
+	got := reconcileBucketUntil(t, r, key, func(b *simplyblockv1alpha2.S3Bucket) bool {
 		return b.Status.Phase == phaseDegraded
 	})
 	cond := findCondition(got.Status.Conditions, conditionMountDelivered)
@@ -365,9 +364,9 @@ func TestS3BucketResumesMidProvisioningWithoutRecreatingThePVC(t *testing.T) {
 	if err := cli.Create(ctx, store); err != nil {
 		t.Fatalf("creating the ObjectStore: %v", err)
 	}
-	bucket := &objectstorev1alpha1.S3Bucket{
+	bucket := &simplyblockv1alpha2.S3Bucket{
 		ObjectMeta: metav1.ObjectMeta{Name: "i06-bucket", Namespace: "default"},
-		Spec: objectstorev1alpha1.S3BucketSpec{
+		Spec: simplyblockv1alpha2.S3BucketSpec{
 			ObjectStoreRef: store.Name, BucketName: "i06-bucket",
 			CapacityBytes: 50 * 1 << 20, StorageClassName: fakeStorageClassName,
 		},
@@ -378,7 +377,7 @@ func TestS3BucketResumesMidProvisioningWithoutRecreatingThePVC(t *testing.T) {
 
 	key := client.ObjectKeyFromObject(bucket)
 	first := &S3BucketReconciler{Client: cli, Scheme: cli.Scheme()}
-	reconcileBucketUntil(t, first, key, func(b *objectstorev1alpha1.S3Bucket) bool {
+	reconcileBucketUntil(t, first, key, func(b *simplyblockv1alpha2.S3Bucket) bool {
 		return b.Status.Phase == phaseProvisioning
 	})
 
@@ -401,7 +400,7 @@ func TestS3BucketResumesMidProvisioningWithoutRecreatingThePVC(t *testing.T) {
 	if pvcAfter.UID != pvcBefore.UID {
 		t.Errorf("PVC UID changed from %s to %s: the restart recreated it", pvcBefore.UID, pvcAfter.UID)
 	}
-	var got objectstorev1alpha1.S3Bucket
+	var got simplyblockv1alpha2.S3Bucket
 	if err := cli.Get(ctx, key, &got); err != nil {
 		t.Fatalf("reading the bucket back: %v", err)
 	}
@@ -414,7 +413,7 @@ func TestS3BucketResumesMidProvisioningWithoutRecreatingThePVC(t *testing.T) {
 // for waiting out s3BucketProvisioningDeadline for real.
 func forcePastDeadline(t *testing.T, cli client.Client, key client.ObjectKey) {
 	t.Helper()
-	var bucket objectstorev1alpha1.S3Bucket
+	var bucket simplyblockv1alpha2.S3Bucket
 	if err := cli.Get(context.Background(), key, &bucket); err != nil {
 		t.Fatalf("reading the bucket: %v", err)
 	}

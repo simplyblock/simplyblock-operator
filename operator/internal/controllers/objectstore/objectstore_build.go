@@ -16,7 +16,7 @@ import (
 
 	"github.com/simplyblock/atlas/bucketdelivery"
 	"github.com/simplyblock/atlas/ptr"
-	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -79,7 +79,7 @@ func tlsSecretName(name string) string {
 // design §4.1 require, spec's passthrough fields applied verbatim, and the
 // label (U-09) design-bucket-provisioning.md's S3BucketReconciler finds
 // gateway pods by.
-func buildDeployment(store *objectstorev1alpha1.ObjectStore) *appsv1.Deployment {
+func buildDeployment(store *simplyblockv1alpha2.ObjectStore) *appsv1.Deployment {
 	labels := map[string]string{gatewayInstanceLabel: store.Name}
 
 	replicas := int32(defaultReplicas)
@@ -133,7 +133,7 @@ func buildDeployment(store *objectstorev1alpha1.ObjectStore) *appsv1.Deployment 
 // cert-manager, since cert-manager already bundles the CA into the Secret it
 // writes, and a projected volume combining the Secret with OpenShift's
 // separate CA ConfigMap otherwise.
-func buildGatewayTLSVolume(store *objectstorev1alpha1.ObjectStore) corev1.Volume {
+func buildGatewayTLSVolume(store *simplyblockv1alpha2.ObjectStore) corev1.Volume {
 	secretName := tlsSecretName(store.Name)
 	if utils.IsCertManagerTLSProvider(store.Spec.TLSProvider) {
 		return corev1.Volume{
@@ -184,7 +184,7 @@ func buildGatewayBucketMountVolume() corev1.Volume {
 // buildService is the ClusterIP Service design §5 describes: one port,
 // spec.port, selecting the Deployment's own pod label, carrying whichever of
 // the two TLS annotations/objects spec.tlsProvider selects.
-func buildService(store *objectstorev1alpha1.ObjectStore) *corev1.Service {
+func buildService(store *simplyblockv1alpha2.ObjectStore) *corev1.Service {
 	secretName := tlsSecretName(store.Name)
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{

@@ -31,7 +31,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -62,7 +61,7 @@ func apiServer(t *testing.T) client.Client {
 			sharedEnvErr = err
 			return
 		}
-		if err := objectstorev1alpha1.AddToScheme(scheme.Scheme); err != nil {
+		if err := simplyblockv1alpha2.AddToScheme(scheme.Scheme); err != nil {
 			sharedEnvErr = err
 			return
 		}
