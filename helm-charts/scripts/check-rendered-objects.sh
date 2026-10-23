@@ -166,7 +166,7 @@ checkVendoredCRDs() {
 # is a second CSI deployment, or a control plane they did not ask for, and the
 # discovery run is a draft cluster proposed from workers they did not choose.
 checkEmpty() {
-  local present unwanted args
+  local present unwanted
   local clean=1
 
   present="$(render empty)"
@@ -184,12 +184,8 @@ checkEmpty() {
     fi
   done
 
-  args="$(helm template sb "$CHART" --namespace simplyblock \
-    "${CAPABILITIES[@]}" \
-    --set deployment.profile=empty \
-    --show-only templates/simplyblock-operator.yaml 2>/dev/null)"
-  if ! grep -qF -- '--initial-discovery=false' <<<"$args"; then
-    echo "  empty: the operator is not told to decline the discovery run"
+  if grep -qxF "OperatorOps/initial-discovery" <<<"$present"; then
+    echo "  empty: the discovery run is rendered"
     clean=0
     fail=1
   fi
@@ -456,12 +452,12 @@ checkClusterStorageClasses() {
   fi
 }
 
-# checkDiscovery asserts that discovery values render the OperatorOps that runs
-# them, and that an install stating none renders no run for the operator to
-# decline behind.
+# checkDiscovery asserts that a standalone install renders the discovery run, that
+# the values reach its spec.discover, and that the profiles that raise no run
+# render none.
 #
-# The operator raises the default run itself. A value an administrator sets has
-# to reach spec.discover, because the run the operator raises would not carry it.
+# The chart is the only thing that creates the run. Nothing in the operator
+# raises one, so an install that drops it here has no draft waiting.
 checkDiscovery() {
   local yq="${YQ:-yq}"
   local ok=1 doc got
@@ -477,9 +473,13 @@ checkDiscovery() {
       "$@" 2>/dev/null | "$yq" -N 'select(.kind == "OperatorOps")'
   }
 
+  # An install stating nothing runs discovery with nothing narrowed, and waives a
+  # partition table because a machine that held data before carries one.
   doc="$(operatorOps standalone)"
-  if [ -n "$doc" ]; then
-    echo "  discovery: an install stating nothing renders an OperatorOps"
+  got="$("$yq" '.metadata.name + " " + .metadata.namespace + " " + .spec.action + " " +
+    (.spec.discover | to_entries | map(.key + "=" + (.value | tostring)) | join(","))' <<<"$doc")"
+  if [ "$got" != "initial-discovery simplyblock Discover enablePartitionedDevices=true" ]; then
+    echo "  discovery: the default run rendered [${got}]"
     ok=0
   fi
 
@@ -504,10 +504,11 @@ checkDiscovery() {
     ok=0
   fi
 
-  # The draft values are accepted and unused, so alone they raise no run.
+  # The draft values are accepted and unused, so they change nothing in the run.
   doc="$(operatorOps standalone --set discovery.draft.name=mine)"
-  if [ -n "$doc" ]; then
-    echo "  discovery: a draft value alone renders an OperatorOps"
+  got="$("$yq" '.spec.discover | keys | join(",")' <<<"$doc")"
+  if [ "$got" != "enablePartitionedDevices" ]; then
+    echo "  discovery: a draft value reached spec.discover [${got}]"
     ok=0
   fi
 
@@ -519,14 +520,14 @@ checkDiscovery() {
       ok=0
     fi
   done
-  doc="$(operatorOps standalone --set discovery.enabled=false --set discovery.enableControlPlaneNodes=true)"
+  doc="$(operatorOps standalone --set discovery.enabled=false)"
   if [ -n "$doc" ]; then
     echo "  discovery: discovery.enabled=false renders an OperatorOps"
     ok=0
   fi
 
   if [ "$ok" -eq 1 ]; then
-    echo "  discovery: values reach spec.discover, and nothing renders without them"
+    echo "  discovery: standalone renders the run, and nothing else does"
   else
     fail=1
   fi

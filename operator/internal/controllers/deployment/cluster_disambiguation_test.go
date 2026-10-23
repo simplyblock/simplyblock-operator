@@ -2,7 +2,7 @@
 // distinguishes this Kubernetes cluster from another one pointed at the same
 // control plane.
 //
-// InitialDiscoveryName is deliberately identical on every install, and that is
+// The chart names the initial discovery run the same on every install, and that is
 // fine for the OperatorOps and the ClusterDeploymentConfig discovery writes --
 // both live in this Kubernetes cluster's own API server, where the name
 // collides with nothing else. The StorageCluster the document proposes does

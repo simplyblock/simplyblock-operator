@@ -691,7 +691,7 @@ func refuseUnreadableFilter(spec *simplyblockv1alpha2.DiscoverSpec) error {
 // clusterDisambiguator is a short, stable-per-Kubernetes-cluster suffix for the
 // cluster name a discovery run proposes.
 //
-// InitialDiscoveryName is deliberately identical on every install, which is
+// The chart names the initial discovery run the same on every install, which is
 // fine for the OperatorOps and the ClusterDeploymentConfig it writes -- both
 // live in this Kubernetes cluster's own API server, where the name collides
 // with nothing else. The StorageCluster the document proposes does not stay

@@ -119,25 +119,23 @@ deployment:
   # what it collects in the object store a hosted control plane brings.
   profile: standalone
 
-# The one discovery run a fresh install performs by itself.
+# The one discovery run a fresh install performs.
 #
-# The operator raises an OperatorOps with action Discover, inspects every
-# schedulable worker, and writes a ClusterDeploymentConfig in Draft. Nothing is
-# deployed until somebody reads that draft and sets `approved: true` on it.
+# The chart renders an OperatorOps with action Discover. The operator inspects
+# every schedulable worker and writes a ClusterDeploymentConfig in Draft. Nothing
+# is deployed until somebody reads that draft and sets `approved: true` on it.
 #
-# Setting any value below other than `enabled` and `draft` renders that OperatorOps from this
-# chart instead, with the values as its spec.discover, and the operator declines
-# to raise its own: it declines whenever any OperatorOps already exists. The
-# operator never rereads a finished run, so a value changed on a later upgrade
-# does not discover again; write a new OperatorOps for that.
+# The values below are its spec.discover, and are left out of it when unset. The
+# operator does not raise a run of its own, so an install without this chart (OLM)
+# writes the OperatorOps by hand. A finished run is not run again: a value changed
+# on a later upgrade does not discover again, so write a new OperatorOps for that.
 #
-# Rendered as `--initial-discovery=false` for the managed profile, where the
-# cluster that manages this one raises the run, and for the empty profile, whose
-# administrator writes the cluster.
+# Not rendered for the managed profile, where the cluster that manages this one
+# raises the run, nor for the empty profile, whose administrator writes the
+# cluster.
 discovery:
-  # Whether this installation raises the run at all. An installation that wants
-  # no draft waiting for it sets this to false and writes its
-  # ClusterDeploymentConfig by hand.
+  # Whether the chart renders the run. An installation that wants no draft waiting
+  # for it sets this to false and writes its ClusterDeploymentConfig by hand.
   enabled: true
 
   # Each of these is a field of OperatorOps spec.discover, and is left out of it
