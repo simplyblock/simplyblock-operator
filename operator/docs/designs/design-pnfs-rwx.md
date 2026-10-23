@@ -934,6 +934,8 @@ active/active MDS and there never will be under this architecture. The shape is 
 single MDS that restarts: one guest owns the mount, and when its pod is lost the
 StatefulSet starts it again, on the same node or on any other node offering KVM,
 and the new guest re-materializes the same exports.
+[`design-pnfs-mds-standby.md`](design-pnfs-mds-standby.md) replaces that shape with
+an active and a warm standby guest, fenced by a per-instance reservation key.
 
 That is less bad than it sounds, because of where the data path runs. Clients read
 and write **directly over NVMe-oF**, so losing the MDS stops metadata operations
