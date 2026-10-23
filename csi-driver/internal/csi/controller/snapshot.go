@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/csi-driver/internal/clusters"
 	"github.com/simplyblock/csi-driver/internal/controlplane"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
@@ -113,7 +114,16 @@ func (cs *Server) CreateSnapshot(
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 
-	volSize, err := sbclient.GetVolumeSize(ctx, spdkVol.VolumeID)
+	var volSize string
+	err = cs.onActiveVolume(ctx, volumeID, spdkVol, sbclient,
+		func(h *lvol.Handle, c *controlplane.ClusterClient) error {
+			size, err := c.GetVolumeSize(ctx, h.VolumeID)
+			if err == nil {
+				// The snapshot is taken of the volume that answered.
+				volSize, spdkVol, sbclient = size, h, c
+			}
+			return err
+		})
 	klog.Infof("CreateSnapshot : volSize=%s", volSize)
 	if err != nil {
 		klog.Errorf("failed to get volume info, volumeID: %s err: %v", volumeID, err)

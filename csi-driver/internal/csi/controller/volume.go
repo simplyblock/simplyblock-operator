@@ -201,6 +201,16 @@ func (cs *Server) DeleteVolume(
 
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
+
+	// A volume a Relocate moved is served by the volume its PV's mark names,
+	// which this handle no longer reaches; it goes with the PV.
+	if mark := cs.relocatedMark(ctx, volumeID); mark != "" {
+		if err := cs.deleteRelocationTarget(ctx, mark); err != nil {
+			klog.Errorf("failed to delete relocation target %s of volume %s: %v", mark, volumeID, err)
+			return nil, classifyDeleteVolumeError(err)
+		}
+	}
+
 	// no harm if volume already unpublished
 	err := cs.unpublishVolume(ctx, volumeID)
 	switch {
