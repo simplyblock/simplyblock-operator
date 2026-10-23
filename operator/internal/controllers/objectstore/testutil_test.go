@@ -18,7 +18,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -47,7 +46,7 @@ func newTestScheme(t *testing.T) *runtime.Scheme {
 	for _, add := range []func(*runtime.Scheme) error{
 		clientgoscheme.AddToScheme,
 		simplyblockv1alpha2.AddToScheme,
-		objectstorev1alpha1.AddToScheme,
+		simplyblockv1alpha2.AddToScheme,
 	} {
 		if err := add(scheme); err != nil {
 			t.Fatalf("building scheme: %v", err)
@@ -63,8 +62,8 @@ func newTestClient(t *testing.T, objects ...client.Object) client.Client {
 	return fake.NewClientBuilder().
 		WithScheme(newTestScheme(t)).
 		WithStatusSubresource(
-			&objectstorev1alpha1.S3Bucket{},
-			&objectstorev1alpha1.ObjectStore{},
+			&simplyblockv1alpha2.S3Bucket{},
+			&simplyblockv1alpha2.ObjectStore{},
 			&simplyblockv1alpha2.NFSExport{},
 		).
 		WithObjects(objects...).
