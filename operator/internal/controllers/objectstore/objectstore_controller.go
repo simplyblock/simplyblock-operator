@@ -29,20 +29,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/simplyblock/atlas/statemachine"
-	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // osPhase is an alias so the graph below reads as a table. Named osPhase
 // rather than phase: S3BucketReconciler's own phase/phasePending/... already
 // claim those names in this package (s3bucket_controller.go), one kind each.
-type osPhase = objectstorev1alpha1.ObjectStorePhase
+type osPhase = simplyblockv1alpha2.ObjectStorePhase
 
 const (
-	osPhasePending      = objectstorev1alpha1.ObjectStorePhasePending
-	osPhaseProvisioning = objectstorev1alpha1.ObjectStorePhaseProvisioning
-	osPhaseReady        = objectstorev1alpha1.ObjectStorePhaseReady
-	osPhaseDegraded     = objectstorev1alpha1.ObjectStorePhaseDegraded
+	osPhasePending      = simplyblockv1alpha2.ObjectStorePhasePending
+	osPhaseProvisioning = simplyblockv1alpha2.ObjectStorePhaseProvisioning
+	osPhaseReady        = simplyblockv1alpha2.ObjectStorePhaseReady
+	osPhaseDegraded     = simplyblockv1alpha2.ObjectStorePhaseDegraded
 )
 
 // Condition types this reconciler sets, design §4.2's own names.
@@ -85,8 +85,8 @@ type ObjectStoreReconciler struct {
 	Recorder events.EventRecorder
 }
 
-// +kubebuilder:rbac:groups=objectstore.simplyblock.io,resources=objectstores,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=objectstore.simplyblock.io,resources=objectstores/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=objectstores,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=objectstores/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;delete
@@ -94,7 +94,7 @@ type ObjectStoreReconciler struct {
 func (r *ObjectStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("objectstore", req.NamespacedName)
 
-	var store objectstorev1alpha1.ObjectStore
+	var store simplyblockv1alpha2.ObjectStore
 	if err := r.Get(ctx, req.NamespacedName, &store); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -146,7 +146,7 @@ func (r *ObjectStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 // then enters Provisioning. Nothing here needs an OnEnter hook because
 // Pending is the graph's own starting point.
 func (r *ObjectStoreReconciler) reconcilePending(
-	ctx context.Context, store *objectstorev1alpha1.ObjectStore, sm *statemachine.Machine[osPhase],
+	ctx context.Context, store *simplyblockv1alpha2.ObjectStore, sm *statemachine.Machine[osPhase],
 ) (ctrl.Result, error) {
 	if err := r.applyOwnedObjects(ctx, store); err != nil {
 		return ctrl.Result{}, fmt.Errorf("creating the gateway's Deployment, Service, and certificate: %w", err)
@@ -155,7 +155,7 @@ func (r *ObjectStoreReconciler) reconcilePending(
 	if err := sm.TransitionTo(ctx, osPhaseProvisioning); err != nil {
 		return ctrl.Result{}, fmt.Errorf("transition to Provisioning: %w", err)
 	}
-	if err := r.writeStatus(ctx, store, func(s *objectstorev1alpha1.ObjectStoreStatus) {
+	if err := r.writeStatus(ctx, store, func(s *simplyblockv1alpha2.ObjectStoreStatus) {
 		s.Phase = osPhaseProvisioning
 		setObjectStoreDeadline(s, sm)
 	}); err != nil {
@@ -169,7 +169,7 @@ func (r *ObjectStoreReconciler) reconcilePending(
 // waits for the Deployment to report Available and the certificate to
 // report Ready.
 func (r *ObjectStoreReconciler) reconcileProvisioning(
-	ctx context.Context, store *objectstorev1alpha1.ObjectStore, sm *statemachine.Machine[osPhase], logger logr,
+	ctx context.Context, store *simplyblockv1alpha2.ObjectStore, sm *statemachine.Machine[osPhase], logger logr,
 ) (ctrl.Result, error) {
 	if err := r.applyOwnedObjects(ctx, store); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling the gateway's Deployment, Service, and certificate: %w", err)
@@ -191,7 +191,7 @@ func (r *ObjectStoreReconciler) reconcileProvisioning(
 	if err := sm.TransitionTo(ctx, osPhaseReady); err != nil {
 		return ctrl.Result{}, fmt.Errorf("transition to Ready: %w", err)
 	}
-	if err := r.writeStatus(ctx, store, func(s *objectstorev1alpha1.ObjectStoreStatus) {
+	if err := r.writeStatus(ctx, store, func(s *simplyblockv1alpha2.ObjectStoreStatus) {
 		s.Phase = osPhaseReady
 		s.ReadyReplicas = readyReplicas
 		s.PhaseDeadline = nil
@@ -212,7 +212,7 @@ func (r *ObjectStoreReconciler) reconcileProvisioning(
 // image, placement) converges without leaving Ready, and refreshes
 // status.readyReplicas. design §6's own failure-table row for
 // spec.replicas: "ordinary Deployment rolling scale-down... stays Ready."
-func (r *ObjectStoreReconciler) reconcileReady(ctx context.Context, store *objectstorev1alpha1.ObjectStore) error {
+func (r *ObjectStoreReconciler) reconcileReady(ctx context.Context, store *simplyblockv1alpha2.ObjectStore) error {
 	if err := r.applyOwnedObjects(ctx, store); err != nil {
 		return fmt.Errorf("reconciling the gateway's Deployment, Service, and certificate: %w", err)
 	}
@@ -224,7 +224,7 @@ func (r *ObjectStoreReconciler) reconcileReady(ctx context.Context, store *objec
 	if readyReplicas == store.Status.ReadyReplicas {
 		return nil
 	}
-	return r.writeStatus(ctx, store, func(s *objectstorev1alpha1.ObjectStoreStatus) {
+	return r.writeStatus(ctx, store, func(s *simplyblockv1alpha2.ObjectStoreStatus) {
 		s.ReadyReplicas = readyReplicas
 	})
 }
@@ -233,7 +233,7 @@ func (r *ObjectStoreReconciler) reconcileReady(ctx context.Context, store *objec
 // the cert-manager Certificate where that provider is selected (the
 // OpenShift provider needs no object of its own: its annotation is already
 // on the Service buildService returns).
-func (r *ObjectStoreReconciler) applyOwnedObjects(ctx context.Context, store *objectstorev1alpha1.ObjectStore) error {
+func (r *ObjectStoreReconciler) applyOwnedObjects(ctx context.Context, store *simplyblockv1alpha2.ObjectStore) error {
 	if err := r.apply(ctx, buildDeployment(store), store); err != nil {
 		return fmt.Errorf("the Deployment: %w", err)
 	}
@@ -270,7 +270,7 @@ func (r *ObjectStoreReconciler) applyOwnedObjects(ctx context.Context, store *ob
 // field this reconciler does not set is never touched, and reapplying the
 // same sparse object is the true no-op idempotency requires.
 func (r *ObjectStoreReconciler) apply(
-	ctx context.Context, desired *appsv1.Deployment, store *objectstorev1alpha1.ObjectStore,
+	ctx context.Context, desired *appsv1.Deployment, store *simplyblockv1alpha2.ObjectStore,
 ) error {
 	if err := controllerutil.SetControllerReference(store, desired, r.Scheme); err != nil {
 		return err
@@ -287,7 +287,7 @@ func (r *ObjectStoreReconciler) apply(
 // reconciler does not set, which is what lets it skip carrying the
 // cluster-assigned ClusterIP forward by hand the way a blind Update would
 // have needed to.
-func (r *ObjectStoreReconciler) applyService(ctx context.Context, store *objectstorev1alpha1.ObjectStore) error {
+func (r *ObjectStoreReconciler) applyService(ctx context.Context, store *simplyblockv1alpha2.ObjectStore) error {
 	desired := buildService(store)
 	if err := controllerutil.SetControllerReference(store, desired, r.Scheme); err != nil {
 		return err
@@ -330,7 +330,7 @@ func (r *ObjectStoreReconciler) applyConfiguration(obj client.Object) (runtime.A
 // issues the Service's serving certificate, the same call
 // StorageNodeWorkloadReconciler.reconcileCertificates already makes
 // (internal/controllers/node/workload_controller.go) for its own Services.
-func (r *ObjectStoreReconciler) applyCertificate(ctx context.Context, store *objectstorev1alpha1.ObjectStore) error {
+func (r *ObjectStoreReconciler) applyCertificate(ctx context.Context, store *simplyblockv1alpha2.ObjectStore) error {
 	object := utils.BuildServiceServingCertificate(store.Namespace, store.Name, tlsSecretName(store.Name))
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, object, func() error {
 		desired := utils.BuildServiceServingCertificate(store.Namespace, store.Name, tlsSecretName(store.Name))
@@ -344,7 +344,7 @@ func (r *ObjectStoreReconciler) applyCertificate(ctx context.Context, store *obj
 // DeploymentAvailable condition is True, and its current ready replica
 // count, which the caller mirrors into status regardless.
 func (r *ObjectStoreReconciler) deploymentAvailable(
-	ctx context.Context, store *objectstorev1alpha1.ObjectStore,
+	ctx context.Context, store *simplyblockv1alpha2.ObjectStore,
 ) (available bool, readyReplicas int32, err error) {
 	var deployment appsv1.Deployment
 	if err := r.Get(ctx, client.ObjectKey{Namespace: store.Namespace, Name: store.Name}, &deployment); err != nil {
@@ -368,7 +368,7 @@ func (r *ObjectStoreReconciler) deploymentAvailable(
 // the service-ca-operator has acted yet, the same boundary §9's failure
 // table draws around it.
 func (r *ObjectStoreReconciler) certificateReady(
-	ctx context.Context, store *objectstorev1alpha1.ObjectStore,
+	ctx context.Context, store *simplyblockv1alpha2.ObjectStore,
 ) (bool, error) {
 	if !utils.IsCertManagerTLSProvider(store.Spec.TLSProvider) {
 		return true, nil
@@ -391,7 +391,7 @@ func (r *ObjectStoreReconciler) certificateReady(
 // certificate's. Called once, from Reconcile, when sm.TimeoutReached() is
 // true.
 func (r *ObjectStoreReconciler) provisioningFailure(
-	ctx context.Context, store *objectstorev1alpha1.ObjectStore,
+	ctx context.Context, store *simplyblockv1alpha2.ObjectStore,
 ) (reason, message, conditionType string) {
 	available, _, err := r.deploymentAvailable(ctx, store)
 	if err == nil && !available {
@@ -408,7 +408,7 @@ func (r *ObjectStoreReconciler) provisioningFailure(
 // event.
 func (r *ObjectStoreReconciler) toDegraded(
 	ctx context.Context,
-	store *objectstorev1alpha1.ObjectStore,
+	store *simplyblockv1alpha2.ObjectStore,
 	sm *statemachine.Machine[osPhase],
 	reason, message, conditionType string,
 ) error {
@@ -416,7 +416,7 @@ func (r *ObjectStoreReconciler) toDegraded(
 		return fmt.Errorf("transition to Degraded: %w", err)
 	}
 	r.event(store, corev1.EventTypeWarning, reason, message)
-	return r.writeStatus(ctx, store, func(s *objectstorev1alpha1.ObjectStoreStatus) {
+	return r.writeStatus(ctx, store, func(s *simplyblockv1alpha2.ObjectStoreStatus) {
 		s.Phase = osPhaseDegraded
 		s.Message = message
 		meta.SetStatusCondition(&s.Conditions, metav1.Condition{
@@ -430,7 +430,7 @@ func (r *ObjectStoreReconciler) toDegraded(
 // one (design §6, I-06), and does not treat a phase already reached as a
 // transition into the phase already happened.
 func (r *ObjectStoreReconciler) restore(
-	ctx context.Context, store *objectstorev1alpha1.ObjectStore,
+	ctx context.Context, store *simplyblockv1alpha2.ObjectStore,
 ) (*statemachine.Machine[osPhase], error) {
 	snap := statemachine.Snapshot[osPhase]{State: store.Status.Phase}
 	if store.Status.PhaseDeadline != nil {
@@ -464,7 +464,7 @@ func objectStorePhases() statemachine.Config[osPhase] {
 
 // setObjectStoreDeadline copies the machine's bound into status, to outlive
 // the process.
-func setObjectStoreDeadline(s *objectstorev1alpha1.ObjectStoreStatus, sm *statemachine.Machine[osPhase]) {
+func setObjectStoreDeadline(s *simplyblockv1alpha2.ObjectStoreStatus, sm *statemachine.Machine[osPhase]) {
 	snap := sm.Snapshot()
 	if snap.Deadline.IsZero() {
 		s.PhaseDeadline = nil
@@ -477,11 +477,11 @@ func setObjectStoreDeadline(s *objectstorev1alpha1.ObjectStoreStatus, sm *statem
 // Re-reading is the point: a blind overwrite reverts a concurrent writer.
 func (r *ObjectStoreReconciler) writeStatus(
 	ctx context.Context,
-	store *objectstorev1alpha1.ObjectStore,
-	mutate func(*objectstorev1alpha1.ObjectStoreStatus),
+	store *simplyblockv1alpha2.ObjectStore,
+	mutate func(*simplyblockv1alpha2.ObjectStoreStatus),
 ) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var fresh objectstorev1alpha1.ObjectStore
+		var fresh simplyblockv1alpha2.ObjectStore
 		if err := r.Get(ctx, client.ObjectKeyFromObject(store), &fresh); err != nil {
 			return err
 		}
@@ -495,7 +495,7 @@ func (r *ObjectStoreReconciler) writeStatus(
 	})
 }
 
-func (r *ObjectStoreReconciler) event(store *objectstorev1alpha1.ObjectStore, kind, reason, message string) {
+func (r *ObjectStoreReconciler) event(store *simplyblockv1alpha2.ObjectStore, kind, reason, message string) {
 	if r.Recorder != nil {
 		r.Recorder.Eventf(store, nil, kind, reason, reason, "%s", message)
 	}
@@ -545,7 +545,7 @@ func unstructuredConditionTrue(obj *unstructured.Unstructured, condType string) 
 // change faster than the next Provisioning poll already does.
 func (r *ObjectStoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&objectstorev1alpha1.ObjectStore{}).
+		For(&simplyblockv1alpha2.ObjectStore{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
 		WithOptions(objectStoreControllerOptions()).

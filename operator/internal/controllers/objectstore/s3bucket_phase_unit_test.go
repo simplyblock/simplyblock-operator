@@ -16,7 +16,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -26,19 +25,19 @@ const (
 	testObjectStoreName = "team-a-store"
 )
 
-func testObjectStore() *objectstorev1alpha1.ObjectStore {
-	return &objectstorev1alpha1.ObjectStore{
+func testObjectStore() *simplyblockv1alpha2.ObjectStore {
+	return &simplyblockv1alpha2.ObjectStore{
 		ObjectMeta: metav1.ObjectMeta{Name: testObjectStoreName, Namespace: testBucketNamespace},
 	}
 }
 
-func testS3Bucket(mutate ...func(*objectstorev1alpha1.S3Bucket)) *objectstorev1alpha1.S3Bucket {
-	bucket := &objectstorev1alpha1.S3Bucket{
+func testS3Bucket(mutate ...func(*simplyblockv1alpha2.S3Bucket)) *simplyblockv1alpha2.S3Bucket {
+	bucket := &simplyblockv1alpha2.S3Bucket{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: testBucketName, Namespace: testBucketNamespace,
-			Finalizers: []string{objectstorev1alpha1.S3BucketFinalizer},
+			Finalizers: []string{simplyblockv1alpha2.S3BucketFinalizer},
 		},
-		Spec: objectstorev1alpha1.S3BucketSpec{
+		Spec: simplyblockv1alpha2.S3BucketSpec{
 			ObjectStoreRef:   testObjectStoreName,
 			BucketName:       testBucketName,
 			CapacityBytes:    100 * 1 << 20,
@@ -51,7 +50,7 @@ func testS3Bucket(mutate ...func(*objectstorev1alpha1.S3Bucket)) *objectstorev1a
 	return bucket
 }
 
-func boundPVC(bucket *objectstorev1alpha1.S3Bucket) (*corev1.PersistentVolumeClaim, *corev1.PersistentVolume) {
+func boundPVC(bucket *simplyblockv1alpha2.S3Bucket) (*corev1.PersistentVolumeClaim, *corev1.PersistentVolume) {
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: "pv-" + bucket.Name},
 		Spec: corev1.PersistentVolumeSpec{
@@ -80,7 +79,7 @@ func testNFSExport(phase simplyblockv1alpha2.NFSExportPhase) *simplyblockv1alpha
 	}
 }
 
-func reconcile(t *testing.T, cli client.Client, bucket *objectstorev1alpha1.S3Bucket) objectstorev1alpha1.S3Bucket {
+func reconcile(t *testing.T, cli client.Client, bucket *simplyblockv1alpha2.S3Bucket) simplyblockv1alpha2.S3Bucket {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -93,7 +92,7 @@ func reconcile(t *testing.T, cli client.Client, bucket *objectstorev1alpha1.S3Bu
 	if _, err := r.Reconcile(ctx, ctrlRequest(bucket)); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	var got objectstorev1alpha1.S3Bucket
+	var got simplyblockv1alpha2.S3Bucket
 	if err := cli.Get(ctx, client.ObjectKeyFromObject(bucket), &got); err != nil {
 		t.Fatalf("reading back the bucket: %v", err)
 	}
@@ -137,7 +136,7 @@ func TestClaimNotYetBoundStaysPending(t *testing.T) {
 // U-03: the PVC is Bound and no NFSExport matches it yet, so the bucket
 // enters Provisioning to wait on one.
 func TestBoundClaimEntersProvisioning(t *testing.T) {
-	bucket := testS3Bucket(func(b *objectstorev1alpha1.S3Bucket) { b.Status.Phase = phasePending })
+	bucket := testS3Bucket(func(b *simplyblockv1alpha2.S3Bucket) { b.Status.Phase = phasePending })
 	pvc, pv := boundPVC(bucket)
 	cli := newTestClient(t, testObjectStore(), bucket, pvc, pv)
 
@@ -154,7 +153,7 @@ func TestBoundClaimEntersProvisioning(t *testing.T) {
 // U-04: the NFSExport exists but has not reached Ready yet, so Provisioning
 // waits rather than advancing.
 func TestExportNotYetReadyStaysProvisioning(t *testing.T) {
-	bucket := testS3Bucket(func(b *objectstorev1alpha1.S3Bucket) { b.Status.Phase = phaseProvisioning })
+	bucket := testS3Bucket(func(b *simplyblockv1alpha2.S3Bucket) { b.Status.Phase = phaseProvisioning })
 	pvc, pv := boundPVC(bucket)
 	export := testNFSExport(simplyblockv1alpha2.NFSExportPhaseAssembling)
 	cli := newTestClient(t, testObjectStore(), bucket, pvc, pv, export)
@@ -172,7 +171,7 @@ func TestExportNotYetReadyStaysProvisioning(t *testing.T) {
 // U-05: the NFSExport is Ready, and with nothing yet to wait on for mount
 // delivery (W-12), the bucket reaches Ready.
 func TestReadyExportCompletesProvisioning(t *testing.T) {
-	bucket := testS3Bucket(func(b *objectstorev1alpha1.S3Bucket) { b.Status.Phase = phaseProvisioning })
+	bucket := testS3Bucket(func(b *simplyblockv1alpha2.S3Bucket) { b.Status.Phase = phaseProvisioning })
 	pvc, pv := boundPVC(bucket)
 	export := testNFSExport(simplyblockv1alpha2.NFSExportPhaseReady)
 	cli := newTestClient(t, testObjectStore(), bucket, pvc, pv, export)
@@ -191,7 +190,7 @@ func TestReadyExportCompletesProvisioning(t *testing.T) {
 // bucket at once rather than waiting out the deadline for something that is
 // not going to recover on its own.
 func TestDegradedExportDegradesTheBucket(t *testing.T) {
-	bucket := testS3Bucket(func(b *objectstorev1alpha1.S3Bucket) { b.Status.Phase = phaseProvisioning })
+	bucket := testS3Bucket(func(b *simplyblockv1alpha2.S3Bucket) { b.Status.Phase = phaseProvisioning })
 	pvc, pv := boundPVC(bucket)
 	export := testNFSExport(simplyblockv1alpha2.NFSExportPhaseDegraded)
 	cli := newTestClient(t, testObjectStore(), bucket, pvc, pv, export)
@@ -213,7 +212,7 @@ func TestDegradedExportDegradesTheBucket(t *testing.T) {
 // rather than reaching Ready on a timed-out wait.
 func TestProvisioningDeadlinePassedDegrades(t *testing.T) {
 	past := metav1.NewTime(metav1.Now().Add(-time.Minute))
-	bucket := testS3Bucket(func(b *objectstorev1alpha1.S3Bucket) {
+	bucket := testS3Bucket(func(b *simplyblockv1alpha2.S3Bucket) {
 		b.Status.Phase = phaseProvisioning
 		b.Status.PhaseDeadline = &past
 	})
@@ -231,7 +230,7 @@ func TestProvisioningDeadlinePassedDegrades(t *testing.T) {
 // U-08: a Ready bucket with nothing changed re-reconciles to no writes: the
 // resourceVersion does not move.
 func TestReadyBucketReconcilesToNoWrites(t *testing.T) {
-	bucket := testS3Bucket(func(b *objectstorev1alpha1.S3Bucket) { b.Status.Phase = phaseReady })
+	bucket := testS3Bucket(func(b *simplyblockv1alpha2.S3Bucket) { b.Status.Phase = phaseReady })
 	cli := newTestClient(t, testObjectStore(), bucket)
 	before := bucket.DeepCopy()
 	if err := cli.Get(context.Background(), client.ObjectKeyFromObject(bucket), before); err != nil {
@@ -249,7 +248,7 @@ func TestReadyBucketReconcilesToNoWrites(t *testing.T) {
 // the finalizer immediately and attempts no PVC delete.
 func TestDeletePendingBucketRemovesFinalizerWithNoPVCAttempt(t *testing.T) {
 	now := metav1.Now()
-	bucket := testS3Bucket(func(b *objectstorev1alpha1.S3Bucket) {
+	bucket := testS3Bucket(func(b *simplyblockv1alpha2.S3Bucket) {
 		b.Status.Phase = phasePending
 		b.DeletionTimestamp = &now
 	})
@@ -260,7 +259,7 @@ func TestDeletePendingBucketRemovesFinalizerWithNoPVCAttempt(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 
-	var got objectstorev1alpha1.S3Bucket
+	var got simplyblockv1alpha2.S3Bucket
 	err := cli.Get(context.Background(), client.ObjectKeyFromObject(bucket), &got)
 	if err == nil && len(got.Finalizers) != 0 {
 		t.Errorf("finalizers = %v, want none left", got.Finalizers)
@@ -272,7 +271,7 @@ func TestDeletePendingBucketRemovesFinalizerWithNoPVCAttempt(t *testing.T) {
 func TestDeleteReadyBucketWithdrawsThenDeletesThenReleasesFinalizer(t *testing.T) {
 	now := metav1.Now()
 	pvcName := pvcNameFor(testBucketName)
-	bucket := testS3Bucket(func(b *objectstorev1alpha1.S3Bucket) {
+	bucket := testS3Bucket(func(b *simplyblockv1alpha2.S3Bucket) {
 		b.Status.Phase = phaseReady
 		b.Status.PersistentVolumeClaimName = pvcName
 		b.Status.MountDeliveredNodes = []string{"node-a"}
@@ -308,7 +307,7 @@ func TestDeleteReadyBucketWithdrawsThenDeletesThenReleasesFinalizer(t *testing.T
 		t.Errorf("PVC still exists after delete: err=%v", err)
 	}
 
-	var got objectstorev1alpha1.S3Bucket
+	var got simplyblockv1alpha2.S3Bucket
 	err := cli.Get(ctx, client.ObjectKeyFromObject(bucket), &got)
 	if err == nil && len(got.Finalizers) != 0 {
 		t.Errorf("finalizers = %v, want none left", got.Finalizers)

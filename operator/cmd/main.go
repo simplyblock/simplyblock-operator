@@ -58,7 +58,6 @@ import (
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	workv1 "open-cluster-management.io/api/work/v1"
 
-	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
@@ -153,10 +152,6 @@ func init() {
 	// OCM ManifestWork: the TestFailover controller places the bubble PV/PVC on a
 	// recovery cluster through it (design-test-failover.md §7.6).
 	utilruntime.Must(workv1.Install(scheme))
-	// objectstore.simplyblock.io: the S3 object interface's bucket provisioning
-	// (design-bucket-provisioning.md), a separate API group from storage's so
-	// its versioning and lifecycle stay independent.
-	utilruntime.Must(objectstorev1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -576,9 +571,8 @@ func main() {
 		os.Exit(1)
 	}
 	// The gateway workload S3Bucket's own mount delivery reaches
-	// (design-objectstore.md), the same manager since both are in the
-	// objectstore.simplyblock.io API group (0005-s3bucket-joins-the-main-
-	// operator-manager.md).
+	// (design-objectstore.md), in this manager rather than one of its own
+	// (0005-s3bucket-joins-the-main-operator-manager.md).
 	if err := (&objectstorecontrollers.ObjectStoreReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),

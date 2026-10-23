@@ -20,11 +20,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
-func testStore(mutate ...func(*objectstorev1alpha1.ObjectStore)) *objectstorev1alpha1.ObjectStore {
+func testStore(mutate ...func(*simplyblockv1alpha2.ObjectStore)) *simplyblockv1alpha2.ObjectStore {
 	store := testObjectStoreSpec()
 	for _, m := range mutate {
 		m(store)
@@ -35,7 +35,7 @@ func testStore(mutate ...func(*objectstorev1alpha1.ObjectStore)) *objectstorev1a
 // availableDeployment is the gateway Deployment design-objectstore.md's own
 // Reconcile would have created, carrying whatever Available condition and
 // ready-replica count a scenario needs.
-func availableDeployment(store *objectstorev1alpha1.ObjectStore, available bool, readyReplicas int32) *appsv1.Deployment {
+func availableDeployment(store *simplyblockv1alpha2.ObjectStore, available bool, readyReplicas int32) *appsv1.Deployment {
 	status := corev1.ConditionFalse
 	if available {
 		status = corev1.ConditionTrue
@@ -51,7 +51,7 @@ func availableDeployment(store *objectstorev1alpha1.ObjectStore, available bool,
 
 // readyCertificate is the cert-manager Certificate this reconciler reads
 // back, carrying a Ready condition of the given status.
-func readyCertificate(store *objectstorev1alpha1.ObjectStore, ready bool) *unstructured.Unstructured {
+func readyCertificate(store *simplyblockv1alpha2.ObjectStore, ready bool) *unstructured.Unstructured {
 	status := "False"
 	if ready {
 		status = "True"
@@ -66,7 +66,7 @@ func readyCertificate(store *objectstorev1alpha1.ObjectStore, ready bool) *unstr
 	return cert
 }
 
-func reconcileStore(t *testing.T, cli client.Client, store *objectstorev1alpha1.ObjectStore) objectstorev1alpha1.ObjectStore {
+func reconcileStore(t *testing.T, cli client.Client, store *simplyblockv1alpha2.ObjectStore) simplyblockv1alpha2.ObjectStore {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -74,7 +74,7 @@ func reconcileStore(t *testing.T, cli client.Client, store *objectstorev1alpha1.
 	if _, err := r.Reconcile(ctx, ctrlRequest(store)); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	var got objectstorev1alpha1.ObjectStore
+	var got simplyblockv1alpha2.ObjectStore
 	if err := cli.Get(ctx, client.ObjectKeyFromObject(store), &got); err != nil {
 		t.Fatalf("reading back the ObjectStore: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestFirstReconcileCreatesObjectsAndEntersProvisioning(t *testing.T) {
 // U-03: the Deployment reporting Available and the certificate reporting
 // Ready together reach Ready.
 func TestProvisioningReachesReadyOnceBothConditionsAreMet(t *testing.T) {
-	store := testStore(func(o *objectstorev1alpha1.ObjectStore) {
+	store := testStore(func(o *simplyblockv1alpha2.ObjectStore) {
 		o.Status.Phase = osPhaseProvisioning
 		o.Spec.TLSProvider = utils.TLSProviderCertManager
 	})
@@ -141,7 +141,7 @@ func TestProvisioningReachesReadyOnceBothConditionsAreMet(t *testing.T) {
 // U-04: the Deployment Available but the certificate not yet Ready stays
 // Provisioning.
 func TestProvisioningStaysWhileCertificateIsNotReady(t *testing.T) {
-	store := testStore(func(o *objectstorev1alpha1.ObjectStore) {
+	store := testStore(func(o *simplyblockv1alpha2.ObjectStore) {
 		o.Status.Phase = osPhaseProvisioning
 		o.Spec.TLSProvider = utils.TLSProviderCertManager
 	})
@@ -158,7 +158,7 @@ func TestProvisioningStaysWhileCertificateIsNotReady(t *testing.T) {
 // Available degrades, naming DeploymentAvailable False.
 func TestProvisioningDeadlinePassedWithNoAvailableDeploymentDegrades(t *testing.T) {
 	past := metav1.NewTime(time.Now().Add(-time.Minute))
-	store := testStore(func(o *objectstorev1alpha1.ObjectStore) {
+	store := testStore(func(o *simplyblockv1alpha2.ObjectStore) {
 		o.Status.Phase = osPhaseProvisioning
 		o.Status.PhaseDeadline = &past
 	})
@@ -180,7 +180,7 @@ func TestProvisioningDeadlinePassedWithNoAvailableDeploymentDegrades(t *testing.
 // reporting Ready) degrades, naming CertificateReady False.
 func TestProvisioningDeadlinePassedWithNoReadyCertificateDegrades(t *testing.T) {
 	past := metav1.NewTime(time.Now().Add(-time.Minute))
-	store := testStore(func(o *objectstorev1alpha1.ObjectStore) {
+	store := testStore(func(o *simplyblockv1alpha2.ObjectStore) {
 		o.Status.Phase = osPhaseProvisioning
 		o.Status.PhaseDeadline = &past
 		o.Spec.TLSProvider = utils.TLSProviderCertManager
@@ -201,7 +201,7 @@ func TestProvisioningDeadlinePassedWithNoReadyCertificateDegrades(t *testing.T) 
 // U-07: a Ready ObjectStore with spec.replicas changed reconciles the
 // Deployment in place and never returns to Pending.
 func TestReadyObjectStoreReconcilesReplicasInPlace(t *testing.T) {
-	store := testStore(func(o *objectstorev1alpha1.ObjectStore) {
+	store := testStore(func(o *simplyblockv1alpha2.ObjectStore) {
 		o.Status.Phase = osPhaseReady
 		o.Status.ReadyReplicas = 1
 		three := int32(3)
@@ -239,7 +239,7 @@ func TestReadyObjectStoreReconcilesReplicasInPlace(t *testing.T) {
 // both on this client and would make the assertion fail even on the correct
 // path.
 func TestRestartMidProvisioningDoesNotRecreateTheDeployment(t *testing.T) {
-	store := testStore(func(o *objectstorev1alpha1.ObjectStore) {
+	store := testStore(func(o *simplyblockv1alpha2.ObjectStore) {
 		o.Status.Phase = osPhaseProvisioning
 	})
 	existing := availableDeployment(store, false, 0)
@@ -247,7 +247,7 @@ func TestRestartMidProvisioningDoesNotRecreateTheDeployment(t *testing.T) {
 	created := false
 	cli := fake.NewClientBuilder().
 		WithScheme(newTestScheme(t)).
-		WithStatusSubresource(&objectstorev1alpha1.ObjectStore{}).
+		WithStatusSubresource(&simplyblockv1alpha2.ObjectStore{}).
 		WithObjects(store, existing).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Create: func(

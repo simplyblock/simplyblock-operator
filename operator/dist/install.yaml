@@ -3452,9 +3452,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
-  name: objectstores.objectstore.simplyblock.io
+  name: objectstores.storage.simplyblock.io
 spec:
-  group: objectstore.simplyblock.io
+  group: storage.simplyblock.io
   names:
     kind: ObjectStore
     listKind: ObjectStoreList
@@ -3477,13 +3477,13 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
-    name: v1alpha1
+    name: v1alpha2
     schema:
       openAPIV3Schema:
         description: |-
           ObjectStore is the desired existence of one S3 gateway: its Deployment,
           its Service, and that Service's serving certificate. Every gateway pod
-          carries the label objectstore.simplyblock.io/instance=<name>, which is how
+          carries the label storage.simplyblock.io/objectstore=<name>, which is how
           S3BucketReconciler finds them without reading this object.
         properties:
           apiVersion:
@@ -5568,9 +5568,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
-  name: s3buckets.objectstore.simplyblock.io
+  name: s3buckets.storage.simplyblock.io
 spec:
-  group: objectstore.simplyblock.io
+  group: storage.simplyblock.io
   names:
     kind: S3Bucket
     listKind: S3BucketList
@@ -5593,7 +5593,7 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
-    name: v1alpha1
+    name: v1alpha2
     schema:
       openAPIV3Schema:
         description: |-
@@ -17250,32 +17250,6 @@ rules:
   - list
   - update
 - apiGroups:
-  - objectstore.simplyblock.io
-  resources:
-  - objectstores
-  - s3buckets
-  verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - objectstore.simplyblock.io
-  resources:
-  - objectstores/status
-  - s3buckets/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - objectstore.simplyblock.io
-  resources:
-  - s3buckets/finalizers
-  verbs:
-  - update
-- apiGroups:
   - operator.openshift.io
   resources:
   - networks
@@ -17415,6 +17389,7 @@ rules:
   - replicationpairs/finalizers
   - replicationpolicies/finalizers
   - replicationslots/finalizers
+  - s3buckets/finalizers
   - simplyblockdrivers/finalizers
   - storagebackupops/finalizers
   - storagebackuppolicies/finalizers
@@ -17442,12 +17417,14 @@ rules:
   - controlplaneops/status
   - controlplanes/status
   - nfsexports/status
+  - objectstores/status
   - operatorops/status
   - persistentvolumeops/status
   - replicationops/status
   - replicationpairs/status
   - replicationpolicies/status
   - replicationslots/status
+  - s3buckets/status
   - simplyblockdrivers/status
   - storagebackupops/status
   - storagebackuppolicies/status
@@ -17486,6 +17463,8 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - objectstores
+  - s3buckets
   - storagefenceremediations
   verbs:
   - get
