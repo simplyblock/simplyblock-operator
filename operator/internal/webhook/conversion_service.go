@@ -34,6 +34,11 @@ type conversionServiceReconciler struct {
 	client    client.Client
 	apiReader client.Reader
 	namespace string
+	// ca is the bundle to keep on the CRDs. Nil leaves the bundle alone, which
+	// is right wherever a rotator or the cert-manager provisioner owns it. The
+	// standalone conversion webhook runs neither, and the CRDs of an upgrade
+	// arrive after it started, so it has to carry its own.
+	ca []byte
 	// interval is how often the correction is re-applied. Zero means
 	// conversionServiceInterval.
 	interval time.Duration
@@ -82,20 +87,22 @@ func (r *conversionServiceReconciler) Start(ctx context.Context) error {
 }
 
 // reconcileOnce points every converted CRD's conversion webhook at this
-// operator's namespace. The CA is left alone: under the self-signed provider it
-// is cert-controller's rotator that owns the bundle, and under cert-manager the
-// provisioner rewrites it on every sync.
+// operator's namespace, and restores the CA when the reconciler carries one.
+// Without one the bundle is left alone: under the self-signed provider it is
+// cert-controller's rotator that owns it, and under cert-manager the provisioner
+// rewrites it on every sync.
 func (r *conversionServiceReconciler) reconcileOnce(ctx context.Context) error {
-	return injectConversionTrust(ctx, r.client, r.apiReader, nil, r.namespace)
+	return injectConversionTrust(ctx, r.client, r.apiReader, r.ca, r.namespace)
 }
 
 // SetupConversionServiceReference adds the correction to the manager. It runs
 // under both TLS providers, because the namespace in the shipped manifest is
-// wrong for the same reason under either.
-func SetupConversionServiceReference(mgr ctrl.Manager, namespace string) error {
+// wrong for the same reason under either. A non-nil ca is also kept on the CRDs.
+func SetupConversionServiceReference(mgr ctrl.Manager, namespace string, ca []byte) error {
 	return mgr.Add(&conversionServiceReconciler{
 		client:    mgr.GetClient(),
 		apiReader: mgr.GetAPIReader(),
 		namespace: namespace,
+		ca:        ca,
 	})
 }
