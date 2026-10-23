@@ -43,6 +43,7 @@ spec:
       containers:
         - name: graylog
           image: "{{ .Values.controlplane.observability.graylog.repository }}:{{ .Values.controlplane.observability.graylog.tag }}"
+          imagePullPolicy: {{ .Values.controlplane.observability.graylog.pullPolicy }}
           command: ["/usr/bin/tini", "--"]
           args: ["wait-for-it", "opensearch-cluster-master:9200", "--", "/docker-entrypoint.sh"]
           env:
@@ -158,6 +159,7 @@ spec:
       containers:
         - name: thanos-store
           image: "{{ .Values.controlplane.observability.thanos.repository }}:{{ .Values.controlplane.observability.thanos.tag }}"
+          imagePullPolicy: {{ .Values.controlplane.observability.thanos.pullPolicy }}
           args:
             - store
             - --grpc-address=0.0.0.0:10901
@@ -185,6 +187,7 @@ spec:
 
         - name: thanos-query
           image: "{{ .Values.controlplane.observability.thanos.repository }}:{{ .Values.controlplane.observability.thanos.tag }}"
+          imagePullPolicy: {{ .Values.controlplane.observability.thanos.pullPolicy }}
           args:
             - query
             - --grpc-address=0.0.0.0:10911
@@ -212,6 +215,7 @@ spec:
 
         - name: thanos-compactor
           image: "{{ .Values.controlplane.observability.thanos.repository }}:{{ .Values.controlplane.observability.thanos.tag }}"
+          imagePullPolicy: {{ .Values.controlplane.observability.thanos.pullPolicy }}
           args:
             - compact
             - --http-address=0.0.0.0:10922
@@ -288,6 +292,7 @@ spec:
       containers:
         - name: grafana
           image: "{{ .Values.controlplane.observability.grafana.repository }}:{{ .Values.controlplane.observability.grafana.tag }}"
+          imagePullPolicy: {{ .Values.controlplane.observability.grafana.pullPolicy }}
           env:
             - name: GF_SECURITY_ADMIN_USER
               value: "admin"
