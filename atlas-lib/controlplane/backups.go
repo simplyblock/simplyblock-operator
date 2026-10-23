@@ -29,10 +29,13 @@ import (
 // the only place the id appears.
 const backupPolicyIDHeader = "X-Policy-Id"
 
-// AttachTargetVolume is the target type a backup policy is attached to. The
-// control plane's attach endpoint takes a type and an id so that it can grow
-// other targets; a volume is the only one this product uses.
-const AttachTargetVolume = "lvol"
+// AttachTargetVolume and AttachTargetConsistencyGroup are the target types a
+// backup policy is attached to. The control plane's attach endpoint takes a type
+// and an id: a volume is backed up on its own, a consistency group as one unit.
+const (
+	AttachTargetVolume           = "lvol"
+	AttachTargetConsistencyGroup = "consistency_group"
+)
 
 // Backup is one copy of one volume in a cluster's store.
 //
@@ -66,24 +69,49 @@ type Backup struct {
 	SizeBytes    int64
 	CreatedAt    time.Time
 	CompletedAt  time.Time
+
+	// GroupBackupID and GroupSeq tie this copy to a consistency-group backup when
+	// it is a member of one; GroupBackupID is empty for a standalone backup. The
+	// id is the group backup's composite "cluster_id/uuid" and GroupSeq is its
+	// generation. The operator mirrors these onto StorageBackup.status.source.group.
+	GroupBackupID string
+	GroupSeq      int64
 }
 
 func backupFromDTO(d cpapi.BackupDTO) Backup {
 	return Backup{
-		ID:           d.Id.String(),
-		S3ID:         int64(d.S3Id),
-		LvolID:       d.LvolId.String(),
-		LvolName:     d.LvolName,
-		SnapshotID:   d.SnapshotId.String(),
-		SnapshotName: d.SnapshotName,
-		NodeID:       d.NodeId.String(),
-		Status:       d.Status,
-		PrevBackupID: uuidOrEmpty(d.PrevBackupId),
-		Encrypted:    d.Encrypted,
-		SizeBytes:    int64(d.Size),
-		CreatedAt:    unixSeconds(d.CreatedAt),
-		CompletedAt:  unixSeconds(d.CompletedAt),
+		ID:            d.Id.String(),
+		S3ID:          int64(d.S3Id),
+		LvolID:        d.LvolId.String(),
+		LvolName:      d.LvolName,
+		SnapshotID:    d.SnapshotId.String(),
+		SnapshotName:  d.SnapshotName,
+		NodeID:        d.NodeId.String(),
+		Status:        d.Status,
+		PrevBackupID:  uuidOrEmpty(d.PrevBackupId),
+		Encrypted:     d.Encrypted,
+		SizeBytes:     int64(d.Size),
+		CreatedAt:     unixSeconds(d.CreatedAt),
+		CompletedAt:   unixSeconds(d.CompletedAt),
+		GroupBackupID: stringOrEmpty(d.GroupBackupId),
+		GroupSeq:      int64(intOrZero(d.GroupSeq)),
 	}
+}
+
+// stringOrEmpty reads an optional string field as "" when it was not sent.
+func stringOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// intOrZero reads an optional integer field as 0 when it was not sent.
+func intOrZero(n *int) int {
+	if n == nil {
+		return 0
+	}
+	return *n
 }
 
 // uuidOrEmpty renders an optional identifier, reading an absent one as the empty
@@ -327,6 +355,26 @@ func (c *Client) AttachBackupPolicy(ctx context.Context, clusterID, policyID, vo
 	return nil
 }
 
+// AttachBackupPolicyToConsistencyGroup puts a whole consistency group under a
+// policy, so the control plane backs the group up as one unit on the policy's
+// schedule. groupID is the group's own composite id.
+func (c *Client) AttachBackupPolicyToConsistencyGroup(ctx context.Context, clusterID, policyID, groupID string) error {
+	cluster, policy, err := parseIDs(clusterID, policyID)
+	if err != nil {
+		return err
+	}
+	what := fmt.Sprintf("attach backup policy %s to consistency group %s", policyID, groupID)
+	resp, err := c.api.ClustersBackupPoliciesAttachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdAttachPostWithResponse(
+		ctx, cluster, policy, cpapi.UnderscoreAttachParams{TargetType: AttachTargetConsistencyGroup, TargetId: groupID})
+	if err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	if code := resp.StatusCode(); code < 200 || code >= 300 {
+		return respError(what, code, resp.Body)
+	}
+	return nil
+}
+
 // DetachBackupPolicy takes a volume back out from under a policy. It stops new
 // copies being taken and deletes none of the existing ones.
 //
@@ -404,6 +452,91 @@ func (c *Client) RestoreBackup(
 		return "", fmt.Errorf("%s: the response named no restored volume: %w", what, errs.ErrInvalidResponse)
 	}
 	return restored.LvolID, nil
+}
+
+// RestoreGroupBackupParams are the inputs for restoring a whole consistency-group
+// backup into a new consistency group.
+type RestoreGroupBackupParams struct {
+	// GroupBackupID is the control-plane group backup to restore, as a bare UUID
+	// or the "<cluster>/<UUID>" composite the group-backup-id label carries.
+	GroupBackupID string
+	// IntoGroupName is the NEW consistency group the restored volumes form. It
+	// must not already exist: a group restore always produces a new group.
+	IntoGroupName string
+	// Pool is the pool to restore every member into, by name.
+	Pool string
+	// TargetNodeID pins every restored volume to one storage node. Empty lets the
+	// control plane choose, then pins the rest of the members to the first's node.
+	TargetNodeID string
+}
+
+// RestoredGroupMember is one volume a group restore produced: its backend id and
+// the name of the source member it was restored from, which the caller forms the
+// restored claim's name from and uses to tell the members apart.
+type RestoredGroupMember struct {
+	LvolID     string
+	MemberName string
+}
+
+// RestoreGroupBackup asks the control plane to read every member of a group
+// backup out of the store into a new consistency group of logical volumes, all
+// or nothing, and returns the new group's id and one entry per restored member
+// volume.
+//
+// The call returns as soon as the restore is accepted; each member volume
+// recovers afterward and reports its own progress, the same as a single-volume
+// restore. The endpoint declares no response model, so the body is decoded here.
+func (c *Client) RestoreGroupBackup(
+	ctx context.Context, clusterID string, params RestoreGroupBackupParams,
+) (string, []RestoredGroupMember, error) {
+	cluster, err := parseUUID("cluster id", clusterID)
+	if err != nil {
+		return "", nil, err
+	}
+	// The endpoint keys on the UUID. Callers carry the id as a bare UUID or the
+	// composite the label uses, so take the last path segment before parsing.
+	id := params.GroupBackupID
+	if i := strings.LastIndex(id, "/"); i >= 0 {
+		id = id[i+1:]
+	}
+	groupBackup, err := parseUUID("group backup id", id)
+	if err != nil {
+		return "", nil, err
+	}
+
+	body := cpapi.UnderscoreGroupRestoreParams{
+		IntoGroupName: params.IntoGroupName,
+		Pool:          params.Pool,
+	}
+	if params.TargetNodeID != "" {
+		body.TargetNodeId = ptr.To(params.TargetNodeID)
+	}
+
+	what := "restore group backup " + params.GroupBackupID
+	resp, err := c.api.ClustersBackupsGroupsRestoreApiV2ClustersClusterIdBackupsGroupsGroupBackupIdRestorePostWithResponse(
+		ctx, cluster, groupBackup, body)
+	if err != nil {
+		return "", nil, fmt.Errorf("%s: %w", what, err)
+	}
+	restored, err := decodeBody[struct {
+		GroupID string `json:"group_id"`
+		Members []struct {
+			LvolID     string `json:"lvol_id"`
+			MemberName string `json:"member_name"`
+		} `json:"members"`
+	}](what, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return "", nil, err
+	}
+	if restored.GroupID == "" || len(restored.Members) == 0 {
+		return "", nil, fmt.Errorf(
+			"%s: the response named no restored group or volumes: %w", what, errs.ErrInvalidResponse)
+	}
+	members := make([]RestoredGroupMember, len(restored.Members))
+	for i, m := range restored.Members {
+		members[i] = RestoredGroupMember{LvolID: m.LvolID, MemberName: m.MemberName}
+	}
+	return restored.GroupID, members, nil
 }
 
 // okOrGone accepts a success and a 404 alike, which is what makes a delete

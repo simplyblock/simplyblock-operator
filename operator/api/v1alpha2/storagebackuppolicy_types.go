@@ -27,10 +27,11 @@ const (
 )
 
 // StorageBackupPolicySpec schedules and retains the backups of the claims it
-// selects. The operator reconciles it into the control plane and reports what
-// the control plane did; it does not run the schedule itself, because a backup
-// schedule that stopped when the operator was down would be one nobody could
-// rely on.
+// selects, or of one consistency group it names. The operator reconciles it into
+// the control plane and reports what the control plane did; it does not run the
+// schedule itself, because a backup schedule that stopped when the operator was
+// down would be one nobody could rely on.
+// +kubebuilder:validation:XValidation:rule="!(has(self.claimSelector) && has(self.consistencyGroupName))",message="set at most one of claimSelector and consistencyGroupName: a policy backs up either independent claims or one whole consistency group"
 type StorageBackupPolicySpec struct {
 	// ClusterRef names the StorageCluster whose backup target this policy writes
 	// to.
@@ -51,6 +52,18 @@ type StorageBackupPolicySpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Claim Selector"
 	// +optional
 	ClaimSelector *metav1.LabelSelector `json:"claimSelector,omitempty"`
+
+	// ConsistencyGroupName names the consistency group this policy backs up as
+	// one unit, resolved in ClusterRef's cluster. When set, the policy takes one
+	// crash-consistent generation of the group per scheduled interval and backs
+	// up every member together, rather than backing up selected claims
+	// independently. The group is named rather than selected by label because the
+	// membership label's key is constant and only its value, the group name,
+	// varies. Set at most one of this and ClaimSelector.
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Consistency Group Name"
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	ConsistencyGroupName string `json:"consistencyGroupName,omitempty"`
 
 	// Schedule is the tiered schedule the control plane runs the policy on, as a
 	// space-separated list of interval,keep_count pairs ("15m,4 60m,11 24h,7").

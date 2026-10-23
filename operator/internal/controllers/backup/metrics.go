@@ -106,6 +106,19 @@ var (
 		},
 		[]string{"cluster", "action"},
 	)
+
+	// A group restore's wall-clock to all-members-online, the recovery time
+	// objective for a whole consistency group rather than one volume. Separate
+	// from the per-operation histogram above so a group restore's cost is legible
+	// on its own, which is what a disaster-recovery drill reports against.
+	groupRestoreDurationSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "simplyblock_group_restore_duration_seconds",
+			Help:    "How long a consistency-group restore took from acquiring its lock to every member volume being online and bound.",
+			Buckets: backupDurationBuckets,
+		},
+		[]string{"cluster"},
+	)
 )
 
 func init() {
@@ -118,5 +131,6 @@ func init() {
 		policyAttachedClaimsCount,
 		backupOperationsTotal,
 		backupOperationDurationSeconds,
+		groupRestoreDurationSeconds,
 	)
 }

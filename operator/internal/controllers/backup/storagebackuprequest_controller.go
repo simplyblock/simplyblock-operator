@@ -185,20 +185,29 @@ func (r *StorageBackupRequestReconciler) resolve(
 		return nil, refused("volume %s names its pool %q, not its identifier", pv.Name, handle.PoolRef)
 	}
 
-	var clusters simplyblockv1alpha2.StorageClusterList
-	if err := r.List(ctx, &clusters); err != nil {
+	if err := clusterMayBackUp(ctx, r.Client, handle.ClusterID); err != nil {
 		return nil, err
 	}
+	return &requestSubject{claim: name, volume: pv.Name, fsType: pv.Spec.CSI.FSType, handle: handle}, nil
+}
+
+// clusterMayBackUp holds a request until a StorageCluster in any namespace
+// reports the cluster and it has a backup location configured.
+func clusterMayBackUp(ctx context.Context, c client.Reader, clusterID string) error {
+	var clusters simplyblockv1alpha2.StorageClusterList
+	if err := c.List(ctx, &clusters); err != nil {
+		return err
+	}
 	for _, c := range clusters.Items {
-		if c.Status.UUID != handle.ClusterID {
+		if c.Status.UUID != clusterID {
 			continue
 		}
 		if c.Spec.Backup == nil {
-			return nil, blocked("cluster %s has no backup location configured", c.Name)
+			return blocked("cluster %s has no backup location configured", c.Name)
 		}
-		return &requestSubject{claim: name, volume: pv.Name, fsType: pv.Spec.CSI.FSType, handle: handle}, nil
+		return nil
 	}
-	return nil, blocked("no StorageCluster reports cluster %s", handle.ClusterID)
+	return blocked("no StorageCluster reports cluster %s", clusterID)
 }
 
 // requestBackup asks for the backup and records its id before anything else. The

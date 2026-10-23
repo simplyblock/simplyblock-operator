@@ -359,6 +359,47 @@ func TestStorageBackupStashIsRewrittenRatherThanAccumulated(t *testing.T) {
 	}
 }
 
+// The hub's status.source.group, which this version has no field for, survives a
+// trip down to this shape and back. A v1alpha1 client that reads a group-member
+// backup a v1alpha2 controller wrote and writes it back would otherwise strip the
+// group identity off a copy that is still a member.
+func TestStorageBackupCarriesTheHubSourceGroupThroughThisVersion(t *testing.T) {
+	hub := v1alpha2.StorageBackup{
+		Spec: v1alpha2.StorageBackupSpec{ClusterRef: testCluster},
+		Status: v1alpha2.StorageBackupStatus{
+			Phase: v1alpha2.StorageBackupPhaseAvailable,
+			Source: &v1alpha2.BackupSource{
+				ClaimName: "app-data",
+				Group: &v1alpha2.BackupGroup{
+					GroupBackupID:        "cluster-1/gb-1",
+					ConsistencyGroupName: "gitea",
+					Generation:           7,
+					MemberCount:          3,
+				},
+			},
+		},
+	}
+
+	var spoke StorageBackup
+	if err := spoke.ConvertFrom(&hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	if _, stashed := spoke.Annotations["storage.simplyblock.io/conversion-status.source.group"]; !stashed {
+		t.Fatalf("status.source.group was dropped rather than stashed: %v", spoke.Annotations)
+	}
+
+	var back v1alpha2.StorageBackup
+	if err := spoke.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	if back.Status.Source == nil {
+		t.Fatalf("status.source was lost on the way back up")
+	}
+	if diff := cmp.Diff(hub.Status.Source.Group, back.Status.Source.Group); diff != "" {
+		t.Errorf("round trip changed status.source.group (-before +after):\n%s", diff)
+	}
+}
+
 // storedBackup is a fully populated v1alpha1 object, so that a field added to
 // either version without a conversion shows up as a diff rather than as a zero
 // that happened to match.

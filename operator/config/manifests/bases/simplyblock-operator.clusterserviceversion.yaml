@@ -252,6 +252,34 @@ spec:
       kind: StorageBackupPolicy
       name: storagebackuppolicies.storage.simplyblock.io
       version: v1alpha2
+    - description: StorageGroupBackup is one backup of a whole consistency group,
+        taken on demand. One crash-consistent generation, every member backed up,
+        committed as one unit. The member copies are recorded as StorageBackups
+        beside it, and deleting it deletes no copy and no record.
+      displayName: Storage Group Backup
+      kind: StorageGroupBackup
+      name: storagegroupbackups.storage.simplyblock.io
+      specDescriptors:
+      - description: ConsistencyGroupName is the group whose member claims are backed
+          up, named by the storage.simplyblock.io/consistency-group label.
+        displayName: Consistency Group Name
+        path: source.consistencyGroupName
+      statusDescriptors:
+      - description: GroupBackupID is the control plane's identifier for the group
+          backup, which a StorageBackupOps restore names.
+        displayName: Group Backup ID
+        path: groupBackupID
+      - description: MemberCount is how many member copies must complete before the
+          group backup is Available.
+        displayName: Member Count
+        path: memberCount
+      - description: Message is the reason the phase is what it is.
+        displayName: Message
+        path: message
+      - description: Phase is where the group backup has got to.
+        displayName: Phase
+        path: phase
+      version: v1alpha2
     - description: StorageClusterOps is the Schema for the storageclusterops API.
       displayName: Storage Cluster Ops
       kind: StorageClusterOps

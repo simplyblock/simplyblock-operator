@@ -37,10 +37,11 @@ import (
 type step = simplyblockv1alpha2.StorageBackupOpsStep
 
 const (
-	stepValidating     = simplyblockv1alpha2.StorageBackupOpsStepValidating
-	stepRestoring      = simplyblockv1alpha2.StorageBackupOpsStepRestoring
-	stepAwaitingVolume = simplyblockv1alpha2.StorageBackupOpsStepAwaitingVolume
-	stepBinding        = simplyblockv1alpha2.StorageBackupOpsStepBinding
+	stepValidating      = simplyblockv1alpha2.StorageBackupOpsStepValidating
+	stepRestoring       = simplyblockv1alpha2.StorageBackupOpsStepRestoring
+	stepAwaitingVolume  = simplyblockv1alpha2.StorageBackupOpsStepAwaitingVolume
+	stepAwaitingVolumes = simplyblockv1alpha2.StorageBackupOpsStepAwaitingVolumes
+	stepBinding         = simplyblockv1alpha2.StorageBackupOpsStepBinding
 )
 
 // actionRestore is the MultiConfig key for the one action this kind carries.
@@ -79,13 +80,20 @@ func restoreGraph() statemachine.MultiConfig[step] {
 					Abortable: true,
 					OnEnter:   deadline(validatingDeadline),
 				},
+				// Restoring branches on whether the operation restores one backup
+				// or a whole group: a single restore waits on its one volume at
+				// AwaitingVolume, a group restore waits on all N at AwaitingVolumes.
+				// The choice between the two edges is made by nextStep, from
+				// spec.groupBackupID, because the edges are otherwise indistinguishable
+				// to the line-walking firstSuccessor.
 				stepRestoring: {
-					To:        []step{stepAwaitingVolume},
+					To:        []step{stepAwaitingVolume, stepAwaitingVolumes},
 					Abortable: true,
 					OnEnter:   deadline(restoringDeadline),
 				},
-				stepAwaitingVolume: {To: []step{stepBinding}, OnEnter: deadline(awaitingVolumeDeadline)},
-				stepBinding:        {OnEnter: deadline(bindingDeadline)},
+				stepAwaitingVolume:  {To: []step{stepBinding}, OnEnter: deadline(awaitingVolumeDeadline)},
+				stepAwaitingVolumes: {To: []step{stepBinding}, OnEnter: deadline(awaitingVolumeDeadline)},
+				stepBinding:         {OnEnter: deadline(bindingDeadline)},
 			},
 		},
 	}

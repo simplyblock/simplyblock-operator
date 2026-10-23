@@ -825,7 +825,8 @@ func (r *BackupRestoreReconciler) ensurePV(
 
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: pvName,
+			Name:        pvName,
+			Annotations: map[string]string{ProvisionedByAnnotation: utils.CSIProvisioner},
 		},
 		Spec: corev1.PersistentVolumeSpec{
 			StorageClassName:              storageClassName,
