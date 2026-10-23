@@ -234,26 +234,44 @@ openapi-sync: openapi-checkout $(OPENAPI_STAMP) ## Re-export the spec from SBCLI
 # The modules go.work lists, read from the workspace itself so a module added to
 # it is covered without touching this file. A module missing from go.work is
 # skipped by both targets below.
-GO_WORK_MODULES = $(shell go list -m -f '{{.Dir}}')
+#
+# A shell fragment rather than $(shell ...), because make discards the exit
+# status of $(shell ...): a workspace that cannot be loaded would list nothing,
+# and the target would edit go.work alone and report success. Each recipe runs
+# it before changing anything, and stops when the listing fails or is empty.
+GO_WORK_MODULES_SH = mods=$$(go list -m -f '{{.Dir}}') && test -n "$$mods" || { \
+	  echo "cannot list the modules in go.work; nothing was changed"; \
+	  exit 1; }
 
 .PHONY: go-sync go-version
 go-sync: ## Align the workspace modules' dependency versions, then tidy each module.
-	go work sync
-	@for mod in $(GO_WORK_MODULES); do \
+	@$(GO_WORK_MODULES_SH); \
+	go work sync || exit 1; \
+	for mod in $$mods; do \
 	  echo "go mod tidy: $$mod"; \
 	  (cd $$mod && go mod tidy) || exit 1; \
 	done
 
 # The go line is set in each module and in go.work, the toolchain line only in
 # go.work: the workspace picks the toolchain for every module it builds.
+#
+# The toolchain is fetched before anything is edited, so a version that does not
+# exist is refused up front. The edits run with GOTOOLCHAIN=local: once go.work
+# names the new version, any other go command would switch to that toolchain
+# first, and a failed switch would leave the edit half done.
 go-version: ## Set the Go version of go.work and every workspace module (GO_VERSION=X.Y.Z).
 	@echo "$(GO_VERSION)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { \
 	  echo "GO_VERSION must be X.Y.Z, got '$(GO_VERSION)': make go-version GO_VERSION=1.26.10"; \
 	  exit 1; }
-	go work edit -go=$(GO_VERSION) -toolchain=go$(GO_VERSION)
-	@for mod in $(GO_WORK_MODULES); do \
+	@GOTOOLCHAIN=go$(GO_VERSION) go version >/dev/null || { \
+	  echo "toolchain go$(GO_VERSION) is not available; nothing was changed"; \
+	  exit 1; }
+	@$(GO_WORK_MODULES_SH); \
+	echo "go work edit -go=$(GO_VERSION) -toolchain=go$(GO_VERSION)"; \
+	GOTOOLCHAIN=local go work edit -go=$(GO_VERSION) -toolchain=go$(GO_VERSION) || exit 1; \
+	for mod in $$mods; do \
 	  echo "go mod edit -go=$(GO_VERSION): $$mod"; \
-	  go mod edit -go=$(GO_VERSION) $$mod/go.mod || exit 1; \
+	  GOTOOLCHAIN=local go mod edit -go=$(GO_VERSION) $$mod/go.mod || exit 1; \
 	done
 
 # ─── help ─────────────────────────────────────────────────────────────────
