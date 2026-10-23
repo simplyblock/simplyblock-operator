@@ -11,6 +11,7 @@ name: "Repo: Release"
 #     └─ package-csi-chart ─────────────────────────────────────────┴─ release-helm (charts branch, FTPS publish)
 #
 #   build-operator ─ release-control-center (Control Center image; nothing waits on it)
+#   build-atlas ─ build-fleet (fleet manager + agent image; nothing waits on it)
 
 on:
   push:
@@ -76,6 +77,16 @@ jobs:
     name: Build operator
     needs: [setup, build-atlas]
     uses: ./.github/workflows/operator_build.yaml
+    with:
+      version: ${{ needs.setup.outputs.version }}
+    secrets: inherit
+
+  # The fleet manager and the member agent. The image resolves atlas-lib and
+  # the operator from the same checkout, so it waits on build-atlas only.
+  build-fleet:
+    name: Build fleet
+    needs: [setup, build-atlas]
+    uses: ./.github/workflows/fleet_build.yaml
     with:
       version: ${{ needs.setup.outputs.version }}
     secrets: inherit
