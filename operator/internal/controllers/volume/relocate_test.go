@@ -660,3 +660,87 @@ func TestTheCutoverIsAwaitedBeforeAnyPathIsAttached(t *testing.T) {
 			ops.Status.Step.State, len(pathJobs(t, r)))
 	}
 }
+
+// cutOverAlone is the control plane releasing a cutover on its own timeout:
+// the target serves the volume, whatever the consuming nodes hold.
+func (f *fakeRelocation) cutOverAlone(volume string) { f.cutOver(volume) }
+
+// assertMovedWithoutPaths asserts the operation failed naming the consuming
+// node, after recording where the volume went.
+func assertMovedWithoutPaths(t *testing.T, r *PersistentVolumeOpsReconciler, ops *simplyblockv1alpha2.PersistentVolumeOps) {
+	t.Helper()
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed ||
+		!strings.Contains(ops.Status.Message, relocateConsumer) {
+		t.Errorf("phase %s, message %q; want Failed naming %s", ops.Status.Phase, ops.Status.Message, relocateConsumer)
+	}
+	if !strings.Contains(eventsOf(r), ReasonCutoverWithoutPaths) {
+		t.Error("no CutoverWithoutPaths event")
+	}
+	var pv corev1.PersistentVolume
+	if err := r.Get(context.Background(), types.NamespacedName{Name: testPVName}, &pv); err != nil {
+		t.Fatal(err)
+	}
+	if pv.Annotations[RelocatedToAnnotation] == "" {
+		t.Error("the volume moved and was not marked, so the driver cannot follow it")
+	}
+}
+
+// I-80: the control plane cutting a volume over on its own timeout before any
+// path Job started fails the operation, naming the consuming node, after the
+// volume is marked.
+func TestACutoverBeforeThePathsWereAttachedFailsNamingTheNode(t *testing.T) {
+	api := relocatingSubsystem()
+	r := relocateReconciler(t, api)
+	passesUntil(t, r, stepReplicating)
+	runPass(t, r)
+	api.inSync()
+	passesUntil(t, r, stepAwaitingCutover)
+	runPass(t, r)
+
+	api.cutOverAlone(testVolumeID)
+	ops := passesUntil(t, r, "never")
+
+	assertMovedWithoutPaths(t, r, ops)
+}
+
+// I-81: the control plane cutting a volume over on its own timeout while a
+// node's path Job had failed fails the operation, naming that node.
+func TestACutoverPastAFailedPathJobFailsNamingTheNode(t *testing.T) {
+	api := relocatingSubsystem()
+	r := relocateReconciler(t, api)
+	passesUntil(t, r, stepReplicating)
+	runPass(t, r)
+	api.inSync()
+	passesUntil(t, r, stepAwaitingCutover)
+	api.cutoverPending(testVolumeID)
+	passesUntil(t, r, stepAttachingPaths)
+	runPass(t, r)
+	finishJobs(t, r, batchv1.JobFailed)
+	runPass(t, r)
+
+	api.cutOverAlone(testVolumeID)
+	ops := passesUntil(t, r, "never")
+
+	assertMovedWithoutPaths(t, r, ops)
+}
+
+// I-82: a cutover the control plane released on its own timeout, of a volume
+// nothing consumes, leaves no node without paths and succeeds.
+func TestACutoverOfAnUnconsumedVolumeSucceedsWithoutPaths(t *testing.T) {
+	api := relocatingSubsystem()
+	api.init()
+	objects := relocateWorld()
+	objects = append(objects[:2], objects[3:]...)
+	r := testReconciler(t, api, objects...)
+	passesUntil(t, r, stepReplicating)
+	runPass(t, r)
+	api.inSync()
+	passesUntil(t, r, stepAwaitingCutover)
+
+	api.cutOverAlone(testVolumeID)
+	ops := passesUntil(t, r, "never")
+
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+		t.Errorf("phase %s (%s), want Succeeded: no node consumed the volume", ops.Status.Phase, ops.Status.Message)
+	}
+}

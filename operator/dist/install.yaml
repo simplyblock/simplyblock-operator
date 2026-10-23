@@ -3988,6 +3988,16 @@ spec:
                       Committed is set before the first commit is requested. It refuses an
                       abort from then on, because a committed cutover cannot be taken back.
                     type: boolean
+                  nodesMissingPaths:
+                    description: |-
+                      NodesMissingPaths are the consuming nodes that did not hold the target's
+                      paths when the control plane cut a volume over without waiting for them.
+                      Pods on these nodes lose the volume until they are restarted, and the
+                      operation fails once the volume's new location is recorded.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
                   pathJobs:
                     description: |-
                       PathJobs are the Jobs that connect the target's paths on the nodes

@@ -485,6 +485,14 @@ type RelocateStatus struct {
 	// consuming the subsystem, one per node.
 	// +optional
 	PathJobs []ValidationJob `json:"pathJobs,omitempty"`
+
+	// NodesMissingPaths are the consuming nodes that did not hold the target's
+	// paths when the control plane cut a volume over without waiting for them.
+	// Pods on these nodes lose the volume until they are restarted, and the
+	// operation fails once the volume's new location is recorded.
+	// +listType=set
+	// +optional
+	NodesMissingPaths []string `json:"nodesMissingPaths,omitempty"`
 }
 
 // PersistentVolumeOpsStatus is the observed state of one volume operation.

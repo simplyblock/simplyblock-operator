@@ -23,7 +23,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -449,7 +451,8 @@ func (r *PersistentVolumeOpsReconciler) cutoverProgress(
 // attachTargetPaths connects the target's paths on every node consuming the
 // subsystem while the volume's cutover is pending, one Job per node. A failing
 // Job is replaced and the cutover not released; the control plane proceeds
-// alone after its own timeout.
+// alone after its own timeout, and the nodes left without the target's paths
+// then are recorded.
 func (r *PersistentVolumeOpsReconciler) attachTargetPaths(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
 ) (bool, error) {
@@ -464,7 +467,7 @@ func (r *PersistentVolumeOpsReconciler) attachTargetPaths(
 	case err != nil:
 		return false, fmt.Errorf("replication relationship of volume %s: %w", v.VolumeUUID, err)
 	case servedByTarget(rel):
-		return true, nil
+		return true, r.recordNodesMissingPaths(ctx, ops, v.VolumeUUID)
 	case rel.State != controlplane.RelationshipCutoverPending:
 		return false, nil
 	}
@@ -473,6 +476,51 @@ func (r *PersistentVolumeOpsReconciler) attachTargetPaths(
 		return false, r.startPathJobs(ctx, ops, subject, h)
 	}
 	return r.pathJobsPassed(ctx, ops, subject, h)
+}
+
+// recordNodesMissingPaths records the consuming nodes that do not hold the
+// target's paths although the control plane cut the volume over: every
+// consumer when no path Job was started, otherwise the nodes whose Job has not
+// succeeded.
+func (r *PersistentVolumeOpsReconciler) recordNodesMissingPaths(
+	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, volumeUUID string,
+) error {
+	var missing []string
+	if ops.Status.Relocate.PathJobs == nil {
+		nodes, err := r.relocationConsumers(ctx, ops)
+		if err != nil {
+			return err
+		}
+		missing = nodes
+	} else {
+		for _, recorded := range ops.Status.Relocate.PathJobs {
+			if recorded.Succeeded {
+				continue
+			}
+			var job batchv1.Job
+			err := r.Get(ctx, client.ObjectKey{Namespace: recorded.Namespace, Name: recorded.Name}, &job)
+			if err != nil && !apierrors.IsNotFound(err) {
+				return err
+			}
+			if err == nil && jobOutcome(&job) == jobSucceeded {
+				continue
+			}
+			missing = append(missing, recorded.Node)
+		}
+	}
+	missing = slices.DeleteFunc(missing, func(node string) bool {
+		return slices.Contains(ops.Status.Relocate.NodesMissingPaths, node)
+	})
+	if len(missing) == 0 {
+		return nil
+	}
+	r.event(ops, corev1.EventTypeWarning, ReasonCutoverWithoutPaths,
+		"The control plane cut volume %s over before nodes %s held the target's paths; "+
+			"their pods lose the volume until they are restarted", volumeUUID, strings.Join(missing, ", "))
+	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.PersistentVolumeOpsStatus) {
+		status.Relocate.NodesMissingPaths = append(status.Relocate.NodesMissingPaths, missing...)
+		sort.Strings(status.Relocate.NodesMissingPaths)
+	})
 }
 
 // relocationConsumers are the nodes running a pod that mounts a moving
@@ -674,7 +722,10 @@ func (r *PersistentVolumeOpsReconciler) proceed(
 
 // verifyRelocation waits for every cutover task, asserts that each moved
 // volume's handle resolves to the target, records the new handle on its
-// PersistentVolume, and deletes the path Jobs.
+// PersistentVolume, and deletes the path Jobs. A move that left consuming
+// nodes without the target's paths fails after that, naming them: the volume
+// did move, and the driver follows it from its mark, but the pods on those
+// nodes lost it.
 func (r *PersistentVolumeOpsReconciler) verifyRelocation(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, _ *subject,
 ) (bool, error) {
@@ -708,7 +759,15 @@ func (r *PersistentVolumeOpsReconciler) verifyRelocation(
 			return false, err
 		}
 	}
-	return true, r.deletePathJobs(ctx, ops)
+	if err := r.deletePathJobs(ctx, ops); err != nil {
+		return false, err
+	}
+	if missing := relocate.NodesMissingPaths; len(missing) > 0 {
+		return false, fatalf("%s: the volume moved to member %s, but the control plane cut it over before "+
+			"nodes %s held the target's paths; the pods on them lose the volume until they are restarted",
+			ReasonCutoverWithoutPaths, ops.Spec.Relocate.TargetClusterRef, strings.Join(missing, ", "))
+	}
+	return true, nil
 }
 
 // markRelocated resolves the PersistentVolume's handle through the control

@@ -92,6 +92,12 @@ const (
 	// retried.
 	ReasonPathAttachHeld = "PathAttachHeld"
 
+	// ReasonCutoverWithoutPaths is the control plane cutting a volume over on
+	// its own timeout while consuming nodes did not hold the target's paths.
+	// Their pods lose the volume until they are restarted, and the operation
+	// fails once the volume is marked.
+	ReasonCutoverWithoutPaths = "CutoverWithoutPaths"
+
 	// ReasonRelocationAbortIgnored is an abort that arrived after the commit.
 	// A committed cutover cannot be taken back, so the move carries on.
 	ReasonRelocationAbortIgnored = "RelocationAbortIgnored"
