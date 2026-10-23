@@ -36,6 +36,10 @@ spec:
       name: ETA
       priority: 1
       type: integer
+    - jsonPath: .status.forecast.converging
+      name: Converging
+      priority: 1
+      type: boolean
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -172,12 +176,32 @@ spec:
                     description: CompletesAt is the forecast completion time.
                     format: date-time
                     type: string
+                  converging:
+                    description: |-
+                      Converging is false when some source lvstore's volumes are written at
+                      least about as fast as it replicates them: their lag never closes, no
+                      cutover can start, and ETASeconds and CompletesAt are left unset. Unset
+                      when the storage control plane does not report the verdict.
+                    type: boolean
+                  dirtyBytesPerSec:
+                    description: |-
+                      DirtyBytesPerSec is the rate the clients write to the volumes still
+                      being copied, which replication has to outrun.
+                    format: int64
+                    type: integer
                   etaSeconds:
                     description: |-
                       ETASeconds is the forecast time, in seconds, until the last volume has
                       cut over.
                     format: int64
                     type: integer
+                  notConvergingLVS:
+                    description: |-
+                      NotConvergingLVS names the source lvstores whose volumes are written
+                      faster than they replicate.
+                    items:
+                      type: string
+                    type: array
                   throughputBytesPerSec:
                     description: ThroughputBytesPerSec is the transfer rate the forecast
                       assumes.
@@ -281,6 +305,14 @@ spec:
                   Subphase describes what the operation is currently doing within the phase
                   (e.g., "TriggeringFailover", "UpdatingSlotStatuses", "ReleasingLock").
                 type: string
+              warnings:
+                description: |-
+                  Warnings are the risks the storage control plane found when it planned
+                  the migration and did not refuse it for, such as too little free
+                  capacity on the source for the snapshots the copy pins.
+                items:
+                  type: string
+                type: array
             type: object
         type: object
     served: true
