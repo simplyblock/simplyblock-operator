@@ -15,6 +15,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -94,6 +95,10 @@ type migrationPlanForecast struct {
 	CompletesAt           json.RawMessage `json:"completes_at"`
 	ThroughputBytesPerSec float64         `json:"throughput_bytes_per_sec"`
 	ThroughputMeasured    bool            `json:"throughput_measured"`
+	// Converging is absent from a control plane that predates the verdict.
+	Converging       *bool    `json:"converging"`
+	DirtyBytesPerSec float64  `json:"dirty_bytes_per_sec"`
+	NotConvergingLVS []string `json:"not_converging_lvs"`
 }
 
 // migrationPlan is the MigrationPlanDTO the control plane returns.
@@ -103,6 +108,7 @@ type migrationPlan struct {
 	Status   string                 `json:"status"`
 	Volumes  []migrationPlanVolume  `json:"volumes"`
 	Forecast *migrationPlanForecast `json:"forecast"`
+	Warnings []string               `json:"warnings"`
 }
 
 // migrationVolume is one volume an operation migrates, with the Kubernetes
@@ -227,7 +233,7 @@ func (r *ReplicationOpsReconciler) runMigration(
 		if scope.enrolling {
 			subphase = replOpsSubphaseEnrolling
 		}
-		r.patchMigrationStatus(ctx, ops, subphase, "Waiting for every volume to replicate before the plan is created", results, nil)
+		r.patchMigrationStatus(ctx, ops, subphase, "Waiting for every volume to replicate before the plan is created", results, nil, nil)
 		return ctrl.Result{RequeueAfter: replOpsWaitPoll}, nil
 	}
 
@@ -282,7 +288,7 @@ func (r *ReplicationOpsReconciler) runMigration(
 			"Dry run: %d volume(s), %s", len(plan.Volumes), describeForecast(plan.Forecast))
 		return r.completeMigration(ctx, ops, simplyblockv1alpha1.ReplicationOpsPhaseSucceeded,
 			fmt.Sprintf("Dry run: %d volume(s), %s", len(plan.Volumes), describeForecast(plan.Forecast)),
-			merged, forecastFromPlan(plan.Forecast))
+			merged, forecastFromPlan(plan.Forecast), plan.Warnings)
 	}
 	return r.adoptMigrationPlan(ctx, ops, &plan, ready, results)
 }
@@ -304,7 +310,9 @@ func (r *ReplicationOpsReconciler) adoptMigrationPlan(
 	ops.Status.Subphase = replOpsSubphaseTrackingPlan
 	ops.Status.Message = fmt.Sprintf("Migration plan %s created for %d volume(s)", *plan.ID, len(plan.Volumes))
 	ops.Status.Results = mergePlanResults(results, plan, ready)
+	previous := ops.Status.Forecast
 	ops.Status.Forecast = forecastFromPlan(plan.Forecast)
+	ops.Status.Warnings = plan.Warnings
 	if err := r.Status().Patch(ctx, ops, patch); err != nil {
 		// The plan exists either way. CreatingPlan stays recorded, so the next
 		// pass adopts it by name rather than creating another.
@@ -312,6 +320,7 @@ func (r *ReplicationOpsReconciler) adoptMigrationPlan(
 	}
 	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "MigrationPlanCreated", "MigrationPlanCreated",
 		"Migration plan %s: %d volume(s), %s", *plan.ID, len(plan.Volumes), describeForecast(plan.Forecast))
+	r.noteConvergence(ops, previous, plan.Forecast)
 	return ctrl.Result{RequeueAfter: replOpsPlanPoll}, nil
 }
 
@@ -361,11 +370,12 @@ func (r *ReplicationOpsReconciler) trackMigrationPlan(
 		return r.completeMigration(ctx, ops, simplyblockv1alpha1.ReplicationOpsPhaseFailed,
 			fmt.Sprintf("Migration plan %s ended %s: %d of %d volume(s) did not migrate; see results",
 				ops.Status.PlanID, plan.Status, countUnmigrated(&plan), len(plan.Volumes)),
-			results, forecast)
+			results, forecast, plan.Warnings)
 	default:
+		r.noteConvergence(ops, ops.Status.Forecast, plan.Forecast)
 		r.patchMigrationStatus(ctx, ops, replOpsSubphaseTrackingPlan,
 			fmt.Sprintf("Migrating %d volume(s): %s", len(plan.Volumes), describeForecast(plan.Forecast)),
-			results, forecast)
+			results, forecast, plan.Warnings)
 		return ctrl.Result{RequeueAfter: replOpsPlanPoll}, nil
 	}
 }
@@ -428,12 +438,12 @@ func (r *ReplicationOpsReconciler) commitPerVolume(
 	}
 	if !anyQueued {
 		return r.completeMigration(ctx, ops, simplyblockv1alpha1.ReplicationOpsPhaseFailed,
-			"Migration commit failed for every volume; see results for details", results, nil)
+			"Migration commit failed for every volume; see results for details", results, nil, nil)
 	}
 	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "MigrationCommitQueued", "MigrationCommitQueued",
 		"Cutover commit queued per volume (the control plane has no migration plans)")
 	r.patchMigrationStatus(ctx, ops, replOpsSubphaseAwaitingCutover,
-		"Cutover commits queued; waiting for every volume to cut over", results, nil)
+		"Cutover commits queued; waiting for every volume to cut over", results, nil, nil)
 	return ctrl.Result{RequeueAfter: replOpsPlanPoll}, nil
 }
 
@@ -472,7 +482,7 @@ func (r *ReplicationOpsReconciler) trackCommittedSlots(
 	}
 	if pending > 0 {
 		r.patchMigrationStatus(ctx, ops, replOpsSubphaseAwaitingCutover,
-			fmt.Sprintf("Waiting for %d volume(s) to cut over", pending), results, nil)
+			fmt.Sprintf("Waiting for %d volume(s) to cut over", pending), results, nil, nil)
 		return ctrl.Result{RequeueAfter: replOpsPlanPoll}, nil
 	}
 	return r.finishMigration(ctx, ops, results, "Migration complete")
@@ -690,6 +700,7 @@ func (r *ReplicationOpsReconciler) patchMigrationStatus(
 	subphase, message string,
 	results []simplyblockv1alpha1.ReplicationOpsResult,
 	forecast *simplyblockv1alpha1.ReplicationOpsForecast,
+	warnings []string,
 ) {
 	patch := client.MergeFrom(ops.DeepCopy())
 	ops.Status.Subphase = subphase
@@ -697,6 +708,9 @@ func (r *ReplicationOpsReconciler) patchMigrationStatus(
 	ops.Status.Results = results
 	if forecast != nil {
 		ops.Status.Forecast = forecast
+	}
+	if warnings != nil {
+		ops.Status.Warnings = warnings
 	}
 	if err := r.Status().Patch(ctx, ops, patch); err != nil {
 		logf.FromContext(ctx).Error(err, "failed to record migration progress", "ops", ops.Name)
@@ -719,9 +733,9 @@ func (r *ReplicationOpsReconciler) finishMigration(
 	}
 	if failed > 0 {
 		return r.completeMigration(ctx, ops, simplyblockv1alpha1.ReplicationOpsPhaseFailed,
-			fmt.Sprintf("%d volume(s) did not migrate; see results", failed), results, ops.Status.Forecast)
+			fmt.Sprintf("%d volume(s) did not migrate; see results", failed), results, ops.Status.Forecast, nil)
 	}
-	return r.completeMigration(ctx, ops, simplyblockv1alpha1.ReplicationOpsPhaseSucceeded, message, results, ops.Status.Forecast)
+	return r.completeMigration(ctx, ops, simplyblockv1alpha1.ReplicationOpsPhaseSucceeded, message, results, ops.Status.Forecast, nil)
 }
 
 // completeMigration writes the terminal phase together with the results and
@@ -733,9 +747,13 @@ func (r *ReplicationOpsReconciler) completeMigration(
 	message string,
 	results []simplyblockv1alpha1.ReplicationOpsResult,
 	forecast *simplyblockv1alpha1.ReplicationOpsForecast,
+	warnings []string,
 ) (ctrl.Result, error) {
 	now := metav1.Now()
 	patch := client.MergeFrom(ops.DeepCopy())
+	if warnings != nil {
+		ops.Status.Warnings = warnings
+	}
 	ops.Status.Phase = string(phase)
 	ops.Status.Subphase = ""
 	ops.Status.Message = message
@@ -852,14 +870,53 @@ func forecastFromPlan(f *migrationPlanForecast) *simplyblockv1alpha1.Replication
 		BytesRemaining:        int64(math.Round(f.BytesRemaining)),
 		ThroughputBytesPerSec: int64(math.Round(f.ThroughputBytesPerSec)),
 		ThroughputMeasured:    f.ThroughputMeasured,
+		DirtyBytesPerSec:      int64(math.Round(f.DirtyBytesPerSec)),
+		NotConvergingLVS:      f.NotConvergingLVS,
 	}
-	if f.ETASeconds != nil {
+	if f.Converging != nil {
+		converging := *f.Converging
+		out.Converging = &converging
+	}
+	if f.ETASeconds != nil && !notConverging(f) {
 		out.ETASeconds = int64(math.Ceil(*f.ETASeconds))
 	}
-	if t := parsePlanTime(f.CompletesAt); t != nil {
+	if t := parsePlanTime(f.CompletesAt); t != nil && !notConverging(f) {
 		out.CompletesAt = &metav1.Time{Time: *t}
 	}
 	return out
+}
+
+// notConverging is the control plane's verdict that the clients write some
+// source lvstore at least as fast as it replicates. Unknown counts as no.
+func notConverging(f *migrationPlanForecast) bool {
+	return f != nil && f.Converging != nil && !*f.Converging
+}
+
+// noteConvergence emits one event per change of the convergence verdict: a
+// warning when the lag stops being able to close, and a normal event when it
+// can again. A verdict that stays the same is not repeated on every poll.
+func (r *ReplicationOpsReconciler) noteConvergence(
+	ops *simplyblockv1alpha1.ReplicationOps,
+	previous *simplyblockv1alpha1.ReplicationOpsForecast,
+	next *migrationPlanForecast,
+) {
+	if next == nil || next.Converging == nil {
+		return
+	}
+	wasNotConverging := previous != nil && previous.Converging != nil && !*previous.Converging
+	switch {
+	case !*next.Converging && !wasNotConverging:
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "NotConverging", "NotConverging",
+			"%s", describeForecast(next))
+	case *next.Converging && wasNotConverging:
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "Converging", "Converging",
+			"Replication outruns the clients' writes again: %s", describeForecast(next))
+	}
+}
+
+// formatRate is a byte rate for messages, in MiB/s.
+func formatRate(bytesPerSec float64) string {
+	return fmt.Sprintf("%.1f MiB/s", bytesPerSec/(1<<20))
 }
 
 // parsePlanTime reads a timestamp the control plane wrote either as RFC 3339
@@ -881,6 +938,10 @@ func parsePlanTime(raw json.RawMessage) *time.Time {
 	}
 	var f float64
 	if err := json.Unmarshal(raw, &f); err == nil {
+		if f <= 0 {
+			// The control plane writes 0 for "no completion time".
+			return nil
+		}
 		t := time.Unix(int64(f), 0).UTC()
 		return &t
 	}
@@ -889,6 +950,11 @@ func parsePlanTime(raw json.RawMessage) *time.Time {
 
 // describeForecast is the one-line forecast used in messages and events.
 func describeForecast(f *migrationPlanForecast) string {
+	if notConverging(f) {
+		return fmt.Sprintf("Not converging: clients write %s, faster than lvstore(s) %s replicate; "+
+			"no cutover can start until the writes drop below the replication throughput",
+			formatRate(f.DirtyBytesPerSec), strings.Join(f.NotConvergingLVS, ", "))
+	}
 	if f == nil || f.ETASeconds == nil {
 		return "no forecast yet"
 	}

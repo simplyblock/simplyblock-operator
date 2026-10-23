@@ -115,6 +115,23 @@ type ReplicationOpsForecast struct {
 	// was assumed.
 	// +optional
 	ThroughputMeasured bool `json:"throughputMeasured,omitempty"`
+
+	// Converging is false when some source lvstore's volumes are written at
+	// least about as fast as it replicates them: their lag never closes, no
+	// cutover can start, and ETASeconds and CompletesAt are left unset. Unset
+	// when the storage control plane does not report the verdict.
+	// +optional
+	Converging *bool `json:"converging,omitempty"`
+
+	// DirtyBytesPerSec is the rate the clients write to the volumes still
+	// being copied, which replication has to outrun.
+	// +optional
+	DirtyBytesPerSec int64 `json:"dirtyBytesPerSec,omitempty"`
+
+	// NotConvergingLVS names the source lvstores whose volumes are written
+	// faster than they replicate.
+	// +optional
+	NotConvergingLVS []string `json:"notConvergingLVS,omitempty"`
 }
 
 // ReplicationOpsSpec defines the desired state of a ReplicationOps.
@@ -218,6 +235,12 @@ type ReplicationOpsStatus struct {
 	// to copy and when it completes.
 	// +optional
 	Forecast *ReplicationOpsForecast `json:"forecast,omitempty"`
+
+	// Warnings are the risks the storage control plane found when it planned
+	// the migration and did not refuse it for, such as too little free
+	// capacity on the source for the snapshots the copy pins.
+	// +optional
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -229,6 +252,7 @@ type ReplicationOpsStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Subphase",type=string,JSONPath=".status.subphase"
 // +kubebuilder:printcolumn:name="ETA",type=integer,JSONPath=".status.forecast.etaSeconds",priority=1
+// +kubebuilder:printcolumn:name="Converging",type=boolean,JSONPath=".status.forecast.converging",priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // ReplicationOps is a one-shot user-driven CR for imperative replication operations:
