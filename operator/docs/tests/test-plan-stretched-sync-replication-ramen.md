@@ -6,7 +6,7 @@ Scope is the operator's stretched role machine, the driver's birth-site placemen
 
 Scenario IDs are permanent and are never reused or renumbered. `U-` is unit (no cluster: mock control plane, fake `client.Client`, an in-process link), `I-` is integration (two operator managers against `envtest` and one mock backend), `E-` is end-to-end (the lab of design Appendix D: a hub and two sites), and `M-` is manual. Types are `Positive`, `Negative`, `Boundary`, and `Regression`. A `—` in the `Test` column means nothing implements the scenario yet, and every such row reappears in §7 with its reason.
 
-Nothing below is implemented. Every row is a requirement, and the `Test` column fills in as the phases of the design's Phasing Overview land.
+Every row is a requirement, and the `Test` column fills in as the phases of the design's Phasing Overview land.
 
 ---
 
@@ -71,44 +71,46 @@ File: `operator/internal/controller/stretchedcluster_controller_unit_test.go`
 
 ### The node plugin's determination (§9.2, §9.4)
 
-File: `csi-driver/internal/csi/node/stage_sync_test.go`
+File: `csi-driver/internal/csi/node/syncgate_test.go`
 
-| #    | Scenario                                                                                                                                  | Type       | Test |
-|------|-------------------------------------------------------------------------------------------------------------------------------------------|------------|------|
-| U-26 | The cluster secret entry carries `sync: true` and `site: a`; a status read answering `led_from: a`, in sync, proceeds to connect          | Positive   | —    |
-| U-27 | `led_from: b` calls `SwitchoverService.Move` for the volume to site `a` and returns `codes.Unavailable` while the answer is `IN_PROGRESS` | Positive   | —    |
-| U-28 | `led_from: ""` (between promote and first I/O) returns `codes.Unavailable` without calling `Move`                                         | Boundary   | —    |
-| U-29 | `MOVED` answered but the next status read still says `led_from: b`: one more `Unavailable`, no connect                                    | Boundary   | —    |
-| U-30 | `REFUSED` with `blocking_volumes` returns `codes.FailedPrecondition` quoting the operator's reason and the volumes                        | Negative   | —    |
-| U-31 | A secret entry without `sync` takes the async path unchanged: no status read, no `Move`                                                   | Regression | —    |
-| U-32 | A secret entry with `sync: true` and no `site` fails the stage with `codes.FailedPrecondition` before any backend call                    | Negative   | —    |
-| U-33 | A volume of a consistency group calls `Move` with the group handle, not the volume                                                        | Positive   | —    |
-| U-34 | Unstage after the volume moved away: the disconnect finds no subsystem and succeeds                                                       | Boundary   | —    |
+| #     | Scenario                                                                                                                                                                                                                  | Type       | Test                                                                          |
+|-------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|-------------------------------------------------------------------------------|
+| U-26  | The cluster secret entry carries `sync: true` and `site: a`; a status read answering `led_from: a` proceeds to connect                                                                                                    | Positive   | `TestAVolumeLedHereStagesWithoutAMove`                                        |
+| U-27  | `led_from: b` calls `SwitchoverService.Move` for the volume to site `a`, allowing a forced promote, and returns `codes.Unavailable` while the answer is `IN_PROGRESS`                                                     | Positive   | `TestAVolumeLedElsewhereIsMovedHereFirst`, `TestAMoveInProgressHoldsTheStage` |
+| U-28  | `led_from: ""` (between promote and first I/O) returns `codes.Unavailable` without calling `Move`                                                                                                                         | Boundary   | `TestAVolumeLedFromNoSiteIsHeldWithoutAMove`                                  |
+| U-29  | `MOVED` answered but the next status read still says `led_from: b`: one more `Unavailable`, no connect                                                                                                                    | Boundary   | `TestAMoveTheStatusDoesNotReflectIsHeld`                                      |
+| U-30  | `REFUSED` with `blocking_volumes` returns `codes.FailedPrecondition` quoting the operator's reason and the volumes                                                                                                        | Negative   | `TestARefusedMoveSaysWhy`                                                     |
+| U-31  | A secret entry without `sync` takes the async path unchanged: no status read, no `Move`                                                                                                                                   | Regression | `TestANonSyncClusterIsNotGated`                                               |
+| U-32  | A secret entry with `sync: true` and no `site` fails the stage with `codes.FailedPrecondition` before any backend call                                                                                                    | Negative   | `TestASyncClusterWithoutASiteHoldsBeforeAnyCall`                              |
+| U-33  | A volume of a consistency group calls `Move` with the group handle, not the volume                                                                                                                                        | Positive   | —                                                                             |
+| U-34  | Unstage after the volume moved away: the disconnect finds no subsystem and succeeds                                                                                                                                       | Boundary   | —                                                                             |
+| U-113 | A node plugin not linked to its operator holds the stage with `codes.Unavailable`                                                                                                                                         | Negative   | `TestANodeNotLinkedToItsOperatorHolds`                                        |
+| U-114 | The gate runs before the stage connects to the volume. Regression: 2026-10-17-stage-connects-before-gate, a connect on the stale site cleared the backend's never-connected record and the birth-state demote never fired | Regression | `TestAStageHoldsOnTheGateBeforeBringingTheStackUp`                            |
 
 ### Birth site on `CreateVolume` (§9.5)
 
-File: `csi-driver/internal/csi/controller/volume_sync_test.go`
+File: `csi-driver/internal/csi/controller/birthsite_test.go`
 
-| #    | Scenario                                                                                                                 | Type       | Test |
-|------|--------------------------------------------------------------------------------------------------------------------------|------------|------|
-| U-67 | A create on a sync cluster sends `site` equal to the driver's own site, with no `host_id`                                | Positive   | —    |
-| U-68 | A create with a co-located `host_id` sends both `site` and `host_id`                                                     | Positive   | —    |
-| U-69 | The backend answers `409` (the pinned node is on the other site): `codes.FailedPrecondition` quoting both, no retry loop | Negative   | —    |
-| U-70 | The backend answers `400` (unknown site): `codes.FailedPrecondition`, the message names the secret entry's `site`        | Negative   | —    |
-| U-71 | A clone or a snapshot restore sends no `site` and logs the inherited home site                                           | Boundary   | —    |
-| U-72 | A create on a cluster whose secret entry has no `sync` sends no `site` (async path unchanged)                            | Regression | —    |
+| #    | Scenario                                                                                                                                                                                                                   | Type       | Test                                                   |
+|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------|
+| U-67 | A create on a sync cluster sends `site` equal to the driver's own site, with no `host_id`                                                                                                                                  | Positive   | `TestASyncCreateNamesTheDriversSite`                   |
+| U-68 | A create with a co-located `host_id` sends both `site` and `host_id`                                                                                                                                                       | Positive   | —                                                      |
+| U-69 | The backend answers `409` naming the node's site (the pinned node is on the other site): `codes.FailedPrecondition`, not the reconcile of a volume that exists. Regression: 2026-10-23-create-site-conflict-read-as-exists | Regression | `TestACreatePinnedToTheOtherSiteIsAFailedPrecondition` |
+| U-70 | The backend answers `400` (unknown site): the create fails without a retry loop, the message names the secret entry's `site`                                                                                               | Negative   | —                                                      |
+| U-71 | A clone or a snapshot restore sends no `site`                                                                                                                                                                              | Boundary   | —                                                      |
+| U-72 | A create on a cluster whose secret entry has no `sync` sends no `site` (async path unchanged)                                                                                                                              | Regression | `TestANonSyncCreateNamesNoSite`                        |
 
-### Inheriting the volume on a recreated claim (§9.6)
+### The create's reconcile on a sync cluster (§9.6)
 
-File: `csi-driver/internal/csi/controller/volume_sync_test.go`
+File: `csi-driver/internal/csi/controller/reconcile_sync_test.go`
 
-| #    | Scenario                                                                                                                                            | Type       | Test |
-|------|-----------------------------------------------------------------------------------------------------------------------------------------------------|------------|------|
-| U-73 | A create whose name exists and is online, led from the other site: the handle of the existing volume is returned, no second create, no site compare | Positive   | —    |
-| U-74 | A create whose name exists with a different size: `codes.AlreadyExists` naming both sizes (unchanged)                                               | Regression | —    |
-| U-75 | A create whose name exists and is not online, on a sync cluster: `codes.Aborted` with the status, no delete call                                    | Negative   | —    |
-| U-76 | The same on a cluster without `sync`: the non-online leftover is deleted and the create retried (unchanged)                                         | Regression | —    |
-| U-77 | `DeleteVolume` on a sync cluster deletes the volume whatever site it is led from                                                                    | Positive   | —    |
+| #    | Scenario                                                                                                                                                                           | Type       | Test                                                  |
+|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|-------------------------------------------------------|
+| U-73 | A retried create whose name exists and is online, led from the other site: the handle of the existing volume is returned, no second create, no site compare                        | Positive   | `TestASyncRecreateReusesTheOnlineVolume`              |
+| U-74 | A create whose name exists with a different size: `codes.AlreadyExists` naming both sizes (unchanged)                                                                              | Regression | —                                                     |
+| U-75 | A create whose name exists and is not online, on a sync cluster: `codes.Aborted` with the status, no delete call. Regression: 2026-10-23-sync-recreate-deletes-a-lost-sites-volume | Regression | `TestASyncRecreateNeverDeletesAVolumeThatIsNotOnline` |
+| U-76 | The same on a cluster without `sync`: the non-online leftover is deleted and the create retried (unchanged)                                                                        | Regression | `TestANonSyncCreateStillDeletesAFailedLeftover`       |
+| U-77 | `DeleteVolume` on a sync cluster deletes the volume whatever site it is led from                                                                                                   | Positive   | —                                                     |
 
 ### Event ownership (§6.1)
 
@@ -141,36 +143,52 @@ File: `operator/internal/controllers/node/storagenode_remote_test.go`
 
 ### `SwitchoverService` in the operator (§9.3)
 
-File: `operator/internal/controllers/driver/switchover_test.go`
+Files: `atlas-lib/switchover/switchover_test.go` (the service), `operator/internal/switchover/backend_test.go` (the operator's backend)
 
-| #    | Scenario                                                                                                                                               | Type     | Test |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-35 | `Move(volume, to: a)`: demote `?site=b` for every volume of the store, then `failover?site=a&planned=true`, answer `MOVED` on `200`                    | Positive | —    |
-| U-36 | Demote answers `409` with `volumes`: no promote, answer `REFUSED` with `blocking_volumes` and the backend's message                                    | Negative | —    |
-| U-37 | Promote answers `409 in progress`: the service polls, the caller sees `IN_PROGRESS`, then `MOVED`                                                      | Boundary | —    |
-| U-38 | Promote answers `412` with `allow_forced`: one `failover?site=a` without `planned`, event `SyncPeerSiteOffline`, answer `MOVED`                        | Positive | —    |
-| U-39 | Promote answers `412` without `allow_forced`: answer `REFUSED`, no forced promote                                                                      | Negative | —    |
-| U-40 | Two concurrent `Move`s for volumes of one store: one demote, one promote, both answered `MOVED`                                                        | Boundary | —    |
-| U-41 | A `Move` for a store already led from `to_site`: `MOVED` with no backend call                                                                          | Boundary | —    |
-| U-42 | A group `Move` uses the `G/replication/...` routes once for the group                                                                                  | Positive | —    |
-| U-43 | A `Move` from a remote peer (`site/b/operator`) is served; a `Move` from a remote node peer (`site/b/node/x`) is refused with `codes.PermissionDenied` | Negative | —    |
-| U-44 | Object operations on a store the service just moved are deferred until the status shows a leader (first-I/O rule)                                      | Boundary | —    |
+| #     | Scenario                                                                                                                                               | Type     | Test                                                                                                |
+|-------|--------------------------------------------------------------------------------------------------------------------------------------------------------|----------|-----------------------------------------------------------------------------------------------------|
+| U-35  | `Move(volume, to: a)`: demote `?site=b`, then `failover?site=a&planned=true`, answer `MOVED` on `200`                                                  | Positive | `TestAPlannedMoveDemotesThenPromotes`                                                               |
+| U-36  | Demote answers `409` with `volumes`: no promote, answer `REFUSED` with `blocking_volumes` and the backend's message                                    | Negative | `TestARefusedDemoteNamesWhatBlocksIt`                                                               |
+| U-37  | Promote answers `409 in progress`: the caller sees `IN_PROGRESS` and asks again, and the service does not poll                                         | Boundary | `TestAPromoteStillRunningIsInProgress`                                                              |
+| U-38  | Promote answers `412` with `allow_forced`: one `failover?site=a` without `planned`, the escalation reported for `SyncPeerSiteOffline`, answer `MOVED`  | Positive | `TestALostSiteEscalatesToAForcedPromoteWhenAllowed`                                                 |
+| U-39  | Promote answers `412` without `allow_forced`: answer `REFUSED`, no forced promote                                                                      | Negative | `TestALostSiteEscalatesToAForcedPromoteWhenAllowed`                                                 |
+| U-40  | Two concurrent `Move`s for one store: one demote and one promote, the second answered `IN_PROGRESS`                                                    | Boundary | `TestOneMovePerStoreAtATime`                                                                        |
+| U-41  | A `Move` for a volume already led from `to_site`: `MOVED` with no demote or promote                                                                    | Boundary | `TestAVolumeLedFromTheTargetSiteIsAlreadyMoved`                                                     |
+| U-42  | A group `Move` uses the `G/replication/...` routes once for the group                                                                                  | Positive | —                                                                                                   |
+| U-43  | A `Move` from a remote peer (`site/b/operator`) is served; a `Move` from a remote node peer (`site/b/node/x`) is refused with `codes.PermissionDenied` | Negative | —                                                                                                   |
+| U-44  | Object operations on a store the service just moved are deferred until the status shows a leader (first-I/O rule)                                      | Boundary | —                                                                                                   |
+| U-115 | A demote the backend cannot reach because the old site is down does not stop the move: the promote decides, forced only after the planned one's `412`  | Boundary | `TestAnUnreachableOldSiteDoesNotBlockThePromote`                                                    |
+| U-116 | A `Move` without a target site is refused before any backend call                                                                                      | Negative | `TestAMoveWithoutATargetSiteIsRefused`                                                              |
+| U-117 | The operator's backend calls the control plane at the endpoint and with the credential the operator resolves, and refuses without an endpoint          | Positive | `TestTheBackendUsesTheControlPlanesEndpointAndCredential`, `TestTheBackendRefusesWithoutAnEndpoint` |
 
 ### `NetworkFence` in the driver (§10.2)
 
-File: `csi-driver/internal/csi/controller/networkfence_test.go`
+Files: `csi-driver/internal/csi/fence/fence_test.go`, `csi-driver/internal/csi/csiaddons/identity/identity_test.go`
 
-| #    | Scenario                                                                                                                                          | Type                | Test |
-|------|---------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|------|
-| U-45 | CIDRs matching only site `a`'s nodes: one `POST .../sites/a/fence`; `200 done` answers success                                                    | Positive            | —    |
-| U-46 | The fence route answers `202` with a task: the RPC returns `codes.Unavailable` so csi-addons retries, and a later call that finds `done` succeeds | Boundary            | —    |
-| U-47 | The fence route answers `409` (proof refused): `codes.FailedPrecondition` quoting the reason, event `FenceRefused`                                | Negative            | —    |
-| U-48 | CIDRs matching no node: `codes.InvalidArgument`, no backend call                                                                                  | Negative            | —    |
-| U-49 | CIDRs matching nodes of both sites: `codes.InvalidArgument`, no backend call                                                                      | Negative            | —    |
-| U-50 | A `/32` list and a covering `/24` resolve to the same site                                                                                        | Boundary            | —    |
-| U-51 | `UnfenceClusterNetwork` while the site is still recorded: `codes.FailedPrecondition`; once the record is gone: success                            | Positive + Negative | —    |
-| U-52 | Fence on a cluster that is not a sync cluster: `codes.FailedPrecondition` naming the cluster                                                      | Negative            | —    |
-| U-53 | The fence never answers success before the control plane records `done` (the one failure that makes a failover unsafe)                            | Regression          | —    |
+| #     | Scenario                                                                                                                                          | Type                | Test                                                                            |
+|-------|---------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|---------------------------------------------------------------------------------|
+| U-45  | CIDRs matching only site `a`'s nodes: one `POST .../sites/a/fence`; `200 done` answers success                                                    | Positive            | `TestTheCIDRsOfOneSiteFenceThatSite`                                            |
+| U-46  | The fence route answers `202` with a task: the RPC returns `codes.Unavailable` so csi-addons retries, and a later call that finds `done` succeeds | Boundary            | `TestAFenceStillRunningIsRetried`                                               |
+| U-47  | The fence route answers `409` (refused): `codes.FailedPrecondition` quoting the reason                                                            | Negative            | `TestAFenceTheBackendRefusesIsAFailedPrecondition`                              |
+| U-48  | CIDRs matching no node, or not CIDRs: `codes.InvalidArgument`, nothing fenced                                                                     | Negative            | `TestCIDRsThatDoNotNameOneSiteAreRefused`                                       |
+| U-49  | CIDRs matching nodes of both sites: `codes.InvalidArgument`, nothing fenced                                                                       | Negative            | `TestCIDRsThatDoNotNameOneSiteAreRefused`                                       |
+| U-50  | A `/32` list and a covering `/24` resolve to the same site                                                                                        | Boundary            | `TestTheCIDRsOfOneSiteFenceThatSite`, `TestARangeCoveringOneSitesHostsFencesIt` |
+| U-51  | `UnfenceClusterNetwork` while the site is still recorded: `codes.FailedPrecondition`; once the record is gone: success                            | Positive + Negative | `TestAnUnfenceConfirmsTheSiteIsBack`                                            |
+| U-52  | Fence on a cluster that is not a sync cluster: `codes.FailedPrecondition` naming the cluster                                                      | Negative            | —                                                                               |
+| U-53  | The fence never answers success before the control plane records `done` (the one failure that makes a failover unsafe)                            | Boundary            | `TestAFenceStillRunningIsRetried`, `TestClientFenceSiteStillRunningIsNotDone`   |
+| U-118 | The fence's `clusterID` parameter, from the `DRCluster`'s storage annotation, wins over the driver's own sync cluster                             | Positive            | `TestTheFencesClusterIDIsHonored`                                               |
+| U-119 | The csi-addons identity advertises `NETWORK_FENCE`, without which csi-addons routes no fence to the driver                                        | Positive            | `TestGetCapabilitiesAdvertisesNetworkFence`                                     |
+
+### The sync and site routes in the control-plane client (§9.3, §10.2, §12)
+
+File: `atlas-lib/controlplane/syncreplication_test.go`
+
+| #     | Scenario                                                                                                                                     | Type     | Test                                                                                                                                                                           |
+|-------|----------------------------------------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-120 | The status is read with no site; the demote and the promote name their site, and the promote whether it is planned                           | Positive | `TestClientSyncStatusReadsTheLedSite`, `TestClientSyncDemoteNamesTheSite`, `TestClientSyncPromoteIsPlannedOnTheTargetSite`                                                     |
+| U-121 | A refusal names its volumes; a promote in progress is not a refusal; a `412` is the peer-site-offline error, distinct from a refusal         | Boundary | `TestClientSyncDemoteRefusalNamesTheBlockingVolumes`, `TestClientSyncPromoteInProgressIsNotARefusal`, `TestClientSyncPromoteReportsAPeerSiteOffline`                           |
+| U-122 | The storage-node listing yields every node's management address and site                                                                     | Positive | `TestClientSiteNodesReadsEachNodesSite`                                                                                                                                        |
+| U-123 | The site fence is not done on `202`, done on `200`, and refused on `409`; the unfence is cleared on `200` and not on `409`, neither an error | Boundary | `TestClientFenceSiteStillRunningIsNotDone`, `TestClientFenceSiteRecordedIsDone`, `TestClientFenceSiteRefusalIsASyncRefusal`, `TestClientUnfenceSiteConfirmsTheRecordIsCleared` |
 
 ### The site link (§7, Appendix C)
 
@@ -246,7 +264,7 @@ Two operator managers in one `envtest` process, each with its own namespace and 
 | I-14 | A PVC provisioned by site `b`'s driver: the mock's create body carries `site: b`; the volume's owner node is on `b`                                        | Positive | —    |
 | I-15 | A PVC on `b` annotated with a site-`a` node: the mock answers `409`, the PVC stays `Pending` with the reason, no create succeeds                           | Negative | —    |
 | I-16 | A protected PVC is deleted on `a` (PV retained by Ramen's rule): the mock backend sees no delete; the PV is `Released` with `Retain`                       | Positive | —    |
-| I-17 | A PVC of the same name is then applied on `b`: the mock answers `409`, the driver returns the existing handle, one volume exists                           | Positive | —    |
+| I-17 | The retained PV is then restored on `b` as a static PV bound to a new PVC: no create reaches the mock, one volume exists                                   | Positive | —    |
 | I-18 | After both sites add their nodes, each manager's client lists every node of the cluster, with `stretched.remote` true for the peer's and false for its own | Positive | —    |
 | I-19 | On each site, the device listing holds every device of both sites, each `nodeRef` resolving to a node on that site, managed or remote                      | Positive | —    |
 
@@ -273,32 +291,32 @@ The lab of design Appendix D: a hub cluster running OCM, `ramen-hub`, the fleet 
 
 ### Planned relocate (§8.3, §9)
 
-| #    | Scenario                                                                                                                                       | Type     | Test |
-|------|------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| E-04 | Protect a workload on `a`, write, relocate to `b`: pods stage on `b`, volumes report `led_from: b`, hash intact, no `VolumeReplication` exists | Positive | —    |
-| E-05 | Relocate back to `a`: same assertions, both moves planned (no `SyncPeerSiteOffline` event)                                                     | Positive | —    |
-| E-06 | A consistency group of three PVCs relocates as one group move                                                                                  | Positive | —    |
-| E-07 | Two workloads on one store, one relocated: the demote's `409 volumes` holds the stage and names the other workload's volumes                   | Negative | —    |
+| #    | Scenario                                                                                                                                       | Type     | Test                                |
+|------|------------------------------------------------------------------------------------------------------------------------------------------------|----------|-------------------------------------|
+| E-04 | Protect a workload on `a`, write, relocate to `b`: pods stage on `b`, volumes report `led_from: b`, hash intact, no `VolumeReplication` exists | Positive | `regression_test/25/09-relocate.sh` |
+| E-05 | Relocate back to `a`: same assertions, both moves planned (no `SyncPeerSiteOffline` event)                                                     | Positive | `regression_test/25/09-relocate.sh` |
+| E-06 | A consistency group of three PVCs relocates as one group move                                                                                  | Positive | —                                   |
+| E-07 | Two workloads on one store, one relocated: the demote's `409 volumes` holds the stage and names the other workload's volumes                   | Negative | —                                   |
 
 ### Unplanned failover and site return (§8.3, §10)
 
-| #    | Scenario                                                                                                                                                                     | Type     | Test |
-|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| E-08 | Power off site `a` (the leader): the monitor records `a` down; failover to `b`: `NetworkFence` fences `a`, stages promote forced, hash intact to the last acknowledged write | Positive | —    |
-| E-09 | Power `a` back on: the site returns by activation, `UnfenceClusterNetwork` succeeds once the record is gone, the DRPC reaches `Unfenced`, relocate back succeeds             | Positive | —    |
-| E-10 | Failover attempted while `a` is reachable (its nodes healthy): the fence's proof refuses, the DRPC holds, nothing is promoted                                                | Negative | —    |
-| E-11 | Swap the roles while `a` is down: `b` becomes leader and runs a rolling restart of its own site; `a` returns as follower                                                     | Positive | —    |
+| #    | Scenario                                                                                                                                                                     | Type     | Test                                |
+|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|-------------------------------------|
+| E-08 | Power off site `a` (the leader): the monitor records `a` down; failover to `b`: `NetworkFence` fences `a`, stages promote forced, hash intact to the last acknowledged write | Positive | `regression_test/25/10-failover.sh` |
+| E-09 | Power `a` back on: the site returns by activation, `UnfenceClusterNetwork` succeeds once the record is gone, the DRPC reaches `Unfenced`, relocate back succeeds             | Positive | `regression_test/25/10-failover.sh` |
+| E-10 | Failover attempted while `a` is reachable (its nodes healthy): the fence's proof refuses, the DRPC holds, nothing is promoted                                                | Negative | —                                   |
+| E-11 | Swap the roles while `a` is down: `b` becomes leader and runs a rolling restart of its own site; `a` returns as follower                                                     | Positive | —                                   |
 
 ### Birth site (§9.5)
 
-| #    | Scenario                                                                                                                                                           | Type     | Test |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| E-14 | A PVC created on `a` with `Immediate` binding: `storage_node_id` is a site-`a` node, `GET V/replication/status` says `led_from: a`                                 | Positive | —    |
-| E-15 | A PVC created on `b` with `WaitForFirstConsumer` and `pod-affinity`: owner node is the storage node co-located with the pod's worker on `b`                        | Positive | —    |
-| E-16 | A snapshot of an `a`-born volume restored on `b`: the clone's home is `a`; `b`'s pod stages after one planned move                                                 | Boundary | —    |
-| E-17 | Relocate `a` to `b`: the backend volume UUID and the volume count are unchanged before and after; the PV on `a` is `Released` with `Retain` and no claim reference | Positive | —    |
-| E-18 | Unprotect (delete the DRPC) then delete the PVC on the primary: the PV's policy is `Delete` again and the backend volume is gone                                   | Positive | —    |
-| E-19 | Without Ramen: delete the PVC on `a` with the PV retained, apply the same PVC on `b`: the claim binds to the existing volume, its pod stages after one move        | Positive | —    |
+| #    | Scenario                                                                                                                                                                   | Type     | Test                            |
+|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|---------------------------------|
+| E-14 | A PVC created on `a` with `Immediate` binding: `storage_node_id` is a site-`a` node, `GET V/replication/status` says `led_from: a`                                         | Positive | —                               |
+| E-15 | A PVC created on `b` with `WaitForFirstConsumer` and `pod-affinity`: owner node is the storage node co-located with the pod's worker on `b`                                | Positive | —                               |
+| E-16 | A snapshot of an `a`-born volume restored on `b`: the clone's home is `a`; `b`'s pod stages after one planned move                                                         | Boundary | —                               |
+| E-17 | Relocate `a` to `b`: the backend volume UUID and the volume count are unchanged before and after; the PV on `a` is `Released` with `Retain` and no claim reference         | Positive | —                               |
+| E-18 | Unprotect (delete the DRPC) then delete the PVC on the primary: the PV's policy is `Delete` again and the backend volume is gone                                           | Positive | —                               |
+| E-19 | Without Ramen: delete the PVC on `a` with the PV retained, restore the PV on `b` bound to a new PVC: the claim binds to the existing volume, its pod stages after one move | Positive | `regression_test/25/07-flip.sh` |
 
 ### Hub loss (§13)
 
@@ -341,10 +359,12 @@ The lab of design Appendix D: a hub cluster running OCM, `ramen-hub`, the fleet 
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 94        | 36      | 58          |
+| Unit        | 123       | 102     | 21          |
 | Integration | 19        | 0       | 19          |
-| E2E         | 19        | 0       | 19          |
+| E2E         | 21        | 7       | 14          |
 | Manual      | 3         | 0       | 3           |
+
+An E2E row counts as covered when a lab script asserts it. Of the seven, E-20 and E-21 have run. `07-flip.sh`, `09-relocate.sh`, and `10-failover.sh` (E-04, E-05, E-08, E-09, E-19) have not yet run against the images of this branch.
 
 ---
 
@@ -361,14 +381,23 @@ The lab of design Appendix D: a hub cluster running OCM, `ramen-hub`, the fleet 
 
 ## 7. What Is Not Yet Covered
 
-Phase 1 is built and its unit rows are covered, with these left open:
+Phases 1 to 3 are built and their unit rows are covered, with these left open:
 
-| Rows       | Why                                                                                                                                                          |
-|------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| U-05, U-82 | The cluster record has no `leader_site` yet (P0-2), so neither a role conflict at adoption nor a role dropped on a record change can be observed             |
-| U-63–U-65  | The reachability check of §5.4 waits on the `reachability` route (P0-2); without it the only check would be a probe the operator cannot run from a site      |
-| U-80       | A follower drives no cluster-wide operation by admission (U-14) and on a role swap (U-08); no test reads a cluster-wide task event on a follower directly    |
-| U-87       | A remote node has no worker, and the workload's node set has always skipped one; the guard is structural, and no test drives the workload with a remote node |
-| U-92       | A remote node's devices are owned by it like any node's, so the existing owner-reference cascade removes them; no test deletes a remote node with devices    |
+| Rows             | Why                                                                                                                                                                                        |
+|------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-05, U-82       | The cluster record has no `leader_site` yet, so neither a role conflict at adoption nor a role dropped on a record change can be observed                                                  |
+| U-63–U-65        | The `reachability` route exists on sbcli branch `stretched-p0-2`, and the preflight does not read it yet                                                                                   |
+| U-80             | A follower drives no cluster-wide operation by admission (U-14) and on a role swap (U-08); no test reads a cluster-wide task event on a follower directly                                  |
+| U-87             | A remote node has no worker, and the workload's node set has always skipped one; the guard is structural, and no test drives the workload with a remote node                               |
+| U-92             | A remote node's devices are owned by it like any node's, so the existing owner-reference cascade removes them; no test deletes a remote node with devices                                  |
+| U-33, U-42       | A group move is not built: `MoveRequest` names one volume, and a consistency group's members move one by one (design §9.3)                                                                 |
+| U-34             | Unstage is unchanged by the gate, and no test unstages a volume that moved away                                                                                                            |
+| U-43             | The relay refuses a remote stream from a node peer (U-56), so a remote node never reaches the service; the service itself does not read its caller's identity, and no test calls it as one |
+| U-44             | The operator issues no object operation on a store after a move, so nothing is deferred yet; the rule binds the first such operation                                                       |
+| U-52             | A fence naming a cluster that is not sync-replicated reaches the backend, whose `400` the driver returns as `codes.Unavailable`, so csi-addons retries a fence that cannot succeed         |
+| U-62             | The HTTP relay to the control plane is not built                                                                                                                                           |
+| U-68, U-70, U-71 | The co-located pin, the backend's `400` for an unknown site, and the clone path are unchanged by the birth site, and no test drives them on a sync cluster                                 |
+| U-74, U-77       | The size conflict and `DeleteVolume` are unchanged on a sync cluster, and no test drives them on one                                                                                       |
+| U-81             | The service does not wait on a stream event: a stage answered `IN_PROGRESS` retries and its next `Move` reads the status (U-37), so nothing is pending for an event to resolve             |
 
-The Phase 2 to 4 rows, and every integration, E2E, and manual row, are `—`. The rows that must be green before Phase 3 is called safe are U-53 (a fence never answers success early), U-29 (a stage never attaches on a stale status), and U-75 (a recreate never deletes a volume whose site is down), both of which are written red first against a mock that answers wrong, as the design's §15 requires.
+Every integration and manual row is `—`, and the E2E rows without a script above. The rows that must be green before Phase 3 is called safe are U-53 (a fence never answers success early), U-29 (a stage never attaches on a stale status), and U-75 (a recreate never deletes a volume whose site is down). All three are covered by unit tests; the live proof is E-08, which has not yet run.

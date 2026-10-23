@@ -253,6 +253,9 @@ type CreateLVolData struct {
 	Namespaced       bool   `json:"namespaced"`
 	PvcName          string `json:"pvc_name,omitempty"`
 	ConsistencyGroup string `json:"consistency_group,omitempty"`
+	// Site is the site a volume of a stretched, sync-replicated cluster is born
+	// led from. The control plane refuses it on any other cluster.
+	Site string `json:"site,omitempty"`
 }
 
 // CreateVolume creates a logical volume and returns volume ID

@@ -44,10 +44,12 @@ import (
 	"github.com/simplyblock/atlas/storage"
 	"github.com/simplyblock/atlas/storage/storagerpc"
 
+	"github.com/simplyblock/csi-driver/internal/clusters"
 	"github.com/simplyblock/csi-driver/internal/config"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/csi-driver/internal/csi/controller"
 	csiaddonsidentityserver "github.com/simplyblock/csi-driver/internal/csi/csiaddons/identity"
+	"github.com/simplyblock/csi-driver/internal/csi/fence"
 	"github.com/simplyblock/csi-driver/internal/csi/identity"
 	"github.com/simplyblock/csi-driver/internal/csi/node"
 	"github.com/simplyblock/csi-driver/internal/csilink"
@@ -149,8 +151,14 @@ func Run(conf *config.Config) {
 	if conf.LinkEnabled {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		if err := startLink(ctx, conf); err != nil {
+		agent, err := startLink(ctx, conf)
+		if err != nil {
 			klog.Fatalf("failed to start the operator link: %s", err)
+		}
+		// A node plugin asks its operator to move a stretched cluster's volume
+		// to this site over the same link (internal/csi/node/syncgate.go).
+		if ns != nil {
+			ns.AttachOperatorLink(agent.Conn)
 		}
 	}
 
@@ -187,6 +195,13 @@ func Run(conf *config.Config) {
 		register = append(register, func(gs *grpc.Server) {
 			csiaddonsvolumegroup.RegisterControllerServer(gs, cs)
 		})
+		// The csi-addons NetworkFence service (design-stretched-sync-replication-
+		// ramen.md §10.2): Ramen fences a lost site of a stretched cluster
+		// through it before failing over.
+		fences := fence.New(func(clusterID string) (fence.Backend, error) {
+			return clusters.ReplicationClient(context.Background(), clusterID)
+		}, soleSyncCluster)
+		register = append(register, func(gs *grpc.Server) { fences.Register(gs) })
 	}
 
 	s := csicommon.NewNonBlockingGRPCServer()
@@ -200,7 +215,7 @@ func Run(conf *config.Config) {
 // linking it, and is identified by the node it runs on. A controller plugin
 // links as itself and currently serves nothing. It is registered so the
 // operator can see it, and so services can be added without new plumbing.
-func startLink(ctx context.Context, conf *config.Config) error {
+func startLink(ctx context.Context, conf *config.Config) (*link.Agent, error) {
 	cfg := csilink.Config{
 		HubAddress:  conf.LinkHubAddress,
 		CAFile:      conf.LinkCAFile,
@@ -212,7 +227,7 @@ func startLink(ctx context.Context, conf *config.Config) error {
 	switch {
 	case conf.IsNodeServer:
 		if conf.NodeID == "" {
-			return fmt.Errorf("link needs the node name (--nodeid); the operator verifies it")
+			return nil, fmt.Errorf("link needs the node name (--nodeid); the operator verifies it")
 		}
 		// storage.Local reads this node through sysfs. It must be the local
 		// one: serving a remote accessor would make this node a proxy for
@@ -220,14 +235,14 @@ func startLink(ctx context.Context, conf *config.Config) error {
 		local := storage.Local(nvme.SysfsConfig{})
 		srv, err := storagerpc.NewServer(local)
 		if err != nil {
-			return fmt.Errorf("node storage: %w", err)
+			return nil, fmt.Errorf("node storage: %w", err)
 		}
 		// The node forgets the connection-tracking entries translated to a dead
 		// pNFS metadata server pod when the operator asks. It runs on the host's
 		// network, so the table it reaches is the host's.
 		flows, err := conntrackrpc.NewServer(conntrack.Forget)
 		if err != nil {
-			return fmt.Errorf("node flows: %w", err)
+			return nil, fmt.Errorf("node flows: %w", err)
 		}
 		// No export service: exports are assembled in the metadata server's
 		// guest, never on a node.
@@ -240,16 +255,15 @@ func startLink(ctx context.Context, conf *config.Config) error {
 
 	case conf.IsControllerServer:
 		if conf.PodName == "" {
-			return fmt.Errorf("link needs the pod name (--pod-name); the operator verifies it")
+			return nil, fmt.Errorf("link needs the pod name (--pod-name); the operator verifies it")
 		}
 		cfg.ID = link.ControllerPeer(conf.PodName)
 
 	default:
-		return fmt.Errorf("link needs either --node or --controller")
+		return nil, fmt.Errorf("link needs either --node or --controller")
 	}
 
-	_, err := csilink.Start(ctx, cfg)
-	return err
+	return csilink.Start(ctx, cfg)
 }
 
 // startNodeServer builds the node service and starts the background loops that
@@ -334,4 +348,24 @@ func markBroken(g *guardian.Guardian) func(string) {
 		return nil
 	}
 	return g.MarkBrokenLvol
+}
+
+// soleSyncCluster is the cluster a fence naming none fences: the one
+// sync-replicated cluster in the driver's secret.
+func soleSyncCluster() (string, error) {
+	ids, err := clusters.List()
+	if err != nil {
+		return "", err
+	}
+	var sync []string
+	for _, id := range ids {
+		if _, ok, err := clusters.SyncSite(id); err == nil && ok {
+			sync = append(sync, id)
+		}
+	}
+	if len(sync) != 1 {
+		return "", fmt.Errorf(
+			"the secret has %d sync-replicated clusters; the fence must name one in parameter clusterID", len(sync))
+	}
+	return sync[0], nil
 }

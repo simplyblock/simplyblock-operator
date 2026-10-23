@@ -101,3 +101,21 @@ func TestGetCapabilitiesAdvertisesReplicationDestinationInfo(t *testing.T) {
 	}
 	t.Error("capabilities do not advertise GET_REPLICATION_DESTINATION_INFO")
 }
+
+// Without NETWORK_FENCE the csi-addons controller-manager never routes a
+// NetworkFence to this driver, so a Ramen failover off a lost site of a
+// stretched cluster waits on a fence nothing serves (design-stretched-sync-
+// replication-ramen.md §10.2).
+func TestGetCapabilitiesAdvertisesNetworkFence(t *testing.T) {
+	s := New("test.csi.simplyblock.io", "v1.2.3")
+	resp, err := s.GetCapabilities(context.Background(), &identity.GetCapabilitiesRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range resp.Capabilities {
+		if nf := c.GetNetworkFence(); nf != nil && nf.Type == identity.Capability_NetworkFence_NETWORK_FENCE {
+			return
+		}
+	}
+	t.Error("capabilities do not advertise NETWORK_FENCE")
+}

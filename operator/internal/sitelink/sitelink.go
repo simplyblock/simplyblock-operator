@@ -64,6 +64,9 @@ type Link struct {
 	MinBackoff time.Duration
 	// Logger receives the link's lifecycle. Nil means slog.Default.
 	Logger *slog.Logger
+	// Register adds the services this operator serves to the other site, such
+	// as SwitchoverService, beside the health check its probe calls.
+	Register func(grpc.ServiceRegistrar)
 
 	mu    sync.RWMutex
 	agent *link.Agent
@@ -93,6 +96,9 @@ func (l *Link) Start(ctx context.Context) error {
 	hs := health.NewServer()
 	hs.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 	healthpb.RegisterHealthServer(srv, hs)
+	if l.Register != nil {
+		l.Register(srv)
+	}
 	go func() { _ = srv.Serve(acceptor) }()
 	defer srv.Stop()
 

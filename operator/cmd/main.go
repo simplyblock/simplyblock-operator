@@ -28,7 +28,9 @@ import (
 
 	"github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/link"
+	"github.com/simplyblock/atlas/link/sitev1"
 	atlasprom "github.com/simplyblock/atlas/prometheus"
+	atlasswitchover "github.com/simplyblock/atlas/switchover"
 
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
@@ -40,6 +42,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -49,6 +52,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -75,6 +79,7 @@ import (
 	twonodecp "github.com/simplyblock/simplyblock-operator/internal/controllers/twonode/cpadapter"
 	volumecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/volume"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
+	"github.com/simplyblock/simplyblock-operator/internal/switchover"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -395,6 +400,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// SwitchoverService (design-stretched-sync-replication-ramen.md §9.3): the
+	// operator moves a sync volume's leadership to the site a pod stages on,
+	// for its own node plugins over the CSI link and for the other site's
+	// operator over the site link. It reaches the control plane the
+	// ControlPlane object names, with the credential it names.
+	switchoverServer := newSwitchoverServer(mgr, operatorNamespace)
+
 	// The CSI link. csiPeers is the registry of linked node and controller
 	// plugins; a reconciler reaching a node goes through it, and treats
 	// link.ErrNoSession as a requeue rather than a failure.
@@ -418,6 +430,8 @@ func main() {
 			NodeServiceAccount:       "simplyblock-csi-node-sa",
 			ControllerServiceAccount: "simplyblock-csi-controller-sa",
 			MDSServiceAccount:        "simplyblock-csi-mds-sa",
+			Register:                 switchoverServer.Register,
+			Capabilities:             []string{sitev1.SwitchoverService_ServiceDesc.ServiceName},
 		})
 		if err != nil {
 			setupLog.Error(err, "unable to set up the CSI link")
@@ -647,6 +661,7 @@ func main() {
 			Kube:        siteKube,
 			Token:       link.TokenFile(siteLinkTokenPath),
 			Logger:      slog.Default().With("component", "site-link"),
+			Register:    switchoverServer.Register,
 		}
 		if err := mgr.Add(siteLink); err != nil {
 			setupLog.Error(err, "unable to add the site link")
@@ -1306,3 +1321,29 @@ type leaderOnly func(context.Context) error
 func (f leaderOnly) Start(ctx context.Context) error { return f(ctx) }
 
 func (leaderOnly) NeedLeaderElection() bool { return true }
+
+// newSwitchoverServer builds the operator's SwitchoverService. A move that had
+// to be forced, because the site the volume was served from is not online, is
+// announced on this namespace's StorageCluster as SyncPeerSiteOffline.
+func newSwitchoverServer(mgr ctrl.Manager, namespace string) *atlasswitchover.Server {
+	backend := &switchover.Backend{
+		Endpoint:   controlplanecontroller.NewEndpointResolver(mgr.GetClient(), namespace),
+		Credential: controlplanecontroller.NewCredentialResolver(mgr.GetClient(), namespace),
+	}
+	if cfg, err := webapi.ControlPlaneConfig(); err == nil {
+		backend.Transport = cfg.Transport
+	}
+	server := atlasswitchover.New(backend, slog.Default().With("component", "switchover"))
+	recorder := mgr.GetEventRecorder("switchover")
+	server.OnForced = func(volume, from, to string) {
+		var clusters simplyblockv1alpha2.StorageClusterList
+		if err := mgr.GetClient().List(context.Background(), &clusters, client.InNamespace(namespace)); err != nil {
+			return
+		}
+		for i := range clusters.Items {
+			recorder.Eventf(&clusters.Items[i], nil, corev1.EventTypeWarning, "SyncPeerSiteOffline", "SyncPeerSiteOffline",
+				"volume %s was promoted on site %s by force: site %s, which served it, is not online", volume, to, from)
+		}
+	}
+	return server
+}

@@ -21,6 +21,7 @@ PROTO_DIRS := link/linkv1 link/sitev1 storage/storagerpc/storagev1 nfsexport/nfs
 	conntrack/conntrackrpc/conntrackv1
 PROTO_GEN := link/linkv1/link.pb.go link/linkv1/link_grpc.pb.go \
 	link/sitev1/relay.pb.go link/sitev1/relay_grpc.pb.go \
+	link/sitev1/switchover.pb.go link/sitev1/switchover_grpc.pb.go \
 	storage/storagerpc/storagev1/nvme.pb.go storage/storagerpc/storagev1/nvme_grpc.pb.go \
 	nfsexport/nfsexportrpc/nfsexportv1/export.pb.go nfsexport/nfsexportrpc/nfsexportv1/export_grpc.pb.go \
 	conntrack/conntrackrpc/conntrackv1/flow.pb.go conntrack/conntrackrpc/conntrackv1/flow_grpc.pb.go
@@ -54,6 +55,12 @@ link/sitev1/relay.pb.go: link/sitev1/relay.proto link/sitev1/buf.gen.yaml link/s
 	cd link/sitev1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
 
 link/sitev1/relay_grpc.pb.go: link/sitev1/relay.pb.go
+
+# One buf invocation generates every file of the module, so the second pair
+# rides the first's recipe.
+link/sitev1/switchover.pb.go: link/sitev1/switchover.proto | link/sitev1/relay.pb.go
+
+link/sitev1/switchover_grpc.pb.go: link/sitev1/switchover.pb.go
 
 storage/storagerpc/storagev1/nvme.pb.go: storage/storagerpc/storagev1/nvme.proto storage/storagerpc/storagev1/buf.gen.yaml storage/storagerpc/storagev1/buf.yaml | buf
 	cd storage/storagerpc/storagev1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate

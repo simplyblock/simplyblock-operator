@@ -87,7 +87,8 @@ func (cs *Server) handleSnapshotSource(
 			return nil, err
 		}
 		// 409: a clone with this name already exists, so reconcile it.
-		existingUUID, rerr := reconcileExistingVolume(ctx, sbclient, snapshotName, sizeBytes)
+		existingUUID, rerr := reconcileExistingVolume(ctx, sbclient, snapshotName, sizeBytes,
+			syncCluster(sbclient.ClusterID()))
 		if rerr != nil {
 			return nil, rerr
 		}
@@ -155,7 +156,8 @@ func (cs *Server) handleVolumeSource(
 			return nil, err
 		}
 		// 409: a clone with this name already exists, so reconcile it.
-		existingUUID, rerr := reconcileExistingVolume(ctx, sbclient, cloneName, sizeBytes)
+		existingUUID, rerr := reconcileExistingVolume(ctx, sbclient, cloneName, sizeBytes,
+			syncCluster(sbclient.ClusterID()))
 		if rerr != nil {
 			return nil, rerr
 		}
