@@ -9,9 +9,10 @@
 package node
 
 import (
-	"github.com/simplyblock/atlas/bucketdelivery"
 	"strings"
 	"testing"
+
+	"github.com/simplyblock/atlas/bucketdelivery"
 )
 
 func TestBucketTargetPathIsDeterministicAndUnderTheGatewayRoot(t *testing.T) {

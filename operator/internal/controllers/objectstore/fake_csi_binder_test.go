@@ -40,7 +40,12 @@ const fakeStorageClassName = "fake-pnfs"
 const (
 	fakeClusterID = "f0bb9077-78c4-4482-9ccf-a5693ce2df78"
 	fakePoolID    = "9d016dd4-34d7-42f0-b549-52a5af2f1399"
+	fakeLvolID    = "cb2f293c-6d6f-4687-ad13-eb81fbec7314"
 )
+
+// testVolumeHandle is the handle a PersistentVolume carries wherever a test
+// stands one up itself rather than letting the fake binder derive one.
+const testVolumeHandle = fakeClusterID + ":" + fakePoolID + ":" + fakeLvolID
 
 // fakeVolumeHandle derives a volume handle for the PVC deterministically from
 // its own UID, which the apiserver already assigns in UUID form: exactly the
