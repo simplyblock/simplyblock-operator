@@ -1,5 +1,5 @@
 // ObjectStoreReconciler driven against a real apiserver, with cert-manager's
-// CRDs installed (testdata/cert-manager-crds.yaml) and no kubelet or
+// CRDs installed (testdata/certificate-crd.yaml) and no kubelet or
 // cert-manager controller running: Deployment.status and the Certificate's
 // status.conditions are set by the test directly, the same simplification
 // design-objectstore.md §11 states for this class.
