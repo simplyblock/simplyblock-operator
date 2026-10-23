@@ -33,7 +33,11 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/discovery"
 )
 
-// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-operatorops,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=operatorops,verbs=create;update,versions=v1alpha2,name=voperatorops.simplyblock.io,admissionReviewVersions=v1
+// failurePolicy=ignore: the chart creates the first run in the pass that creates
+// this operator, before the webhook serves. A refusal the webhook gives is still
+// enforced, and the controller refuses an unreadable range again
+// (refuseUnreadableFilter).
+// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-operatorops,mutating=false,failurePolicy=ignore,sideEffects=None,groups=storage.simplyblock.io,resources=operatorops,verbs=create;update,versions=v1alpha2,name=voperatorops.simplyblock.io,admissionReviewVersions=v1
 
 // OperatorOpsValidator refuses a run whose filter cannot be read.
 //

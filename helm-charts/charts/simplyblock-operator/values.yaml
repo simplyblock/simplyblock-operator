@@ -99,9 +99,7 @@ deployment:
   # empty installs the operator, its CRDs, and its webhooks, and nothing for it to
   # act on: no ControlPlane, no SimplyblockDriver, and no discovery run. The
   # administrator writes the ControlPlane and the SimplyblockDriver afterward. The
-  # `driver` section below is not read, and of `discovery` only `namespace` is:
-  # the node-probe ServiceAccount and Role go there, and a discovery run raised
-  # later by hand needs them in its namespace.
+  # `driver` section below is not read, and neither is `discovery`.
   #
   # A release cannot switch to empty while a ControlPlane or SimplyblockDriver it
   # created still exists, because Helm keeps both on the upgrade and the operator
@@ -111,26 +109,24 @@ deployment:
   # what it collects in the object store a hosted control plane brings.
   profile: standalone
 
-# The one discovery run a fresh install performs by itself.
+# The one discovery run a fresh install performs.
 #
-# The operator raises it, inspects every worker this section allows it to, and
-# writes a ClusterDeploymentConfig in Draft. Nothing is deployed until somebody
-# reads that draft and sets `approved: true` on it: `helm install` is not where a
-# running cluster comes from, and there is no value here that makes it one.
+# The chart renders an OperatorOps with action Discover. The operator inspects
+# every schedulable worker and writes a ClusterDeploymentConfig in Draft. Nothing
+# is deployed until somebody reads that draft and sets `approved: true` on it.
 #
-# It happens once per installation. The operator declines the run the moment any
-# OperatorOps, ClusterDeploymentConfig, or StorageCluster already exists, so
-# changing anything below and running `helm upgrade` changes nothing: the run it
-# would configure has already happened. Raising another is
-# `kubectl create -f` against an OperatorOps of your own.
+# The values below are its spec.discover, and one at its default is left out of it.
+# The operator does not raise a run of its own, so an install without this chart
+# (OLM) writes the OperatorOps by hand. A finished run is not run again: a value
+# changed on a later upgrade does not discover again, so write a new OperatorOps
+# for that.
 #
-# Rendered for the managed profile as `enabled: false` alone: there, the cluster
-# that manages this one raises the run, in the namespace it chooses. The empty
-# profile renders the same, because its administrator writes the cluster.
+# Not rendered for the managed profile, where the cluster that manages this one
+# raises the run, nor for the empty profile, whose administrator writes the
+# cluster.
 discovery:
-  # Whether this installation raises the run at all. An installation that wants
-  # no draft waiting for it sets this to false and writes its
-  # ClusterDeploymentConfig by hand.
+  # Whether the chart renders the run. An installation that wants no draft waiting
+  # for it sets this to false and writes its ClusterDeploymentConfig by hand.
   enabled: true
 
   # What the run is called. It is also what the draft is named after, unless
@@ -273,6 +269,9 @@ discovery:
     #   driveSizeRange: 1T-16T
     driveSizeRange: ""
 
+  # The values below are accepted and not used. The operator no longer seeds the
+  # draft from the chart, so edit the draft before approving it. They stay so that
+  # a values file written for an earlier release still installs.
   # What the draft proposes, for the parts no probe can read.
   #
   # Every field here is one discovery would otherwise guess at, and the guesses

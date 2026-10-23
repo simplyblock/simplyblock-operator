@@ -134,7 +134,7 @@ webhooks:
       name: webhook-service
       namespace: system
       path: /validate-storage-simplyblock-io-v1alpha2-operatorops
-  failurePolicy: Fail
+  failurePolicy: Ignore
   name: voperatorops.simplyblock.io
   rules:
   - apiGroups:
