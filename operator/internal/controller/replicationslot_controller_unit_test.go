@@ -781,7 +781,7 @@ func TestSlot_CutoverPending_JobComplete_Signals(t *testing.T) {
 
 // ---------- reconcileCutoverPending: Job failed → signals proceed anyway ----------
 
-func TestSlot_CutoverPending_JobFailed_SignalsAnyway(t *testing.T) {
+func TestSlot_CutoverPending_JobFailed_RetriesWithoutSignal(t *testing.T) {
 	pol := readyReplicationPolicy()
 	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending))
 	jobName := replSlotPreconnectJobName("vol-id")
@@ -817,15 +817,22 @@ func TestSlot_CutoverPending_JobFailed_SignalsAnyway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !proceedCalled {
-		t.Error("expected POST cutover-proceed even after preconnect Job failed")
+	// A failed preconnect leaves the consumer without a target path; signalling
+	// would cut its IO off at the ANA flip (fio-2 EIO, 2026-10-23).
+	if proceedCalled {
+		t.Error("POST cutover-proceed must not be sent after the preconnect Job failed")
 	}
 	if res.RequeueAfter != 5*time.Second {
 		t.Errorf("RequeueAfter = %v, want 5s", res.RequeueAfter)
 	}
 	got := getSlot(t, cl)
-	if got.Annotations[annotCutoverProceedSignaled] != annotCutoverProceedSignaledValue {
-		t.Errorf("annotation %q not set after failed job signalling", annotCutoverProceedSignaled)
+	if _, set := got.Annotations[annotCutoverProceedSignaled]; set {
+		t.Errorf("annotation %q set after a failed job; the retry would be suppressed", annotCutoverProceedSignaled)
+	}
+	var job batchv1.Job
+	err = cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: jobName}, &job)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("failed preconnect Job should be deleted so the next reconcile recreates it; Get err = %v", err)
 	}
 }
 

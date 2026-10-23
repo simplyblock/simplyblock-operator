@@ -667,7 +667,9 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 }
 
 // handleExistingPreconnectJob inspects a preconnect Job that already exists and
-// signals the backend to proceed once the Job has completed (pass or fail).
+// signals the backend to proceed once the Job has succeeded. A failed Job is
+// deleted and retried instead: signalling after a failure is what cut a consumer
+// off from its volume.
 //
 // We always re-check the job state even when the annotation is set, so that a
 // previously-failed callCutoverProceed is retried rather than silently dropped:
@@ -686,16 +688,26 @@ func (r *ReplicationSlotReconciler) handleExistingPreconnectJob(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	for _, c := range job.Status.Conditions {
-		if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) && c.Status == corev1.ConditionTrue {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			// A consumer is attached and has no target path: proceeding would flip
+			// ANA and remove the source paths from under it, and its IO fails. The
+			// 2026-10-23 bed lost fio-2 exactly so. Drop the Job without signalling;
+			// the next reconcile recreates it. The backend's own proceed timeout
+			// still bounds how long the cutover waits.
+			log.Info("Preconnect job failed; retrying instead of signalling proceed", "job", job.Name)
+			r.Recorder.Eventf(slot, nil, corev1.EventTypeWarning, "PreconnectFailed", "PreconnectFailed",
+				"Preconnect job %s failed; cutover held and preconnect retried", job.Name)
+			if delErr := r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground)); delErr != nil && !apierrors.IsNotFound(delErr) {
+				log.Error(delErr, "Failed to delete failed preconnect job", "job", job.Name)
+			}
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
 			result, patchErr := r.markCutoverProceedSignaled(ctx, slot)
 			if patchErr != nil {
 				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 			}
-			if c.Type == batchv1.JobComplete {
-				log.Info("Preconnect job succeeded; signalling backend to proceed", "job", job.Name)
-			} else {
-				log.Info("Preconnect job failed; signalling backend to proceed anyway", "job", job.Name)
-			}
+			log.Info("Preconnect job succeeded; signalling backend to proceed", "job", job.Name)
 			if err := r.callCutoverProceed(ctx, apiClient, proceedClusterID, proceedPoolID, proceedVolumeID); err != nil {
 				log.Error(err, "POST cutover-proceed failed", "slot", slot.Name)
 			}
