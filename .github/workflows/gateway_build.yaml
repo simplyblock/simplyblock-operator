@@ -1,0 +1,80 @@
+name: "Gateway: Docker Build"
+
+# Unlike CSI/Operator: Docker Build, this pushes to registry.simplyblock.ai
+# and Docker Hub only, not ECR Public/Quay. ECR Public needs its repository
+# created in advance of the first push (unlike Docker Hub, which creates one
+# on push), and nobody has created the gateway repository in the account's
+# ECR Public namespace yet; until that is done (or decided against), ECR
+# stays out. Quay ships customer-facing images (see operator_build.yaml), and
+# this repository has no tagged releases yet, so it stays out too. Docker Hub
+# is in because ObjectStoreSpec.Image's admission pattern
+# (api/objectstore/v1alpha1/objectstore_types.go) only ever accepted
+# quay.io/simplyblock-io, docker.io/simplyblock, or public.ecr.aws/simply-block
+# — publishing to registry.simplyblock.ai alone left no image any cluster's
+# ObjectStore could actually reference. No MDS job and no integration-suite
+# job here, because gateway has neither: it is one image, and the suite that
+# would exercise it (design-objectstore.md's ObjectStore reconciler driving a
+# gateway Deployment) does not exist yet.
+
+on:
+  push:
+    branches: ['**']
+  workflow_call:
+    inputs:
+      version:
+        description: "Image tag to publish (defaults to the branch/tag ref)"
+        required: false
+        type: string
+  workflow_dispatch:
+
+env:
+  INTERNAL_IMAGE_NAME: registry.simplyblock.ai/simplyblock/gateway
+  DOCKERHUB_IMAGE_NAME: simplyblock/gateway
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Log in to registries
+      uses: ./.github/actions/registry-login
+      with:
+        ecr: "false"
+        dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+        dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+        internal-username: ${{ secrets.INTERNAL_USERNAME }}
+        internal-password: ${{ secrets.INTERNAL_PASSWORD }}
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: |
+          ${{ env.DOCKERHUB_IMAGE_NAME }}
+          ${{ env.INTERNAL_IMAGE_NAME }}
+        tags: |
+          type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
+          type=raw,value=latest,enable=${{ github.ref_name == 'main' || github.event_name == 'release' || inputs.version != '' }}
+          type=ref,event=branch
+          type=ref,event=tag
+          type=sha,prefix=${{ github.ref_name }}-,format=short,enable=${{ github.event_name == 'push' }}
+
+    - name: Build and push
+      uses: docker/build-push-action@v6
+      with:
+        context: gateway
+        file: gateway/Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        cache-from: type=gha,scope=gateway
+        cache-to: type=gha,mode=max,scope=gateway

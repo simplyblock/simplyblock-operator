@@ -144,6 +144,16 @@ atlas/
 │   └── conntrackrpc/       FlowService: served by the CSI node plugin, called by the operator
 │       ├── conntrackrpc.go NewServer(conntrack.Forget), Remote(conn).Forget
 │       └── conntrackv1/    the FlowService protocol (buf-generated, committed)
+├── bucketdelivery/         Deliver an S3 bucket's mount to its gateway's node set
+│   ├── paths.go            GatewayMountRoot: the one hostPath both the CSI node plugin (bind-mounts a
+│   │                       bucket there) and the operator's ObjectStoreReconciler (mounts every gateway
+│   │                       pod's hostPath there, HostToContainer) have to agree on without calling
+│   │                       each other
+│   └── bucketdeliveryrpc/  BucketDeliveryService: served by the CSI node plugin, called by the operator.
+│       │                   No sibling local-action package: Deliver/Withdraw wrap the node plugin's
+│       │                   own NodeStageVolume/NodePublishVolume, already written for kubelet.
+│       ├── bucketdeliveryrpc.go  Bucket, Deliverer, NewServer(deliverer), Remote(conn)
+│       └── bucketdeliveryv1/     the BucketDeliveryService protocol (buf-generated, committed)
 ├── prometheus/             The telemetry simplyblock exports about itself (PromQL)
 │   ├── doc.go              Why this is not part of controlplane, and how fresh a value is
 │   ├── client.go           Provider, New, NewWithAPI (the test seam), query helpers
@@ -1440,6 +1450,62 @@ for _, p := range registry.PeersOfKind(link.PeerKindNode) {
 *Today:* the operator's `NFSExport` reconciler asks for it when a pNFS metadata
 server pod goes away, through `operator/internal/csilink/flows.go`, and
 `csi-driver/internal/driver/driver.go` serves it on every node plugin.
+
+#### Deliver a bucket's mount to a gateway node
+
+An `S3Bucket`'s gateway Deployment runs on a changing set of nodes, and every
+pod on a node needs the same bucket mounted at the same path with no pod spec
+of its own changing to get it (`design-bucket-provisioning.md` §5). No new
+component runs on the node for this: `DeliverBucket` and `WithdrawBucket` wrap
+the CSI node plugin's own `NodeStageVolume`/`NodePublishVolume` and
+`NodeUnpublishVolume`/`NodeUnstageVolume`, called by the operator instead of
+kubelet, over the same `csi-link` session `NFSExport` assembly already reaches
+a node through.
+
+```go
+// On the node (the CSI node plugin), wrapping its own NodeServer:
+type deliverer struct{ ns *node.Server }
+
+func (d *deliverer) Deliver(ctx context.Context, b bucketdeliveryrpc.Bucket) error {
+    path := derivedTargetPath(b.Name) // under the DaemonSet's own Bidirectional hostPath subtree
+    if _, err := d.ns.NodeStageVolume(ctx, &csi.NodeStageVolumeRequest{
+        VolumeId: b.VolumeHandle, StagingTargetPath: path, VolumeContext: b.VolumeContext,
+    }); err != nil {
+        return err
+    }
+    _, err := d.ns.NodePublishVolume(ctx, &csi.NodePublishVolumeRequest{
+        VolumeId: b.VolumeHandle, StagingTargetPath: path, TargetPath: path,
+    })
+    return err
+}
+
+srv, err := bucketdeliveryrpc.NewServer(&deliverer{ns: nodeServer})
+cfg.Register = func(r grpc.ServiceRegistrar) { nodeServer.Register(r); srv.Register(r) }
+cfg.Capabilities = append(cfg.Capabilities, bucketdeliveryrpc.Capabilities()...)
+
+// From the operator, per node newly in the gateway Deployment's pod set:
+conn, err := registry.Conn(link.NodePeer(nodeName)) // the same lookup NFSExport assembly uses
+if err == nil {
+    err = bucketdeliveryrpc.Remote(conn).Deliver(ctx, bucketdeliveryrpc.Bucket{
+        Name: bucketName, VolumeHandle: pv.Spec.CSI.VolumeHandle, VolumeContext: volumeContext,
+    })
+}
+```
+
+The bind mount `NodePublishVolume` makes under the plugin's own `Bidirectional`
+`hostPath` subtree reaches every gateway pod on that node via `HostToContainer`
+propagation, already confirmed on a live cluster
+(`0004-direct-csi-mount-spike-result.md`). `Withdraw` reverses it the same way,
+and both read and write the plugin's existing stack record, so its own
+restart-recovery path covers a delivered bucket with no new persistence.
+
+*Today:* wired end to end. `csi-driver/internal/csi/node/bucketdelivery.go`
+is the node-side `deliverer` (W-11), `S3BucketReconciler` is the
+operator-side caller (W-12, `kubernetes/operator/internal/controllers/
+objectstore/s3bucket_delivery.go`), and `ObjectStoreReconciler` mounts every
+gateway pod's `GatewayMountRoot` hostPath so a bucket delivered after the pod
+started still reaches it (`kubernetes/operator/internal/controllers/
+objectstore/objectstore_build.go`).
 
 ### Cross-cutting
 

@@ -8,6 +8,7 @@ rules:
   - ""
   resources:
   - configmaps
+  - persistentvolumeclaims
   - secrets
   - serviceaccounts
   - services
@@ -31,17 +32,6 @@ rules:
   resources:
   - nodes
   verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - persistentvolumeclaims
-  verbs:
-  - create
   - get
   - list
   - patch
@@ -396,6 +386,7 @@ rules:
   - replicationpairs/finalizers
   - replicationpolicies/finalizers
   - replicationslots/finalizers
+  - s3buckets/finalizers
   - simplyblockdrivers/finalizers
   - storagebackupops/finalizers
   - storagebackuppolicies/finalizers
@@ -422,12 +413,14 @@ rules:
   - controlplaneops/status
   - controlplanes/status
   - nfsexports/status
+  - objectstores/status
   - operatorops/status
   - persistentvolumeops/status
   - replicationops/status
   - replicationpairs/status
   - replicationpolicies/status
   - replicationslots/status
+  - s3buckets/status
   - simplyblockdrivers/status
   - storagebackupops/status
   - storagebackuppolicies/status
@@ -457,6 +450,17 @@ rules:
   - clusterdeploymentconfigs
   verbs:
   - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - objectstores
+  - s3buckets
+  verbs:
   - get
   - list
   - patch
