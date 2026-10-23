@@ -79,7 +79,7 @@ spec:
                   name: simplyblock-graylog-secret
                   key: MAX_NUMBER_OF_INDICES
             - name: GRAYLOG_ELASTICSEARCH_MAX_TIME_PER_INDEX
-              value: "1d"
+              value: {{ include "simplyblock.graylogMaxTimePerIndex" . | quote }}
             - name: GRAYLOG_RING_SIZE
               value: "4096"
             - name: GRAYLOG_INPUTBUFFER_RING_SIZE
