@@ -95,6 +95,9 @@ func (v *PersistentVolumeOpsValidator) admitCreate(
 	if denied != nil {
 		return *denied
 	}
+	if ops.Spec.Action == simplyblockv1alpha2.PersistentVolumeOpsActionRelocate {
+		return v.relocateEligible(ctx, &ops, handle)
+	}
 	return v.targetInTheVolumesCluster(ctx, &ops, handle)
 }
 
