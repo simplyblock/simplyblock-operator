@@ -76,12 +76,6 @@ csiSecret:
   simplybk:
     secret:
 
-
-podAnnotations: {}
-
-# SimplyBlock Daemonset, Deployment, Statefulset annotations
-simplyBlockAnnotations: {}
-
 multiCluster:
   enable: false
   clusters:
@@ -627,8 +621,7 @@ controlplane:
     value:
 
   storageclass:
-    name:  
-    allowedTopologyZones: []
+    name:
 
   foundationdb:
     # Whether the chart applies the FoundationDB CRDs it carries. They are the
