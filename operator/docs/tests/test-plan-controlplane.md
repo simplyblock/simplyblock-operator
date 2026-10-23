@@ -210,8 +210,8 @@ File: `operator/internal/controllers/controlplane/dnsdomain_test.go`
 | #     | Scenario                                                                          | Type       | Test                                                          |
 |-------|-----------------------------------------------------------------------------------|------------|---------------------------------------------------------------|
 | U-519 | The database names its coordinators under the cluster DNS domain, not the default | Regression | `TestTheDatabaseNamesItsCoordinatorsUnderTheClusterDNSDomain` |
-| U-520 | The management API endpoint is under the cluster DNS domain                       | Positive   | `TestTheManagementAPIEndpointIsUnderTheClusterDNSDomain`      |
-| U-521 | The peer certificate names the database's pods under the cluster DNS domain       | Positive   | `TestThePeerCertificateNamesTheClusterDNSDomain`              |
+| U-520 | The management API endpoint carries no cluster DNS domain                         | Regression | `TestTheManagementAPIEndpointCarriesNoClusterDomain`          |
+| U-521 | The peer certificate names the database's pods in both spellings                  | Positive   | `TestThePeerCertificateNamesBothSpellings`                    |
 
 ### Deletion (design §4.4)
 

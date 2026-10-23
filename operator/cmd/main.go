@@ -243,10 +243,6 @@ func main() {
 	flag.StringVar(&latencyPercentile, "latency-percentile", "p50",
 		"fio write-latency percentile driving the volume-rebalancing deviation signal: "+
 			"\"p50\" (median, stable) or \"p99\" (tail, noisy).")
-	var clusterDNSDomain string
-	flag.StringVar(&clusterDNSDomain, "cluster-dns-domain", utils.DefaultClusterDNSDomain,
-		"The cluster's DNS domain, the suffix after <service>.<namespace>.svc. Every "+
-			"in-cluster address and certificate name the operator builds uses it.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -255,9 +251,12 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	if err := utils.SetClusterDNSDomain(clusterDNSDomain); err != nil {
-		setupLog.Error(err, "invalid --cluster-dns-domain")
-		os.Exit(1)
+	clusterDNSDomain, err := utils.DetectClusterDNSDomain()
+	if err != nil {
+		setupLog.Info("falling back to the default cluster DNS domain",
+			"domain", clusterDNSDomain, "reason", err.Error())
+	} else {
+		setupLog.Info("detected the cluster DNS domain", "domain", clusterDNSDomain)
 	}
 
 	nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
