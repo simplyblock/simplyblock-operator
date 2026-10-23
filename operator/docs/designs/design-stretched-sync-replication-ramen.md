@@ -229,6 +229,8 @@ spec:
   sizing:                   # what no probe can read, written onto both drafts
     stripe: {dataChunks: 2, parityChunks: 2}
     maxSubsystemCount: 64
+  images:                   # what both sites' storage nodes run, written onto both drafts
+    spdk: {image: public.ecr.aws/simply-block/ultra:main-sync-replica-test-latest}
   approved: false           # the one-way review gate, flipped here, delivered to both sites
 ```
 
@@ -807,6 +809,13 @@ type StretchedClusterSpec struct {
 	// drafts whatever is written here.
 	// +optional
 	Sizing *StorageSiteSizing `json:"sizing,omitempty"`
+
+	// Images are the images both sites' storage nodes run, written onto both
+	// drafts with the sizing. A stretched cluster's two sites run one data plane,
+	// so the images are stated once for both. Unstated, each site's expansion
+	// keeps its own defaults.
+	// +optional
+	Images *DeploymentImages `json:"images,omitempty"`
 
 	// Approved is the review gate for both drafts. One-way. The leader's draft
 	// is approved as soon as this is set; the follower's only once the leader's

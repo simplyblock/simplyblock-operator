@@ -132,6 +132,13 @@ type StretchedClusterSpec struct {
 	// +optional
 	Sizing *StorageSiteSizing `json:"sizing,omitempty"`
 
+	// Images are the images both sites' storage nodes run, written onto both
+	// drafts with the sizing. A stretched cluster's two sites run one data plane,
+	// so the images are stated once for both. Unstated, each site's expansion
+	// keeps its own defaults.
+	// +optional
+	Images *DeploymentImages `json:"images,omitempty"`
+
 	// Approved is the review gate for both drafts. One-way. The leader's draft
 	// is approved as soon as this is set; the follower's only once the leader's
 	// cluster exists, so the follower never races the create.

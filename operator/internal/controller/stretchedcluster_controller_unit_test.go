@@ -215,6 +215,37 @@ func TestEachDraftIsSizedAsOneSiteOfASyncCluster(t *testing.T) {
 	}
 }
 
+// The images a stretched cluster pins reach both drafts, so the two sites'
+// storage nodes run the same SPDK and SPDK proxy. Without them each site's
+// expansion falls back to the control plane's default SPDK image, which need not
+// carry synchronous replication.
+func TestBothDraftsPinTheStretchedClustersImages(t *testing.T) {
+	const spdk = "example.test/ultra:sync"
+	const proxy = "example.test/simplyblock:stretched"
+	sc := newStretched(func(s *simplyblockv1alpha2.StretchedCluster) {
+		s.Spec.Images = &simplyblockv1alpha2.DeploymentImages{
+			SPDK:      &simplyblockv1alpha2.ImageSpec{Image: spdk},
+			SPDKProxy: &simplyblockv1alpha2.ImageSpec{Image: proxy},
+		}
+	})
+	r, cl, _ := newStretchedReconciler(t, sc)
+	got := reconcileStretched(t, r, cl, 2)
+	for _, site := range got.Spec.Sites {
+		project(t, cl, got, site.Cluster, site.Site, "draft", stretchedDraft(got, false))
+	}
+	got = reconcileStretched(t, r, cl, 2)
+
+	for _, site := range got.Spec.Sites {
+		spec := draftApply(t, siteWork(t, cl, got, site.Cluster, site.Site))
+		images, _ := spec["images"].(map[string]any)
+		spdkSlot, _ := images["spdk"].(map[string]any)
+		proxySlot, _ := images["spdkProxy"].(map[string]any)
+		if spdkSlot["image"] != spdk || proxySlot["image"] != proxy {
+			t.Errorf("%s: the draft's images are %v, want spdk %s and spdkProxy %s", site.Cluster, spec["images"], spdk, proxy)
+		}
+	}
+}
+
 // U-21: approval reaches the leader's draft at once and the follower's only once
 // the leader's cluster exists, together with the credentials to adopt it, so the
 // follower never races the create.

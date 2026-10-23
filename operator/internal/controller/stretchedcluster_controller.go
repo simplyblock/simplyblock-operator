@@ -204,7 +204,7 @@ func (r *StretchedClusterReconciler) runSite(
 		Discover:       site.Discover,
 		Labels:         map[string]string{stretchedClusterIDLabel: string(sc.UID)},
 		WorkName:       stretchedWorkName(sc, site.Site),
-		DraftSpec:      map[string]any{"approved": approved, "cluster": template},
+		DraftSpec:      draftSpec(approved, template, sc.Spec.Images),
 		PreviousDraft:  previousDraft(sc, site.Cluster),
 	}
 	if site.Role == simplyblockv1alpha2.StretchedRoleFollower && uuid != "" && secret != "" {
@@ -401,6 +401,32 @@ func stretchedWorkName(sc *simplyblockv1alpha2.StretchedCluster, site string) st
 // stretchedViewName is one of a site's views.
 func stretchedViewName(sc *simplyblockv1alpha2.StretchedCluster, site, suffix string) string {
 	return stretchedWorkName(sc, site) + "-" + suffix
+}
+
+// draftSpec is what the hub applies onto a site's draft: the approval, the
+// cluster template, and the images both sites run, when the request pins any.
+func draftSpec(approved bool, template map[string]any, images *simplyblockv1alpha2.DeploymentImages) map[string]any {
+	spec := map[string]any{"approved": approved, "cluster": template}
+	if images == nil {
+		return spec
+	}
+	slots := map[string]any{}
+	for name, slot := range map[string]*simplyblockv1alpha2.ImageSpec{
+		"nodeAgent": images.NodeAgent, "spdk": images.SPDK, "spdkProxy": images.SPDKProxy,
+	} {
+		if slot == nil {
+			continue
+		}
+		image := map[string]any{"image": slot.Image}
+		if slot.ImagePullPolicy != "" {
+			image["imagePullPolicy"] = string(slot.ImagePullPolicy)
+		}
+		slots[name] = image
+	}
+	if len(slots) > 0 {
+		spec["images"] = slots
+	}
+	return spec
 }
 
 // stretchedDraftName is the draft the discovery writes on each site.
