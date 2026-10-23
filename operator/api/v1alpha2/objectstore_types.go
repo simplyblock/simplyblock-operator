@@ -9,7 +9,7 @@
 // that turns this into a Deployment, a Service, and a certificate is
 // objectstore_controller.go.
 
-package v1alpha1
+package v1alpha2
 
 import (
 	corev1 "k8s.io/api/core/v1"
@@ -133,7 +133,7 @@ type ObjectStoreStatus struct {
 
 // ObjectStore is the desired existence of one S3 gateway: its Deployment,
 // its Service, and that Service's serving certificate. Every gateway pod
-// carries the label objectstore.simplyblock.io/instance=<name>, which is how
+// carries the label storage.simplyblock.io/objectstore=<name>, which is how
 // S3BucketReconciler finds them without reading this object.
 type ObjectStore struct {
 	metav1.TypeMeta   `json:",inline"`

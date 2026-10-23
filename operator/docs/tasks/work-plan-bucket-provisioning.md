@@ -80,7 +80,7 @@ Resolved by a live-cluster spike, recorded in `0004-direct-csi-mount-spike-resul
 **Scenarios:** —
 **Size:** S
 
-Add `S3Bucket`, `S3BucketSpec`, `S3BucketStatus`, `S3BucketPhase`, and `S3BucketFinalizer` to a new `objectstore.simplyblock.io/v1alpha1` API group, exactly as specified in design Appendix A. This is a new API group, not an addition to `storage.simplyblock.io`, keeping this feature's API versioning independent of the existing group's (design §7.1). No reconciler logic in this item: types, kubebuilder markers, and generated code only.
+Add `S3Bucket`, `S3BucketSpec`, `S3BucketStatus`, `S3BucketPhase`, and `S3BucketFinalizer` to a new `storage.simplyblock.io/v1alpha2` API group, exactly as specified in design Appendix A. This is a new API group, not an addition to `storage.simplyblock.io`, keeping this feature's API versioning independent of the existing group's (design §7.1). No reconciler logic in this item: types, kubebuilder markers, and generated code only.
 
 **Acceptance criteria**
 
@@ -250,7 +250,7 @@ Runs in the existing `kubernetes/operator` manager (`0005-s3bucket-joins-the-mai
 - [x] Two gateway pods on the same node produce exactly one `DeliverBucket` call (U-13): `desiredDeliveryNodes` builds its node set from a map, so the duplicate never reaches `diffDeliveryNodes` to call `DeliverBucket` twice about
 - [x] The existing manager's `ClusterRole` diff is committed with this item, scoped to exactly the `pods`/`deployments.apps` rules design §7.5 lists for this controller (both verb sets were already a subset of what the manager's merged `ClusterRole` grants other controllers, so the diff adds no new permission, only this reconciler's own explicit markers)
 
-Also added, beyond design §7.2's own text: a `Watches(&corev1.Pod{}, ...)` on the gateway's pods (filtered to ones carrying the `objectstore.simplyblock.io/instance` label), mapping a pod event to every `S3Bucket` naming that `ObjectStore`. Without it nothing would ever wake a `Ready` bucket's reconcile when its gateway pod moved to a new node in production, since this controller watches no object `design-objectstore.md` owns.
+Also added, beyond design §7.2's own text: a `Watches(&corev1.Pod{}, ...)` on the gateway's pods (filtered to ones carrying the `storage.simplyblock.io/objectstore` label), mapping a pod event to every `S3Bucket` naming that `ObjectStore`. Without it nothing would ever wake a `Ready` bucket's reconcile when its gateway pod moved to a new node in production, since this controller watches no object `design-objectstore.md` owns.
 
 ---
 

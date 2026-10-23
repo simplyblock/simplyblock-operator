@@ -181,18 +181,18 @@ StorageClassName string `json:"storageClassName"`
 MountDeliveredNodes []string `json:"mountDeliveredNodes,omitempty"`
 ```
 
-The whole type, including `Phase`, `NFSExportName`, `Conditions`, and `ObservedGeneration`, is in Appendix A. A finalizer (`objectstore.simplyblock.io/s3bucket`) is mandatory: the CR is the only record of a PVC and a set of per-node mount deliveries, and a direct delete without it orphans both.
+The whole type, including `Phase`, `NFSExportName`, `Conditions`, and `ObservedGeneration`, is in Appendix A. A finalizer (`storage.simplyblock.io/s3bucket`) is mandatory: the CR is the only record of a PVC and a set of per-node mount deliveries, and a direct delete without it orphans both.
 
 A CR as it exists once `Ready`:
 
 ```yaml
-apiVersion: objectstore.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: S3Bucket
 metadata:
   name: team-a-reports
   namespace: s3-system
   finalizers:
-    - objectstore.simplyblock.io/s3bucket
+    - storage.simplyblock.io/s3bucket
 spec:
   objectStoreRef: team-a-store
   bucketName: team-a-reports
@@ -238,7 +238,7 @@ The plugin already persists a durable stack record per staged volume (`ns.stack.
 
 ### 5.3 Tracking gateway pod placement
 
-The reconciler lists the `ObjectStore`'s gateway Deployment's pods (by the fixed label `objectstore.simplyblock.io/instance=<name>`, `design-objectstore.md`, no field read off the `ObjectStore` itself) and derives the current node set. For every node in that set the bucket is not yet delivered to, it resolves the node's `csi-link` session (`PeerRegistry.Conn(link.NodePeer(nodeName))`, the same lookup `nfsexport_assembler.go` uses) and calls `DeliverBucket`. For every node holding a delivery no longer in the set, it calls `WithdrawBucket` the same way. This reconciles on every `S3Bucket` pass and whenever the watched Deployment's pod set changes, so a gateway pod rescheduled to a new node gets the bucket delivered there within one reconcile, not only at bucket-creation time. No Kubernetes object is created or deleted for this: what changes is the CSI node plugin's own stack record on the affected nodes.
+The reconciler lists the `ObjectStore`'s gateway Deployment's pods (by the fixed label `storage.simplyblock.io/objectstore=<name>`, `design-objectstore.md`, no field read off the `ObjectStore` itself) and derives the current node set. For every node in that set the bucket is not yet delivered to, it resolves the node's `csi-link` session (`PeerRegistry.Conn(link.NodePeer(nodeName))`, the same lookup `nfsexport_assembler.go` uses) and calls `DeliverBucket`. For every node holding a delivery no longer in the set, it calls `WithdrawBucket` the same way. This reconciles on every `S3Bucket` pass and whenever the watched Deployment's pod set changes, so a gateway pod rescheduled to a new node gets the bucket delivered there within one reconcile, not only at bucket-creation time. No Kubernetes object is created or deleted for this: what changes is the CSI node plugin's own stack record on the affected nodes.
 
 ### 5.4 Verification
 
@@ -290,7 +290,7 @@ The same spike confirmed, on a live cluster, the fact this design turns on: a `N
 
 ### 7.1 Location
 
-`S3BucketReconciler` registers into the existing `kubernetes/operator` manager, the same process that already reconciles `StorageCluster`, `StorageNode`, `Pool`, and `NFSExport` (and, by a separate design, `ObjectStore`). It is a new API group, `objectstore.simplyblock.io`, not an addition to `storage.simplyblock.io` (keeping this feature's API versioning and lifecycle independent of the existing group's), but it is not a new manager process.
+`S3BucketReconciler` registers into the existing `kubernetes/operator` manager, the same process that already reconciles `StorageCluster`, `StorageNode`, `Pool`, and `NFSExport` (and, by a separate design, `ObjectStore`). It is a new kind in `storage.simplyblock.io/v1alpha2` rather than a group of its own, and not a new manager process.
 
 This is what makes `DeliverBucket`/`WithdrawBucket` (§5.2, §5.3) straightforward: both need the in-process `PeerRegistry` the `csi-link` hub owns, and `S3BucketReconciler` calls it the same way `NFSExportReconciler` already does for NFSExport assembly, because it runs in the same process. The alternative, a separate manager, was considered and rejected: it would need either a second `PeerRegistry`-reaching mechanism built just for this (a new `csi-link` peer kind the hub relays through, or a dedicated API `S3BucketReconciler` calls), or the delivery piece split into its own controller inside the main operator while everything else stayed out. Both are more moving parts than the risk this reconciler actually carries justifies, once `DeliverBucket`/`WithdrawBucket` reuse `NFSExportReconciler`'s already-proven mechanism rather than inventing a new one. The cost accepted instead: this reconciler's RBAC (PVC create/delete, `NFSExport` and gateway-pod read) joins the main operator's existing `ServiceAccount`, the same union-of-permissions tradeoff every controller already in that manager carries.
 
@@ -385,7 +385,7 @@ The risk concentrates in the E2E class: every unit and integration scenario can 
 | #   | Question                                                                                                                                                                                                                                                                                                                                                                                                                                   | Owner                                               |
 |-----|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------|
 | 1   | ~~**Mount propagation (§5.4):** does `HostToContainer` propagation on the gateway pod actually see a mount-holder's `NodePublishVolume` bind mount?~~ **Resolved** (`0004-direct-csi-mount-spike-result.md`): yes, for a mount placed under the node plugin's own `Bidirectional` `hostPath` subtree. See §5.4.                                                                                                                            | Resolved                                            |
-| 2   | ~~**`ObjectStore`'s shape:** what fields it exposes for this design to read a gateway Deployment's pod selector, and whether `S3Bucket` and `ObjectStore` are reconciled by the same manager or two.~~ **Resolved** (`design-objectstore.md`): no field read at all. The gateway Deployment and its pods are named deterministically from `ObjectStore.metadata.name`, labeled `objectstore.simplyblock.io/instance=<name>`. Same manager. | Resolved                                            |
+| 2   | ~~**`ObjectStore`'s shape:** what fields it exposes for this design to read a gateway Deployment's pod selector, and whether `S3Bucket` and `ObjectStore` are reconciled by the same manager or two.~~ **Resolved** (`design-objectstore.md`): no field read at all. The gateway Deployment and its pods are named deterministically from `ObjectStore.metadata.name`, labeled `storage.simplyblock.io/objectstore=<name>`. Same manager. | Resolved                                            |
 | 3   | **Who creates an `S3Bucket`:** whether the gateway's `CreateBucket` handler needs its own Kubernetes RBAC to create one directly, or goes through a narrower-scoped intermediary. This design accepts an `S3Bucket` from any authorized caller and does not constrain who that is.                                                                                                                                                         | Gateway repository / RBAC hardening                 |
 | 4   | **The `CreateBucket` synchronous-wait bound:** unmeasured. `simplyblock_objectstore_bucket_provisioning_seconds` (§10) is how it gets measured once this design is deployed somewhere the pNFS path exists.                                                                                                                                                                                                                                | This design, once P0-1 is available for measurement |
 | 5   | ~~**Mount-holder resource footprint at scale:** one pod per `(bucket, node)` pair.~~ **Resolved** (§5.2, §5.4): no Pod of any kind. `DeliverBucket`/`WithdrawBucket` run inside the existing CSI node plugin, over its existing `csi-link` session.                                                                                                                                                                                        | Resolved                                            |
@@ -397,7 +397,7 @@ The risk concentrates in the E2E class: every unit and integration scenario can 
 ## Appendix A: `s3bucket_types.go`
 
 ```go
-// Package v1alpha1 of the objectstore.simplyblock.io API group.
+// Package v1alpha2 of the storage.simplyblock.io API group.
 
 package v1alpha1
 
@@ -408,7 +408,7 @@ import (
 // S3BucketFinalizer keeps the record alive until its PVC is released and its
 // per-node mount deliveries are withdrawn. Without it a direct delete orphans
 // a mounted export and a volume nothing describes any longer.
-const S3BucketFinalizer = "objectstore.simplyblock.io/s3bucket"
+const S3BucketFinalizer = "storage.simplyblock.io/s3bucket"
 
 // S3BucketPhase is the lifecycle phase of a bucket's provisioning.
 // +kubebuilder:validation:Enum=Pending;Provisioning;Ready;Degraded;Deleting

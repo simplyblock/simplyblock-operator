@@ -304,32 +304,6 @@ rules:
   - list
   - update
 - apiGroups:
-  - objectstore.simplyblock.io
-  resources:
-  - objectstores
-  - s3buckets
-  verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - objectstore.simplyblock.io
-  resources:
-  - objectstores/status
-  - s3buckets/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - objectstore.simplyblock.io
-  resources:
-  - s3buckets/finalizers
-  verbs:
-  - update
-- apiGroups:
   - operator.openshift.io
   resources:
   - networks
@@ -478,6 +452,7 @@ rules:
   - replicationpairs/finalizers
   - replicationpolicies/finalizers
   - replicationslots/finalizers
+  - s3buckets/finalizers
   - simplyblockdrivers/finalizers
   - storagebackupops/finalizers
   - storagebackuppolicies/finalizers
@@ -506,12 +481,14 @@ rules:
   - controlplaneops/status
   - controlplanes/status
   - nfsexports/status
+  - objectstores/status
   - operatorops/status
   - persistentvolumeops/status
   - replicationops/status
   - replicationpairs/status
   - replicationpolicies/status
   - replicationslots/status
+  - s3buckets/status
   - simplyblockdrivers/status
   - storagebackupops/status
   - storagebackuppolicies/status
@@ -551,6 +528,8 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - objectstores
+  - s3buckets
   - storagefenceremediations
   - stretchedclusters
   verbs:

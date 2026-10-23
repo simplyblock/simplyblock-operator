@@ -21,7 +21,7 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 // DefaultCollectInterval is how often the phase gauge is rebuilt. A bucket's
@@ -32,12 +32,12 @@ const DefaultCollectInterval = 30 * time.Second
 // bucketPhases is every value the gauge carries a series for, so a bucket
 // currently in one phase still reports 0 for the other four rather than
 // those series being absent.
-var bucketPhases = []objectstorev1alpha1.S3BucketPhase{
+var bucketPhases = []simplyblockv1alpha2.S3BucketPhase{
 	phasePending, phaseProvisioning, phaseReady, phaseDegraded, phaseDeleting,
 }
 
 // objectStorePhaseValues is the same, for ObjectStore's own four-value phase.
-var objectStorePhaseValues = []objectstorev1alpha1.ObjectStorePhase{
+var objectStorePhaseValues = []simplyblockv1alpha2.ObjectStorePhase{
 	osPhasePending, osPhaseProvisioning, osPhaseReady, osPhaseDegraded,
 }
 
@@ -49,7 +49,7 @@ type Collector struct {
 	Interval time.Duration
 }
 
-// +kubebuilder:rbac:groups=objectstore.simplyblock.io,resources=s3buckets;objectstores,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=s3buckets;objectstores,verbs=get;list;watch
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable. Both gauges
 // are per-object facts rather than per-replica ones, so a follower
@@ -93,7 +93,7 @@ func (c *Collector) collect(ctx context.Context) error {
 }
 
 func (c *Collector) collectBuckets(ctx context.Context) error {
-	var buckets objectstorev1alpha1.S3BucketList
+	var buckets simplyblockv1alpha2.S3BucketList
 	if err := c.List(ctx, &buckets); err != nil {
 		return fmt.Errorf("list the S3Buckets: %w", err)
 	}
@@ -113,7 +113,7 @@ func (c *Collector) collectBuckets(ctx context.Context) error {
 }
 
 func (c *Collector) collectObjectStores(ctx context.Context) error {
-	var stores objectstorev1alpha1.ObjectStoreList
+	var stores simplyblockv1alpha2.ObjectStoreList
 	if err := c.List(ctx, &stores); err != nil {
 		return fmt.Errorf("list the ObjectStores: %w", err)
 	}

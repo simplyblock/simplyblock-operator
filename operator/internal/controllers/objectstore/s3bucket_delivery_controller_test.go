@@ -19,7 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 // gatewayDeployment is a minimal Deployment a real apiserver accepts (a
@@ -71,9 +71,9 @@ func readyBucketWithGatewayPod(
 		t.Fatalf("creating the gateway pod: %v", err)
 	}
 
-	bucket := &objectstorev1alpha1.S3Bucket{
+	bucket := &simplyblockv1alpha2.S3Bucket{
 		ObjectMeta: metav1.ObjectMeta{Name: bucketName, Namespace: "default"},
-		Spec: objectstorev1alpha1.S3BucketSpec{
+		Spec: simplyblockv1alpha2.S3BucketSpec{
 			ObjectStoreRef: storeName, BucketName: bucketName,
 			CapacityBytes: 50 * 1 << 20, StorageClassName: fakeStorageClassName,
 		},
@@ -85,7 +85,7 @@ func readyBucketWithGatewayPod(
 	registry := newFakePeerRegistry(ctx, t, registryNodes...)
 	r := &S3BucketReconciler{Client: cli, Scheme: cli.Scheme(), Registry: registry}
 	key := client.ObjectKeyFromObject(bucket)
-	reconcileBucketUntil(t, r, key, func(b *objectstorev1alpha1.S3Bucket) bool {
+	reconcileBucketUntil(t, r, key, func(b *simplyblockv1alpha2.S3Bucket) bool {
 		return b.Status.Phase == phaseReady
 	})
 	return r, key, cli, registry
@@ -123,7 +123,7 @@ func TestMountDeliveryFollowsAGatewayPodRescheduleWhileReady(t *testing.T) {
 	if got := registry.Withdrawn("node-a"); len(got) != 1 {
 		t.Errorf("node-a withdrawn = %v, want exactly one WithdrawBucket call within the one reconcile", got)
 	}
-	var bucket objectstorev1alpha1.S3Bucket
+	var bucket simplyblockv1alpha2.S3Bucket
 	if err := cli.Get(ctx, key, &bucket); err != nil {
 		t.Fatalf("reading the bucket back: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestMountDeliveryCorrectsADriftedNodeInStatus(t *testing.T) {
 	r, key, cli, registry := readyBucketWithGatewayPod(t, "i09-store", "i09-bucket", "node-a")
 
 	ctx := context.Background()
-	var bucket objectstorev1alpha1.S3Bucket
+	var bucket simplyblockv1alpha2.S3Bucket
 	if err := cli.Get(ctx, key, &bucket); err != nil {
 		t.Fatalf("reading the bucket: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestMountDeliveryCorrectsADriftedNodeInStatus(t *testing.T) {
 	if got := registry.Withdrawn("node-drifted"); len(got) != 0 {
 		t.Errorf("node-drifted withdrawn = %v, want none: it was never linked, so there is nothing to call", got)
 	}
-	var got objectstorev1alpha1.S3Bucket
+	var got simplyblockv1alpha2.S3Bucket
 	if err := cli.Get(ctx, key, &got); err != nil {
 		t.Fatalf("reading the bucket back: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestMountDeliveryLeavesDeliveriesWhenTheGatewayDeploymentIsGone(t *testing.
 	if got := registry.Withdrawn("node-a"); len(got) != 0 {
 		t.Errorf("node-a withdrawn = %v, want none: existing deliveries stay in place", got)
 	}
-	var got objectstorev1alpha1.S3Bucket
+	var got simplyblockv1alpha2.S3Bucket
 	if err := cli.Get(ctx, key, &got); err != nil {
 		t.Fatalf("reading the bucket back: %v", err)
 	}
