@@ -456,70 +456,63 @@ checkClusterStorageClasses() {
   fi
 }
 
-# checkDiscovery asserts that discovery values render the OperatorOps that runs
-# them, and that an install stating none renders no run for the operator to
-# decline behind.
+# checkDiscovery asserts that discovery values reach the operator as the spec of
+# its initial run, and that the chart never renders an OperatorOps itself.
 #
-# The operator raises the default run itself. A value an administrator sets has
-# to reach spec.discover, because the run the operator raises would not carry it.
+# The operator raises the run and the chart only tells it what to carry. An
+# OperatorOps rendered here would be applied before the operator's webhook is
+# serving, and `helm uninstall` would delete an object holding a finalizer along
+# with the controller that releases it.
 checkDiscovery() {
-  local yq="${YQ:-yq}"
-  local ok=1 doc got
+  local ok=1 args objects
 
-  # operatorOps prints the rendered OperatorOps, with the extra settings given.
-  operatorOps() {
-    local profile="$1"
-    shift
+  # operatorArgs prints the operator's initial-discovery-spec argument, decoded
+  # from the manifest, with extra settings.
+  operatorArgs() {
     helm template sb "$CHART" --namespace simplyblock \
       "${CAPABILITIES[@]}" \
-      --set deployment.profile="$profile" \
-      --set controlplane.managed.endpoint=https://cp.example.com \
-      "$@" 2>/dev/null | "$yq" -N 'select(.kind == "OperatorOps")'
+      --show-only templates/simplyblock-operator.yaml \
+      "$@" 2>/dev/null |
+      "${YQ:-yq}" -N 'select(.kind == "Deployment") | .spec.template.spec.containers[].args[] |
+        select(test("^--initial-discovery-spec="))'
   }
 
-  doc="$(operatorOps standalone)"
-  if [ -n "$doc" ]; then
-    echo "  discovery: an install stating nothing renders an OperatorOps"
+  args="$(operatorArgs --set deployment.profile=standalone)"
+  if grep -qF -- '--initial-discovery-spec' <<<"$args"; then
+    echo "  discovery: an install stating nothing passes a spec"
     ok=0
   fi
 
-  doc="$(operatorOps standalone \
-    --set discovery.nodeSelector.node-role\\.kubernetes\\.io/simplyblock-storage="" \
+  args="$(operatorArgs --set deployment.profile=standalone \
+    --set discovery.nodeSelector.tier=storage \
     --set discovery.enableControlPlaneNodes=true \
     --set 'discovery.deviceFilter.pcieDenyList={0000:00:1f.2}')"
-  got="$("$yq" '.spec.action + " " + (.spec.discover.enableControlPlaneNodes | tostring) + " " +
-    .spec.discover.deviceFilter.pcieDenyList[0] + " " +
-    (.spec.discover.enablePartitionedDevices | tostring) + " " + .metadata.name' <<<"$doc")"
-  if [ "$got" != "Discover true 0000:00:1f.2 true initial-discovery" ]; then
-    echo "  discovery: values rendered [${got}], want [Discover true 0000:00:1f.2 true initial-discovery]"
-    ok=0
-  fi
-
-  doc="$(operatorOps standalone --set discovery.name=mine --set discovery.namespace=other \
-    --set discovery.enablePartitionedDevices=false)"
-  got="$("$yq" '.metadata.name + " " + .metadata.namespace + " " +
-    (.spec.discover.enablePartitionedDevices | tostring)' <<<"$doc")"
-  if [ "$got" != "mine other false" ]; then
-    echo "  discovery: name, namespace, and the partition waiver rendered [${got}], want [mine other false]"
-    ok=0
-  fi
-
-  # The profiles that raise no run render none, whatever the values say.
-  for profile in managed empty; do
-    doc="$(operatorOps "$profile" --set discovery.enableControlPlaneNodes=true)"
-    if [ -n "$doc" ]; then
-      echo "  discovery: the ${profile} profile renders an OperatorOps"
+  for want in '"nodeSelector":{"tier":"storage"}' '"enableControlPlaneNodes":true' \
+    '"pcieDenyList":["0000:00:1f.2"]'; do
+    if ! grep -qF -- "$want" <<<"$args"; then
+      echo "  discovery: the spec argument lacks ${want}"
       ok=0
     fi
   done
-  doc="$(operatorOps standalone --set discovery.enabled=false --set discovery.enableControlPlaneNodes=true)"
-  if [ -n "$doc" ]; then
-    echo "  discovery: discovery.enabled=false renders an OperatorOps"
+
+  # What the operator is not given: the run's switch and the draft values, which
+  # are accepted and unused.
+  args="$(operatorArgs --set deployment.profile=standalone \
+    --set discovery.enableControlPlaneNodes=true --set discovery.draft.name=mine)"
+  if grep -qE 'enabled|draft' <<<"$args"; then
+    echo "  discovery: the spec argument carries the switch or the draft values"
+    ok=0
+  fi
+
+  objects="$(helm template sb "$CHART" --namespace simplyblock "${CAPABILITIES[@]}" \
+    --set deployment.profile=standalone --set discovery.enableControlPlaneNodes=true 2>/dev/null | objects)"
+  if grep -qF 'OperatorOps/' <<<"$objects"; then
+    echo "  discovery: the chart renders an OperatorOps"
     ok=0
   fi
 
   if [ "$ok" -eq 1 ]; then
-    echo "  discovery: values reach spec.discover, and nothing renders without them"
+    echo "  discovery: values reach the operator as a spec, and no OperatorOps is rendered"
   else
     fail=1
   fi

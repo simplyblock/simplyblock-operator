@@ -231,6 +231,10 @@ func main() {
 		"Raise one Discover run on an install that has nothing, so a draft is waiting "+
 			"for review. Disable it where another cluster raises the run or an administrator "+
 			"writes the deployment config by hand.")
+	var initialDiscoverySpec string
+	flag.StringVar(&initialDiscoverySpec, "initial-discovery-spec", "",
+		"The JSON of the spec.discover the initial run carries, for an installation that "+
+			"narrows it (a node selector, tolerations, a device filter). Empty is the default run.")
 
 	var enableMetricsAPI bool
 	var metricsAPIPort int
@@ -857,10 +861,16 @@ func main() {
 	// A fresh install raises one discovery run by itself, so an administrator
 	// finds a draft of what the fleet has rather than an empty namespace. It is
 	// declined the moment anything already exists (design-clusterdeploymentconfig.md §8).
+	discoverSpec, err := deployment.ParseDiscoverSpec(initialDiscoverySpec)
+	if err != nil {
+		setupLog.Error(err, "invalid --initial-discovery-spec")
+		os.Exit(1)
+	}
 	if err := (&deployment.InitialDiscovery{
 		Client:    mgr.GetClient(),
 		Namespace: operatorNamespace,
 		Disabled:  !initialDiscovery,
+		Spec:      discoverSpec,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to add the initial discovery check")
 		os.Exit(1)
