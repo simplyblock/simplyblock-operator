@@ -197,6 +197,10 @@ const (
 	// parameter is pinned to a node carrying this label (see
 	// ParamClientCompression, ParamClientDeduplication).
 	LabelVDOCapable = "storage.simplyblock.io/vdo-capable"
+	// LabelConsistencyGroup names, on a claim, the consistency group its volume
+	// belongs to. A group's members are snapshotted together, live in one
+	// cluster, and are never moved apart.
+	LabelConsistencyGroup = "storage.simplyblock.io/consistency-group"
 	// AnnoVDOCapableManagedBy stamps every LabelVDOCapable value the node
 	// plugin's own probe writes, with AnnoVDOCapableManagedByAutoDetect. A label
 	// carrying this annotation is the probe's to overwrite on its next run; one
