@@ -254,3 +254,52 @@ func TestRedirectToActiveVolumeStopsOnALoop(t *testing.T) {
 		t.Fatalf("a looping chain returned %v, want nil", got)
 	}
 }
+
+// A volume migrated twice, A -> B -> C, each move with --delete-source. A
+// control plane that only recorded the first move names B as the active
+// volume, and B is gone. B's own relationship knows the second move: the walk
+// continues from B instead of giving up on its missing volume.
+func TestRedirectToActiveVolumeContinuesPastADeletedIntermediate(t *testing.T) {
+	const (
+		clusterA = "aaaaaaaa-0000-0000-0000-000000000001"
+		clusterB = "bbbbbbbb-0000-0000-0000-000000000001"
+		clusterC = "cccccccc-0000-0000-0000-000000000001"
+		poolB    = "bbbbbbbb-0000-0000-0000-00000000000b"
+		poolC    = "cccccccc-0000-0000-0000-00000000000c"
+		volA     = "11111111-1111-1111-1111-111111111111"
+		volB     = "22222222-2222-2222-2222-222222222222"
+		volC     = "33333333-3333-3333-3333-333333333333"
+	)
+	srcClient := &fakeRelationshipAPI{rels: map[string]*controlplane.ReplicationRelationship{
+		volA: {SourceLvolID: volA, TargetLvolID: volB, SourceClusterID: clusterA,
+			TargetClusterID: clusterB, TargetPoolID: poolB, ActiveLvolID: volB},
+	}}
+	clusterBClient := &fakeRelationshipAPI{rels: map[string]*controlplane.ReplicationRelationship{
+		volB: {SourceLvolID: volB, TargetLvolID: volC, SourceClusterID: clusterB,
+			TargetClusterID: clusterC, TargetPoolID: poolC, ActiveLvolID: volC},
+	}}
+	clusterCClient := &fakeRelationshipAPI{conn: map[string]map[string]string{
+		volC: {"nqn": "nqn.test:" + volC},
+	}}
+
+	orig := clusterClientFor
+	defer func() { clusterClientFor = orig }()
+	clusterClientFor = func(_ context.Context, clusterID, poolID string) (controlplane.ClusterAPI, error) {
+		switch {
+		case clusterID == clusterB && poolID == poolB:
+			return clusterBClient, nil
+		case clusterID == clusterC && poolID == poolC:
+			return clusterCClient, nil
+		}
+		return nil, errors.New("unexpected cluster " + clusterID)
+	}
+
+	connInfo := redirectToActiveVolume(context.Background(), srcClient, volA,
+		clusterA+":pool:"+volA, map[string]string{})
+	if connInfo == nil {
+		t.Fatal("redirect returned nil: it stopped at the deleted intermediate volume")
+	}
+	if got := connInfo[csicommon.ParamClusterID]; got != clusterC {
+		t.Errorf("cluster_id = %q, want %q", got, clusterC)
+	}
+}

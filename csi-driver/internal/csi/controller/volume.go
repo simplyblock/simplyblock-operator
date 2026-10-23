@@ -259,7 +259,10 @@ func (cs *Server) deleteRetiredReplicaChain(ctx context.Context, volumeID string
 		return nil // unparsable handles were already tolerated as deleted above
 	}
 	cur := h
-	for range 8 { // one hop per past fail-over; capped far above any real chain
+	// One hop per past move, never compacted: the 8-hop cap the chain walks
+	// lost on 2026-10-03 left the ninth retired copy here. A loop ends at the
+	// hop whose target is the active volume, so the bound is a cycle guard.
+	for range maxChainHops {
 		client, err := clusters.ReplicationClient(ctx, cur.ClusterID)
 		if err != nil {
 			return err
