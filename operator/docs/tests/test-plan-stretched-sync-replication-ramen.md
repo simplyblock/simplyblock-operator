@@ -174,19 +174,19 @@ File: `csi-driver/internal/csi/controller/networkfence_test.go`
 
 ### The site link (§7, Appendix C)
 
-File: `atlas-lib/link/relay_test.go`, `fleet/internal/forwarder/forwarder_test.go` (package to be created)
+File: `atlas-lib/link/relay_test.go` (the relay, the forwarder, and the peer end, all in one process)
 
-| #    | Scenario                                                                                                                                                          | Type                | Test |
-|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|------|
-| U-54 | Two agents dial the relay as `site/a` and `site/b`; a stream from `site/a/operator` to `site/b/operator` carries a unary gRPC call end to end                     | Positive            | —    |
-| U-55 | A sub-peer registering as `site/b/operator` through `site/a`'s agent is refused by the relay                                                                      | Negative            | —    |
-| U-56 | A node peer (`site/a/node/x`) opening a stream to any remote target is refused; an operator peer is admitted                                                      | Negative            | —    |
-| U-57 | The target is not linked: `ErrNoSession`, retryable, no stream left half open                                                                                     | Negative            | —    |
-| U-58 | The relay session drops: the agent redials, the registry recovers, a stream opened after recovery succeeds                                                        | Boundary            | —    |
-| U-59 | The agent's local hub refuses a local peer whose `TokenReview` fails; the relay refuses an agent whose hub token fails                                            | Negative            | —    |
-| U-60 | The relay is not leader (`Accepting` false): agents are refused and redial with backoff                                                                           | Boundary            | —    |
-| U-61 | A stream open while the relay loses leadership is closed with an error, not left hanging                                                                          | Boundary            | —    |
-| U-62 | The HTTP relay to the control plane (§7.5) is off by default; enabled, a request from `site/b/operator` reaches the management API with the caller's bearer token | Positive + Negative | —    |
+| #    | Scenario                                                                                                                                                          | Type                | Test                                                                                     |
+|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|------------------------------------------------------------------------------------------|
+| U-54 | Two agents dial the relay as `site/a` and `site/b`; a stream from `site/a/operator` to `site/b/operator` carries a unary gRPC call end to end                     | Positive            | `TestARemoteCallCrossesTheRelay`                                                         |
+| U-55 | A sub-peer registering as `site/b/operator` through `site/a`'s agent is refused by the relay                                                                      | Negative            | `TestTheRelayRefusesASourceOnAnotherSite`                                                |
+| U-56 | A node peer (`site/a/node/x`) opening a stream to any remote target is refused; an operator peer is admitted                                                      | Negative            | `TestANodePeerCannotOpenARemoteStream`                                                   |
+| U-57 | The target is not linked: `ErrNoSession`, retryable, no stream left half open                                                                                     | Negative            | `TestATargetOnAnUnlinkedSiteIsUnavailable`, `TestAnAbsentPeerOnALinkedSiteIsUnavailable` |
+| U-58 | The relay session drops: the agent redials, the registry recovers, a stream opened after recovery succeeds                                                        | Boundary            | `TestAForwarderRelinksAfterTheRelayDropsIt`                                              |
+| U-59 | The agent's local hub refuses a local peer whose `TokenReview` fails; the relay refuses an agent whose hub token fails                                            | Negative            | `TestBadCredentialsLinkNeitherSiteNorPeer`                                               |
+| U-60 | The relay is not leader (`Accepting` false): agents are refused and redial with backoff                                                                           | Boundary            | `TestAForwarderLinksOnceTheRelayAccepts`                                                 |
+| U-61 | A stream open while the relay loses leadership is closed with an error, not left hanging                                                                          | Boundary            | `TestAnOpenStreamEndsWhenTheRelayGoesAway`                                               |
+| U-62 | The HTTP relay to the control plane (§7.5) is off by default; enabled, a request from `site/b/operator` reaches the management API with the caller's bearer token | Positive + Negative | —                                                                                        |
 
 ### Preflight (§5.4)
 

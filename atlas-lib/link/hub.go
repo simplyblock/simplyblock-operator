@@ -79,6 +79,12 @@ type HubConfig struct {
 
 	// Logger receives session lifecycle events. Nil means slog.Default.
 	Logger *slog.Logger
+
+	// Registry is where the hub registers its peers. Nil means a new one.
+	// Pass one when a service the hub registers needs the registry before the
+	// hub exists, as a [Relay] does: build the registry, then the relay over
+	// it, then the hub with both.
+	Registry *Registry
 }
 
 // Hub accepts peer links and keeps a [Registry] of who is reachable.
@@ -114,10 +120,13 @@ func NewHub(cfg HubConfig) (*Hub, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	if cfg.Registry == nil {
+		cfg.Registry = NewRegistry()
+	}
 	return &Hub{
 		cfg:      cfg,
 		log:      cfg.Logger,
-		registry: NewRegistry(),
+		registry: cfg.Registry,
 		sessions: make(map[*Session]struct{}),
 	}, nil
 }
@@ -187,8 +196,9 @@ func (h *Hub) handle(raw net.Conn) {
 	hs := &handshake{hub: h, ready: make(chan struct{})}
 
 	sess, err := newSession(raw, false, sessionConfig{
-		name:  remote.String(),
-		yamux: h.cfg.Yamux,
+		name:          remote.String(),
+		yamux:         h.cfg.Yamux,
+		serverOptions: hs.serverOptions(),
 		register: func(srv grpc.ServiceRegistrar) {
 			linkv1.RegisterLinkServiceServer(srv, hs)
 			if h.cfg.Register != nil {
@@ -378,3 +388,33 @@ func (hs *handshake) identity() (PeerID, bool) {
 	defer hs.mu.Unlock()
 	return hs.id.ID, hs.identified
 }
+
+// serverOptions put the session's verified identity in the context of every
+// call the session's server runs, so a service the hub serves to its peers can
+// tell which peer is calling ([PeerFromContext]). Calls before Hello carry none.
+func (hs *handshake) serverOptions() []grpc.ServerOption {
+	withPeer := func(ctx context.Context) context.Context {
+		if id, ok := hs.identity(); ok {
+			return context.WithValue(ctx, peerContextKey{}, id)
+		}
+		return ctx
+	}
+	return []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo,
+			handler grpc.UnaryHandler) (any, error) {
+			return handler(withPeer(ctx), req)
+		}),
+		grpc.ChainStreamInterceptor(func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo,
+			handler grpc.StreamHandler) error {
+			return handler(srv, &peerStream{ServerStream: ss, ctx: withPeer(ss.Context())})
+		}),
+	}
+}
+
+// peerStream is a server stream whose context carries the calling peer.
+type peerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *peerStream) Context() context.Context { return s.ctx }

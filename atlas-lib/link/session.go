@@ -42,6 +42,9 @@ type sessionConfig struct {
 	register func(grpc.ServiceRegistrar)
 	// yamux tunes the multiplexer; nil means DefaultYamuxConfig.
 	yamux *yamux.Config
+	// serverOptions configure the session's server, which is how a hub
+	// tells its services which verified peer a call came from.
+	serverOptions []grpc.ServerOption
 }
 
 // DefaultYamuxConfig is the multiplexer tuning a link uses unless told
@@ -95,7 +98,7 @@ func newSession(raw net.Conn, client bool, cfg sessionConfig) (*Session, error) 
 		return nil, fmt.Errorf("link: multiplex %s: %w", raw.RemoteAddr(), err)
 	}
 
-	s := &Session{mux: mux, srv: grpc.NewServer()}
+	s := &Session{mux: mux, srv: grpc.NewServer(cfg.serverOptions...)}
 	if cfg.register != nil {
 		cfg.register(s.srv)
 	}
