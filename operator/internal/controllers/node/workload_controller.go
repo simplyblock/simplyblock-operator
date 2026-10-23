@@ -364,7 +364,7 @@ func (r *StorageNodeWorkloadReconciler) image(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) (string, error) {
 	if wl := cluster.Spec.StorageNodes; wl != nil && wl.Image != "" {
-		return wl.Image, nil
+		return string(wl.Image), nil
 	}
 
 	// Read at v1alpha2, the stored version, rather than at the retired v1alpha1. A
@@ -380,14 +380,14 @@ func (r *StorageNodeWorkloadReconciler) image(
 			SingletonControlPlaneName, err)
 	}
 	if local := controlPlane.Spec.Source.Local; local != nil && local.Image != "" {
-		return local.Image, nil
+		return string(local.Image), nil
 	}
 	// A managed control plane is a different Kubernetes cluster's install and
 	// carries no image of its own here to fall back to -- spec.source.managed
 	// says where the control plane is, not what this cluster's storage nodes
 	// should run. StorageNodeImage is the only source of a default left.
 	if managed := controlPlane.Spec.Source.Managed; managed != nil && managed.StorageNodeImage != "" {
-		return managed.StorageNodeImage, nil
+		return string(managed.StorageNodeImage), nil
 	}
 	return "", fmt.Errorf(
 		"spec.storageNodes.image is unset and ControlPlane %s states no managed image",
