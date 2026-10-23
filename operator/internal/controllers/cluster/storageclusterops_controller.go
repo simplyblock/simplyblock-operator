@@ -281,6 +281,26 @@ func (r *StorageClusterOpsReconciler) advance(
 
 	current := machine.CurrentState()
 
+	// A role swap made this site a follower while a cluster-wide operation was
+	// in flight. The other site's operator now owns those operations, so one
+	// that can still be stopped ends here; one the control plane is part-way
+	// through runs on, as an abort would, since ending the record would not end
+	// the work.
+	if ops.Spec.Action.IsClusterWide() && machine.CanAbort() {
+		follower, err := r.onFollowerSite(ctx, ops)
+		if err != nil {
+			return ctrl.Result{RequeueAfter: opsRetry}, err
+		}
+		if follower {
+			r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, RoleLost, RoleLost,
+				"Cluster %s became the follower site of its stretched cluster at step %s; "+
+					"its cluster-wide operations run on the leader site", ops.Spec.ClusterRef, current)
+			return r.finish(ctx, ops, simplyblockv1alpha2.StorageClusterOpsPhaseFailed, fmt.Sprintf(
+				"RoleLost: cluster %s became a follower site at step %s, and %s runs on its leader site",
+				ops.Spec.ClusterRef, current, ops.Spec.Action))
+		}
+	}
+
 	if ops.Spec.Abort {
 		if machine.CanAbort() {
 			return r.unwind(ctx, ops, current)
@@ -980,7 +1000,7 @@ func (r *StorageClusterOpsReconciler) clusterSecret(
 // identity -- the only way to reach a control plane a different Kubernetes
 // cluster runs (a ControlPlane.spec.source.managed one), since a Kubernetes
 // TokenReview can never cross a cluster boundary. See StorageClusterReconciler's
-// identically-named method.
+// identically named method.
 func (r *StorageClusterOpsReconciler) authenticatedContext(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps,
 ) context.Context {
@@ -1003,4 +1023,18 @@ func effectiveConcurrentRestarts(specVal, ftt *int32) *int32 {
 		effective = *ftt
 	}
 	return ptr.To(effective)
+}
+
+// onFollowerSite reports whether the operation's cluster is a stretched
+// cluster's follower site. A cluster that cannot be found is not one; the
+// operation fails on its own for that.
+func (r *StorageClusterOpsReconciler) onFollowerSite(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps,
+) (bool, error) {
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: ops.Namespace, Name: ops.Spec.ClusterRef}
+	if err := r.Get(ctx, key, &cluster); err != nil {
+		return false, client.IgnoreNotFound(err)
+	}
+	return cluster.IsStretchedFollower(), nil
 }

@@ -54,7 +54,7 @@ func TestLinkReachesBothPlugins(t *testing.T) {
 
 	node := containerNamed(nodeDaemonSet(d, testImage).Spec.Template.Spec.Containers, "csi-node")
 	controller := containerNamed(
-		controllerStatefulSet(d, testImage).Spec.Template.Spec.Containers, "csi-controller")
+		controllerStatefulSet(d, testImage).Spec.Template.Spec.Containers, controllerPluginName)
 
 	for _, c := range []*corev1.Container{node, controller} {
 		if !hasArg(c, "--link") {
@@ -128,7 +128,7 @@ func TestLinkVolumesReachOnlyThePluginContainers(t *testing.T) {
 		controllerStatefulSet(d, testImage).Spec.Template.Spec,
 	} {
 		for _, c := range pod.Containers {
-			plugin := c.Name == "csi-node" || c.Name == "csi-controller"
+			plugin := c.Name == "csi-node" || c.Name == controllerPluginName
 			for _, name := range []string{linkTokenVolumeName, linkCAVolumeName} {
 				m := mountNamed(c.VolumeMounts, name)
 				switch {

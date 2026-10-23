@@ -102,6 +102,10 @@ type StorageClusterReconciler struct {
 	API       ControlPlane
 	Namespace string
 
+	// SiteLink, when set, checks whether the other site's operator answers over
+	// the site link, for status.stretched.siteLink. Nil runs no check.
+	SiteLink SiteLinkProber
+
 	// Clusters is the cluster stream's cache, which is where every
 	// steady-state reading comes from (§4.4). It is root-scoped, so no
 	// reconciler opens it; it is optional, and a deployment without the
@@ -209,6 +213,14 @@ type CSIClusterEntry struct {
 	// across fail-overs, and the chain of relationships behind it alternates
 	// between the sites.
 	Local bool `json:"local,omitempty"`
+	// Sync marks a sync-replication cluster, whose volumes are served from the
+	// site their store is led from, so the driver's node plugin gates staging
+	// on that site rather than taking the async path.
+	Sync bool `json:"sync,omitempty"`
+	// Site is the backend site of the Kubernetes cluster this driver runs on,
+	// set for a sync cluster that is one site of a stretched cluster, so a node
+	// plugin knows its site without reading its Node.
+	Site string `json:"site,omitempty"`
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch;create;update;patch;delete
@@ -292,6 +304,14 @@ func (r *StorageClusterReconciler) create(
 	// rest, so exactly one of them goes on to POST.
 	if cluster.Status.Step.State == "" {
 		return r.claim(ctx, cluster), nil
+	}
+
+	// A follower never creates the cluster: it waits for the one its leader
+	// creates, for as long as that takes, so its wait is not bounded by the
+	// step deadline (stretched.go).
+	if cluster.IsStretchedFollower() &&
+		machine.CurrentState() == simplyblockv1alpha2.StorageClusterStepCheckingControlPlane {
+		return r.awaitLeader(ctx, cluster, machine)
 	}
 
 	if machine.TimeoutReached() {
@@ -474,6 +494,9 @@ type adoption struct {
 	NDCS   int
 	NPCS   int
 	FTT    int
+	// SyncReplication is whether the adopted cluster spans two sites, which a
+	// follower requires of the cluster it joins.
+	SyncReplication bool
 }
 
 // adopt takes over a backend cluster the operator did not create.
@@ -490,6 +513,19 @@ func (r *StorageClusterReconciler) adopt(
 	found, ok, err := r.upgradeClaim(ctx, cluster)
 	if err != nil {
 		return ctrl.Result{RequeueAfter: clusterRetry}, err
+	}
+	if !ok && cluster.IsStretchedFollower() {
+		// The credentials were withdrawn after the step was entered. A follower
+		// has no other way in: adoption by name carries no cluster secret, and
+		// restarting creation would post one.
+		return ctrl.Result{RequeueAfter: clusterRetry}, r.noteOnce(ctx, cluster,
+			corev1.EventTypeNormal, PeerClusterMissing, fmt.Sprintf(
+				"follower site: waiting for the hub to deliver the credentials to adopt backend cluster %s in Secret %s",
+				cluster.Name, upgradeSecretName(cluster)))
+	}
+	if refusal := refuseFollowerAdoption(cluster, found); ok && refusal != "" {
+		return ctrl.Result{RequeueAfter: clusterRetry}, r.noteOnce(ctx, cluster,
+			corev1.EventTypeWarning, SyncReplicationMismatch, refusal)
 	}
 	if !ok {
 		entry, listed, err := r.API.ClusterByName(ctx, cluster.Name)
@@ -559,7 +595,7 @@ func (r *StorageClusterReconciler) upgradeClaim(
 	return adoption{
 		UUID: found.UUID, Secret: clusterSecret, NQN: found.NQN,
 		Status: found.Status, NDCS: found.NDCS, NPCS: found.NPCS,
-		FTT: found.MaxFaultTolerance,
+		FTT: found.MaxFaultTolerance, SyncReplication: found.SyncReplication,
 	}, true, nil
 }
 
@@ -591,7 +627,7 @@ func (r *StorageClusterReconciler) persist(
 	if err := r.writeClusterSecret(ctx, cluster, found); err != nil {
 		return ctrl.Result{RequeueAfter: clusterRetry}, r.note(ctx, cluster, err.Error())
 	}
-	if err := r.upsertCSICredentials(ctx, found.UUID, found.Secret); err != nil {
+	if err := r.upsertCSICredentials(ctx, cluster, found.UUID, found.Secret); err != nil {
 		return ctrl.Result{RequeueAfter: clusterRetry}, r.note(ctx, cluster, err.Error())
 	}
 
@@ -683,7 +719,7 @@ func (r *StorageClusterReconciler) sync(
 
 	secret, err := r.clusterSecret(ctx, cluster)
 	if err == nil && secret != "" {
-		if err := r.upsertCSICredentials(ctx, cluster.Status.UUID, secret); err != nil {
+		if err := r.upsertCSICredentials(ctx, cluster, cluster.Status.UUID, secret); err != nil {
 			log.Error(err, "the CSI credentials entry could not be restored",
 				"cluster", cluster.Name)
 			return ctrl.Result{RequeueAfter: clusterResync}, nil
@@ -709,6 +745,13 @@ func (r *StorageClusterReconciler) sync(
 
 	tasks := r.readTasks(readCtx, cluster)
 
+	stretched, err := r.stretchedStatus(ctx, cluster, reading)
+	if err != nil {
+		log.Error(err, "the stretched status could not be computed", "cluster", cluster.Name)
+		return ctrl.Result{RequeueAfter: clusterResync}, nil
+	}
+	before := cluster.Status.Stretched.DeepCopy()
+
 	ftt := int32(reading.MaxFaultTolerance) //nolint:gosec // a fault tolerance is a small count
 	err = r.writeStatus(ctx, cluster, func(status *simplyblockv1alpha2.StorageClusterStatus) {
 		status.Status = reading.Status
@@ -720,10 +763,12 @@ func (r *StorageClusterReconciler) sync(
 			cluster.Spec.MaxConcurrentWorkerRestarts, &ftt)
 		status.Phase = phaseFor(reading.Status, reading.Rebalancing, reading.Shrinking)
 		status.Tasks = tasks
+		status.Stretched = stretched
 	})
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	r.announceStretched(cluster, before, stretched)
 	r.observePhase(cluster)
 	return ctrl.Result{RequeueAfter: clusterResync}, nil
 }
@@ -766,6 +811,9 @@ func (r *StorageClusterReconciler) reading(
 		NDCS:              response.NDCS,
 		NPCS:              response.NPCS,
 		MaxFaultTolerance: response.MaxFaultTolerance,
+		SyncReplication:   response.SyncReplication,
+		LostSite:          response.LostSite,
+		LostSiteState:     response.LostSiteState,
 	}, nil
 }
 
@@ -910,10 +958,15 @@ func (r *StorageClusterReconciler) teardown(
 		if secret, err := r.clusterSecret(ctx, cluster); err == nil && secret != "" {
 			deleteCtx = webapi.WithBearerToken(ctx, secret)
 		}
-		if err := r.API.DeleteCluster(deleteCtx, cluster.Status.UUID); err != nil {
-			log.Error(err, "the cluster could not be deleted; retrying",
-				"cluster", cluster.Name, "uuid", cluster.Status.UUID)
-			return ctrl.Result{RequeueAfter: clusterRetry}, nil
+		// A follower's backend cluster is its leader's, with every node of both
+		// sites in it, so deleting the follower's object lets go of it rather
+		// than deleting it.
+		if !cluster.IsStretchedFollower() {
+			if err := r.API.DeleteCluster(deleteCtx, cluster.Status.UUID); err != nil {
+				log.Error(err, "the cluster could not be deleted; retrying",
+					"cluster", cluster.Name, "uuid", cluster.Status.UUID)
+				return ctrl.Result{RequeueAfter: clusterRetry}, nil
+			}
 		}
 		if err := r.removeCSICredentials(ctx, cluster.Status.UUID); err != nil {
 			log.Error(err, "the CSI credentials entry could not be removed; retrying",
@@ -993,6 +1046,7 @@ func (r *StorageClusterReconciler) creationParams(
 		BackupConfig:           backup,
 		HashicorpVaultSettings: vault,
 		EnableFailureDomain:    ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains),
+		SyncReplication:        ptr.BoolFromOrFalse(cluster.Spec.EnableSyncReplication),
 		InlineChecksum:         ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
 		Atomic4k:               ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
 		DeviceMode:             deviceMode(cluster.Spec.DeviceClass),
@@ -1143,7 +1197,7 @@ func (r *StorageClusterReconciler) clusterSecret(
 // dropped. Until this, the cross-registration was a manual merge of the
 // sites' secrets (realbed `deploy.sh csi`).
 func (r *StorageClusterReconciler) upsertCSICredentials(
-	ctx context.Context, clusterID, clusterSecret string,
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, clusterID, clusterSecret string,
 ) error {
 	endpoint := r.API.Endpoint(ctx)
 	peers, err := r.API.Clusters(ctx)
@@ -1160,6 +1214,8 @@ func (r *StorageClusterReconciler) upsertCSICredentials(
 			ClusterEndpoint: endpoint,
 			ClusterSecret:   clusterSecret,
 			Local:           true,
+			Sync:            ptr.BoolFromOrFalse(cluster.Spec.EnableSyncReplication),
+			Site:            cluster.StretchedSite(),
 		}, peers, err == nil)
 	})
 }

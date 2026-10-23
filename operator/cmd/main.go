@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/metricsapi"
+	"github.com/simplyblock/simplyblock-operator/internal/sitelink"
 
 	// Import all Kubernetes client auth plugins (e.g., Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -44,6 +46,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -225,6 +228,17 @@ func main() {
 		"The name of the CSI link serving key file.")
 	flag.StringVar(&csiLinkAudience, "csi-link-audience", "simplyblock-csi-link",
 		"The audience the peers' projected ServiceAccount tokens must carry.")
+	var siteLinkEnabled bool
+	var siteLinkAddr, siteLinkNamespace, siteLinkTokenPath string
+	flag.BoolVar(&siteLinkEnabled, "site-link", false,
+		"Link to this site's fleet agent, the site end of a stretched cluster's site link.")
+	flag.StringVar(&siteLinkAddr, "site-link-address",
+		"simplyblock-site-link.open-cluster-management-agent-addon.svc:9443",
+		"The site's fleet agent, host:port.")
+	flag.StringVar(&siteLinkNamespace, "site-link-namespace", "open-cluster-management-agent-addon",
+		"The fleet agent's namespace, where it publishes the CA it serves with.")
+	flag.StringVar(&siteLinkTokenPath, "site-link-token-path", "/var/run/secrets/simplyblock/site-link/token",
+		"The projected ServiceAccount token, with the site link's audience, the agent verifies.")
 
 	var enableMetricsAPI bool
 	var metricsAPIPort int
@@ -616,7 +630,33 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlaneOps")
 		os.Exit(1)
 	}
+	// The site link is the elected replica's, so it runs as a leader-election
+	// runnable and the StorageCluster controller probes through it.
+	var siteLinkProber clustercontroller.SiteLinkProber
+	if siteLinkEnabled {
+		siteKube, err := kubernetes.NewForConfig(mgr.GetConfig())
+		if err != nil {
+			setupLog.Error(err, "unable to create the site link's client")
+			os.Exit(1)
+		}
+		siteLink := &sitelink.Link{
+			Pod:         os.Getenv("POD_NAME"),
+			PodUID:      os.Getenv("POD_UID"),
+			Address:     siteLinkAddr,
+			CANamespace: siteLinkNamespace,
+			Kube:        siteKube,
+			Token:       link.TokenFile(siteLinkTokenPath),
+			Logger:      slog.Default().With("component", "site-link"),
+		}
+		if err := mgr.Add(siteLink); err != nil {
+			setupLog.Error(err, "unable to add the site link")
+			os.Exit(1)
+		}
+		siteLinkProber = siteLink
+	}
+
 	if err := (&clustercontroller.StorageClusterReconciler{
+		SiteLink:     siteLinkProber,
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Recorder:     mgr.GetEventRecorder("storagecluster-controller"),
@@ -821,6 +861,16 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
 	}
+	if err := (&nodecontroller.RemoteNodeReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagenode-remote-controller"),
+		API:      nodecontroller.NewControlPlane(controlPlaneEndpoint),
+		Nodes:    nodeSubscription,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeRemote")
+		os.Exit(1)
+	}
 	if err := (&nodecontroller.StorageNodeOpsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -897,11 +947,18 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageDeviceOps")
 		os.Exit(1)
 	}
+	// The CSI controller joins the operator's site link, so the other site's
+	// operator can reach it too.
+	var driverSiteLink *driver.SiteLinkConfig
+	if siteLinkEnabled {
+		driverSiteLink = &driver.SiteLinkConfig{Address: siteLinkAddr, AgentNamespace: siteLinkNamespace}
+	}
 	if err := (&driver.SimplyblockDriverReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		Recorder:  mgr.GetEventRecorder("simplyblockdriver-controller"),
 		Snapshots: &driver.DiscoveredSnapshotAPI{Discovery: operatorOpsDiscovery},
+		SiteLink:  driverSiteLink,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SimplyblockDriver")
 		os.Exit(1)
@@ -1033,6 +1090,16 @@ func main() {
 		}).SetupWithManager(mgr); err != nil {
 			return fmt.Errorf("controller StorageSiteDeployment: %w", err)
 		}
+		// A stretched cluster is two site deployments joined on the hub, which
+		// also runs the control plane the follower's credentials are read from.
+		if err := (&controller.StretchedClusterReconciler{
+			Client:       mgr.GetClient(),
+			Scheme:       mgr.GetScheme(),
+			Recorder:     mgr.GetEventRecorder("stretchedcluster-controller"),
+			ControlPlane: webapi.NewClient(),
+		}).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("controller StretchedCluster: %w", err)
+		}
 		return nil
 	}
 	if hasManifestWork {
@@ -1043,8 +1110,8 @@ func main() {
 	} else {
 		// OCM may be installed after the operator (the DR stack brings it): keep
 		// looking, and start the controllers once ManifestWork is served.
-		setupLog.Info("OCM ManifestWork resource not served yet; the TestFailover and "+
-			"StorageSiteDeployment controllers start once it is (hub-only)",
+		setupLog.Info("OCM ManifestWork resource not served yet; the TestFailover, "+
+			"StorageSiteDeployment, and StretchedCluster controllers start once it is (hub-only)",
 			"groupVersion", ocmWorkGroupVersion, "resource", ocmManifestWorkResource)
 		if err := mgr.Add(&ocmLateStart{log: setupLog, disc: workDiscovery, register: registerOCMControllers}); err != nil {
 			setupLog.Error(err, "unable to add the OCM ManifestWork watcher")
@@ -1136,7 +1203,7 @@ func main() {
 		setupLog.Info("registered controlplaneops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storageclusterops",
-			&webhook.Admission{Handler: &internalwebhook.StorageClusterOpsValidator{}})
+			&webhook.Admission{Handler: &internalwebhook.StorageClusterOpsValidator{Client: mgr.GetClient()}})
 		setupLog.Info("registered storageclusterops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-operatorops",
@@ -1144,8 +1211,16 @@ func main() {
 		setupLog.Info("registered operatorops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagenodeops",
-			&webhook.Admission{Handler: &internalwebhook.StorageNodeOpsValidator{}})
+			&webhook.Admission{Handler: &internalwebhook.StorageNodeOpsValidator{Client: mgr.GetClient()}})
 		setupLog.Info("registered storagenodeops validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-stretchedcluster",
+			&webhook.Admission{Handler: &internalwebhook.StretchedClusterValidator{}})
+		setupLog.Info("registered stretchedcluster validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagedeviceops",
+			&webhook.Admission{Handler: &internalwebhook.StorageDeviceOpsValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered storagedeviceops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-persistentvolumeops",
 			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeOpsValidator{

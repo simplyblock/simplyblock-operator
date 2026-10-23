@@ -46,3 +46,28 @@ func TestParseClusterResponseReadsTheShrinkingFlag(t *testing.T) {
 		t.Errorf("a cluster reporting is_shrinking parsed as not shrinking: %#v", resp)
 	}
 }
+
+// Regression: 2026-10-22-cluster-response-drops-sync-fields: the parser decoded
+// sync_replication, lost_site and lost_site_state and left them out of its
+// result, so every cluster read as one without sync replication. A stretched
+// follower handed the leader's sync cluster refused to adopt it as "not a
+// sync-replication cluster" and its StorageCluster went Unavailable, and the lost
+// site never reached status.stretched.
+func TestParseClusterResponseReadsTheSyncReplicationFacts(t *testing.T) {
+	resp, err := ParseClusterResponse([]byte(`{
+		"id": "cluster-1",
+		"status": "active",
+		"sync_replication": true,
+		"lost_site": "site-a",
+		"lost_site_state": "fenced"
+	}`))
+	if err != nil {
+		t.Fatalf("ParseClusterResponse returned error: %v", err)
+	}
+	if !resp.SyncReplication {
+		t.Error("SyncReplication = false, want true")
+	}
+	if resp.LostSite != "site-a" || resp.LostSiteState != "fenced" {
+		t.Errorf("LostSite, LostSiteState = %q, %q, want site-a, fenced", resp.LostSite, resp.LostSiteState)
+	}
+}

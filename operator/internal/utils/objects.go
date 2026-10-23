@@ -28,6 +28,8 @@ type NodeStatusResponse struct {
 	UUID   string `json:"id"`
 	Status string `json:"status"`
 	IP     string `json:"mgmt_ip"`
+	// Site is the node's sync-replication site, empty off a sync cluster.
+	Site string `json:"site"`
 }
 
 type Lvol struct {

@@ -26,8 +26,13 @@ const (
 	// controller, and the event is the only thing that distinguishes them.
 	ClusterNotReady      = "ClusterNotReady"
 	FailureDomainMissing = "FailureDomainMissing"
-	HostUnreachable      = "HostUnreachable"
-	AwaitingSlot         = "AwaitingSlot"
+	SiteMissing          = "SiteMissing"
+	// RemoteNodeAdded and RemoteNodeRemoved are a stretched cluster's other-site
+	// node appearing in, or leaving, this site's listing.
+	RemoteNodeAdded   = "RemoteNodeAdded"
+	RemoteNodeRemoved = "RemoteNodeRemoved"
+	HostUnreachable   = "HostUnreachable"
+	AwaitingSlot      = "AwaitingSlot"
 
 	// WorkerAway is the machine this node is being added to being not Ready or
 	// cordoned, which is every MachineConfig reboot and every drain.

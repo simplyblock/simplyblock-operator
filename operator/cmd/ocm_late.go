@@ -64,7 +64,8 @@ func (o *ocmLateStart) Start(ctx context.Context) error {
 		ocmPollInterval, ocmPollMaxInterval, after) {
 		return nil
 	}
-	o.log.Info("OCM ManifestWork resource is now served; starting the TestFailover and "+
-		"StorageSiteDeployment controllers", "groupVersion", ocmWorkGroupVersion, "resource", ocmManifestWorkResource)
+	o.log.Info("OCM ManifestWork resource is now served; starting the TestFailover, "+
+		"StorageSiteDeployment, and StretchedCluster controllers",
+		"groupVersion", ocmWorkGroupVersion, "resource", ocmManifestWorkResource)
 	return o.register()
 }
