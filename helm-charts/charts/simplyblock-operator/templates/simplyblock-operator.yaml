@@ -69,10 +69,6 @@ spec:
             # administrator writing the cluster, so neither raises one here.
             - --initial-discovery=false
             {{- end }}
-            {{- $discover := omit .Values.discovery "enabled" "draft" }}
-            {{- if and $discover (eq .Values.deployment.profile "standalone") .Values.discovery.enabled }}
-            - {{ printf "--initial-discovery-spec=%s" (toJson $discover) | quote }}
-            {{- end }}
             {{- if .Values.metricsAPI.enabled }}
             - --metrics-api-bind-port={{ .Values.metricsAPI.port }}
             - --prometheus-url={{ .Values.metricsAPI.prometheusURL }}

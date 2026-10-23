@@ -43,11 +43,8 @@
 package deployment
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -100,9 +97,6 @@ type InitialDiscovery struct {
 
 	// Disabled is true on an installation that raises no run of its own.
 	Disabled bool
-
-	// Spec is what the installation states about the run. Nil is the default run.
-	Spec *simplyblockv1alpha2.DiscoverSpec
 }
 
 // NeedLeaderElection makes one replica ask the question. The create is idempotent
@@ -124,12 +118,7 @@ func (d *InitialDiscovery) Start(ctx context.Context) error {
 	namespace := d.Namespace
 	name := InitialDiscoveryName
 
-	spec := d.Spec
-	if spec == nil {
-		spec = defaultDiscoverSpec()
-	}
-
-	reason, err := d.declineReason(ctx, spec)
+	reason, err := d.declineReason(ctx)
 	if err != nil {
 		// A read that failed is not evidence of an empty cluster. Declining is the
 		// conservative answer: the cost of not running is an administrator writing
@@ -153,7 +142,11 @@ func (d *InitialDiscovery) Start(ctx context.Context) error {
 		},
 		Spec: simplyblockv1alpha2.OperatorOpsSpec{
 			Action: simplyblockv1alpha2.OperatorOpsActionDiscover,
-			Discover: spec,
+			// A run that narrows nothing and waives a partition table: what it
+			// produces is a draft of everything the fleet has, and that is what a
+			// reviewer narrows. An administrator who wants other settings writes
+			// their own OperatorOps, which this declines behind.
+			Discover: defaultDiscoverSpec(),
 		},
 	}
 	if err := d.createRun(ctx, run); err != nil {
@@ -217,7 +210,7 @@ func webhookUnreachable(err error) bool {
 
 // declineReason answers whether anything already exists, and says which thing. An
 // empty string means the install has nothing and the run is worth raising.
-func (d *InitialDiscovery) declineReason(ctx context.Context, spec *simplyblockv1alpha2.DiscoverSpec) (string, error) {
+func (d *InitialDiscovery) declineReason(ctx context.Context) (string, error) {
 	var runs simplyblockv1alpha2.OperatorOpsList
 	if err := d.List(ctx, &runs); err != nil {
 		return "", fmt.Errorf("listing operator operations: %w", err)
@@ -243,22 +236,15 @@ func (d *InitialDiscovery) declineReason(ctx context.Context, spec *simplyblockv
 	}
 
 	// The question is whether there is a machine the run would inspect, so it is
-	// asked about the machines the run is narrowed to rather than about every
-	// machine in the cluster. UsableWorker is the same predicate the run then
-	// applies, and the selector and the opt-in are the same two the run carries,
-	// which is what keeps this from raising runs the run itself declines.
-	options := []client.ListOption{}
-	if len(spec.NodeSelector) > 0 {
-		options = append(options, client.MatchingLabels(spec.NodeSelector))
-	}
+	// asked with the same predicate the run applies. The run narrows nothing, so
+	// every node is a candidate, and it does not consider control-plane nodes.
 	var nodes corev1.NodeList
-	if err := d.List(ctx, &nodes, options...); err != nil {
+	if err := d.List(ctx, &nodes); err != nil {
 		return "", fmt.Errorf("listing nodes: %w", err)
 	}
-	useControlPlane := ptr.BoolFromOrFalse(spec.EnableControlPlaneNodes)
 	usable := 0
 	for _, node := range nodes.Items {
-		if UsableWorker(node, useControlPlane) {
+		if UsableWorker(node, false) {
 			usable++
 		}
 	}
@@ -270,32 +256,9 @@ func (d *InitialDiscovery) declineReason(ctx context.Context, spec *simplyblockv
 	return "", nil
 }
 
-// defaultDiscoverSpec is the run a fresh install raises when it states nothing:
-// one that narrows nothing and waives a partition table. What it produces is a
-// draft of everything the fleet has, and that is what a reviewer narrows.
+// defaultDiscoverSpec is the run a fresh install raises.
 func defaultDiscoverSpec() *simplyblockv1alpha2.DiscoverSpec {
 	return &simplyblockv1alpha2.DiscoverSpec{EnablePartitionedDevices: ptr.To(true)}
-}
-
-// ParseDiscoverSpec reads the run an installation states, as the JSON of a
-// spec.discover. What the document leaves out keeps its default, so stating a
-// node selector does not give up the partition waiver, and a document that says
-// `false` for it is believed. An empty document is the default run.
-//
-// It reads strictly. The chart renders the document from its values, and a field
-// this operator does not know is a typo that would otherwise produce a run
-// missing the setting it was meant to carry.
-func ParseDiscoverSpec(document string) (*simplyblockv1alpha2.DiscoverSpec, error) {
-	spec := defaultDiscoverSpec()
-	if strings.TrimSpace(document) == "" {
-		return spec, nil
-	}
-	decoder := json.NewDecoder(bytes.NewReader([]byte(document)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(spec); err != nil {
-		return nil, fmt.Errorf("reading the initial discovery spec: %w", err)
-	}
-	return spec, nil
 }
 
 // SetupWithManager adds the check to the manager.

@@ -125,11 +125,11 @@ deployment:
 # schedulable worker, and writes a ClusterDeploymentConfig in Draft. Nothing is
 # deployed until somebody reads that draft and sets `approved: true` on it.
 #
-# The values below other than `enabled` and `draft` are the run's spec.discover.
-# The chart passes them to the operator as --initial-discovery-spec, and the
-# operator raises the run with them. The chart renders no OperatorOps itself.
-# A run that already finished is not raised again, so a value changed on a later
-# upgrade does not discover again; write a new OperatorOps for that.
+# Setting any value below other than `enabled` renders that OperatorOps from this
+# chart instead, with the values as its spec.discover, and the operator declines
+# to raise its own: it declines whenever any OperatorOps already exists. The
+# operator never rereads a finished run, so a value changed on a later upgrade
+# does not discover again; write a new OperatorOps for that.
 #
 # Rendered as `--initial-discovery=false` for the managed profile, where the
 # cluster that manages this one raises the run, and for the empty profile, whose
@@ -143,6 +143,8 @@ discovery:
   # Each of these is a field of OperatorOps spec.discover, and is left out of it
   # when unset.
   #
+  #   name: initial-discovery          # the run's name; the draft is "discovered-<name>"
+  #   namespace: simplyblock-storage   # empty is this release's namespace; must exist
   #   nodeSelector:                    # empty inspects every schedulable worker
   #     node-role.kubernetes.io/simplyblock-storage: ""
   #   tolerations:                     # what the probe pods, and then the storage nodes, tolerate
@@ -161,115 +163,6 @@ discovery:
   #     blockAllowList: []
   #     pcieModel: ""
   #     driveSizeRange: ""
-
-  # The values below are accepted and not used. The operator no longer seeds the
-  # draft from the chart, so edit the draft before approving it. They stay so that
-  # a values file written for an earlier release still installs.
-  # What the draft proposes, for the parts no probe can read.
-  #
-  # Every field here is one discovery would otherwise guess at, and the guesses
-  # that matter are the ones nobody can take back. stripe,
-  # enableChecksumValidation, and enableAtomicity4K are immutable on the
-  # StorageCluster the draft expands into, and enableDriveFormat is spent when a
-  # node takes its devices, which is destructive and happens once.
-  # maxSubsystemCount is the exception and can be corrected on the cluster later.
-  # It is here because nothing about the hardware decides it.
-  #
-  # What is left out is what the probes answer better than an installation can:
-  # the vCPU count, the huge-page size, the journal device, the host OS, and the
-  # workers themselves.
-  #
-  # It seeds this run's draft and no other. A discovery run somebody raises later
-  # describes whatever the fleet has become by then.
-  draft:
-    # What the document is called. Empty is "discovered-" followed by the run's
-    # name, so the default is "discovered-initial-discovery."
-    #
-    #   name: production-draft
-    name: ""
-
-    # State that this is an edge deployment, which differs from a datacenter one
-    # in topology and scale rather than in kind. Left out, the draft says nothing
-    # about it.
-    # edgeCluster: true
-
-    # Images the draft pins, as full repository:tag references. Empty leaves each
-    # to its own default, which is the pairing this release was tested as. The
-    # node agent is not here: a draft that pins none takes the ControlPlane
-    # object's image, which this chart already writes.
-    #
-    #   images:
-    #     spdk: quay.io/simplyblock-io/spdk:v26.2.6
-    #     spdkProxy: quay.io/simplyblock-io/spdk-proxy:v26.2.6
-    images:
-      spdk: ""
-      spdkProxy: ""
-
-    cluster:
-      # The StorageCluster's name. Empty is the draft's name with "-cluster"
-      # appended, so the default is "discovered-initial-discovery-cluster," which
-      # is 36 of the 37 characters the control plane allows. It derives its own
-      # names from this one, and the chart refuses a longer one rather than
-      # letting the draft fail at CreatingCluster.
-      #
-      #   name: production
-      name: ""
-
-      # The erasure-coding layout. Empty derives one from the number of storage
-      # nodes the run found, which is a fact about the fleet rather than about how
-      # much redundancy this deployment wants: a fleet of three gets 1+1 and a
-      # fleet of twelve gets 2+1, whatever it was built for. A cluster's stripe
-      # cannot be changed afterward.
-      #
-      #   stripe:
-      #     dataChunks: 4
-      #     parityChunks: 2
-      stripe: {}
-
-      # How many NVMe-oF subsystems each storage node serves. Left out, the draft
-      # proposes 30, which is the middle of the range this API accepts and not a
-      # reading: the number follows from how many volumes the deployment expects
-      # to serve and how they are spread.
-      # maxSubsystemCount: 50
-
-      # Format every device the draft names before a storage node takes it. Left
-      # out, the draft proposes it set, because a drive carrying anything is not
-      # usable otherwise. State false for a fleet whose drives must be handed over
-      # as they are. The draft still lists them either way, so a reviewer sees
-      # which disks are involved.
-      # enableDriveFormat: false
-
-      # Validate a CRC on every I/O, for silent-data-error protection. Left out,
-      # the cluster's own default decides, which is off.
-      #
-      # The backend bakes the checksum method into each device when the cluster is
-      # created and never re-applies it, so a cluster created without this is one
-      # nobody can turn it on for. It needs a 4K logical block size, which
-      # enableDriveFormat produces on an NVMe device that can be reformatted and
-      # enableAtomicity4K is the alternative to on one that cannot.
-      #
-      # It is stated as null rather than left out, unlike the values above it,
-      # because the chart itself reads this one: the check below refuses 4K
-      # atomicity without it, and a template may only read a value the chart
-      # defines. Null is what "left out" means everywhere else here, and the
-      # operator reads it the same way.
-      enableChecksumValidation: null
-
-      # Enforce 4K write atomicity on every device the draft names, which is what
-      # lets checksum validation run on a device whose logical block size is under
-      # the data plane's 4K minimum. Left out, the cluster's own default decides,
-      # which is off.
-      #
-      # It is an enforcement and not a reading. A SATA drive presenting 512-byte
-      # logical blocks over a 4K physical sector reports 512 and nothing more, and
-      # a kernel older than 6.11 publishes no atomic write attributes at all, so
-      # this asserts a guarantee nothing verified. Where the hardware does not keep
-      # it, a torn write becomes a checksum that silently disagrees with the data.
-      # The device reports in the run's own draft are what to check it against.
-      #
-      # Stated as null for the reason enableChecksumValidation is: the chart
-      # reads it, and the check below is what reads it.
-      enableAtomicity4K: null
 
 # The CSI driver, as the SimplyblockDriver the chart renders for every profile
 # that runs one.
