@@ -28,7 +28,6 @@ OPERATOR=(
   "ValidatingWebhookConfiguration/simplyblock-operator-validating-webhook-configuration"
   "ServiceAccount/simplyblock-operator"
   "Service/simplyblock-csi-link"
-  "ConfigMap/simplyblock-bootstrap"
 )
 
 # Objects the standalone and managed profiles render on top of OPERATOR.
@@ -167,7 +166,7 @@ checkVendoredCRDs() {
 # is a second CSI deployment, or a control plane they did not ask for, and the
 # discovery run is a draft cluster proposed from workers they did not choose.
 checkEmpty() {
-  local present unwanted bootstrap
+  local present unwanted args
   local clean=1
 
   present="$(render empty)"
@@ -185,12 +184,12 @@ checkEmpty() {
     fi
   done
 
-  bootstrap="$(helm template sb "$CHART" --namespace simplyblock \
+  args="$(helm template sb "$CHART" --namespace simplyblock \
     "${CAPABILITIES[@]}" \
     --set deployment.profile=empty \
-    --show-only templates/bootstrap-configmap.yaml 2>/dev/null)"
-  if ! grep -qE '^ +enabled: false$' <<<"$bootstrap"; then
-    echo "  empty: the bootstrap ConfigMap does not decline the discovery run"
+    --show-only templates/simplyblock-operator.yaml 2>/dev/null)"
+  if ! grep -qF -- '--initial-discovery=false' <<<"$args"; then
+    echo "  empty: the operator is not told to decline the discovery run"
     clean=0
     fail=1
   fi

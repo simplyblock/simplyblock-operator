@@ -64,6 +64,11 @@ spec:
             # migration cannot be carried across and is drained instead.
             - --legacy-volume-migration
             {{- end }}
+            {{- if not (and (eq .Values.deployment.profile "standalone") .Values.discovery.enabled) }}
+            # Managed raises its run from the managing cluster and empty has an
+            # administrator writing the cluster, so neither raises one here.
+            - --initial-discovery=false
+            {{- end }}
             {{- if .Values.metricsAPI.enabled }}
             - --metrics-api-bind-port={{ .Values.metricsAPI.port }}
             - --prometheus-url={{ .Values.metricsAPI.prometheusURL }}

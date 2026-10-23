@@ -44,7 +44,6 @@ package deployment
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -58,7 +57,6 @@ import (
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
-	"github.com/simplyblock/simplyblock-operator/internal/bootstrap"
 )
 
 // InitialDiscoveryName is what the run is called. It is fixed rather than
@@ -67,13 +65,8 @@ import (
 // object with that name and deleting nothing.
 const InitialDiscoveryName = "initial-discovery"
 
-// InitialDiscoveryLabel marks the run this raised, so that the draft seed an
-// installation stated is applied to that run's document and to no other.
-//
-// It is a label rather than a comparison against the configured name. The
-// reconciler that reads it would otherwise re-derive this decision from a
-// ConfigMap that may have been edited between the install and the Writing step,
-// and disagree with the object in its hand.
+// InitialDiscoveryLabel marks the run this raised, so that it can be told apart
+// from one an administrator wrote.
 const InitialDiscoveryLabel = "storage.simplyblock.io/initial-discovery"
 
 // How long the create waits for the operator's own webhook to begin serving, and
@@ -101,6 +94,9 @@ type InitialDiscovery struct {
 	// A document describes one deployment, and the operator's own namespace is
 	// the one place a deployment that does not exist yet can be described from.
 	Namespace string
+
+	// Disabled is true on an installation that raises no run of its own.
+	Disabled bool
 }
 
 // NeedLeaderElection makes one replica ask the question. The create is idempotent
@@ -114,37 +110,15 @@ func (d *InitialDiscovery) NeedLeaderElection() bool { return true }
 func (d *InitialDiscovery) Start(ctx context.Context) error {
 	log := logf.FromContext(ctx).WithName("initial-discovery")
 
-	// What the installation stated, or the operator's own behavior where it
-	// stated nothing. A document that is present and unusable is reported once
-	// and then treated as absent: the alternative is an install that raises no
-	// run because of a typo, which is the outcome hardest to account for from
-	// the outside.
-	//
-	// A configuration that could not be read at all is the other failure, and it
-	// is not one to proceed through. What it says is unknown, and one of the
-	// things it may say is that this installation raises no run: a managed one
-	// states exactly that, and defaulting past it creates an OperatorOps and a
-	// probe Job on every worker in the fleet. Returning the error leaves the
-	// check unperformed, which is the recoverable half of the choice.
-	config, err := bootstrap.Load(ctx, d.Client, d.Namespace)
-	switch {
-	case errors.Is(err, bootstrap.ErrUnreadable):
-		return fmt.Errorf("the initial discovery check could not read the "+
-			"installation's configuration, so it raised nothing: %w", err)
-	case err != nil:
-		log.Error(err, "the installation's bootstrap configuration could not be parsed; "+
-			"the operator's own defaults apply")
-	}
-
-	if !config.DiscoveryEnabled() {
+	if d.Disabled {
 		log.Info("the initial discovery run is declined; this installation raises none")
 		return nil
 	}
 
-	namespace := config.RunNamespace(d.Namespace)
-	name := config.RunName(InitialDiscoveryName)
+	namespace := d.Namespace
+	name := InitialDiscoveryName
 
-	reason, err := d.declineReason(ctx, config)
+	reason, err := d.declineReason(ctx)
 	if err != nil {
 		// A read that failed is not evidence of an empty cluster. Declining is the
 		// conservative answer: the cost of not running is an administrator writing
@@ -168,11 +142,11 @@ func (d *InitialDiscovery) Start(ctx context.Context) error {
 		},
 		Spec: simplyblockv1alpha2.OperatorOpsSpec{
 			Action: simplyblockv1alpha2.OperatorOpsActionDiscover,
-			// An installation that stated nothing gets a run that narrows nothing
-			// and waives a partition table, which is what this raised before a
-			// configuration existed: what it produces is a draft of everything the
-			// fleet has, and that is what a reviewer narrows.
-			Discover: config.DiscoverSpec(),
+			// A run that narrows nothing and waives a partition table: what it
+			// produces is a draft of everything the fleet has, and that is what a
+			// reviewer narrows. An administrator who wants other settings writes
+			// their own OperatorOps, which this declines behind.
+			Discover: defaultDiscoverSpec(),
 		},
 	}
 	if err := d.createRun(ctx, run); err != nil {
@@ -236,7 +210,7 @@ func webhookUnreachable(err error) bool {
 
 // declineReason answers whether anything already exists, and says which thing. An
 // empty string means the install has nothing and the run is worth raising.
-func (d *InitialDiscovery) declineReason(ctx context.Context, config *bootstrap.Config) (string, error) {
+func (d *InitialDiscovery) declineReason(ctx context.Context) (string, error) {
 	var runs simplyblockv1alpha2.OperatorOpsList
 	if err := d.List(ctx, &runs); err != nil {
 		return "", fmt.Errorf("listing operator operations: %w", err)
@@ -262,25 +236,15 @@ func (d *InitialDiscovery) declineReason(ctx context.Context, config *bootstrap.
 	}
 
 	// The question is whether there is a machine the run would inspect, so it is
-	// asked about the machines that run is narrowed to rather than about every
-	// machine in the cluster. UsableWorker is the same predicate the run then
-	// applies, and the selector and the opt-in are the same two the run carries:
-	// reading all three off the run this would raise is what keeps the bootstrap
-	// from raising runs the run itself declines.
-	spec := config.DiscoverSpec()
-
-	options := []client.ListOption{}
-	if len(spec.NodeSelector) > 0 {
-		options = append(options, client.MatchingLabels(spec.NodeSelector))
-	}
+	// asked with the same predicate the run applies. The run narrows nothing, so
+	// every node is a candidate, and it does not consider control-plane nodes.
 	var nodes corev1.NodeList
-	if err := d.List(ctx, &nodes, options...); err != nil {
+	if err := d.List(ctx, &nodes); err != nil {
 		return "", fmt.Errorf("listing nodes: %w", err)
 	}
-	useControlPlane := ptr.BoolFromOrFalse(spec.EnableControlPlaneNodes)
 	usable := 0
 	for _, node := range nodes.Items {
-		if UsableWorker(node, useControlPlane) {
+		if UsableWorker(node, false) {
 			usable++
 		}
 	}
@@ -290,6 +254,11 @@ func (d *InitialDiscovery) declineReason(ctx context.Context, config *bootstrap.
 	}
 
 	return "", nil
+}
+
+// defaultDiscoverSpec is the run a fresh install raises.
+func defaultDiscoverSpec() *simplyblockv1alpha2.DiscoverSpec {
+	return &simplyblockv1alpha2.DiscoverSpec{EnablePartitionedDevices: ptr.To(true)}
 }
 
 // SetupWithManager adds the check to the manager.

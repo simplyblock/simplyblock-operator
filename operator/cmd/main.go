@@ -226,6 +226,12 @@ func main() {
 	flag.StringVar(&csiLinkAudience, "csi-link-audience", "simplyblock-csi-link",
 		"The audience the peers' projected ServiceAccount tokens must carry.")
 
+	var initialDiscovery bool
+	flag.BoolVar(&initialDiscovery, "initial-discovery", true,
+		"Raise one Discover run on an install that has nothing, so a draft is waiting "+
+			"for review. Disable it where another cluster raises the run or an administrator "+
+			"writes the deployment config by hand.")
+
 	var enableMetricsAPI bool
 	var metricsAPIPort int
 	flag.BoolVar(&enableMetricsAPI, "enable-metrics-api", true,
@@ -854,6 +860,7 @@ func main() {
 	if err := (&deployment.InitialDiscovery{
 		Client:    mgr.GetClient(),
 		Namespace: operatorNamespace,
+		Disabled:  !initialDiscovery,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to add the initial discovery check")
 		os.Exit(1)
@@ -873,7 +880,6 @@ func main() {
 		Recorder:   mgr.GetEventRecorder("operatorops-controller"),
 		Discovery:  operatorOpsDiscovery,
 		ProbeImage: os.Getenv(deployment.NodeProbeImageEnv),
-		Namespace:  operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OperatorOps")
 		os.Exit(1)
