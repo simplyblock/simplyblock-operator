@@ -3980,6 +3980,106 @@ spec:
                 - Failed
                 - Aborted
                 type: string
+              relocate:
+                description: Relocate is the progress of a Relocate.
+                properties:
+                  committed:
+                    description: |-
+                      Committed is set before the first commit is requested. It refuses an
+                      abort from then on, because a committed cutover cannot be taken back.
+                    type: boolean
+                  pathJobs:
+                    description: |-
+                      PathJobs are the Jobs that connect the target's paths on the nodes
+                      consuming the subsystem, one per node.
+                    items:
+                      description: |-
+                        ValidationJob is one Job started to check a path is reachable from one node.
+
+                        It is tracked so that Verifying can delete every Job the operation started,
+                        including after a restart. The namespace is recorded for the same reason
+                        spec.migrate.targetNodeRef carries one: a Job is namespaced and this object
+                        is not, so a name alone would not locate it.
+                      properties:
+                        name:
+                          type: string
+                        namespace:
+                          type: string
+                        node:
+                          description: |-
+                            Node is the worker the Job is pinned to, which is a node consuming one of
+                            the migrated subsystem's volumes.
+                          type: string
+                        succeeded:
+                          description: |-
+                            Succeeded records a node whose paths were checked and found ready, so a
+                            restart does not run the check again on a node that already passed and
+                            whose Job its own TTL may already have reaped.
+                          type: boolean
+                      required:
+                      - name
+                      - namespace
+                      type: object
+                    type: array
+                  sourceClusterUUID:
+                    description: SourceClusterUUID is the member the volume started
+                      in.
+                    type: string
+                  targetClusterUUID:
+                    description: TargetClusterUUID is the member the volume is moving
+                      to.
+                    type: string
+                  targetPoolUUID:
+                    description: |-
+                      TargetPoolUUID is the pool in the target member the volumes land in: the
+                      target's pool of the same supercluster pool as the source's.
+                    type: string
+                  volumes:
+                    description: |-
+                      Volumes are every volume moving together: the named one and those
+                      sharing its subsystem.
+                    items:
+                      description: |-
+                        RelocatedVolume is one volume a Relocate moves, and how far its cutover is.
+
+                        The control plane cuts the volumes of one subsystem over one at a time, so
+                        each carries its own task and its own release rather than the operation
+                        carrying one for all of them.
+                      properties:
+                        cutOver:
+                          description: CutOver is set once the target serves the volume.
+                          type: boolean
+                        persistentVolumeName:
+                          description: |-
+                            PersistentVolumeName is the PersistentVolume carrying the volume, when one
+                            does. It is what the volume's new location is recorded on.
+                          type: string
+                        proceeded:
+                          description: |-
+                            Proceeded is set before the volume's cutover is first released. The
+                            release is resent while the cutover waits for it.
+                          type: boolean
+                        targetVolumeUUID:
+                          description: TargetVolumeUUID is the volume's backend UUID
+                            in the target member.
+                          type: string
+                        taskID:
+                          description: |-
+                            TaskID is the control plane's task carrying the volume's cutover and the
+                            deletion of its source, from the commit's answer.
+                          type: string
+                        volumeUUID:
+                          description: VolumeUUID is the volume's backend UUID in
+                            the source member.
+                          type: string
+                      required:
+                      - volumeUUID
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - volumeUUID
+                    x-kubernetes-list-type: map
+                type: object
               startedAt:
                 description: StartedAt is when the operation began.
                 format: date-time

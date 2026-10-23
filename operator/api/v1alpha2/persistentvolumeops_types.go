@@ -416,6 +416,73 @@ type MigrationStatus struct {
 	ValidationJobs []ValidationJob `json:"validationJobs,omitempty"`
 }
 
+// RelocatedVolume is one volume a Relocate moves, and how far its cutover is.
+//
+// The control plane cuts the volumes of one subsystem over one at a time, so
+// each carries its own task and its own release rather than the operation
+// carrying one for all of them.
+type RelocatedVolume struct {
+	// VolumeUUID is the volume's backend UUID in the source member.
+	// +kubebuilder:validation:Required
+	VolumeUUID string `json:"volumeUUID"`
+
+	// PersistentVolumeName is the PersistentVolume carrying the volume, when one
+	// does. It is what the volume's new location is recorded on.
+	// +optional
+	PersistentVolumeName string `json:"persistentVolumeName,omitempty"`
+
+	// TaskID is the control plane's task carrying the volume's cutover and the
+	// deletion of its source, from the commit's answer.
+	// +optional
+	TaskID string `json:"taskID,omitempty"`
+
+	// Proceeded is set before the volume's cutover is first released. The
+	// release is resent while the cutover waits for it.
+	// +optional
+	Proceeded bool `json:"proceeded,omitempty"`
+
+	// CutOver is set once the target serves the volume.
+	// +optional
+	CutOver bool `json:"cutOver,omitempty"`
+
+	// TargetVolumeUUID is the volume's backend UUID in the target member.
+	// +optional
+	TargetVolumeUUID string `json:"targetVolumeUUID,omitempty"`
+}
+
+// RelocateStatus is the progress of a Relocate.
+type RelocateStatus struct {
+	// SourceClusterUUID is the member the volume started in.
+	// +optional
+	SourceClusterUUID string `json:"sourceClusterUUID,omitempty"`
+
+	// TargetClusterUUID is the member the volume is moving to.
+	// +optional
+	TargetClusterUUID string `json:"targetClusterUUID,omitempty"`
+
+	// TargetPoolUUID is the pool in the target member the volumes land in: the
+	// target's pool of the same supercluster pool as the source's.
+	// +optional
+	TargetPoolUUID string `json:"targetPoolUUID,omitempty"`
+
+	// Committed is set before the first commit is requested. It refuses an
+	// abort from then on, because a committed cutover cannot be taken back.
+	// +optional
+	Committed bool `json:"committed,omitempty"`
+
+	// Volumes are every volume moving together: the named one and those
+	// sharing its subsystem.
+	// +listType=map
+	// +listMapKey=volumeUUID
+	// +optional
+	Volumes []RelocatedVolume `json:"volumes,omitempty"`
+
+	// PathJobs are the Jobs that connect the target's paths on the nodes
+	// consuming the subsystem, one per node.
+	// +optional
+	PathJobs []ValidationJob `json:"pathJobs,omitempty"`
+}
+
 // PersistentVolumeOpsStatus is the observed state of one volume operation.
 type PersistentVolumeOpsStatus struct {
 	// Phase is the operation's own progress.
@@ -433,6 +500,10 @@ type PersistentVolumeOpsStatus struct {
 	// operation.
 	// +optional
 	Migration *MigrationStatus `json:"migration,omitempty"`
+
+	// Relocate is the progress of a Relocate.
+	// +optional
+	Relocate *RelocateStatus `json:"relocate,omitempty"`
 
 	// DeferredSince is when the operation was first held — behind another
 	// operation's lock, or behind a control plane that is not accepting
