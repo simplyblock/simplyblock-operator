@@ -151,8 +151,10 @@ type VolumeDefaults struct {
 	// +optional
 	EnableDHCHAP *bool `json:"enableDHCHAP,omitempty"`
 
-	// PriorityClass is the logical-volume priority class the control plane
-	// places with.
+	// PriorityClass is the I/O service class the pool's volumes run in: the
+	// name of one of the cluster's spec.serviceClasses.classes. Omitted, they
+	// run in Default. A volume whose class the cluster does not define is not
+	// created.
 	// +optional
 	PriorityClass string `json:"priorityClass,omitempty"`
 
