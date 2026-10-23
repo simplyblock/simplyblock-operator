@@ -1190,3 +1190,63 @@ func TestSlot_ReconcileReplicating_FailedOver_Failback_SetsReplicatingSource(t *
 		t.Errorf("Direction = %q, want Source (failback complete)", got.Status.Direction)
 	}
 }
+
+// ---------- reconcileAttach: a migrated volume attaches where it lives now ----------
+
+// The PV keeps the handle it was provisioned with. After A -> B with
+// --delete-source that names a volume on A that no longer exists, so a new
+// policy attached through it (the first step of migrating the volume again)
+// got a 404 from the control plane. The slot must attach on B's volume and
+// carry that handle from then on.
+func TestSlot_ReconcileAttach_MigratedVolumeAttachesOnItsCurrentCluster(t *testing.T) {
+	const (
+		clusterA = "aaaaaaaa-0000-0000-0000-000000000001"
+		clusterB = "bbbbbbbb-0000-0000-0000-000000000001"
+		poolA    = "aaaaaaaa-0000-0000-0000-00000000000a"
+		poolB    = "bbbbbbbb-0000-0000-0000-00000000000b"
+		volA     = "11111111-1111-1111-1111-111111111111"
+		volB     = "22222222-2222-2222-2222-222222222222"
+	)
+	pol := readyReplicationPolicy()
+	slot := newTestSlot("")
+	slot.Spec.VolumeID = clusterA + ":" + poolA + ":" + volA
+
+	var putPath string
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case req.Method == http.MethodGet && req.URL.Path == "/api/v2/clusters/"+clusterA+"/replication/relationships/"+volA:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"is_source": true, "target_cluster_id": clusterB, "target_pool_id": poolB,
+				"target_lvol_id": volB, "active_lvol_id": volB,
+			})
+		case req.Method == http.MethodGet && req.URL.Path == "/api/v2/clusters/"+clusterB+"/replication/relationships/"+volB:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"is_source": false, "target_cluster_id": clusterB, "target_pool_id": poolB,
+				"target_lvol_id": volB, "active_lvol_id": volB,
+			})
+		case req.Method == http.MethodPut:
+			putPath = req.URL.Path
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	r, cl := newSlotReconciler(t, slot, pol)
+	if _, err := r.Reconcile(context.Background(), slotRequest("slot1")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := "/api/v2/clusters/" + clusterB + "/storage-pools/" + poolB + "/volumes/" + volB
+	if putPath != want {
+		t.Errorf("attach PUT %q, want %q (the volume serving the data now)", putPath, want)
+	}
+	got := getSlot(t, cl)
+	if got.Spec.VolumeID != clusterB+":"+poolB+":"+volB {
+		t.Errorf("Spec.VolumeID = %q, want the current volume's handle", got.Spec.VolumeID)
+	}
+	if got.Status.State != string(simplyblockv1alpha1.ReplicationSlotStateReplicating) {
+		t.Errorf("State = %q, want Replicating", got.Status.State)
+	}
+}

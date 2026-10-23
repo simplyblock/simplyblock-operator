@@ -182,7 +182,7 @@ func (r *ReplicationOpsReconciler) runMigration(
 		return r.trackCommittedSlots(ctx, ops)
 	}
 
-	scope, failure, err := r.resolveMigrationScope(ctx, ops, pair, policy, sourceUUID)
+	scope, failure, err := r.resolveMigrationScope(ctx, ops, pair, policy, sourceUUID, apiClient)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -499,6 +499,7 @@ func (r *ReplicationOpsReconciler) resolveMigrationScope(
 	pair *simplyblockv1alpha1.ReplicationPair,
 	policy *simplyblockv1alpha1.ReplicationPolicy,
 	sourceUUID string,
+	apiClient *webapi.Client,
 ) (*migrationScope, string, error) {
 	log := logf.FromContext(ctx)
 	scope := &migrationScope{sourceUUID: sourceUUID}
@@ -515,7 +516,7 @@ func (r *ReplicationOpsReconciler) resolveMigrationScope(
 	var err error
 	switch ops.Spec.Scope {
 	case utils.ReplicationOpsScopeCluster:
-		failure, err := r.resolveClusterScope(ctx, ops, pair, policy, scope)
+		failure, err := r.resolveClusterScope(ctx, ops, pair, policy, scope, apiClient)
 		return scope, failure, err
 	case utils.ReplicationOpsScopeTarget:
 		slots, err = r.collectSlotsForPair(ctx, pair.Name, ops.Namespace)
@@ -543,12 +544,19 @@ func (r *ReplicationOpsReconciler) resolveMigrationScope(
 // "<namespace>/<name>" when the claim lives outside the policy's namespace.
 // The PVC annotation watcher then creates the slot beside the claim, exactly
 // as for a claim a user annotated.
+//
+// "Lives on" is where the volume is now, not what the PV's handle says: the
+// handle is fixed at provisioning, and after a completed migration it names
+// the cluster the volume left. A claim whose slot finished a migration is
+// therefore located through the control plane's relationships, and that
+// finished slot does not hold the claim: it is superseded by the new policy.
 func (r *ReplicationOpsReconciler) resolveClusterScope(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.ReplicationOps,
 	pair *simplyblockv1alpha1.ReplicationPair,
 	policy *simplyblockv1alpha1.ReplicationPolicy,
 	scope *migrationScope,
+	apiClient *webapi.Client,
 ) (string, error) {
 	refUUID, err := utils.ResolveClusterUUID(ctx, r.Client, ops.Namespace, ops.Spec.Ref)
 	if err != nil {
@@ -596,10 +604,27 @@ func (r *ReplicationOpsReconciler) resolveClusterScope(
 		if pv.Spec.CSI == nil {
 			continue
 		}
-		clusterID, _, volumeID, ok := splitVolumeHandle(pv.Spec.CSI.VolumeHandle)
-		if !ok || clusterID != scope.sourceUUID {
+		slot := slotByPVC[pvc.Namespace+"/"+pvc.Name]
+		origin := pv.Spec.CSI.VolumeHandle
+		if slot != nil {
+			origin = slot.Spec.VolumeID
+		}
+		originCluster, _, _, ok := splitVolumeHandle(origin)
+		if !ok {
 			continue
 		}
+		// An attached slot already addresses the current volume (the slot
+		// reconciler resolves it at attach); anything else is located from
+		// its handle.
+		current := origin
+		finished := slot != nil &&
+			slot.Status.State == string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone)
+		if slot == nil || slot.Status.State == "" || finished {
+			if current, err = currentVolumeHandle(ctx, apiClient, origin); err != nil {
+				return "", fmt.Errorf("locate the volume of claim %s/%s: %w", pvc.Namespace, pvc.Name, err)
+			}
+		}
+		clusterID, _, volumeID, _ := splitVolumeHandle(current)
 
 		pvcRef := utils.RefFrom(pvc.Namespace, pvc.Name, ops.Namespace)
 		skip := func(detail string) {
@@ -607,7 +632,13 @@ func (r *ReplicationOpsReconciler) resolveClusterScope(
 				PVCRef: pvcRef, Status: string(simplyblockv1alpha1.ReplicationOpsResultSkipped), Detail: detail,
 			})
 		}
-		if slot, ok := slotByPVC[pvc.Namespace+"/"+pvc.Name]; ok {
+		if clusterID != scope.sourceUUID {
+			if originCluster == scope.sourceUUID {
+				skip(fmt.Sprintf("moved to cluster %s", clusterID))
+			}
+			continue
+		}
+		if slot != nil && !finished {
 			if utils.CanonicalRef(slot.Spec.PolicyRef, slot.Namespace) != policyRef {
 				skip(fmt.Sprintf("follows replication policy %q", slot.Spec.PolicyRef))
 				continue
@@ -623,7 +654,9 @@ func (r *ReplicationOpsReconciler) resolveClusterScope(
 		if err != nil {
 			return "", err
 		}
-		if assigned != "" && utils.CanonicalRef(assigned, pvc.Namespace) != policyRef {
+		// The policy a finished migration left on the claim is spent: the volume
+		// has arrived, and that policy replicates from where it no longer is.
+		if assigned != "" && utils.CanonicalRef(assigned, pvc.Namespace) != policyRef && !finished {
 			skip(fmt.Sprintf("assigned replication policy %q", assigned))
 			continue
 		}
@@ -632,7 +665,16 @@ func (r *ReplicationOpsReconciler) resolveClusterScope(
 			continue
 		}
 		scope.enrolling = true
-		if assigned == "" {
+		if finished && utils.CanonicalRef(slot.Spec.PolicyRef, slot.Namespace) == policyRef {
+			// Back under the policy it finished with (A -> B -> A on one pair):
+			// the slot's name is taken by the finished one, so it goes, and the
+			// watcher creates a fresh one for the annotation that stays.
+			if err := r.Delete(ctx, slot); err != nil && !apierrors.IsNotFound(err) {
+				return "", fmt.Errorf("retire finished ReplicationSlot %q: %w", slot.Name, err)
+			}
+			continue
+		}
+		if assigned == "" || utils.CanonicalRef(assigned, pvc.Namespace) != policyRef {
 			patch := client.MergeFrom(pvc.DeepCopy())
 			if pvc.Annotations == nil {
 				pvc.Annotations = map[string]string{}
