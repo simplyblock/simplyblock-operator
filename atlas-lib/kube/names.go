@@ -197,6 +197,13 @@ const (
 	// parameter is pinned to a node carrying this label (see
 	// ParamClientCompression, ParamClientDeduplication).
 	LabelVDOCapable = "storage.simplyblock.io/vdo-capable"
+	// AnnoRelocatedTo records, on a PersistentVolume moved to another member of
+	// its supercluster, the handle of the volume serving it now. The PV's own
+	// handle is immutable and names the deleted source. The CSI driver starts
+	// resolving the PV at this handle, and deletes the volume it names when the
+	// PV is deleted; a PV without it never has its handle's active volume
+	// deleted, because another cluster's PV may carry the same handle.
+	AnnoRelocatedTo = "storage.simplyblock.io/relocated-to"
 	// LabelConsistencyGroup names, on a claim, the consistency group its volume
 	// belongs to. A group's members are snapshotted together, live in one
 	// cluster, and are never moved apart.

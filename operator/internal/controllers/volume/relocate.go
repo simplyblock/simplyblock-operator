@@ -60,11 +60,9 @@ const (
 	stepProceeding     = simplyblockv1alpha2.PersistentVolumeOpsStepProceeding
 )
 
-// RelocatedToAnnotation records, on a PersistentVolume a Relocate moved, the
-// handle of the volume serving it now. The PV's own handle is immutable and
-// names the deleted source; the CSI driver starts its resolution at this one,
-// and deletes the volume it names when the PV goes.
-const RelocatedToAnnotation = "storage.simplyblock.io/relocated-to"
+// RelocatedToAnnotation is kube.AnnoRelocatedTo, which this controller writes
+// and the CSI driver reads.
+const RelocatedToAnnotation = kube.AnnoRelocatedTo
 
 const (
 	// relocateIntervalMinutes is how often the source takes the snapshots
