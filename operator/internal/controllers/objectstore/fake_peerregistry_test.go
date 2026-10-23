@@ -143,7 +143,7 @@ func TestFakePeerRegistryRecordsDeliveryAndWithdrawalPerNode(t *testing.T) {
 
 	bucket := bucketdeliveryrpc.Bucket{
 		Name:         "team-a-reports",
-		VolumeHandle: fakeClusterID + ":" + fakePoolID + ":" + "cb2f293c-6d6f-4687-ad13-eb81fbec7314",
+		VolumeHandle: testVolumeHandle,
 		VolumeContext: map[string]string{
 			"access_protocol": "nfs",
 			"export_service":  "nfsexp-8f1a2c0e3b.default.svc.cluster.local",

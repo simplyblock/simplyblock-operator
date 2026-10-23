@@ -59,7 +59,8 @@ func validateDeliveryPath(path string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("bucketdelivery: target path %s is outside every Bidirectional hostPath root %v", path, bidirectionalRoots)
+	return fmt.Errorf("bucketdelivery: target path %s is outside every Bidirectional hostPath root %v",
+		path, bidirectionalRoots)
 }
 
 // bucketName validates the bucket name this RPC was asked to deliver.

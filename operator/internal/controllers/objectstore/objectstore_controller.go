@@ -120,7 +120,7 @@ func (r *ObjectStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// stays Ready (design §6's own failure-table row for
 		// spec.replicas), it never returns to Provisioning or Pending.
 		if sm.CurrentState() == osPhaseReady {
-			return r.reconcileReady(ctx, &store)
+			return ctrl.Result{}, r.reconcileReady(ctx, &store)
 		}
 		return ctrl.Result{}, nil
 	}
@@ -212,21 +212,19 @@ func (r *ObjectStoreReconciler) reconcileProvisioning(
 // image, placement) converges without leaving Ready, and refreshes
 // status.readyReplicas. design §6's own failure-table row for
 // spec.replicas: "ordinary Deployment rolling scale-down... stays Ready."
-func (r *ObjectStoreReconciler) reconcileReady(
-	ctx context.Context, store *objectstorev1alpha1.ObjectStore,
-) (ctrl.Result, error) {
+func (r *ObjectStoreReconciler) reconcileReady(ctx context.Context, store *objectstorev1alpha1.ObjectStore) error {
 	if err := r.applyOwnedObjects(ctx, store); err != nil {
-		return ctrl.Result{}, fmt.Errorf("reconciling the gateway's Deployment, Service, and certificate: %w", err)
+		return fmt.Errorf("reconciling the gateway's Deployment, Service, and certificate: %w", err)
 	}
 
 	_, readyReplicas, err := r.deploymentAvailable(ctx, store)
 	if err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
 	if readyReplicas == store.Status.ReadyReplicas {
-		return ctrl.Result{}, nil
+		return nil
 	}
-	return ctrl.Result{}, r.writeStatus(ctx, store, func(s *objectstorev1alpha1.ObjectStoreStatus) {
+	return r.writeStatus(ctx, store, func(s *objectstorev1alpha1.ObjectStoreStatus) {
 		s.ReadyReplicas = readyReplicas
 	})
 }

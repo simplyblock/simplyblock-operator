@@ -51,12 +51,12 @@ func testS3Bucket(mutate ...func(*objectstorev1alpha1.S3Bucket)) *objectstorev1a
 	return bucket
 }
 
-func boundPVC(bucket *objectstorev1alpha1.S3Bucket, volumeHandle string) (*corev1.PersistentVolumeClaim, *corev1.PersistentVolume) {
+func boundPVC(bucket *objectstorev1alpha1.S3Bucket) (*corev1.PersistentVolumeClaim, *corev1.PersistentVolume) {
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: "pv-" + bucket.Name},
 		Spec: corev1.PersistentVolumeSpec{
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
-				CSI: &corev1.CSIPersistentVolumeSource{Driver: "fake.csi.simplyblock.io", VolumeHandle: volumeHandle},
+				CSI: &corev1.CSIPersistentVolumeSource{Driver: "fake.csi.simplyblock.io", VolumeHandle: testVolumeHandle},
 			},
 		},
 		Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeBound},
@@ -69,11 +69,11 @@ func boundPVC(bucket *objectstorev1alpha1.S3Bucket, volumeHandle string) (*corev
 	return pvc, pv
 }
 
-func testNFSExport(volumeHandle string, phase simplyblockv1alpha2.NFSExportPhase) *simplyblockv1alpha2.NFSExport {
+func testNFSExport(phase simplyblockv1alpha2.NFSExportPhase) *simplyblockv1alpha2.NFSExport {
 	return &simplyblockv1alpha2.NFSExport{
 		ObjectMeta: metav1.ObjectMeta{Name: "nfsexp-" + testBucketName},
 		Spec: simplyblockv1alpha2.NFSExportSpec{
-			VolumeRef:  volumeHandle,
+			VolumeRef:  testVolumeHandle,
 			ExportPath: "/var/lib/simplyblock/exports/" + testBucketName,
 		},
 		Status: simplyblockv1alpha2.NFSExportStatus{Phase: phase},
@@ -138,7 +138,7 @@ func TestClaimNotYetBoundStaysPending(t *testing.T) {
 // enters Provisioning to wait on one.
 func TestBoundClaimEntersProvisioning(t *testing.T) {
 	bucket := testS3Bucket(func(b *objectstorev1alpha1.S3Bucket) { b.Status.Phase = phasePending })
-	pvc, pv := boundPVC(bucket, "f0bb9077-78c4-4482-9ccf-a5693ce2df78:9d016dd4-34d7-42f0-b549-52a5af2f1399:cb2f293c-6d6f-4687-ad13-eb81fbec7314")
+	pvc, pv := boundPVC(bucket)
 	cli := newTestClient(t, testObjectStore(), bucket, pvc, pv)
 
 	got := reconcile(t, cli, bucket)
@@ -154,10 +154,9 @@ func TestBoundClaimEntersProvisioning(t *testing.T) {
 // U-04: the NFSExport exists but has not reached Ready yet, so Provisioning
 // waits rather than advancing.
 func TestExportNotYetReadyStaysProvisioning(t *testing.T) {
-	handle := "f0bb9077-78c4-4482-9ccf-a5693ce2df78:9d016dd4-34d7-42f0-b549-52a5af2f1399:cb2f293c-6d6f-4687-ad13-eb81fbec7314"
 	bucket := testS3Bucket(func(b *objectstorev1alpha1.S3Bucket) { b.Status.Phase = phaseProvisioning })
-	pvc, pv := boundPVC(bucket, handle)
-	export := testNFSExport(handle, simplyblockv1alpha2.NFSExportPhaseAssembling)
+	pvc, pv := boundPVC(bucket)
+	export := testNFSExport(simplyblockv1alpha2.NFSExportPhaseAssembling)
 	cli := newTestClient(t, testObjectStore(), bucket, pvc, pv, export)
 
 	got := reconcile(t, cli, bucket)
@@ -173,10 +172,9 @@ func TestExportNotYetReadyStaysProvisioning(t *testing.T) {
 // U-05: the NFSExport is Ready, and with nothing yet to wait on for mount
 // delivery (W-12), the bucket reaches Ready.
 func TestReadyExportCompletesProvisioning(t *testing.T) {
-	handle := "f0bb9077-78c4-4482-9ccf-a5693ce2df78:9d016dd4-34d7-42f0-b549-52a5af2f1399:cb2f293c-6d6f-4687-ad13-eb81fbec7314"
 	bucket := testS3Bucket(func(b *objectstorev1alpha1.S3Bucket) { b.Status.Phase = phaseProvisioning })
-	pvc, pv := boundPVC(bucket, handle)
-	export := testNFSExport(handle, simplyblockv1alpha2.NFSExportPhaseReady)
+	pvc, pv := boundPVC(bucket)
+	export := testNFSExport(simplyblockv1alpha2.NFSExportPhaseReady)
 	cli := newTestClient(t, testObjectStore(), bucket, pvc, pv, export)
 
 	got := reconcile(t, cli, bucket)
@@ -193,10 +191,9 @@ func TestReadyExportCompletesProvisioning(t *testing.T) {
 // bucket at once rather than waiting out the deadline for something that is
 // not going to recover on its own.
 func TestDegradedExportDegradesTheBucket(t *testing.T) {
-	handle := "f0bb9077-78c4-4482-9ccf-a5693ce2df78:9d016dd4-34d7-42f0-b549-52a5af2f1399:cb2f293c-6d6f-4687-ad13-eb81fbec7314"
 	bucket := testS3Bucket(func(b *objectstorev1alpha1.S3Bucket) { b.Status.Phase = phaseProvisioning })
-	pvc, pv := boundPVC(bucket, handle)
-	export := testNFSExport(handle, simplyblockv1alpha2.NFSExportPhaseDegraded)
+	pvc, pv := boundPVC(bucket)
+	export := testNFSExport(simplyblockv1alpha2.NFSExportPhaseDegraded)
 	cli := newTestClient(t, testObjectStore(), bucket, pvc, pv, export)
 
 	got := reconcile(t, cli, bucket)
@@ -215,14 +212,13 @@ func TestDegradedExportDegradesTheBucket(t *testing.T) {
 // (W-12's own check, stubbed true today). The deadline path still degrades
 // rather than reaching Ready on a timed-out wait.
 func TestProvisioningDeadlinePassedDegrades(t *testing.T) {
-	handle := "f0bb9077-78c4-4482-9ccf-a5693ce2df78:9d016dd4-34d7-42f0-b549-52a5af2f1399:cb2f293c-6d6f-4687-ad13-eb81fbec7314"
 	past := metav1.NewTime(metav1.Now().Add(-time.Minute))
 	bucket := testS3Bucket(func(b *objectstorev1alpha1.S3Bucket) {
 		b.Status.Phase = phaseProvisioning
 		b.Status.PhaseDeadline = &past
 	})
-	pvc, pv := boundPVC(bucket, handle)
-	export := testNFSExport(handle, simplyblockv1alpha2.NFSExportPhaseAssembling)
+	pvc, pv := boundPVC(bucket)
+	export := testNFSExport(simplyblockv1alpha2.NFSExportPhaseAssembling)
 	cli := newTestClient(t, testObjectStore(), bucket, pvc, pv, export)
 
 	got := reconcile(t, cli, bucket)
@@ -289,7 +285,7 @@ func TestDeleteReadyBucketWithdrawsThenDeletesThenReleasesFinalizer(t *testing.T
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: "pv-" + bucket.Name},
 		Spec: corev1.PersistentVolumeSpec{PersistentVolumeSource: corev1.PersistentVolumeSource{
-			CSI: &corev1.CSIPersistentVolumeSource{VolumeHandle: "f0bb9077-78c4-4482-9ccf-a5693ce2df78:9d016dd4-34d7-42f0-b549-52a5af2f1399:cb2f293c-6d6f-4687-ad13-eb81fbec7314"},
+			CSI: &corev1.CSIPersistentVolumeSource{VolumeHandle: testVolumeHandle},
 		}},
 	}
 	cli := newTestClient(t, testObjectStore(), bucket, pvc, pv)

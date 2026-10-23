@@ -283,10 +283,10 @@ func TestS3BucketDegradesWhenObjectStoreMissing(t *testing.T) {
 		return b.Status.Phase == phaseDegraded
 	})
 	cond := findCondition(got.Status.Conditions, conditionObjectStoreOK)
-	if cond == nil || cond.Reason != "ObjectStoreNotFound" {
+	if cond == nil || cond.Reason != reasonObjectStoreNotFound {
 		t.Errorf("ObjectStoreReady condition = %+v, want reason ObjectStoreNotFound", cond)
 	}
-	expectEvent(t, recorder, "ObjectStoreNotFound")
+	expectEvent(t, recorder, reasonObjectStoreNotFound)
 }
 
 // I-12: the PVC binds and the export reaches Ready, but no Registry is wired
@@ -346,10 +346,10 @@ func TestS3BucketDegradesWhenMountDeliveryNeverConfirms(t *testing.T) {
 		return b.Status.Phase == phaseDegraded
 	})
 	cond := findCondition(got.Status.Conditions, conditionMountDelivered)
-	if cond == nil || cond.Reason != "MountDeliveryFailed" {
+	if cond == nil || cond.Reason != reasonMountDeliveryFailed {
 		t.Errorf("MountDelivered condition = %+v, want reason MountDeliveryFailed", cond)
 	}
-	expectEvent(t, recorder, "MountDeliveryFailed")
+	expectEvent(t, recorder, reasonMountDeliveryFailed)
 }
 
 // I-06: a reconciler built fresh mid-Provisioning (standing in for an

@@ -42,12 +42,16 @@ func gatewayDeployment(name string) *appsv1.Deployment {
 	}
 }
 
+// firstGatewayNode is where readyBucketWithGatewayPod places the gateway pod
+// it starts from. Every caller then moves the pod, or doesn't, relative to it.
+const firstGatewayNode = "node-a"
+
 // readyBucketWithGatewayPod drives a fresh bucket to Ready with one gateway
-// pod already placed on firstNode, and returns the reconciler (carrying the
-// fake registry) and the bucket's key, ready for a test to change the
+// pod already placed on firstGatewayNode, and returns the reconciler (carrying
+// the fake registry) and the bucket's key, ready for a test to change the
 // gateway's pod placement or status and reconcile again.
 func readyBucketWithGatewayPod(
-	t *testing.T, storeName, bucketName, firstNode string, registryNodes ...string,
+	t *testing.T, storeName, bucketName string, registryNodes ...string,
 ) (*S3BucketReconciler, client.ObjectKey, client.Client, *fakePeerRegistry) {
 	t.Helper()
 	cli := apiServer(t)
@@ -63,7 +67,7 @@ func readyBucketWithGatewayPod(
 	if err := cli.Create(ctx, gatewayDeployment(storeName)); err != nil {
 		t.Fatalf("creating the gateway Deployment: %v", err)
 	}
-	if err := cli.Create(ctx, gatewayPod(bucketName+"-gw", storeName, firstNode)); err != nil {
+	if err := cli.Create(ctx, gatewayPod(bucketName+"-gw", storeName, firstGatewayNode)); err != nil {
 		t.Fatalf("creating the gateway pod: %v", err)
 	}
 
@@ -91,7 +95,7 @@ func readyBucketWithGatewayPod(
 // called there, and WithdrawBucket called for the stale node, within the one
 // reconcile that follows.
 func TestMountDeliveryFollowsAGatewayPodRescheduleWhileReady(t *testing.T) {
-	r, key, cli, registry := readyBucketWithGatewayPod(t, "i07-store", "i07-bucket", "node-a", "node-a", "node-b")
+	r, key, cli, registry := readyBucketWithGatewayPod(t, "i07-store", "i07-bucket", "node-a", "node-b")
 
 	if got := registry.Delivered("node-a"); len(got) != 1 {
 		t.Fatalf("node-a delivered = %v before the reschedule, want exactly one", got)
@@ -133,7 +137,7 @@ func TestMountDeliveryFollowsAGatewayPodRescheduleWhileReady(t *testing.T) {
 // through a real delivery) is corrected on the next pass: withdrawn, even
 // though that node was never actually linked to acknowledge it.
 func TestMountDeliveryCorrectsADriftedNodeInStatus(t *testing.T) {
-	r, key, cli, registry := readyBucketWithGatewayPod(t, "i09-store", "i09-bucket", "node-a", "node-a")
+	r, key, cli, registry := readyBucketWithGatewayPod(t, "i09-store", "i09-bucket", "node-a")
 
 	ctx := context.Background()
 	var bucket objectstorev1alpha1.S3Bucket
@@ -165,7 +169,7 @@ func TestMountDeliveryCorrectsADriftedNodeInStatus(t *testing.T) {
 // leaves its existing deliveries in place, per design §6's failure table,
 // rather than withdrawing them for lack of a node set to target.
 func TestMountDeliveryLeavesDeliveriesWhenTheGatewayDeploymentIsGone(t *testing.T) {
-	r, key, cli, registry := readyBucketWithGatewayPod(t, "i10-store", "i10-bucket", "node-a", "node-a")
+	r, key, cli, registry := readyBucketWithGatewayPod(t, "i10-store", "i10-bucket", "node-a")
 
 	ctx := context.Background()
 	var deployment appsv1.Deployment
