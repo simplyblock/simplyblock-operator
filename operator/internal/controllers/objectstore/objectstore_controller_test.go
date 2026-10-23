@@ -18,14 +18,14 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
-func testObjectStoreFixture(name string, mutate ...func(*objectstorev1alpha1.ObjectStore)) *objectstorev1alpha1.ObjectStore {
-	store := &objectstorev1alpha1.ObjectStore{
+func testObjectStoreFixture(name string, mutate ...func(*simplyblockv1alpha2.ObjectStore)) *simplyblockv1alpha2.ObjectStore {
+	store := &simplyblockv1alpha2.ObjectStore{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec: objectstorev1alpha1.ObjectStoreSpec{
+		Spec: simplyblockv1alpha2.ObjectStoreSpec{
 			Image: "docker.io/simplyblock/gateway:main",
 			Port:  9000,
 		},
@@ -39,15 +39,15 @@ func testObjectStoreFixture(name string, mutate ...func(*objectstorev1alpha1.Obj
 // reconcileStoreUntil calls Reconcile in a loop against a real apiserver
 // until cond holds or the budget runs out.
 func reconcileStoreUntil(
-	t *testing.T, r *ObjectStoreReconciler, key client.ObjectKey, cond func(*objectstorev1alpha1.ObjectStore) bool,
-) *objectstorev1alpha1.ObjectStore {
+	t *testing.T, r *ObjectStoreReconciler, key client.ObjectKey, cond func(*simplyblockv1alpha2.ObjectStore) bool,
+) *simplyblockv1alpha2.ObjectStore {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := r.Reconcile(context.Background(), ctrlRequestKey(key)); err != nil {
 			t.Fatalf("Reconcile: %v", err)
 		}
-		var got objectstorev1alpha1.ObjectStore
+		var got simplyblockv1alpha2.ObjectStore
 		if err := r.Get(context.Background(), key, &got); err != nil {
 			t.Fatalf("reading the ObjectStore back: %v", err)
 		}
@@ -111,7 +111,7 @@ func TestObjectStoreCreatesItsOwnedObjects(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	store := testObjectStoreFixture("os-i01-store", func(o *objectstorev1alpha1.ObjectStore) {
+	store := testObjectStoreFixture("os-i01-store", func(o *simplyblockv1alpha2.ObjectStore) {
 		o.Spec.TLSProvider = utils.TLSProviderCertManager
 	})
 	if err := cli.Create(ctx, store); err != nil {
@@ -120,7 +120,7 @@ func TestObjectStoreCreatesItsOwnedObjects(t *testing.T) {
 
 	r := &ObjectStoreReconciler{Client: cli, Scheme: cli.Scheme()}
 	key := client.ObjectKeyFromObject(store)
-	reconcileStoreUntil(t, r, key, func(o *objectstorev1alpha1.ObjectStore) bool {
+	reconcileStoreUntil(t, r, key, func(o *simplyblockv1alpha2.ObjectStore) bool {
 		return o.Status.Phase == osPhaseProvisioning
 	})
 
@@ -159,7 +159,7 @@ func TestObjectStoreReachesReadyOnceDeploymentAndCertificateAreReady(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	store := testObjectStoreFixture("os-i02-store", func(o *objectstorev1alpha1.ObjectStore) {
+	store := testObjectStoreFixture("os-i02-store", func(o *simplyblockv1alpha2.ObjectStore) {
 		o.Spec.TLSProvider = utils.TLSProviderCertManager
 	})
 	if err := cli.Create(ctx, store); err != nil {
@@ -169,14 +169,14 @@ func TestObjectStoreReachesReadyOnceDeploymentAndCertificateAreReady(t *testing.
 	recorder := events.NewFakeRecorder(16)
 	r := &ObjectStoreReconciler{Client: cli, Scheme: cli.Scheme(), Recorder: recorder}
 	key := client.ObjectKeyFromObject(store)
-	reconcileStoreUntil(t, r, key, func(o *objectstorev1alpha1.ObjectStore) bool {
+	reconcileStoreUntil(t, r, key, func(o *simplyblockv1alpha2.ObjectStore) bool {
 		return o.Status.Phase == osPhaseProvisioning
 	})
 
 	markDeploymentAvailable(t, cli, key, true, 2)
 	markCertificateReady(t, cli, key, true)
 
-	got := reconcileStoreUntil(t, r, key, func(o *objectstorev1alpha1.ObjectStore) bool {
+	got := reconcileStoreUntil(t, r, key, func(o *simplyblockv1alpha2.ObjectStore) bool {
 		return o.Status.Phase == osPhaseReady
 	})
 	if got.Status.ReadyReplicas != 2 {
@@ -199,11 +199,11 @@ func TestObjectStoreReplicaChangeUpdatesTheDeploymentInPlace(t *testing.T) {
 
 	r := &ObjectStoreReconciler{Client: cli, Scheme: cli.Scheme()}
 	key := client.ObjectKeyFromObject(store)
-	reconcileStoreUntil(t, r, key, func(o *objectstorev1alpha1.ObjectStore) bool {
+	reconcileStoreUntil(t, r, key, func(o *simplyblockv1alpha2.ObjectStore) bool {
 		return o.Status.Phase == osPhaseProvisioning
 	})
 	markDeploymentAvailable(t, cli, key, true, 1)
-	got := reconcileStoreUntil(t, r, key, func(o *objectstorev1alpha1.ObjectStore) bool {
+	got := reconcileStoreUntil(t, r, key, func(o *simplyblockv1alpha2.ObjectStore) bool {
 		return o.Status.Phase == osPhaseReady
 	})
 
@@ -255,7 +255,7 @@ func TestObjectStoreDeletionIsNotBlockedByAFinalizer(t *testing.T) {
 	}
 	r := &ObjectStoreReconciler{Client: cli, Scheme: cli.Scheme()}
 	key := client.ObjectKeyFromObject(store)
-	reconcileStoreUntil(t, r, key, func(o *objectstorev1alpha1.ObjectStore) bool {
+	reconcileStoreUntil(t, r, key, func(o *simplyblockv1alpha2.ObjectStore) bool {
 		return o.Status.Phase == osPhaseProvisioning
 	})
 
@@ -263,7 +263,7 @@ func TestObjectStoreDeletionIsNotBlockedByAFinalizer(t *testing.T) {
 		t.Fatalf("deleting the ObjectStore: %v", err)
 	}
 
-	var got objectstorev1alpha1.ObjectStore
+	var got simplyblockv1alpha2.ObjectStore
 	err := cli.Get(ctx, key, &got)
 	if !apierrorsIsNotFound(err) {
 		t.Errorf("Get after delete = %v, want NotFound (no finalizer should hold it back)", err)
@@ -284,7 +284,7 @@ func TestObjectStoreResumesMidProvisioningWithoutRecreatingTheDeployment(t *test
 	}
 	key := client.ObjectKeyFromObject(store)
 	first := &ObjectStoreReconciler{Client: cli, Scheme: cli.Scheme()}
-	reconcileStoreUntil(t, first, key, func(o *objectstorev1alpha1.ObjectStore) bool {
+	reconcileStoreUntil(t, first, key, func(o *simplyblockv1alpha2.ObjectStore) bool {
 		return o.Status.Phase == osPhaseProvisioning
 	})
 
@@ -327,7 +327,7 @@ func TestObjectStoreProvisioningReconcileIsANoOpWhenNothingChanged(t *testing.T)
 	}
 	key := client.ObjectKeyFromObject(store)
 	r := &ObjectStoreReconciler{Client: cli, Scheme: cli.Scheme()}
-	reconcileStoreUntil(t, r, key, func(o *objectstorev1alpha1.ObjectStore) bool {
+	reconcileStoreUntil(t, r, key, func(o *simplyblockv1alpha2.ObjectStore) bool {
 		return o.Status.Phase == osPhaseProvisioning
 	})
 

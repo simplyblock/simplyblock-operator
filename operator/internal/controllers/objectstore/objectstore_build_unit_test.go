@@ -10,7 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/simplyblock/atlas/bucketdelivery"
-	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -19,11 +19,11 @@ const (
 	testObjectStoreOnlyName  = "team-a-store"
 )
 
-func testObjectStoreSpec(mutate ...func(*objectstorev1alpha1.ObjectStore)) *objectstorev1alpha1.ObjectStore {
-	store := &objectstorev1alpha1.ObjectStore{}
+func testObjectStoreSpec(mutate ...func(*simplyblockv1alpha2.ObjectStore)) *simplyblockv1alpha2.ObjectStore {
+	store := &simplyblockv1alpha2.ObjectStore{}
 	store.Name = testObjectStoreOnlyName
 	store.Namespace = testObjectStoreNamespace
-	store.Spec = objectstorev1alpha1.ObjectStoreSpec{
+	store.Spec = simplyblockv1alpha2.ObjectStoreSpec{
 		Image: "docker.io/simplyblock/gateway:main",
 		Port:  9000,
 	}
@@ -104,7 +104,7 @@ func TestBuildDeploymentCopiesEnvFromUnmodified(t *testing.T) {
 	envFrom := []corev1.EnvFromSource{
 		{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "team-a-store-vault-token"}}},
 	}
-	store := testObjectStoreSpec(func(o *objectstorev1alpha1.ObjectStore) { o.Spec.EnvFrom = envFrom })
+	store := testObjectStoreSpec(func(o *simplyblockv1alpha2.ObjectStore) { o.Spec.EnvFrom = envFrom })
 
 	deployment := buildDeployment(store)
 
@@ -146,7 +146,7 @@ func TestBuildServiceIsClusterIPOnSpecPortSelectingTheDeployment(t *testing.T) {
 // through unchanged.
 func TestBuildServicePortAtItsLimits(t *testing.T) {
 	for _, port := range []int32{1, 65535} {
-		store := testObjectStoreSpec(func(o *objectstorev1alpha1.ObjectStore) { o.Spec.Port = port })
+		store := testObjectStoreSpec(func(o *simplyblockv1alpha2.ObjectStore) { o.Spec.Port = port })
 		service := buildService(store)
 		if len(service.Spec.Ports) != 1 || service.Spec.Ports[0].Port != port {
 			t.Errorf("port %d: Service ports = %+v, want exactly one port %d", port, service.Spec.Ports, port)
@@ -158,7 +158,7 @@ func TestBuildServicePortAtItsLimits(t *testing.T) {
 // Service and creates no Certificate object (applyCertificate is never
 // called for this provider; see applyOwnedObjects).
 func TestOpenShiftTLSProviderAnnotatesTheServiceOnly(t *testing.T) {
-	store := testObjectStoreSpec(func(o *objectstorev1alpha1.ObjectStore) {
+	store := testObjectStoreSpec(func(o *simplyblockv1alpha2.ObjectStore) {
 		o.Spec.TLSProvider = utils.TLSProviderOpenShift
 	})
 	service := buildService(store)
@@ -177,7 +177,7 @@ func TestOpenShiftTLSProviderAnnotatesTheServiceOnly(t *testing.T) {
 // Certificate utils.BuildServiceServingCertificate builds names this
 // ObjectStore's Service and Secret.
 func TestCertManagerTLSProviderBuildsACertificateAndNoAnnotation(t *testing.T) {
-	store := testObjectStoreSpec(func(o *objectstorev1alpha1.ObjectStore) {
+	store := testObjectStoreSpec(func(o *simplyblockv1alpha2.ObjectStore) {
 		o.Spec.TLSProvider = utils.TLSProviderCertManager
 	})
 	service := buildService(store)

@@ -73,7 +73,7 @@ The gateway itself needs nothing from the control plane (`sbcli`) or from `atlas
 │                                                                                    │
 │   ┌───────────────────────── ObjectStoreReconciler ─────────────────────────┐    │
 │   │ 1. Ensure a Deployment named <name> exists, pods labeled                 │    │
-│   │    objectstore.simplyblock.io/instance=<name>                           │    │
+│   │    storage.simplyblock.io/objectstore=<name>                           │    │
 │   │ 2. Ensure a ClusterIP Service named <name>, same selector               │    │
 │   │ 3. Ensure that Service's serving certificate (utils.tls)                 │    │
 │   │ 4. Phase = Ready once the Deployment reports Available                  │    │
@@ -185,7 +185,7 @@ The whole type is in Appendix A. No finalizer: the Deployment, the Service, and 
 A CR as it exists once `Ready`:
 
 ```yaml
-apiVersion: objectstore.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: ObjectStore
 metadata:
   name: team-a-store
@@ -214,7 +214,7 @@ status:
 
 ## 5. TLS and Service Exposure
 
-The `Service` this design creates is `ClusterIP`, named identically to the `ObjectStore`, selecting pods labeled `objectstore.simplyblock.io/instance=<name>`, and carrying exactly one port, `spec.port`. Its serving certificate is issued by `utils.BuildServiceServingCertificate(namespace, name, secretName)`, the identical call `operator/internal/webhook/certmanager.go` and `operator/internal/controllers/node/workload_controller.go` already make for their own Services, branching on `spec.tlsProvider` the same way `utils.NormalizeTLSProvider`/`TLSProviderSupported` already do. The resulting Secret is mounted into the gateway container at a fixed path, and `spec.port` is the only thing that varies between an `ObjectStore` and any other TLS-terminating Service in this operator.
+The `Service` this design creates is `ClusterIP`, named identically to the `ObjectStore`, selecting pods labeled `storage.simplyblock.io/objectstore=<name>`, and carrying exactly one port, `spec.port`. Its serving certificate is issued by `utils.BuildServiceServingCertificate(namespace, name, secretName)`, the identical call `operator/internal/webhook/certmanager.go` and `operator/internal/controllers/node/workload_controller.go` already make for their own Services, branching on `spec.tlsProvider` the same way `utils.NormalizeTLSProvider`/`TLSProviderSupported` already do. The resulting Secret is mounted into the gateway container at a fixed path, and `spec.port` is the only thing that varies between an `ObjectStore` and any other TLS-terminating Service in this operator.
 
 Reaching this Service from outside the cluster is not this design's concern (§2 Non-Goals): it is an ordinary `ClusterIP` Service, fronted the same way any other one in the cluster is.
 
@@ -258,7 +258,7 @@ Reaching this Service from outside the cluster is not this design's concern (§2
 
 ### 7.1 Location
 
-The existing `kubernetes/operator` manager, the same process `design-bucket-provisioning.md`'s `S3BucketReconciler` registers into (`0005-s3bucket-joins-the-main-operator-manager.md`). Both are new and both are in the `objectstore.simplyblock.io` API group, a separate group from `storage.simplyblock.io` but not a separate manager.
+The existing `kubernetes/operator` manager, the same process `design-bucket-provisioning.md`'s `S3BucketReconciler` registers into (`0005-s3bucket-joins-the-main-operator-manager.md`). Both are new kinds in `storage.simplyblock.io/v1alpha2`, the group and version every other kind this manager reconciles already uses.
 
 ### 7.2 Reconciliation Trigger
 
@@ -346,7 +346,7 @@ Full scenario matrix, coverage status, and hand-off test concepts: [`tests/test-
 ## Appendix A: `objectstore_types.go`
 
 ```go
-// Package v1alpha1 of the objectstore.simplyblock.io API group.
+// Package v1alpha2 of the storage.simplyblock.io API group.
 
 package v1alpha1
 
@@ -477,7 +477,7 @@ type ObjectStoreStatus struct {
 
 // ObjectStore is the desired existence of one S3 gateway: its Deployment,
 // its Service, and that Service's serving certificate. Every gateway pod
-// carries the label objectstore.simplyblock.io/instance=<name>, which is
+// carries the label storage.simplyblock.io/objectstore=<name>, which is
 // how design-bucket-provisioning.md's S3BucketReconciler finds them without
 // reading this object.
 type ObjectStore struct {

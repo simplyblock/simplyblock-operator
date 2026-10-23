@@ -36,19 +36,18 @@ import (
 	"github.com/simplyblock/atlas/bucketdelivery/bucketdeliveryrpc"
 	"github.com/simplyblock/atlas/link"
 	"github.com/simplyblock/atlas/statemachine"
-	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 // phase is an alias so the graph below reads as a table.
-type phase = objectstorev1alpha1.S3BucketPhase
+type phase = simplyblockv1alpha2.S3BucketPhase
 
 const (
-	phasePending      = objectstorev1alpha1.S3BucketPhasePending
-	phaseProvisioning = objectstorev1alpha1.S3BucketPhaseProvisioning
-	phaseReady        = objectstorev1alpha1.S3BucketPhaseReady
-	phaseDegraded     = objectstorev1alpha1.S3BucketPhaseDegraded
-	phaseDeleting     = objectstorev1alpha1.S3BucketPhaseDeleting
+	phasePending      = simplyblockv1alpha2.S3BucketPhasePending
+	phaseProvisioning = simplyblockv1alpha2.S3BucketPhaseProvisioning
+	phaseReady        = simplyblockv1alpha2.S3BucketPhaseReady
+	phaseDegraded     = simplyblockv1alpha2.S3BucketPhaseDegraded
+	phaseDeleting     = simplyblockv1alpha2.S3BucketPhaseDeleting
 )
 
 // Condition types this reconciler sets. VolumeBound, ExportReady, and
@@ -100,10 +99,10 @@ type S3BucketReconciler struct {
 	Registry PeerRegistry
 }
 
-// +kubebuilder:rbac:groups=objectstore.simplyblock.io,resources=s3buckets,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=objectstore.simplyblock.io,resources=s3buckets/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=objectstore.simplyblock.io,resources=s3buckets/finalizers,verbs=update
-// +kubebuilder:rbac:groups=objectstore.simplyblock.io,resources=objectstores,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=s3buckets,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=s3buckets/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=s3buckets/finalizers,verbs=update
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=objectstores,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=nfsexports,verbs=get;list;watch
@@ -112,7 +111,7 @@ type S3BucketReconciler struct {
 func (r *S3BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("s3bucket", req.NamespacedName)
 
-	var bucket objectstorev1alpha1.S3Bucket
+	var bucket simplyblockv1alpha2.S3Bucket
 	if err := r.Get(ctx, req.NamespacedName, &bucket); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -182,7 +181,7 @@ func (r *S3BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 // because Pending is the graph's own starting point.
 func (r *S3BucketReconciler) reconcilePending(
 	ctx context.Context,
-	bucket *objectstorev1alpha1.S3Bucket,
+	bucket *simplyblockv1alpha2.S3Bucket,
 	sm *statemachine.Machine[phase],
 	logger logr,
 ) (ctrl.Result, error) {
@@ -194,7 +193,7 @@ func (r *S3BucketReconciler) reconcilePending(
 	if pvc.Status.Phase != corev1.ClaimBound {
 		r.event(bucket, corev1.EventTypeWarning, "PersistentVolumeClaimNotBound",
 			fmt.Sprintf("waiting for PersistentVolumeClaim %s to bind", pvc.Name))
-		if err := r.writeStatus(ctx, bucket, func(s *objectstorev1alpha1.S3BucketStatus) {
+		if err := r.writeStatus(ctx, bucket, func(s *simplyblockv1alpha2.S3BucketStatus) {
 			s.Phase = phasePending
 			s.PersistentVolumeClaimName = pvc.Name
 			meta.SetStatusCondition(&s.Conditions, metav1.Condition{
@@ -211,7 +210,7 @@ func (r *S3BucketReconciler) reconcilePending(
 	if err := sm.TransitionTo(ctx, phaseProvisioning); err != nil {
 		return ctrl.Result{}, fmt.Errorf("transition to Provisioning: %w", err)
 	}
-	if err := r.writeStatus(ctx, bucket, func(s *objectstorev1alpha1.S3BucketStatus) {
+	if err := r.writeStatus(ctx, bucket, func(s *simplyblockv1alpha2.S3BucketStatus) {
 		s.Phase = phaseProvisioning
 		s.PersistentVolumeClaimName = pvc.Name
 		s.Message = "waiting for the NFSExport and mount delivery"
@@ -231,7 +230,7 @@ func (r *S3BucketReconciler) reconcilePending(
 // re-poll.
 func (r *S3BucketReconciler) reconcileProvisioning(
 	ctx context.Context,
-	bucket *objectstorev1alpha1.S3Bucket,
+	bucket *simplyblockv1alpha2.S3Bucket,
 	sm *statemachine.Machine[phase],
 	logger logr,
 ) (ctrl.Result, error) {
@@ -261,7 +260,7 @@ func (r *S3BucketReconciler) reconcileProvisioning(
 			fmt.Sprintf("NFSExport %s is Degraded: %s", export.Name, export.Status.Message))
 	}
 	if export.Status.Phase != simplyblockv1alpha2.NFSExportPhaseReady {
-		if err := r.writeStatus(ctx, bucket, func(s *objectstorev1alpha1.S3BucketStatus) {
+		if err := r.writeStatus(ctx, bucket, func(s *simplyblockv1alpha2.S3BucketStatus) {
 			s.NFSExportName = export.Name
 		}); err != nil {
 			return ctrl.Result{}, err
@@ -281,7 +280,7 @@ func (r *S3BucketReconciler) reconcileProvisioning(
 	if err := sm.TransitionTo(ctx, phaseReady); err != nil {
 		return ctrl.Result{}, fmt.Errorf("transition to Ready: %w", err)
 	}
-	if err := r.writeStatus(ctx, bucket, func(s *objectstorev1alpha1.S3BucketStatus) {
+	if err := r.writeStatus(ctx, bucket, func(s *simplyblockv1alpha2.S3BucketStatus) {
 		s.Phase = phaseReady
 		s.NFSExportName = export.Name
 		s.Message = ""
@@ -313,7 +312,7 @@ func (r *S3BucketReconciler) reconcileProvisioning(
 // state advanceProvisioning reads. Called once, from Reconcile, when
 // sm.TimeoutReached() is true.
 func (r *S3BucketReconciler) provisioningFailure(
-	ctx context.Context, bucket *objectstorev1alpha1.S3Bucket,
+	ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket,
 ) (reason, message string) {
 	if exists, err := r.objectStoreExists(ctx, bucket); err == nil && !exists {
 		return reasonObjectStoreNotFound, fmt.Sprintf("spec.objectStoreRef %q does not resolve to an ObjectStore", bucket.Spec.ObjectStoreRef)
@@ -334,7 +333,7 @@ func (r *S3BucketReconciler) provisioningFailure(
 // toDegraded parks the bucket and says why, in a condition and an event.
 func (r *S3BucketReconciler) toDegraded(
 	ctx context.Context,
-	bucket *objectstorev1alpha1.S3Bucket,
+	bucket *simplyblockv1alpha2.S3Bucket,
 	sm *statemachine.Machine[phase],
 	reason, message string,
 ) error {
@@ -349,7 +348,7 @@ func (r *S3BucketReconciler) toDegraded(
 	case reasonMountDeliveryFailed:
 		conditionType = conditionMountDelivered
 	}
-	return r.writeStatus(ctx, bucket, func(s *objectstorev1alpha1.S3BucketStatus) {
+	return r.writeStatus(ctx, bucket, func(s *simplyblockv1alpha2.S3BucketStatus) {
 		s.Phase = phaseDegraded
 		s.Message = message
 		s.PhaseDeadline = nil
@@ -364,7 +363,7 @@ func (r *S3BucketReconciler) toDegraded(
 // that died between the create and the status write finds the claim already
 // there on its next pass.
 func (r *S3BucketReconciler) ensurePVC(
-	ctx context.Context, bucket *objectstorev1alpha1.S3Bucket,
+	ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket,
 ) (*corev1.PersistentVolumeClaim, error) {
 	name := pvcNameFor(bucket.Spec.BucketName)
 	var pvc corev1.PersistentVolumeClaim
@@ -405,7 +404,7 @@ func (r *S3BucketReconciler) ensurePVC(
 // NFSExport's spec.volumeRef. nil, nil when the PVC is not yet bound or no
 // export matches it yet, both of which are waits rather than errors.
 func (r *S3BucketReconciler) matchingNFSExport(
-	ctx context.Context, bucket *objectstorev1alpha1.S3Bucket,
+	ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket,
 ) (*simplyblockv1alpha2.NFSExport, error) {
 	handle, err := r.boundVolumeHandle(ctx, bucket)
 	if err != nil || handle == "" {
@@ -429,7 +428,7 @@ func (r *S3BucketReconciler) matchingNFSExport(
 // matchingNFSExport and the delete path's withdrawal, which both need the
 // same identity the NFSExport's own spec.volumeRef is matched against.
 func (r *S3BucketReconciler) boundVolumeHandle(
-	ctx context.Context, bucket *objectstorev1alpha1.S3Bucket,
+	ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket,
 ) (string, error) {
 	var pvc corev1.PersistentVolumeClaim
 	if err := r.Get(ctx, client.ObjectKey{
@@ -453,9 +452,9 @@ func (r *S3BucketReconciler) boundVolumeHandle(
 // objectStoreExists reports whether spec.objectStoreRef names an ObjectStore
 // in the bucket's own namespace.
 func (r *S3BucketReconciler) objectStoreExists(
-	ctx context.Context, bucket *objectstorev1alpha1.S3Bucket,
+	ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket,
 ) (bool, error) {
-	var store objectstorev1alpha1.ObjectStore
+	var store simplyblockv1alpha2.ObjectStore
 	err := r.Get(ctx, client.ObjectKey{Namespace: bucket.Namespace, Name: bucket.Spec.ObjectStoreRef}, &store)
 	switch {
 	case err == nil:
@@ -470,8 +469,8 @@ func (r *S3BucketReconciler) objectStoreExists(
 // reconcileDelete releases the PVC and drops the finalizer, on every path
 // including the one where nothing was ever provisioned, withdrawing the
 // mount from every node status.mountDeliveredNodes still names first.
-func (r *S3BucketReconciler) reconcileDelete(ctx context.Context, bucket *objectstorev1alpha1.S3Bucket) error {
-	if !controllerutil.ContainsFinalizer(bucket, objectstorev1alpha1.S3BucketFinalizer) {
+func (r *S3BucketReconciler) reconcileDelete(ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket) error {
+	if !controllerutil.ContainsFinalizer(bucket, simplyblockv1alpha2.S3BucketFinalizer) {
 		return nil
 	}
 
@@ -479,7 +478,7 @@ func (r *S3BucketReconciler) reconcileDelete(ctx context.Context, bucket *object
 		// Best-effort and not retried on its own: the finalizer release below
 		// is what must complete, and a failed status write here only costs an
 		// observer the Deleting phase label, not correctness.
-		_ = r.writeStatus(ctx, bucket, func(s *objectstorev1alpha1.S3BucketStatus) { s.Phase = phaseDeleting })
+		_ = r.writeStatus(ctx, bucket, func(s *simplyblockv1alpha2.S3BucketStatus) { s.Phase = phaseDeleting })
 	}
 
 	// Withdraw every delivered node before the PVC goes, per design §6: a
@@ -511,7 +510,7 @@ func (r *S3BucketReconciler) reconcileDelete(ctx context.Context, bucket *object
 // right now has nothing live to withdraw from either way, and the finalizer
 // must still be able to complete while a node plugin is mid-rollout.
 func (r *S3BucketReconciler) withdrawFromNode(
-	ctx context.Context, bucket *objectstorev1alpha1.S3Bucket, node string,
+	ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket, node string,
 ) error {
 	conn, err := r.Registry.Conn(link.NodePeer(node))
 	if errors.Is(err, link.ErrNoSession) {
@@ -531,33 +530,33 @@ func (r *S3BucketReconciler) withdrawFromNode(
 }
 
 // releaseFinalizer drops the bucket's finalizer against a fresh copy.
-func (r *S3BucketReconciler) releaseFinalizer(ctx context.Context, bucket *objectstorev1alpha1.S3Bucket) error {
+func (r *S3BucketReconciler) releaseFinalizer(ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var fresh objectstorev1alpha1.S3Bucket
+		var fresh simplyblockv1alpha2.S3Bucket
 		if err := r.Get(ctx, client.ObjectKeyFromObject(bucket), &fresh); err != nil {
 			return client.IgnoreNotFound(err)
 		}
-		controllerutil.RemoveFinalizer(&fresh, objectstorev1alpha1.S3BucketFinalizer)
+		controllerutil.RemoveFinalizer(&fresh, simplyblockv1alpha2.S3BucketFinalizer)
 		return r.Update(ctx, &fresh)
 	})
 }
 
 // ensureFinalizer adds the finalizer if it is absent, reporting whether it wrote.
 func (r *S3BucketReconciler) ensureFinalizer(
-	ctx context.Context, bucket *objectstorev1alpha1.S3Bucket,
+	ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket,
 ) (bool, error) {
-	if controllerutil.ContainsFinalizer(bucket, objectstorev1alpha1.S3BucketFinalizer) {
+	if controllerutil.ContainsFinalizer(bucket, simplyblockv1alpha2.S3BucketFinalizer) {
 		return false, nil
 	}
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var fresh objectstorev1alpha1.S3Bucket
+		var fresh simplyblockv1alpha2.S3Bucket
 		if err := r.Get(ctx, client.ObjectKeyFromObject(bucket), &fresh); err != nil {
 			return err
 		}
-		if controllerutil.ContainsFinalizer(&fresh, objectstorev1alpha1.S3BucketFinalizer) {
+		if controllerutil.ContainsFinalizer(&fresh, simplyblockv1alpha2.S3BucketFinalizer) {
 			return nil
 		}
-		controllerutil.AddFinalizer(&fresh, objectstorev1alpha1.S3BucketFinalizer)
+		controllerutil.AddFinalizer(&fresh, simplyblockv1alpha2.S3BucketFinalizer)
 		return r.Update(ctx, &fresh)
 	})
 	return err == nil, err
@@ -566,7 +565,7 @@ func (r *S3BucketReconciler) ensureFinalizer(
 // restore rebuilds the phase machine from status. No entry hooks run: the
 // transition into the phase already happened.
 func (r *S3BucketReconciler) restore(
-	ctx context.Context, bucket *objectstorev1alpha1.S3Bucket,
+	ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket,
 ) (*statemachine.Machine[phase], error) {
 	snap := statemachine.Snapshot[phase]{State: bucket.Status.Phase}
 	if bucket.Status.PhaseDeadline != nil {
@@ -600,11 +599,11 @@ func s3BucketPhases() statemachine.Config[phase] {
 // Re-reading is the point: a blind overwrite reverts a concurrent writer.
 func (r *S3BucketReconciler) writeStatus(
 	ctx context.Context,
-	bucket *objectstorev1alpha1.S3Bucket,
-	mutate func(*objectstorev1alpha1.S3BucketStatus),
+	bucket *simplyblockv1alpha2.S3Bucket,
+	mutate func(*simplyblockv1alpha2.S3BucketStatus),
 ) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var fresh objectstorev1alpha1.S3Bucket
+		var fresh simplyblockv1alpha2.S3Bucket
 		if err := r.Get(ctx, client.ObjectKeyFromObject(bucket), &fresh); err != nil {
 			return err
 		}
@@ -619,7 +618,7 @@ func (r *S3BucketReconciler) writeStatus(
 }
 
 // setDeadline copies the machine's bound into status, to outlive the process.
-func setDeadline(s *objectstorev1alpha1.S3BucketStatus, sm *statemachine.Machine[phase]) {
+func setDeadline(s *simplyblockv1alpha2.S3BucketStatus, sm *statemachine.Machine[phase]) {
 	snap := sm.Snapshot()
 	if snap.Deadline.IsZero() {
 		s.PhaseDeadline = nil
@@ -628,7 +627,7 @@ func setDeadline(s *objectstorev1alpha1.S3BucketStatus, sm *statemachine.Machine
 	s.PhaseDeadline = &metav1.Time{Time: snap.Deadline}
 }
 
-func (r *S3BucketReconciler) event(bucket *objectstorev1alpha1.S3Bucket, kind, reason, message string) {
+func (r *S3BucketReconciler) event(bucket *simplyblockv1alpha2.S3Bucket, kind, reason, message string) {
 	if r.Recorder != nil {
 		r.Recorder.Eventf(bucket, nil, kind, reason, reason, "%s", message)
 	}
@@ -658,7 +657,7 @@ func s3BucketControllerOptions() controller.Options {
 // owns.
 func (r *S3BucketReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&objectstorev1alpha1.S3Bucket{}).
+		For(&simplyblockv1alpha2.S3Bucket{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(
 			func(ctx context.Context, obj client.Object) []ctrlreconcile.Request {

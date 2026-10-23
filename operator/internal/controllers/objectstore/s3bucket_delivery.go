@@ -28,7 +28,6 @@ import (
 
 	"github.com/simplyblock/atlas/bucketdelivery/bucketdeliveryrpc"
 	"github.com/simplyblock/atlas/link"
-	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -38,7 +37,7 @@ import (
 // gatewayInstanceLabel is the label every gateway pod of an ObjectStore
 // carries, fixed by design-objectstore.md rather than read off the
 // ObjectStore object.
-const gatewayInstanceLabel = "objectstore.simplyblock.io/instance"
+const gatewayInstanceLabel = "storage.simplyblock.io/objectstore"
 
 // desiredDeliveryNodes reports the distinct, scheduled nodes an ObjectStore's
 // gateway Deployment currently places pods on.
@@ -49,7 +48,7 @@ const gatewayInstanceLabel = "objectstore.simplyblock.io/instance"
 // withdrawn, which the caller distinguishes from a Deployment that exists
 // with zero pods (U-14, where everything is withdrawn) by checking for it.
 func (r *S3BucketReconciler) desiredDeliveryNodes(
-	ctx context.Context, bucket *objectstorev1alpha1.S3Bucket,
+	ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket,
 ) ([]string, error) {
 	var deployment appsv1.Deployment
 	if err := r.Get(ctx, client.ObjectKey{
@@ -122,7 +121,7 @@ func diffDeliveryNodes(desired, delivered []string) (toDeliver, toWithdraw []str
 // not read: a gateway pod moving to a new node is this function's job to
 // notice regardless of phase.
 func (r *S3BucketReconciler) reconcileMountDelivery(
-	ctx context.Context, bucket *objectstorev1alpha1.S3Bucket, export *simplyblockv1alpha2.NFSExport,
+	ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket, export *simplyblockv1alpha2.NFSExport,
 ) (complete bool, err error) {
 	if r.Registry == nil {
 		// Mount delivery is not wired in this process. Nothing this pass can
@@ -194,7 +193,7 @@ func (r *S3BucketReconciler) reconcileMountDelivery(
 		newSet = append(newSet, node)
 	}
 	sort.Strings(newSet)
-	if err := r.writeStatus(ctx, bucket, func(s *objectstorev1alpha1.S3BucketStatus) {
+	if err := r.writeStatus(ctx, bucket, func(s *simplyblockv1alpha2.S3BucketStatus) {
 		s.MountDeliveredNodes = newSet
 	}); err != nil {
 		return false, err
@@ -210,7 +209,7 @@ func (r *S3BucketReconciler) reconcileMountDelivery(
 // recordMountDeliveryCall publishes simplyblock_objectstore_mount_delivery_calls_total
 // (design §10): one DeliverBucket/WithdrawBucket call outcome, by node and
 // result.
-func (r *S3BucketReconciler) recordMountDeliveryCall(bucket *objectstorev1alpha1.S3Bucket, node, operation, outcome string) {
+func (r *S3BucketReconciler) recordMountDeliveryCall(bucket *simplyblockv1alpha2.S3Bucket, node, operation, outcome string) {
 	mountDeliveryCallsTotal.WithLabelValues(bucket.Spec.ObjectStoreRef, node, operation, outcome).Inc()
 }
 
@@ -220,7 +219,7 @@ func (r *S3BucketReconciler) recordMountDeliveryCall(bucket *objectstorev1alpha1
 // export_path is its spec.exportPath, the same two fields a kubelet-driven
 // pNFS stage would have received from CreateVolume.
 func (r *S3BucketReconciler) deliverToNode(
-	ctx context.Context, bucket *objectstorev1alpha1.S3Bucket, export *simplyblockv1alpha2.NFSExport, node string,
+	ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket, export *simplyblockv1alpha2.NFSExport, node string,
 ) error {
 	conn, err := r.Registry.Conn(link.NodePeer(node))
 	if err != nil {
@@ -254,7 +253,7 @@ func (r *S3BucketReconciler) bucketsForGatewayPod(ctx context.Context, pod *core
 	if objectStoreRef == "" {
 		return nil
 	}
-	var buckets objectstorev1alpha1.S3BucketList
+	var buckets simplyblockv1alpha2.S3BucketList
 	if err := r.List(ctx, &buckets, client.InNamespace(pod.Namespace)); err != nil {
 		log.FromContext(ctx).Error(err, "listing buckets for a gateway pod event", "pod", pod.Name)
 		return nil

@@ -12,14 +12,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-func collectorBucket(name string, phase objectstorev1alpha1.S3BucketPhase) *objectstorev1alpha1.S3Bucket {
-	return &objectstorev1alpha1.S3Bucket{
+func collectorBucket(name string, phase simplyblockv1alpha2.S3BucketPhase) *simplyblockv1alpha2.S3Bucket {
+	return &simplyblockv1alpha2.S3Bucket{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testBucketNamespace},
-		Spec:       objectstorev1alpha1.S3BucketSpec{BucketName: name, ObjectStoreRef: testObjectStoreName},
-		Status:     objectstorev1alpha1.S3BucketStatus{Phase: phase},
+		Spec:       simplyblockv1alpha2.S3BucketSpec{BucketName: name, ObjectStoreRef: testObjectStoreName},
+		Status:     simplyblockv1alpha2.S3BucketStatus{Phase: phase},
 	}
 }
 
