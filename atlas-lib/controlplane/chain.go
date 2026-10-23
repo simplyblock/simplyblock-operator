@@ -27,15 +27,22 @@ const (
 	RelationshipFailedOver     = "failed_over"
 )
 
+// RelationshipReader reads a volume's replication relationship. *Client is
+// one; a caller that reaches the control plane through an interface of its
+// own, to test against a fake, walks the chain with that.
+type RelationshipReader interface {
+	GetVolumeReplicationRelationship(ctx context.Context, h lvol.VolumeHandle) (Relationship, error)
+}
+
 // ClientFor returns the client of a cluster, built from whatever credentials
 // the caller holds for it.
-type ClientFor func(ctx context.Context, clusterID string) (*Client, error)
+type ClientFor[C RelationshipReader] func(ctx context.Context, clusterID string) (C, error)
 
 // ChainHop is one volume of a replication chain, with the client of its
 // cluster.
-type ChainHop struct {
+type ChainHop[C RelationshipReader] struct {
 	Handle lvol.Handle
-	Client *Client
+	Client C
 }
 
 // ErrChainDoesNotConverge is a chain whose records loop, or that is longer
@@ -50,9 +57,11 @@ const maxChainHops = 256
 // WalkChain walks the replication chain behind start: start itself, then
 // every source-to-target hop until the active volume. known is whether start
 // has a relationship at all; a volume without one is its own chain.
-func WalkChain(ctx context.Context, start lvol.Handle, client *Client, clientFor ClientFor) ([]ChainHop, bool, error) {
+func WalkChain[C RelationshipReader](
+	ctx context.Context, start lvol.Handle, client C, clientFor ClientFor[C],
+) ([]ChainHop[C], bool, error) {
 	known := false
-	hops := []ChainHop{{Handle: start, Client: client}}
+	hops := []ChainHop[C]{{Handle: start, Client: client}}
 	visited := map[lvol.VolumeHandle]bool{}
 	h := start
 	for {
@@ -77,7 +86,7 @@ func WalkChain(ctx context.Context, start lvol.Handle, client *Client, clientFor
 			return nil, false, fmt.Errorf("replication chain of %s: %w", start.Handle(), err)
 		}
 		h, client = target, targetClient
-		hops = append(hops, ChainHop{Handle: h, Client: client})
+		hops = append(hops, ChainHop[C]{Handle: h, Client: client})
 		if rel.ActiveLvolID == "" || rel.ActiveLvolID == rel.TargetLvolID {
 			return hops, known, nil
 		}

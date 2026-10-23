@@ -51,7 +51,7 @@ const (
 	volB     = "b1b1b1b1-b1b1-b1b1-b1b1-b1b1b1b1b1b1"
 )
 
-func twoClusters(t *testing.T, a, b *relationships) (*Client, ClientFor) {
+func twoClusters(t *testing.T, a, b *relationships) (*Client, ClientFor[*Client]) {
 	t.Helper()
 	clients := map[string]*Client{
 		clusterA: newTestClient(t, a.serve),
@@ -81,7 +81,7 @@ func TestTheChainOfAMovedVolumeEndsAtTheTarget(t *testing.T) {
 	if len(hops) != 2 || end.Handle != (lvol.Handle{ClusterID: clusterB, PoolRef: poolB, VolumeID: volB}) {
 		t.Errorf("hops = %+v, want A then B's volume", hops)
 	}
-	if end.Client == nil {
+	if end.Client == nil || end.Client == c {
 		t.Error("the target hop carries no client")
 	}
 }
