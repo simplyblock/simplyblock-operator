@@ -294,7 +294,7 @@ func TestARelocateCutsTheVolumeOverToTheTarget(t *testing.T) {
 	}
 
 	api.inSync()
-	passesUntil(t, r, stepAttachingPaths)
+	passesUntil(t, r, stepAwaitingCutover)
 	runPass(t, r)
 	if api.commits[testVolumeID] != 1 {
 		t.Errorf("commits = %v, want one", api.commits)
@@ -304,6 +304,7 @@ func TestARelocateCutsTheVolumeOverToTheTarget(t *testing.T) {
 	}
 
 	api.cutoverPending(testVolumeID)
+	passesUntil(t, r, stepAttachingPaths)
 	runPass(t, r)
 	jobs := pathJobs(t, r)
 	if len(jobs) != 1 || jobs[0].Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"] != relocateConsumer {
@@ -361,7 +362,7 @@ func TestVolumesSharingTheSubsystemMoveTogether(t *testing.T) {
 	}
 	runPass(t, r)
 	api.inSync()
-	passesUntil(t, r, stepAttachingPaths)
+	passesUntil(t, r, stepAwaitingCutover)
 	runPass(t, r)
 	if api.commits[testVolumeID] != 1 || api.commits[sibling] != 1 {
 		t.Fatalf("commits = %v, want both volumes committed", api.commits)
@@ -413,7 +414,7 @@ func TestAnAbortAfterTheCommitIsIgnored(t *testing.T) {
 	passesUntil(t, r, stepReplicating)
 	runPass(t, r)
 	api.inSync()
-	passesUntil(t, r, stepAttachingPaths)
+	passesUntil(t, r, stepAwaitingCutover)
 
 	abort(t, r)
 	runPass(t, r)
@@ -459,8 +460,9 @@ func TestAHandleThatDoesNotResolveToTheTargetFails(t *testing.T) {
 	passesUntil(t, r, stepReplicating)
 	runPass(t, r)
 	api.inSync()
-	passesUntil(t, r, stepAttachingPaths)
+	passesUntil(t, r, stepAwaitingCutover)
 	api.cutoverPending(testVolumeID)
+	passesUntil(t, r, stepAttachingPaths)
 	runPass(t, r)
 	finishJobs(t, r, batchv1.JobComplete)
 	passesUntil(t, r, stepProceeding)
@@ -486,8 +488,9 @@ func TestAFailingPathJobHoldsTheCutover(t *testing.T) {
 	passesUntil(t, r, stepReplicating)
 	runPass(t, r)
 	api.inSync()
-	passesUntil(t, r, stepAttachingPaths)
+	passesUntil(t, r, stepAwaitingCutover)
 	api.cutoverPending(testVolumeID)
+	passesUntil(t, r, stepAttachingPaths)
 	runPass(t, r)
 	finishJobs(t, r, batchv1.JobFailed)
 
@@ -543,8 +546,9 @@ func TestTheReleaseIsResentOnlyWhileTheCutoverIsPending(t *testing.T) {
 	passesUntil(t, r, stepReplicating)
 	runPass(t, r)
 	api.inSync()
-	passesUntil(t, r, stepAttachingPaths)
+	passesUntil(t, r, stepAwaitingCutover)
 	api.cutoverPending(testVolumeID)
+	passesUntil(t, r, stepAttachingPaths)
 	runPass(t, r)
 	finishJobs(t, r, batchv1.JobComplete)
 	passesUntil(t, r, stepProceeding)
@@ -617,5 +621,42 @@ func TestARelocateWaitsOnAMigrateOfTheSameVolume(t *testing.T) {
 	}
 	if len(api.starts) != 0 {
 		t.Errorf("starts = %v, want none while the volume is held", api.starts)
+	}
+}
+
+// I-79: after the commit the operation awaits the cutover in a step of its
+// own, reporting the control plane's progress from the cutover task, and
+// attaches no path until the cutover is pending.
+func TestTheCutoverIsAwaitedBeforeAnyPathIsAttached(t *testing.T) {
+	api := relocatingSubsystem()
+	r := relocateReconciler(t, api)
+	passesUntil(t, r, stepReplicating)
+	runPass(t, r)
+	api.inSync()
+	ops := passesUntil(t, r, stepAwaitingCutover)
+	if ops.Status.Step.State != string(stepAwaitingCutover) {
+		t.Fatalf("step = %s, want AwaitingCutover after the commit", ops.Status.Step.State)
+	}
+
+	api.tasks["task-"+testVolumeID] = controlplane.Task{ID: "task-" + testVolumeID, Status: "suspended",
+		Result: "shrink round 9: waiting for the transfer"}
+	runPass(t, r)
+	ops = operationFrom(t, r)
+	if ops.Status.Step.State != string(stepAwaitingCutover) {
+		t.Fatalf("step = %s, want still AwaitingCutover before the cutover is pending", ops.Status.Step.State)
+	}
+	if !strings.Contains(ops.Status.Message, "shrink round 9: waiting for the transfer") {
+		t.Errorf("message = %q, want the cutover task's progress", ops.Status.Message)
+	}
+	if len(pathJobs(t, r)) != 0 {
+		t.Fatal("paths attached before the cutover was pending")
+	}
+
+	api.cutoverPending(testVolumeID)
+	ops = passesUntil(t, r, stepAttachingPaths)
+	runPass(t, r)
+	if ops.Status.Step.State != string(stepAttachingPaths) || len(pathJobs(t, r)) != 1 {
+		t.Errorf("step %s, %d jobs; want AttachingPaths with a Job once the cutover is pending",
+			ops.Status.Step.State, len(pathJobs(t, r)))
 	}
 }

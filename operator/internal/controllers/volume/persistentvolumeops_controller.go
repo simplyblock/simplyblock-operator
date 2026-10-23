@@ -377,6 +377,10 @@ func (r *PersistentVolumeOpsReconciler) advance(
 	}
 
 	done, err := r.perform(ctx, ops, subject, current)
+	var waiting *stepWaiting
+	if errors.As(err, &waiting) {
+		err = nil
+	}
 	if errors.Is(err, errAlreadyOnTarget) {
 		r.event(ops, corev1.EventTypeNormal, ReasonTargetNodeIsSource,
 			"Volume %s is already on node %s with its subsystem; nothing was migrated",
@@ -399,6 +403,9 @@ func (r *PersistentVolumeOpsReconciler) advance(
 	}
 	if !done {
 		message := fmt.Sprintf("waiting on %s", current)
+		if waiting != nil {
+			message += ": " + waiting.message
+		}
 		if ops.Spec.Abort {
 			message += "; the abort arrived after the volume had moved and cannot be honored"
 		}
@@ -793,6 +800,16 @@ func (e *terminalStepError) Error() string { return e.reason }
 
 func fatalf(format string, args ...any) error {
 	return &terminalStepError{reason: fmt.Sprintf(format, args...)}
+}
+
+// stepWaiting is a step that has not finished and says what it waits for, which
+// the operation's message carries after the step's name.
+type stepWaiting struct{ message string }
+
+func (e *stepWaiting) Error() string { return e.message }
+
+func waitingf(format string, args ...any) error {
+	return &stepWaiting{message: fmt.Sprintf(format, args...)}
 }
 
 // errVolumeGone is the volume having been deleted or begun deleting, which ends

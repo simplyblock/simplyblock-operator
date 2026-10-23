@@ -63,9 +63,10 @@ var undeletableVolumeSteps = map[simplyblockv1alpha2.PersistentVolumeOpsStep]str
 	simplyblockv1alpha2.PersistentVolumeOpsStepVerifying: "the copy has finished and the volume " +
 		"has already moved, so what is left is the cleanup that makes the move safe: the " +
 		"validation Jobs and the paths they connected on every consuming host",
-	simplyblockv1alpha2.PersistentVolumeOpsStepCommitting:     committedRelocation,
-	simplyblockv1alpha2.PersistentVolumeOpsStepAttachingPaths: committedRelocation,
-	simplyblockv1alpha2.PersistentVolumeOpsStepProceeding:     committedRelocation,
+	simplyblockv1alpha2.PersistentVolumeOpsStepCommitting:      committedRelocation,
+	simplyblockv1alpha2.PersistentVolumeOpsStepAwaitingCutover: committedRelocation,
+	simplyblockv1alpha2.PersistentVolumeOpsStepAttachingPaths:  committedRelocation,
+	simplyblockv1alpha2.PersistentVolumeOpsStepProceeding:      committedRelocation,
 }
 
 // committedRelocation is why a Relocate past its commit cannot be deleted.

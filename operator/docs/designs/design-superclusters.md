@@ -1259,15 +1259,19 @@ target's paths on every consuming host while the relationship is
     │                (write-ahead status.relocate.committed before the first)
     │  202 or 409, each volume's task recorded
     ▼
-  AttachingPaths   ← the next volume's relationship cutover_pending; GET
-    │                …/connect returns the target's paths beside the source's;
+  AwaitingCutover  ← the control plane converges the next volume's delta and
+    │                prepares its cutover; the cutover task's report is the
+    │                operation's message
+    │  the volume's relationship cutover_pending
+    ▼
+  AttachingPaths   ← GET …/connect returns the target's paths beside the source's;
     │                one preconnect Job per consuming node, the Job the
     │                replication slot uses
     │  every Job succeeded
     ▼
   Proceeding       ← POST …/replication/cutover-proceed  (write-ahead the
     │                volume's proceeded before the call), resent while pending
-    │  the target serves the volume ─── another volume left ──▶ AttachingPaths
+    │  the target serves the volume ─── another volume left ──▶ AwaitingCutover
     ▼
   Verifying        ← every task finished; each PV's handle resolves into the
     │                target (§8.3); every moved PV marked relocated-to; Jobs
@@ -1291,10 +1295,14 @@ target's paths on every consuming host while the relationship is
 holds one cutover per lvstore, so a commit of every volume queues their cutovers,
 and each reaches `cutover_pending` after the one before it is done. The
 operation records a task, a release, and the outcome per volume, and runs
-`AttachingPaths` and `Proceeding` once for each. The paths belong to the
-subsystem, so the Jobs that connected them for the first volume serve the rest.
-The relationship record appears only when a cutover is prepared, after the delta
-has converged, and `AttachingPaths` waits for it.
+`AwaitingCutover`, `AttachingPaths`, and `Proceeding` once for each. The paths
+belong to the subsystem, so the Jobs that connected them for the first volume
+serve the rest. The relationship record appears only when a cutover is
+prepared, after the delta has converged, and `AwaitingCutover` waits for it.
+Under a steady write load the convergence runs every one of the control
+plane's shrink rounds, which takes minutes, so it is a step of its own whose
+message reports the round rather than an `AttachingPaths` that attaches
+nothing.
 
 **The target pool is the source pool's counterpart.** A supercluster's
 `StoragePool` records one backend pool per member (§7.1). The entry naming the
@@ -2167,14 +2175,15 @@ const (
 	PersistentVolumeOpsActionRelocate PersistentVolumeOpsAction = "Relocate"
 )
 
-// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Replicating;Committing;AttachingPaths;Proceeding
+// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Replicating;Committing;AwaitingCutover;AttachingPaths;Proceeding
 type PersistentVolumeOpsStep string
 
 const (
-	PersistentVolumeOpsStepReplicating    PersistentVolumeOpsStep = "Replicating"
-	PersistentVolumeOpsStepCommitting     PersistentVolumeOpsStep = "Committing"
-	PersistentVolumeOpsStepAttachingPaths PersistentVolumeOpsStep = "AttachingPaths"
-	PersistentVolumeOpsStepProceeding     PersistentVolumeOpsStep = "Proceeding"
+	PersistentVolumeOpsStepReplicating     PersistentVolumeOpsStep = "Replicating"
+	PersistentVolumeOpsStepCommitting      PersistentVolumeOpsStep = "Committing"
+	PersistentVolumeOpsStepAwaitingCutover PersistentVolumeOpsStep = "AwaitingCutover"
+	PersistentVolumeOpsStepAttachingPaths  PersistentVolumeOpsStep = "AttachingPaths"
+	PersistentVolumeOpsStepProceeding      PersistentVolumeOpsStep = "Proceeding"
 )
 
 // RelocateVolumeSpec is where a Relocate moves the volume.

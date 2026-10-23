@@ -85,10 +85,13 @@ const (
 	// committingDeadline bounds recording a task for every volume.
 	committingDeadline = 15 * time.Minute
 
-	// attachingDeadline bounds one volume's wait for its cutover to be
-	// prepared, which includes the control plane's catch-up and its shrink
-	// rounds, and the path Jobs after it.
-	attachingDeadline = 30 * time.Minute
+	// awaitingCutoverDeadline bounds one volume's wait for its cutover to be
+	// prepared: the control plane's catch-up and its shrink rounds.
+	awaitingCutoverDeadline = 30 * time.Minute
+
+	// attachingDeadline bounds one volume's path Jobs. Each Job gives up after
+	// preconnectJobDeadline, and a failed one is replaced.
+	attachingDeadline = 10 * time.Minute
 
 	// proceedingDeadline bounds one volume's release. The control plane
 	// proceeds alone two minutes into the wait, so the step ends well inside
@@ -170,18 +173,22 @@ func graphs(members int32) statemachine.MultiConfig[step] {
 				// and deletes their sources whatever the operation does, so no
 				// step after it can be stopped.
 				stepCommitting: {
-					To:      []step{stepAttachingPaths},
+					To:      []step{stepAwaitingCutover},
 					OnEnter: deadline(committingDeadline),
+				},
+				stepAwaitingCutover: {
+					To:      []step{stepAttachingPaths},
+					OnEnter: deadline(awaitingCutoverDeadline),
 				},
 				stepAttachingPaths: {
 					To:      []step{stepProceeding},
 					OnEnter: deadline(attachingDeadline),
 				},
 				// The volumes of one subsystem are cut over one at a time,
-				// so a release leads to the next volume's paths until every
+				// so a release leads to the next volume's cutover until every
 				// volume is served by the target.
 				stepProceeding: {
-					To:      []step{stepAttachingPaths, stepVerifying},
+					To:      []step{stepAwaitingCutover, stepVerifying},
 					OnEnter: deadline(proceedingDeadline),
 				},
 				stepVerifying: {OnEnter: deadline(verifyingDeadline)},

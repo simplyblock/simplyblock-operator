@@ -128,7 +128,7 @@ const (
 // registered kind merges these with the phases above into one enum, so that
 // Validating sits beside Completed and neither can be read without the other's
 // values in mind.
-// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Replicating;Committing;AttachingPaths;Proceeding
+// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Replicating;Committing;AwaitingCutover;AttachingPaths;Proceeding
 type PersistentVolumeOpsStep string
 
 const (
@@ -154,6 +154,10 @@ const (
 	// PersistentVolumeOpsStepCommitting asks the control plane to cut each
 	// volume over to the target and delete its source afterward.
 	PersistentVolumeOpsStepCommitting PersistentVolumeOpsStep = "Committing"
+	// PersistentVolumeOpsStepAwaitingCutover waits while the control plane
+	// catches the target up with a volume's latest writes and prepares its
+	// cutover. The message carries the control plane's progress.
+	PersistentVolumeOpsStepAwaitingCutover PersistentVolumeOpsStep = "AwaitingCutover"
 	// PersistentVolumeOpsStepAttachingPaths connects the target's paths on
 	// every node consuming the subsystem while a volume's cutover waits for
 	// them.
@@ -492,7 +496,7 @@ type PersistentVolumeOpsStatus struct {
 	// Step is the position of the running action's state machine. It is
 	// persisted before the side effect that step performs, so a step reported
 	// here is a step that started.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating','Verifying','Replicating','Committing','AttachingPaths','Proceeding']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating','Verifying','Replicating','Committing','AwaitingCutover','AttachingPaths','Proceeding']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

@@ -3,11 +3,12 @@
 // NVMe-oF subsystem, by the control plane's replication in migration mode.
 //
 // The steps follow the planned cutover the replication slot drives:
-// replicate until in sync, commit with the source's deletion, connect the
-// target's paths on every consuming node while a volume's cutover waits for
-// them, release it, and verify that the volume's handle resolves to the
-// target. The control plane cuts the volumes of one subsystem over one at a
-// time, so AttachingPaths and Proceeding run once per volume, in turn.
+// replicate until in sync, commit with the source's deletion, wait for a
+// volume's cutover to be prepared, connect the target's paths on every
+// consuming node while the cutover waits for them, release it, and verify that
+// the volume's handle resolves to the target. The control plane cuts the
+// volumes of one subsystem over one at a time, so AwaitingCutover,
+// AttachingPaths, and Proceeding run once per volume, in turn.
 //
 // It lives beside Migrate's steps because the two share the lock, the
 // subject, and the operation's lifecycle; what differs is the control plane's
@@ -54,10 +55,11 @@ type RelocationClient interface {
 }
 
 const (
-	stepReplicating    = simplyblockv1alpha2.PersistentVolumeOpsStepReplicating
-	stepCommitting     = simplyblockv1alpha2.PersistentVolumeOpsStepCommitting
-	stepAttachingPaths = simplyblockv1alpha2.PersistentVolumeOpsStepAttachingPaths
-	stepProceeding     = simplyblockv1alpha2.PersistentVolumeOpsStepProceeding
+	stepReplicating     = simplyblockv1alpha2.PersistentVolumeOpsStepReplicating
+	stepCommitting      = simplyblockv1alpha2.PersistentVolumeOpsStepCommitting
+	stepAwaitingCutover = simplyblockv1alpha2.PersistentVolumeOpsStepAwaitingCutover
+	stepAttachingPaths  = simplyblockv1alpha2.PersistentVolumeOpsStepAttachingPaths
+	stepProceeding      = simplyblockv1alpha2.PersistentVolumeOpsStepProceeding
 )
 
 // RelocatedToAnnotation is kube.AnnoRelocatedTo, which this controller writes
@@ -93,6 +95,8 @@ func (r *PersistentVolumeOpsReconciler) performRelocate(
 		return r.replicate(ctx, ops, subject)
 	case stepCommitting:
 		return r.commitRelocation(ctx, ops, subject)
+	case stepAwaitingCutover:
+		return r.awaitCutover(ctx, ops, subject)
 	case stepAttachingPaths:
 		return r.attachTargetPaths(ctx, ops, subject)
 	case stepProceeding:
@@ -404,11 +408,48 @@ func cuttingOver(ops *simplyblockv1alpha2.PersistentVolumeOps) int {
 	return -1
 }
 
-// attachTargetPaths waits until the volume's cutover is pending, then connects
-// the target's paths on every node consuming the subsystem, one Job per node.
-// A failing Job is replaced and the cutover not released; the control plane
-// proceeds alone after its own timeout, and a node without the target's paths
-// reaches it on its next stage, with an I/O pause on that node.
+// awaitCutover waits until the control plane has prepared the volume's
+// cutover: caught the target up with the latest writes and recorded the
+// relationship. Until then the cutover task's own report is the progress.
+func (r *PersistentVolumeOpsReconciler) awaitCutover(
+	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
+) (bool, error) {
+	i := cuttingOver(ops)
+	if i < 0 {
+		return true, nil
+	}
+	v := ops.Status.Relocate.Volumes[i]
+	rel, err := r.API.GetVolumeReplicationRelationship(ctx, sourceHandle(ops, subject, v.VolumeUUID))
+	switch {
+	case errors.Is(err, errs.ErrNotFound):
+		// The control plane records the relationship once the cutover is
+		// prepared, after the delta has converged.
+	case err != nil:
+		return false, fmt.Errorf("replication relationship of volume %s: %w", v.VolumeUUID, err)
+	case rel.State == controlplane.RelationshipCutoverPending || servedByTarget(rel):
+		return true, nil
+	}
+	return false, r.cutoverProgress(ctx, ops, v)
+}
+
+// cutoverProgress is what the volume's cutover task last reported, as a wait.
+func (r *PersistentVolumeOpsReconciler) cutoverProgress(
+	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, v simplyblockv1alpha2.RelocatedVolume,
+) error {
+	if v.TaskID == "" {
+		return nil
+	}
+	task, err := r.API.Task(ctx, ops.Status.Relocate.SourceClusterUUID, v.TaskID)
+	if err != nil || task.Result == "" {
+		return nil
+	}
+	return waitingf("the control plane is preparing the cutover of volume %s: %s", v.VolumeUUID, task.Result)
+}
+
+// attachTargetPaths connects the target's paths on every node consuming the
+// subsystem while the volume's cutover is pending, one Job per node. A failing
+// Job is replaced and the cutover not released; the control plane proceeds
+// alone after its own timeout.
 func (r *PersistentVolumeOpsReconciler) attachTargetPaths(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
 ) (bool, error) {
@@ -420,10 +461,6 @@ func (r *PersistentVolumeOpsReconciler) attachTargetPaths(
 	h := sourceHandle(ops, subject, v.VolumeUUID)
 	rel, err := r.API.GetVolumeReplicationRelationship(ctx, h)
 	switch {
-	case errors.Is(err, errs.ErrNotFound):
-		// The control plane records the relationship once the cutover is
-		// prepared, after the delta has converged.
-		return false, nil
 	case err != nil:
 		return false, fmt.Errorf("replication relationship of volume %s: %w", v.VolumeUUID, err)
 	case servedByTarget(rel):
@@ -774,12 +811,12 @@ func sortedNodes(nodes map[string]struct{}) []string {
 }
 
 // relocateSuccessor is the step after the current one when the graph
-// branches: after a release, the next volume's paths, or the verification
+// branches: after a release, the next volume's cutover, or the verification
 // once every volume is cut over.
 func relocateSuccessor(ops *simplyblockv1alpha2.PersistentVolumeOps, machine *statemachine.Machine[step]) step {
 	if machine.CurrentState() == stepProceeding {
 		if cuttingOver(ops) >= 0 {
-			return stepAttachingPaths
+			return stepAwaitingCutover
 		}
 		return stepVerifying
 	}
