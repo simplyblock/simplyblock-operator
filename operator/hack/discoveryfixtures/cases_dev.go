@@ -208,6 +208,11 @@ func devCases() map[string]Case {
 				nvme("nvme0n1", "0000:5e:00.0", 0, 3*tb),
 			))},
 		},
+		"DEV-21": {
+			Family: "dev", Slug: "blank-formatted-and-unread-partitions-block-run",
+			Note: "Driven in the discovery package by TestPlanProposesABlankPartitionInABlockRun, " +
+				"which builds the partitions' probe readings directly.",
+		},
 		"DEV-20": {
 			Family: "dev", Slug: "equal-block-disks-with-no-journal-decision",
 			// The one block case that does not force, which is what makes it

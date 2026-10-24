@@ -51,7 +51,13 @@ import (
 // for the same reason. A version-8 address names no network, so a reader
 // comparing the networks of two workers would find nothing to compare and pass
 // a fleet whose links cannot reach each other.
-const ReportVersion = 9
+//
+// Version 10 carries the kernel's release and capabilities, and is a bump
+// because a version-9 report decodes with every kernel fact empty. A reader
+// that warns about a worker whose native NVMe multipath is not enabled would
+// find nothing to warn about, and pass a worker that cannot mount a volume
+// over more than one path.
+const ReportVersion = 10
 
 // Report is one worker's inventory as the probe found it.
 type Report struct {
@@ -150,6 +156,50 @@ type HostOS struct {
 	// Architecture is uname's machine field: `x86_64`, `aarch64`. It says whether
 	// the images this product ships would run on the worker at all.
 	Architecture string `json:"architecture,omitempty"`
+
+	// Kernel is what the kernel the worker boots offers.
+	Kernel Kernel `json:"kernel"`
+}
+
+// Kernel is the worker's kernel and the capabilities it offers, each with the
+// evidence it was concluded from.
+type Kernel struct {
+	// Release is what `uname -r` prints, such as
+	// `6.1.155-176.282.amzn2023.x86_64`. It is empty when it could not be read,
+	// and Unreadable then says why.
+	Release string `json:"release,omitempty"`
+
+	// Version is the upstream version the release opens with, and is absent
+	// when the release does not open with one.
+	Version *KernelVersion `json:"version,omitempty"`
+
+	// NVMeMultipath is `Enabled`, `Disabled`, `NotBuilt`, or `Unknown`. A worker
+	// on which it is not Enabled can host a storage node and cannot mount a
+	// volume over more than one path: each path is a disk of its own.
+	NVMeMultipath Fact `json:"nvmeMultipath"`
+
+	// KVM, TUN, and PNFSBlock are `Available`, `Loadable`, `Absent`, or
+	// `Unknown`: /dev/kvm, /dev/net/tun, and the pNFS block layout driver.
+	KVM       Fact `json:"kvm"`
+	TUN       Fact `json:"tun"`
+	PNFSBlock Fact `json:"pnfsBlock"`
+}
+
+// KernelVersion is the upstream kernel version, `6.1.155` as three numbers. A
+// distribution backports fixes without changing it, so it places a kernel in
+// upstream's history and does not say which fixes the kernel carries.
+type KernelVersion struct {
+	Major int `json:"major"`
+	Minor int `json:"minor"`
+	Patch int `json:"patch"`
+}
+
+// Fact is one conclusion about the kernel and the evidence for it.
+type Fact struct {
+	State string `json:"state,omitempty"`
+
+	// Detail names the source that answered and what it said.
+	Detail string `json:"detail,omitempty"`
 }
 
 // CPU is what the probe found out about the machine's processors.

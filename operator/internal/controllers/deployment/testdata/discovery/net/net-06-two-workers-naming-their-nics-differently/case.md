@@ -5,3 +5,5 @@
 **Expected.** 2 node sets, one per interface name, each a single-node member: workers that name their management interface differently cannot share a member (design-superclusters.md §5.5). Gap G-25, fixed
 
 **Harness.** `CM`
+
+**Gap.** G-25. This case records what the generator does today, so that the day it changes the diff is the finding.

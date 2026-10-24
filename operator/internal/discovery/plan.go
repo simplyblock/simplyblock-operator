@@ -104,6 +104,11 @@ const (
 	// PlacementGroupInvalid names a placement-group value that cannot be a node
 	// set name, or whose workers cannot share a member.
 	PlacementGroupInvalid = "PlacementGroupInvalid"
+
+	// NVMeMultipathUnavailable names a worker whose kernel is known to lack
+	// native NVMe multipath, which can host a storage node and cannot mount a
+	// volume over more than one path.
+	NVMeMultipathUnavailable = "NVMeMultipathUnavailable"
 )
 
 // PlacementGroupLabel assigns a worker to a member: workers carrying one value
@@ -589,6 +594,7 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 	plan.Workers, misaligned = alignNetworks(plan.Workers)
 	plan.Refusals = append(plan.Refusals, misaligned...)
 	plan.assignFailureDomains(failureDomainLabelOf(run))
+	plan.noteMultipath()
 
 	if len(plan.Workers) > 0 {
 		var found []Finding
