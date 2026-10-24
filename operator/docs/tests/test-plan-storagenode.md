@@ -627,36 +627,39 @@ Files: `operator/internal/controllers/node/drain_test.go`, `remove_fanout_test.g
 Files: `operator/internal/controllers/node/migrate_test.go`,
 `pernodeconfig_test.go`
 
-| #     | Scenario                                                                         | Type     | Test                                                          |
-|-------|----------------------------------------------------------------------------------|----------|---------------------------------------------------------------|
-| U-178 | The target worker's configuration is cloned from the source                      | Positive | `TestPreparingWritesTheTargetsConfigurationAndLabelsIt`       |
-| U-179 | The topology re-point moves the node onto the target worker                      | Positive | `TestThePromoteIsFollowedByTheTopologyRepoint`                |
-| U-180 | `newSsdPcie` addresses are merged into the effective allow list                  | Positive | `TestTheTargetInheritsTheSourcesEntryWithTheNewDrives`        |
-| U-181 | Merging two PCI lists produces no duplicates                                     | Positive | `TestTheBoundDrivesJoinTheListInTheOrderItWasWritten`         |
-| U-182 | A quoted shell list is parsed back into its elements                             | Positive | `TestAListIsReadBackTheWayItWasWritten`                       |
-| U-183 | An empty PCI list merged with additions yields just the additions                | Boundary | `TestAnEntryWithNoAllowListGetsOne`                           |
-| U-184 | The target worker does not exist: the operation fails informatively              | Negative | `TestATargetThatCannotHostTheNodeIsRefused`                   |
-| U-185 | The target worker is the node's current worker: the step is already done         | Boundary | `TestARelocationToTheHostTheNodeIsOnIsAlreadyDone`            |
-| U-186 | `spec.migrate` absent for `action: Migrate`: the operation is terminal           | Negative | `TestARelocationWithNoTargetEndsTheOperation`                 |
-| U-187 | The target's pod is not `Ready`: `Preparing` holds and no restart is issued      | Negative | `TestPreparingWritesTheTargetsConfigurationAndLabelsIt`       |
-| U-188 | The pod is `Ready` but not yet in the EndpointSlice: `Preparing` still holds     | Boundary | `TestPreparingWaitsForTheNameToResolveAndNotOnlyForThePod`    |
-| U-189 | The pod is `Ready` and in the EndpointSlice: the step advances                   | Positive | `TestPreparingWaitsForTheNameToResolveAndNotOnlyForThePod`    |
-| U-190 | The relocation restart is forced by default                                      | Positive | `TestTheRelocationRestartIsAimedAtTheTargetAndForced`         |
-| U-191 | An explicit `spec.force: false` is honored rather than overridden                | Negative | `TestAStatedForceOutranksTheRelocationsDefault`               |
-| U-192 | The node is still online after the restart call: `Relocating` holds              | Negative | `TestTheRelocationRestartIsAimedAtTheTargetAndForced`         |
-| U-193 | The node has left online: the step advances to `AwaitingNode`                    | Positive | `TestTheRelocationIsOverWhenTheNodeHasLeftOnline`             |
-| U-194 | The node returns online: the step advances to `Promoting`                        | Positive | `TestTheWaitForTheRelocatedNodeEndsWhenItIsBack`              |
-| U-195 | The promote is issued exactly once across several reconciles                     | Negative | `TestAPromoteThatAlreadyLandedIsNotIssuedAgain`               |
-| U-196 | `spec.abort` during `Preparing`: `Aborted`, and no control-plane call was made   | Positive | —                                                             |
-| U-197 | `spec.abort` during `Promoting`: refused by the graph, and the operation runs on | Negative | `TestAnAbortThatArrivedTooLateIsRefusedAndTheOperationRunsOn` |
-| U-198 | The topology re-point happens after the promote, never before                    | Positive | `TestThePromoteIsFollowedByTheTopologyRepoint`                |
-| U-199 | The source worker loses its storage-plane labels when no node remains on it      | Positive | —                                                             |
-| U-200 | The source worker keeps its labels when another node still runs there            | Boundary | —                                                             |
-| U-347 | A target worker that is not `Ready`: refused rather than waited on               | Negative | `TestATargetThatCannotHostTheNodeIsRefused`                   |
-| U-348 | The promote is refused while the node has not come back                          | Boundary | `TestAPromoteIsRefusedWhileTheNodeIsNotBack`                  |
-| U-349 | The restart names the target's own per-pod address                               | Positive | `TestTheRelocationRestartIsAimedAtTheTargetAndForced`         |
-| U-350 | A worker that has reported no readiness condition is not read as `Ready`         | Boundary | `TestAWorkerThatHasNotReportedIsNotReady`                     |
-| U-351 | A migration binding no drive leaves the allow list byte for byte as it was       | Boundary | `TestAMigrationThatBindsNoDriveLeavesTheListAlone`            |
+| #     | Scenario                                                                                                           | Type       | Test                                                               |
+|-------|--------------------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------------------|
+| U-178 | The target worker's configuration is cloned from the source                                                        | Positive   | `TestPreparingWritesTheTargetsConfigurationAndLabelsIt`            |
+| U-179 | The topology re-point moves the node onto the target worker                                                        | Positive   | `TestThePromoteIsFollowedByTheTopologyRepoint`                     |
+| U-180 | `newSsdPcie` addresses are merged into the effective allow list                                                    | Positive   | `TestTheTargetInheritsTheSourcesEntryWithTheNewDrives`             |
+| U-181 | Merging two PCI lists produces no duplicates                                                                       | Positive   | `TestTheBoundDrivesJoinTheListInTheOrderItWasWritten`              |
+| U-182 | A quoted shell list is parsed back into its elements                                                               | Positive   | `TestAListIsReadBackTheWayItWasWritten`                            |
+| U-183 | An empty PCI list merged with additions yields just the additions                                                  | Boundary   | `TestAnEntryWithNoAllowListGetsOne`                                |
+| U-184 | The target worker does not exist: the operation fails informatively                                                | Negative   | `TestATargetThatCannotHostTheNodeIsRefused`                        |
+| U-185 | The target worker is the node's current worker: the step is already done                                           | Boundary   | `TestARelocationToTheHostTheNodeIsOnIsAlreadyDone`                 |
+| U-186 | `spec.migrate` absent for `action: Migrate`: the operation is terminal                                             | Negative   | `TestARelocationWithNoTargetEndsTheOperation`                      |
+| U-187 | The target's pod is not `Ready`: `Preparing` holds and no restart is issued                                        | Negative   | `TestPreparingWritesTheTargetsConfigurationAndLabelsIt`            |
+| U-188 | The pod is `Ready` but not yet in the EndpointSlice: `Preparing` still holds                                       | Boundary   | `TestPreparingWaitsForTheNameToResolveAndNotOnlyForThePod`         |
+| U-189 | The pod is `Ready` and in the EndpointSlice: the step advances                                                     | Positive   | `TestPreparingWaitsForTheNameToResolveAndNotOnlyForThePod`         |
+| U-190 | The relocation restart is forced by default                                                                        | Positive   | `TestTheRelocationRestartIsAimedAtTheTargetAndForced`              |
+| U-191 | An explicit `spec.force: false` is honored rather than overridden                                                  | Negative   | `TestAStatedForceOutranksTheRelocationsDefault`                    |
+| U-192 | The node is still online after the restart call: `Relocating` holds                                                | Negative   | `TestTheRelocationRestartIsAimedAtTheTargetAndForced`              |
+| U-193 | The node has left online: the step advances to `AwaitingNode`                                                      | Positive   | `TestTheRelocationIsOverWhenTheNodeHasLeftOnline`                  |
+| U-194 | The node returns online: the step advances to `Promoting`                                                          | Positive   | `TestTheWaitForTheRelocatedNodeEndsWhenItIsBack`                   |
+| U-195 | The promote is issued exactly once across several reconciles                                                       | Negative   | `TestAPromoteThatAlreadyLandedIsNotIssuedAgain`                    |
+| U-196 | `spec.abort` during `Preparing`: `Aborted`, and no control-plane call was made                                     | Positive   | —                                                                  |
+| U-197 | `spec.abort` during `Promoting`: refused by the graph, and the operation runs on                                   | Negative   | `TestAnAbortThatArrivedTooLateIsRefusedAndTheOperationRunsOn`      |
+| U-198 | The topology re-point happens after the promote, never before                                                      | Positive   | `TestThePromoteIsFollowedByTheTopologyRepoint`                     |
+| U-199 | The source worker loses its storage-plane labels when no node remains on it                                        | Positive   | —                                                                  |
+| U-200 | The source worker keeps its labels when another node still runs there                                              | Boundary   | —                                                                  |
+| U-347 | A target worker that is not `Ready`: refused rather than waited on                                                 | Negative   | `TestATargetThatCannotHostTheNodeIsRefused`                        |
+| U-348 | The promote is refused while the node has not come back                                                            | Boundary   | `TestAPromoteIsRefusedWhileTheNodeIsNotBack`                       |
+| U-349 | The restart names the target's own per-pod address                                                                 | Positive   | `TestTheRelocationRestartIsAimedAtTheTargetAndForced`              |
+| U-350 | A worker that has reported no readiness condition is not read as `Ready`                                           | Boundary   | `TestAWorkerThatHasNotReportedIsNotReady`                          |
+| U-351 | A migration binding no drive leaves the allow list byte for byte as it was                                         | Boundary   | `TestAMigrationThatBindsNoDriveLeavesTheListAlone`                 |
+| U-535 | The node is online on the origin host, not the target: `AwaitingNode` holds (2026-10-24-migrate-await-origin-host) | Regression | `TestTheWaitForTheRelocatedNodeIgnoresAnOnlineNodeOnTheOriginHost` |
+| U-536 | The node is online on the target host: `AwaitingNode` advances                                                     | Positive   | `TestTheWaitForTheRelocatedNodeEndsWhenItIsOnlineOnTheTarget`      |
+| U-537 | The node is online on the origin host: no promote is issued (2026-10-24-migrate-await-origin-host)                 | Regression | `TestAPromoteIsRefusedForAnOnlineNodeOnTheOriginHost`              |
 
 ### Operation: The Host Maintenance Graph (design §10)
 

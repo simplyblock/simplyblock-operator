@@ -66,7 +66,7 @@ func TestAPassReadingTheOperationBeforeTheCallDoesNotCallAgain(t *testing.T) {
 				tc.mutate(ops)
 			}
 			api := aControlPlane().reporting(tc.status)
-			r, apiClient := anOpsWorld(t, api, ops)
+			r, apiClient := anOpsWorld(t, api, ops, aWorker(opsTarget, true))
 			cache := &testsupport.LaggingClient{Client: r.Client}
 			r.Client = cache
 			holdTheNodeLock(t, apiClient, "an-operation")
