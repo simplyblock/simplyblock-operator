@@ -12,4 +12,5 @@ resources:
 - storage_v1alpha1_backuprestore.yaml
 - storage_v1alpha2_operatorops.yaml
 - storage_v1alpha2_persistentvolumeops.yaml
+- storage_v1alpha2_storagefenceremediationtemplate.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

@@ -26,6 +26,9 @@ spec:
     - jsonPath: .spec.migrate.targetNodeRef.name
       name: Target
       type: string
+    - jsonPath: .spec.relocate.targetClusterRef
+      name: Target Cluster
+      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
@@ -74,7 +77,8 @@ spec:
               PersistentVolume.
 
               The action and its parameter block have to agree: Migrate requires
-              spec.migrate, and no other action accepts it.
+              spec.migrate and Relocate requires spec.relocate, and neither action
+              accepts the other's block.
             properties:
               abort:
                 description: |-
@@ -89,6 +93,7 @@ spec:
                   what it was doing halfway through would have a status describing neither.
                 enum:
                 - Migrate
+                - Relocate
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -172,6 +177,23 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              relocate:
+                description: Relocate parameterizes action Relocate.
+                properties:
+                  targetClusterRef:
+                    description: |-
+                      TargetClusterRef names the member StorageCluster to move the volume to,
+                      in the namespace of the volume's current member. It must be another
+                      member of the same supercluster, and must accept new volumes.
+                    maxLength: 63
+                    minLength: 1
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                required:
+                - targetClusterRef
+                type: object
             required:
             - action
             - persistentVolumeName
@@ -181,6 +203,9 @@ spec:
               rule: '!has(oldSelf.creatorRef) || has(self.creatorRef)'
             - message: migrate is required for action Migrate and must be absent otherwise
               rule: 'self.action == ''Migrate'' ? has(self.migrate) : !has(self.migrate)'
+            - message: relocate is required for action Relocate and must be absent
+                otherwise
+              rule: 'self.action == ''Relocate'' ? has(self.relocate) : !has(self.relocate)'
           status:
             description: PersistentVolumeOpsStatus is the observed state of one volume
               operation.
@@ -361,6 +386,116 @@ spec:
                 - Failed
                 - Aborted
                 type: string
+              relocate:
+                description: Relocate is the progress of a Relocate.
+                properties:
+                  committed:
+                    description: |-
+                      Committed is set before the first commit is requested. It refuses an
+                      abort from then on, because a committed cutover cannot be taken back.
+                    type: boolean
+                  nodesMissingPaths:
+                    description: |-
+                      NodesMissingPaths are the consuming nodes that did not hold the target's
+                      paths when the control plane cut a volume over without waiting for them.
+                      Pods on these nodes lose the volume until they are restarted, and the
+                      operation fails once the volume's new location is recorded.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  pathJobs:
+                    description: |-
+                      PathJobs are the Jobs that connect the target's paths on the nodes
+                      consuming the subsystem, one per node.
+                    items:
+                      description: |-
+                        ValidationJob is one Job started to check a path is reachable from one node.
+
+                        It is tracked so that Verifying can delete every Job the operation started,
+                        including after a restart. The namespace is recorded for the same reason
+                        spec.migrate.targetNodeRef carries one: a Job is namespaced and this object
+                        is not, so a name alone would not locate it.
+                      properties:
+                        name:
+                          type: string
+                        namespace:
+                          type: string
+                        node:
+                          description: |-
+                            Node is the worker the Job is pinned to, which is a node consuming one of
+                            the migrated subsystem's volumes.
+                          type: string
+                        succeeded:
+                          description: |-
+                            Succeeded records a node whose paths were checked and found ready, so a
+                            restart does not run the check again on a node that already passed and
+                            whose Job its own TTL may already have reaped.
+                          type: boolean
+                      required:
+                      - name
+                      - namespace
+                      type: object
+                    type: array
+                  sourceClusterUUID:
+                    description: SourceClusterUUID is the member the volume started
+                      in.
+                    type: string
+                  targetClusterUUID:
+                    description: TargetClusterUUID is the member the volume is moving
+                      to.
+                    type: string
+                  targetPoolUUID:
+                    description: |-
+                      TargetPoolUUID is the pool in the target member the volumes land in: the
+                      target's pool of the same supercluster pool as the source's.
+                    type: string
+                  volumes:
+                    description: |-
+                      Volumes are every volume moving together: the named one and those
+                      sharing its subsystem.
+                    items:
+                      description: |-
+                        RelocatedVolume is one volume a Relocate moves, and how far its cutover is.
+
+                        The control plane cuts the volumes of one subsystem over one at a time, so
+                        each carries its own task and its own release rather than the operation
+                        carrying one for all of them.
+                      properties:
+                        cutOver:
+                          description: CutOver is set once the target serves the volume.
+                          type: boolean
+                        persistentVolumeName:
+                          description: |-
+                            PersistentVolumeName is the PersistentVolume carrying the volume, when one
+                            does. It is what the volume's new location is recorded on.
+                          type: string
+                        proceeded:
+                          description: |-
+                            Proceeded is set before the volume's cutover is first released. The
+                            release is resent while the cutover waits for it.
+                          type: boolean
+                        targetVolumeUUID:
+                          description: TargetVolumeUUID is the volume's backend UUID
+                            in the target member.
+                          type: string
+                        taskID:
+                          description: |-
+                            TaskID is the control plane's task carrying the volume's cutover and the
+                            deletion of its source, from the commit's answer.
+                          type: string
+                        volumeUUID:
+                          description: VolumeUUID is the volume's backend UUID in
+                            the source member.
+                          type: string
+                      required:
+                      - volumeUUID
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - volumeUUID
+                    x-kubernetes-list-type: map
+                type: object
               startedAt:
                 description: StartedAt is when the operation began.
                 format: date-time
@@ -410,7 +545,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'',''Verifying'']'
+                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'',''Verifying'',''Replicating'',''Committing'',''AwaitingCutover'',''AttachingPaths'',''Proceeding'']'
             type: object
         type: object
     served: true

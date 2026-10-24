@@ -17,7 +17,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	atlascp "github.com/simplyblock/atlas/controlplane"
+
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
 )
 
@@ -27,20 +28,25 @@ const (
 	testAdminAuthHeader  = "Bearer " + testAdminToken
 )
 
+// jsonContent is the content type the control plane answers with, which the
+// generated client reads a typed body by.
+var jsonContent = map[string]string{"Content-Type": "application/json"}
+
 func TestCreateClusterAuthenticatesWithTheManagedAdminCredentialWhenOneResolves(t *testing.T) {
 	mock := webapimock.NewSpecServerFromFile(t, clusterAdminSpecPath, false)
 	defer mock.Close()
 
 	mock.Register(http.MethodPost, "/api/v2/clusters/", webapimock.RouteResponse{
-		Status: http.StatusCreated,
-		Body:   `{"id":"cluster-uuid","secret":"cluster-secret"}`,
+		Status:  http.StatusCreated,
+		Body:    `{"id":"` + testClusterUUID + `","secret":"cluster-secret"}`,
+		Headers: jsonContent,
 	})
 
 	resolveEndpoint := func(context.Context) string { return mock.URL() }
 	resolveCredential := func(context.Context) (string, bool) { return testAdminToken, true }
 
 	api := NewControlPlane(resolveEndpoint, resolveCredential)
-	if _, err := api.CreateCluster(context.Background(), utils.ClusterAddParams{Name: "b"}); err != nil {
+	if _, err := api.CreateCluster(context.Background(), atlascp.CreateClusterParams{Name: "b"}); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
 
@@ -58,7 +64,7 @@ func TestClusterByNameAuthenticatesWithTheManagedAdminCredentialWhenOneResolves(
 	defer mock.Close()
 
 	mock.Register(http.MethodGet, "/api/v2/clusters/", webapimock.RouteResponse{
-		Status: http.StatusOK, Body: `[]`,
+		Status: http.StatusOK, Body: `[]`, Headers: jsonContent,
 	})
 
 	resolveEndpoint := func(context.Context) string { return mock.URL() }
@@ -86,15 +92,16 @@ func TestCreateClusterCarriesNoAdminCredentialWhenNoneResolves(t *testing.T) {
 	defer mock.Close()
 
 	mock.Register(http.MethodPost, "/api/v2/clusters/", webapimock.RouteResponse{
-		Status: http.StatusCreated,
-		Body:   `{"id":"cluster-uuid","secret":"cluster-secret"}`,
+		Status:  http.StatusCreated,
+		Body:    `{"id":"` + testClusterUUID + `","secret":"cluster-secret"}`,
+		Headers: jsonContent,
 	})
 
 	resolveEndpoint := func(context.Context) string { return mock.URL() }
 	resolveCredential := func(context.Context) (string, bool) { return "", false }
 
 	api := NewControlPlane(resolveEndpoint, resolveCredential)
-	if _, err := api.CreateCluster(context.Background(), utils.ClusterAddParams{Name: "b"}); err != nil {
+	if _, err := api.CreateCluster(context.Background(), atlascp.CreateClusterParams{Name: "b"}); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
 

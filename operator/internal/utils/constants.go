@@ -94,9 +94,6 @@ const (
 	ENDPOINT       = "http://simplyblock-webappapi:5000"
 	CSIProvisioner = "csi.simplyblock.io"
 
-	SecretNameStorageNodeSetAPITLS = "simplyblock-storage-node-api-tls"
-	SecretNameSpdkProxyTLS         = "simplyblock-spdk-proxy-tls"
-
 	// Webhook serving-certificate wiring. WebhookServiceName and
 	// WebhookConfigurationName carry the Kustomize namePrefix (simplyblock-operator-)
 	// applied in config/default. The serving certificate is provisioned into
@@ -153,7 +150,7 @@ const (
 
 	// AnnotationLogCollector marks a pod whose logs the chart's fluent-bit ships
 	// to Graylog. Its filter drops every pod without the annotation set to
-	// "true", so a workload left unmarked never reaches Graylog.
+	// `true`, so a workload left unmarked never reaches Graylog.
 	AnnotationLogCollector = "log-collector/enabled"
 
 	LabelFDBClusterName = "foundationdb.org/fdb-cluster-name"

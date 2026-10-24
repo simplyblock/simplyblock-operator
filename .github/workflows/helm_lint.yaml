@@ -43,11 +43,24 @@ jobs:
       - name: Required objects
         run: helm-charts/scripts/check-rendered-objects.sh
 
+      - name: Observability values
+        run: |
+          make -C operator yq
+          helm-charts/scripts/test-observability-values.sh
+
+      - name: Image values
+        run: |
+          make -C operator yq
+          helm-charts/scripts/test-image-values.sh
+
       - name: KMS setup script
         run: helm-charts/scripts/test-setup-kms.sh
 
       - name: Cleanup script
         run: helm-charts/scripts/test-cleanup-simplyblock.sh
+
+      - name: Support bundle script
+        run: helm-charts/scripts/test-kubectl-simplyblock-bundle.sh
 
       - name: Value references
         run: |

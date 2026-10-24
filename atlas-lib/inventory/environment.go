@@ -62,6 +62,16 @@ const (
 	// root filesystem, and a kubelet configured only through its machine
 	// config.
 	DistributionTalos Distribution = "Talos"
+
+	// DistributionEKS, DistributionGKE, DistributionAKS, and DistributionOKE are
+	// the managed services of Amazon, Google, Microsoft, and Oracle. The
+	// provider builds the node image and the kubelet configuration and replaces
+	// both whenever a node pool is upgraded or scaled, so a change a workload
+	// makes to either is one the next node does not have.
+	DistributionEKS Distribution = "EKS"
+	DistributionGKE Distribution = "GKE"
+	DistributionAKS Distribution = "AKS"
+	DistributionOKE Distribution = "OKE"
 )
 
 // Source is where one finding was read, which is how strong it is.
@@ -123,7 +133,12 @@ type Environment struct {
 // reason from the other direction, since its host is the most constrained one
 // this product runs on.
 //
-// Rancher is last of the four, and that is the one entry worth stating a reason
+// The managed services come after Talos and before K3s and Rancher. None of them
+// carries another's markers, so their order among themselves decides nothing.
+// They precede Rancher because Rancher imports clusters it did not install: an
+// EKS cluster under Rancher management carries both, and EKS built the kubelet.
+//
+// Rancher is last, and that is the one entry worth stating a reason
 // for. It is a management layer as much as a distribution, so a Rancher-managed
 // K3s cluster carries both sets of markers. What decides the host's shape is the
 // distribution that installed the kubelet, so K3s wins, and the Rancher finding
@@ -131,6 +146,10 @@ type Environment struct {
 var precedence = []Distribution{
 	DistributionOpenShift,
 	DistributionTalos,
+	DistributionEKS,
+	DistributionGKE,
+	DistributionAKS,
+	DistributionOKE,
 	DistributionK3s,
 	DistributionRancher,
 }
@@ -150,11 +169,20 @@ var apiGroupMarkers = map[string]Distribution{
 }
 
 // kubeletVersionMarkers are the suffixes a distribution builds into its
-// kubelet's version string, such as v1.31.4+k3s1 and v1.31.4+rke2r1.
+// kubelet's version string, such as `v1.31.4+k3s1`, `v1.31.4+rke2r1`,
+// `v1.30.8-eks-2d5f260`, and `v1.30.5-gke.1014001`.
+//
+// The two managed-service suffixes are the build's and not the service's. EKS
+// Distro, which EKS Anywhere runs, carries `-eks-` as well, and Google
+// Distributed Cloud carries `-gke.`, so those clusters read as EKS and GKE. The
+// conclusion then leaves the kubelet configuration alone on a host whose
+// kubelet could have been configured, which a reviewer corrects in the draft.
 var kubeletVersionMarkers = map[string]Distribution{
 	"+k3s":  DistributionK3s,
 	"+rke2": DistributionRancher,
 	"+rke":  DistributionRancher,
+	"-eks-": DistributionEKS,
+	"-gke.": DistributionGKE,
 }
 
 // osImageMarkers are prefixes of the image string a node's kubelet reports.
@@ -168,6 +196,13 @@ var osImageMarkers = map[string]Distribution{
 
 // nodeKeyMarkers are the label and annotation key prefixes an installer leaves
 // on the nodes it created.
+//
+// The managed-service entries are the labels the service puts on the nodes of
+// its own node pools. The cloud controller manager's labels are not among them
+// (oci.oraclecloud.com/, topology.k8s.aws/, and kubernetes.azure.com/managed),
+// because a self-managed cluster on the same cloud runs that controller too.
+// AKS shares its prefix with the Azure cloud controller manager, so it is
+// matched by whole keys in nodeKeyExactMarkers instead.
 var nodeKeyMarkers = map[string]Distribution{
 	"node.openshift.io/":                 DistributionOpenShift,
 	"machineconfiguration.openshift.io/": DistributionOpenShift,
@@ -177,6 +212,16 @@ var nodeKeyMarkers = map[string]Distribution{
 	"rke.cattle.io/":                     DistributionRancher,
 	"management.cattle.io/":              DistributionRancher,
 	"cattle.io/":                         DistributionRancher,
+	"eks.amazonaws.com/":                 DistributionEKS,
+	"cloud.google.com/gke-":              DistributionGKE,
+	"oke.oraclecloud.com/":               DistributionOKE,
+}
+
+// nodeKeyExactMarkers are label and annotation keys that identify a
+// distribution only when they match whole.
+var nodeKeyExactMarkers = map[string]Distribution{
+	"kubernetes.azure.com/agentpool": DistributionAKS,
+	"kubernetes.azure.com/cluster":   DistributionAKS,
 }
 
 // CollectEnvironment reads the API groups the server registers and concludes a
@@ -270,11 +315,14 @@ func nodeEvidence(n corev1.Node) []Evidence {
 	return evidence
 }
 
-// markerFor matches a label or annotation key against the key prefixes, longest
-// prefix first: cattle.io/ and management.cattle.io/ both point at Rancher
+// markerFor matches a label or annotation key against the whole keys first, then
+// against the key prefixes, longest prefix first: cattle.io/ and management.cattle.io/ both point at Rancher
 // today, and a shorter prefix must not shadow a longer one that could point
 // somewhere else tomorrow.
 func markerFor(key string) (Distribution, bool) {
+	if dist, ok := nodeKeyExactMarkers[key]; ok {
+		return dist, true
+	}
 	for _, prefix := range nodeKeyPrefixes {
 		if strings.HasPrefix(key, prefix) {
 			return nodeKeyMarkers[prefix], true

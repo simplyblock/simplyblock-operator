@@ -95,8 +95,10 @@ spec:
                       guards are what carry documents written before the default existed.
                     type: boolean
                   cluster:
-                    description: Cluster is the StorageCluster to create. Ignored
-                      when ClusterRef is set.
+                    description: |-
+                      Cluster is the StorageCluster to create, or the sizing of the members to
+                      add when ClusterRef names a supercluster, whose name is then not used.
+                      Ignored when ClusterRef names a standalone cluster or a member.
                     properties:
                       arbitration:
                         description: |-
@@ -112,6 +114,17 @@ spec:
                             maximum: 4500
                             minimum: 500
                             type: integer
+                          hostFencing:
+                            description: |-
+                              HostFencing lets Kubernetes follow the arbiter's fence of a node whose
+                              state is unknown. The control plane revokes the node's NVMe host
+                              identities on its peer, the operator sets the StorageFenced condition on
+                              its Kubernetes node, and a NodeHealthCheck with a
+                              StorageFenceRemediationTemplate applies the out-of-service taint, so its
+                              pods and VMs restart on the peer within seconds. A partition then has a
+                              winner instead of stopping I/O on both nodes. Requires the NodeHealthCheck
+                              operator.
+                            type: boolean
                           leaseTtlMs:
                             description: |-
                               LeaseTtlMs is how long a lease from the arbiter stays valid. It only
@@ -311,6 +324,14 @@ spec:
                           nobody can turn it on for. A deployment that wants its data checked has to
                           say so here or not at all.
                         type: boolean
+                      enableCpuTopology:
+                        description: |-
+                          EnableCpuTopology turns on topology-aware CPU assignment on the storage
+                          nodes. It is valid only when spec.environment is Vanilla, whose workers
+                          the environment does not describe. Every other environment decides it:
+                          OpenShift turns it on, and the rest leave it off. Unset on a Vanilla
+                          document leaves it off.
+                        type: boolean
                       enableDriveFormat:
                         description: |-
                           EnableDriveFormat formats every device the document names before a storage
@@ -344,6 +365,17 @@ spec:
                           built with is not one a later document can vary. It also costs a drive of
                           capacity per node, which is a trade a reviewer approves rather than one a
                           default makes for them.
+                        type: boolean
+                      enableKubeletConfiguration:
+                        description: |-
+                          EnableKubeletConfiguration lets the storage nodes rewrite the kubelet
+                          configuration of their workers and restart the kubelet. It is valid only
+                          when spec.environment is Vanilla, for a fleet whose workers keep the
+                          configuration where the storage node cannot write it. Every other
+                          environment decides it: on for OpenShift, Rancher, and K3s, and off for
+                          Talos, EKS, GKE, AKS, and OKE, whose kubelet configuration is not
+                          writable or is rebuilt with every node. Unset on a Vanilla document
+                          turns it on.
                         type: boolean
                       enableNodeAffinity:
                         description: |-
@@ -684,8 +716,10 @@ spec:
                         && self.enableArbitration))
                   clusterRef:
                     description: |-
-                      ClusterRef names an existing StorageCluster this document adds nodes to.
-                      Absent means the document creates the cluster in Cluster. Setting it to a
+                      ClusterRef names an existing StorageCluster this document adds to: the
+                      nodes of every node set to a standalone cluster or a member, and one new
+                      member per node set to a supercluster. Absent means the document creates
+                      the cluster in Cluster. Setting it to a
                       cluster that does not exist, or leaving it absent when one already does,
                       is refused rather than reconciled.
 
@@ -713,6 +747,10 @@ spec:
                     - Rancher
                     - K3s
                     - Talos
+                    - EKS
+                    - GKE
+                    - AKS
+                    - OKE
                     type: string
                   hostOS:
                     description: |-
@@ -772,10 +810,10 @@ spec:
                               is not written downstream, so the field it would fill keeps its own
                               default rather than being overridden with nothing.
 
-                              The registry set is the one every image field in this API is held to,
-                              which is what keeps a reviewed document from naming a build nobody
-                              published.
-                            pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                              Every image field in this API is held to the same reference format and
+                              to no particular registry, so an air-gapped deployment can name its own
+                              mirror.
+                            pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                             type: string
                           imagePullPolicy:
                             default: Always
@@ -802,10 +840,10 @@ spec:
                               is not written downstream, so the field it would fill keeps its own
                               default rather than being overridden with nothing.
 
-                              The registry set is the one every image field in this API is held to,
-                              which is what keeps a reviewed document from naming a build nobody
-                              published.
-                            pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                              Every image field in this API is held to the same reference format and
+                              to no particular registry, so an air-gapped deployment can name its own
+                              mirror.
+                            pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                             type: string
                           imagePullPolicy:
                             default: Always
@@ -829,10 +867,10 @@ spec:
                               is not written downstream, so the field it would fill keeps its own
                               default rather than being overridden with nothing.
 
-                              The registry set is the one every image field in this API is held to,
-                              which is what keeps a reviewed document from naming a build nobody
-                              published.
-                            pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                              Every image field in this API is held to the same reference format and
+                              to no particular registry, so an air-gapped deployment can name its own
+                              mirror.
+                            pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                             type: string
                           imagePullPolicy:
                             default: Always
@@ -857,6 +895,81 @@ spec:
                         workers a document adds or grows together. It carries no sizing, because sizing
                         is uniform across a cluster and is stated once in ClusterTemplate.
                       properties:
+                        cluster:
+                          description: |-
+                            Cluster overrides the document's cluster template for the member cluster
+                            this node set becomes, for a node set whose hardware differs from the
+                            rest. A field left unset takes the template's value. Valid on a document
+                            with more than one node set, or one naming a cluster in clusterRef.
+                          properties:
+                            maxSubsystemCount:
+                              description: |-
+                                MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
+                                node of this member serves.
+                              format: int32
+                              maximum: 75
+                              minimum: 10
+                              type: integer
+                            minHugePagesSize:
+                              description: |-
+                                MinHugePagesSize is the smallest huge-page allocation each storage node of
+                                this member makes: 100G or 1T, where a bare number is gigabytes.
+                              maxLength: 32
+                              type: string
+                            nodesPerSocket:
+                              description: |-
+                                NodesPerSocket is how many storage nodes run per NUMA socket on this
+                                member's workers.
+                              format: int32
+                              maximum: 8
+                              minimum: 1
+                              type: integer
+                            socketsToUse:
+                              description: |-
+                                SocketsToUse are the NUMA sockets that run storage nodes on this member's
+                                workers. With NodesPerSocket it decides how many storage nodes each worker
+                                runs.
+                              items:
+                                maxLength: 16
+                                type: string
+                              maxItems: 16
+                              type: array
+                              x-kubernetes-list-type: set
+                            stripe:
+                              description: Stripe is this member's erasure-coding
+                                layout.
+                              properties:
+                                dataChunks:
+                                  description: DataChunks is the number of data chunks
+                                    per stripe (ndcs).
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                parityChunks:
+                                  description: |-
+                                    ParityChunks is the number of parity chunks per stripe (npcs), and
+                                    therefore how many chunk losses a stripe survives.
+                                  format: int32
+                                  minimum: 0
+                                  type: integer
+                              type: object
+                              x-kubernetes-validations:
+                              - message: the erasure-coding scheme must be one of
+                                  1+0, 1+1, 2+1, 4+1, 1+2, 2+2, or 4+2, written as
+                                  dataChunks+parityChunks, and an unstated half is
+                                  1
+                                rule: '[has(self.dataChunks) ? self.dataChunks : 1,
+                                  has(self.parityChunks) ? self.parityChunks : 1]
+                                  in [[1, 0], [1, 1], [2, 1], [4, 1], [1, 2], [2,
+                                  2], [4, 2]]'
+                            vcpuCount:
+                              description: |-
+                                VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
+                                this member.
+                              format: int32
+                              minimum: 4
+                              type: integer
+                          type: object
                         groups:
                           description: Groups are the sets of workers sharing one
                             configuration.
@@ -1010,14 +1123,24 @@ spec:
                   rule: '!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf'
                 - message: approval cannot be withdrawn
                   rule: '!has(oldSelf.approved) || !oldSelf.approved || self.approved'
-                - message: 'every group must name the same device class: all nvme
-                    or all block'
-                  rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)))
-                    || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))
+                - message: 'every group of a node set must name the same device class:
+                    all nvme or all block'
+                  rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))
+                    || s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))
+                - message: a node set overrides the cluster template only when the
+                    document has more than one node set or names a cluster in clusterRef
+                  rule: size(self.nodeSets) > 1 || has(self.clusterRef) || self.nodeSets.all(s,
+                    !has(s.cluster))
                 - message: spec.cluster.openshift is what a deployment onto OpenShift
                     states, so spec.environment has to be OpenShift
                   rule: '!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment)
                     && self.environment == ''OpenShift'')'
+                - message: 'spec.cluster.enableCpuTopology and spec.cluster.enableKubeletConfiguration
+                    are stated only when spec.environment is Vanilla: every other
+                    environment decides both'
+                  rule: '!has(self.cluster) || (!has(self.cluster.enableCpuTopology)
+                    && !has(self.cluster.enableKubeletConfiguration)) || (has(self.environment)
+                    && self.environment == ''Vanilla'')'
               memberRef:
                 description: MemberRef names the FleetMember this cluster is built
                   in.

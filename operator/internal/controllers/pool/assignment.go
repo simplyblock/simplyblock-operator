@@ -195,8 +195,8 @@ func ClassParameters(p *simplyblockv1alpha2.StoragePool, clusterUUID string) map
 	// plane, which is why the default class is written after creation rather
 	// than beside it.
 	if defaults.EnableDHCHAP != nil && *defaults.EnableDHCHAP &&
-		len(p.Spec.AllowedNodes) > 0 && p.Status.UUID != "" {
-		params[paramDHCHAPNodeSelector] = kube.PoolNodeLabelKey(p.Status.UUID)
+		len(p.Spec.AllowedNodes) > 0 && poolLabelID(p) != "" {
+		params[paramDHCHAPNodeSelector] = kube.PoolNodeLabelKey(poolLabelID(p))
 	}
 
 	return params

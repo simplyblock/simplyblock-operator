@@ -16,12 +16,12 @@ import (
 	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 const (
@@ -66,7 +66,7 @@ func ipFor(i int) string { return []string{"10.0.0.1", "10.0.0.2"}[i] }
 // its own next step.
 func rollingAPI(fleet *rollingFleet) *fakeControlPlane {
 	return &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		storageNodes: func(string) ([]utils.NodeStatusResponse, error) {
 			return fleet.nodes(), nil
 		},

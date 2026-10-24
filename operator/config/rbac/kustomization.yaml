@@ -30,7 +30,10 @@ resources:
 - metrics_apiserver_auth_delegator_binding.yaml
 - metrics_apiserver_extension_reader_binding.yaml
 - metrics_apiserver_aggregate_view_role.yaml
-# The Kubebuilder scaffold also produces "Admin", "Editor" and "Viewer" ClusterRoles
+# NodeHealthCheck's access to the storage fence remediation (two-node clusters
+# with host fencing).
+- storagefence_remediation_ext_role.yaml
+# The Kubebuilder scaffold also produces Admin, Editor, and Viewer ClusterRoles
 # for the remaining CRDs below. Those are not consumed by the operator itself.
 # They will be replaced with aggregation roles in a follow-up; until then they
 # remain installed for backward compatibility.
@@ -43,3 +46,6 @@ resources:
 - storagebackup_admin_role.yaml
 - storagebackup_editor_role.yaml
 - storagebackup_viewer_role.yaml
+- storagegroupbackup_admin_role.yaml
+- storagegroupbackup_editor_role.yaml
+- storagegroupbackup_viewer_role.yaml

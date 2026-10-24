@@ -69,6 +69,11 @@ type mockSBCLI struct {
 	// control-plane errors (e.g., HTTP 400) during snapshot creation.
 	snapshotCreateStatus int
 
+	// relationshipReads counts the relationship lookups, and lastCloneSource
+	// is the volume the last clone was taken from.
+	relationshipReads int
+	lastCloneSource   string
+
 	// snapshotCreatePersistThenFail, when true, makes the next snapshot POST
 	// persist the snapshot but respond HTTP 500: the ambiguous timeout where the
 	// control plane created the snapshot but the client never saw success.
@@ -166,7 +171,7 @@ type mockSBCLI struct {
 	// groupResolution, keyed by group id, is the body GET
 	// .../consistency-groups/{id}/replication/resolution serves. Absent means
 	// a control plane that predates the endpoint (a route-level 404), so the
-	// driver keeps its pre-resolution behaviour.
+	// driver keeps its pre-resolution behavior.
 	groupResolution map[string]map[string]any
 }
 
@@ -439,6 +444,7 @@ func (m *mockSBCLI) handleReplicationStatus(w http.ResponseWriter, r *http.Reque
 
 func (m *mockSBCLI) handleReplicationRelationship(w http.ResponseWriter, r *http.Request) {
 	volumeID := r.PathValue("volumeID")
+	m.relationshipReads++
 	body, ok := m.replicationRelationship[volumeID]
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "Volume has no replication relationship"})
@@ -573,6 +579,7 @@ func (m *mockSBCLI) handleCloneVolume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cloneName := r.URL.Query().Get("clone_name")
+	m.lastCloneSource = volume.UUID
 	newID := uuid.New().String()
 	m.volumes[newID] = &mockVolume{UUID: newID, Name: cloneName, Size: volume.Size}
 	w.Header().Set("Location", fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/",
@@ -683,7 +690,7 @@ type mockGroup struct {
 	Demoted          bool
 	DemoteConverging bool // when set, /demote answers 202 (still converging)
 	FailbackSource   string
-	LastReplicatedAt int64 // unix seconds surfaced by /replication/status
+	LastReplicatedAt int64 // Unix seconds surfaced by /replication/status
 }
 
 // seedGroup registers a group with the given member lvol UUIDs and stamps each

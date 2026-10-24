@@ -113,6 +113,11 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 	if err := r.Get(ctx, req.NamespacedName, clusterCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	// A supercluster's UUID names no backend cluster; its members are
+	// rebalanced as the ordinary clusters they are.
+	if clusterCR.Spec.Supercluster != nil {
+		return ctrl.Result{}, nil
+	}
 
 	if clusterCR.Status.UUID == "" {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
@@ -651,10 +656,16 @@ func (r *VolumeRebalancerReconciler) SetupWithManager(
 			// React to spec changes (generation) and to annotation changes so an
 			// explicit realignment trigger (TriggerRealignmentAnnotation) reconciles
 			// the cluster immediately rather than waiting for the next interval tick.
-			builder.WithPredicates(predicate.Or(
-				predicate.GenerationChangedPredicate{},
-				predicate.AnnotationChangedPredicate{},
-			))).
+			builder.WithPredicates(
+				predicate.Or(
+					predicate.GenerationChangedPredicate{},
+					predicate.AnnotationChangedPredicate{},
+				),
+				predicate.NewPredicateFuncs(func(obj client.Object) bool {
+					cluster, ok := obj.(*simplyblockv1alpha2.StorageCluster)
+					return ok && cluster.Spec.Supercluster == nil
+				}),
+			)).
 		Owns(&simplyblockv1alpha1.VolumeMigration{}).
 		Named("volumerebalancer").
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).

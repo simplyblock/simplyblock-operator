@@ -338,6 +338,63 @@ func TestFromInventoryCarriesTheDistroFamilyVersionAndArchitecture(t *testing.T)
 	}
 }
 
+func TestFromInventoryCarriesTheKernelFacts(t *testing.T) {
+	// The kernel decides what a worker can do beside hosting a storage node:
+	// mount a volume over several paths, run virtual machines, and read a pNFS
+	// volume directly. Each conclusion travels with its evidence, which is what
+	// a reviewer checks on the host.
+	host := ubuntuHost()
+	host.Kernel = inventory.KernelFacts{
+		Release: "6.1.155-176.282.amzn2023.x86_64",
+		Version: inventory.KernelVersion{Major: 6, Minor: 1, Patch: 155},
+		NVMeMultipath: inventory.Multipath{State: inventory.MultipathNotBuilt,
+			Detail: "nvme_core is loaded and has no multipath parameter"},
+		KVM:       inventory.Capability{State: inventory.CapabilityAbsent, Detail: "no vmx or svm"},
+		TUN:       inventory.Capability{State: inventory.CapabilityLoadable, Detail: "tun is a module"},
+		PNFSBlock: inventory.Capability{State: inventory.CapabilityAvailable, Detail: "blocklayoutdriver is loaded"},
+	}
+	report := FromInventory(testNode, probedAt, inventory.Inventory{HostOS: host}, nil)
+
+	kernel := report.HostOS.Kernel
+	if kernel.Release != "6.1.155-176.282.amzn2023.x86_64" {
+		t.Errorf("the report names the kernel release %q", kernel.Release)
+	}
+	if want := (KernelVersion{Major: 6, Minor: 1, Patch: 155}); kernel.Version == nil || *kernel.Version != want {
+		t.Errorf("the report names the kernel version %+v, want %+v", kernel.Version, want)
+	}
+	for name, got := range map[string]Fact{
+		"NVMe multipath": kernel.NVMeMultipath, "KVM": kernel.KVM, "TUN": kernel.TUN, "pNFS block": kernel.PNFSBlock,
+	} {
+		if got.State == "" || got.Detail == "" {
+			t.Errorf("the report carries %s as %+v, without its state or its evidence", name, got)
+		}
+	}
+	if kernel.NVMeMultipath.State != string(inventory.MultipathNotBuilt) {
+		t.Errorf("the report names NVMe multipath %q, want %q", kernel.NVMeMultipath.State, inventory.MultipathNotBuilt)
+	}
+}
+
+func TestFromInventoryOmitsAKernelVersionThatWasNotRead(t *testing.T) {
+	// A release the parser does not recognize leaves the version unset, and the
+	// report says nothing rather than claiming kernel 0.0.0.
+	host := ubuntuHost()
+	host.Kernel = inventory.KernelFacts{Release: "talos"}
+	report := FromInventory(testNode, probedAt, inventory.Inventory{HostOS: host}, nil)
+
+	if report.HostOS.Kernel.Version != nil {
+		t.Errorf("the report names the kernel version %+v for an unparsed release", *report.HostOS.Kernel.Version)
+	}
+}
+
+func TestTheReportVersionMarksTheKernelFacts(t *testing.T) {
+	// A version-9 report decodes with every kernel fact empty, and a reader
+	// would take that as nothing known where the probe never asked. Refusing it
+	// re-runs the probe.
+	if ReportVersion < 10 {
+		t.Errorf("the report is version %d, and the kernel facts arrived at version 10", ReportVersion)
+	}
+}
+
 func TestFromInventoryReportsAHostWhoseOSWasNotRead(t *testing.T) {
 	// A probe that was not given the host's root filesystem reports an empty
 	// distro beside the failure that says why, rather than a plausible one read

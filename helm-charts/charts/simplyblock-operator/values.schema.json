@@ -417,32 +417,25 @@
           "additionalProperties": false,
           "properties": {
             "provisioner": {
-              "type": "string",
-              "pattern": "^($|(quay\\.io/simplyblock-io|docker\\.io/simplyblock|public\\.ecr\\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$"
+              "$ref": "#/definitions/imageReference"
             },
             "attacher": {
-              "type": "string",
-              "pattern": "^($|(quay\\.io/simplyblock-io|docker\\.io/simplyblock|public\\.ecr\\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$"
+              "$ref": "#/definitions/imageReference"
             },
             "resizer": {
-              "type": "string",
-              "pattern": "^($|(quay\\.io/simplyblock-io|docker\\.io/simplyblock|public\\.ecr\\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$"
+              "$ref": "#/definitions/imageReference"
             },
             "snapshotter": {
-              "type": "string",
-              "pattern": "^($|(quay\\.io/simplyblock-io|docker\\.io/simplyblock|public\\.ecr\\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$"
+              "$ref": "#/definitions/imageReference"
             },
             "healthMonitor": {
-              "type": "string",
-              "pattern": "^($|(quay\\.io/simplyblock-io|docker\\.io/simplyblock|public\\.ecr\\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$"
+              "$ref": "#/definitions/imageReference"
             },
             "nodeDriverRegistrar": {
-              "type": "string",
-              "pattern": "^($|(quay\\.io/simplyblock-io|docker\\.io/simplyblock|public\\.ecr\\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$"
+              "$ref": "#/definitions/imageReference"
             },
             "csiAddons": {
-              "type": "string",
-              "pattern": "^($|(quay\\.io/simplyblock-io|docker\\.io/simplyblock|public\\.ecr\\.aws/simply-block|quay\\.io/csiaddons)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$"
+              "$ref": "#/definitions/imageReference"
             }
           }
         },
@@ -670,6 +663,13 @@
           }
         }
       }
+    }
+  },
+  "definitions": {
+    "imageReference": {
+      "description": "A container image reference from any registry, mirrors included, carrying a tag, a digest, or both. Mirrors the crdtypes.ImageReference pattern in atlas-lib.",
+      "type": "string",
+      "pattern": "^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\\[[a-fA-F0-9:]+\\])(:[0-9]+)?/)?[a-z0-9]+((\\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$"
     }
   }
 }

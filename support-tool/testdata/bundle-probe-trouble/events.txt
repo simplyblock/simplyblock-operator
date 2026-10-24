@@ -1,0 +1,7 @@
+LAST SEEN   TYPE      REASON                     OBJECT                         MESSAGE
+12m         Normal    WorkerDeclined             operatorops/discover-fleet-02  worker-04 is not used: it is cordoned
+12m         Normal    WorkerDeclined             operatorops/discover-fleet-02  worker-05 is not used: it carries the taint nvidia.com/gpu=present:NoSchedule, which spec.discover.tolerations does not tolerate
+11m         Warning   EnvironmentPartiallyRead   operatorops/discover-fleet-02  the API groups could not be listed, so the distribution was concluded from the nodes alone: the server is currently unable to handle the request
+4m          Warning   DeviceInspectionFailed     operatorops/discover-fleet-02  the probe on worker-03 failed, so it is not in the draft
+4m          Warning   ReportUnreadable           operatorops/discover-fleet-02  simplyblock/sb-nodeprobe-discover-fleet-02-worker-06: the probe report is version 8 and this operator reads version 10, so the probe has to be re-run
+3m          Warning   NVMeMultipathUnavailable   operatorops/discover-fleet-02  worker-01 boots kernel 6.1.155-176.282.amzn2023.x86_64, which is built without CONFIG_NVME_MULTIPATH

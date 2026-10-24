@@ -63,10 +63,10 @@ spec:
                     Image is the container image used for all simplyblock control-plane and
                     storage-node workloads (e.g., `quay.io/simplyblock-io/simplyblock:26.2.2`).
                     StorageNodeSet CRs that omit spec.clusterImage inherit this value.
-                    Must reference one of the trusted registries (`quay.io/simplyblock-io`,
-                    `docker.io/simplyblock`, `public.ecr.aws/simply-block`). Digest pinning
+                    Any registry is accepted, mirrors included, as long as the value is a
+                    well-formed reference carrying a tag, a digest, or both. Digest pinning
                     (@sha256:...) is recommended.
-                  pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                  pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                   type: string
               type: object
             status:
@@ -287,14 +287,60 @@ spec:
                                 from. It cannot be a class this operator provides, because the control
                                 plane has to exist before any simplyblock volume can.
                               type: string
+                            tolerations:
+                              description: |-
+                                Tolerations are applied to the database's own processes, and nothing else
+                                the control plane runs. Unset leaves them with the control plane's
+                                tolerations, spec.source.local.tolerations. When set, they replace those
+                                for the database rather than adding to them, the rule NodeSelector
+                                follows: the database confined to tainted workers tolerates their taint,
+                                and the rest of the control plane does not follow it there.
+                              items:
+                                description: |-
+                                  The pod this Toleration is attached to tolerates any taint that matches
+                                  the triple <key,value,effect> using the matching operator <operator>.
+                                properties:
+                                  effect:
+                                    description: |-
+                                      Effect indicates the taint effect to match. Empty means match all taint effects.
+                                      When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                                    type: string
+                                  key:
+                                    description: |-
+                                      Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                                      If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                                    type: string
+                                  operator:
+                                    description: |-
+                                      Operator represents a key's relationship to the value.
+                                      Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                                      Exists is equivalent to wildcard for value, so that a pod can
+                                      tolerate all taints of a particular category.
+                                      Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                                    type: string
+                                  tolerationSeconds:
+                                    description: |-
+                                      TolerationSeconds represents the period of time the toleration (which must be
+                                      of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                                      it is not set, which means tolerate the taint forever (do not evict). Zero and
+                                      negative values will be treated as 0 (evict immediately) by the system.
+                                    format: int64
+                                    type: integer
+                                  value:
+                                    description: |-
+                                      Value is the taint value the toleration matches to.
+                                      If the operator is Exists, the value should be empty, otherwise just a regular string.
+                                    type: string
+                                type: object
+                              type: array
                           type: object
                         image:
                           description: |-
                             Image is the management API and control-plane image.
-                            Must reference one of the trusted registries (`quay.io/simplyblock-io`,
-                            `docker.io/simplyblock`, `public.ecr.aws/simply-block`); digest pinning
+                            Any registry is accepted, mirrors included, as long as the value is a
+                            well-formed reference carrying a tag, a digest, or both. Digest pinning
                             (@sha256:...) is recommended.
-                          pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                          pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                           type: string
                         imagePullPolicy:
                           default: IfNotPresent
@@ -551,7 +597,7 @@ spec:
                             there is no equivalent to fall back to without this field -- every
                             StorageCluster on a managed deployment must get an image from here or
                             from its own spec.
-                          pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                          pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                           type: string
                       required:
                         - endpoint

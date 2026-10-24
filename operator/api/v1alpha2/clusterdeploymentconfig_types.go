@@ -21,6 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/simplyblock/atlas/crdtypes"
 	"github.com/simplyblock/atlas/statemachine"
 )
 
@@ -79,8 +80,9 @@ const (
 )
 
 // KubernetesEnvironment is the distribution a deployment targets. The values are
-// the distributions' own names.
-// +kubebuilder:validation:Enum=Vanilla;OpenShift;Rancher;K3s;Talos
+// the distributions' own names: EKS, GKE, AKS, and OKE are the managed services
+// of Amazon, Google, Microsoft, and Oracle.
+// +kubebuilder:validation:Enum=Vanilla;OpenShift;Rancher;K3s;Talos;EKS;GKE;AKS;OKE
 type KubernetesEnvironment string
 
 const (
@@ -89,6 +91,10 @@ const (
 	KubernetesEnvironmentRancher   KubernetesEnvironment = "Rancher"
 	KubernetesEnvironmentK3s       KubernetesEnvironment = "K3s"
 	KubernetesEnvironmentTalos     KubernetesEnvironment = "Talos"
+	KubernetesEnvironmentEKS       KubernetesEnvironment = "EKS"
+	KubernetesEnvironmentGKE       KubernetesEnvironment = "GKE"
+	KubernetesEnvironmentAKS       KubernetesEnvironment = "AKS"
+	KubernetesEnvironmentOKE       KubernetesEnvironment = "OKE"
 )
 
 // HostOSFamily is the packaging tradition a Linux distribution belongs to.
@@ -311,6 +317,57 @@ type NodeSet struct {
 	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:Required
 	Groups []NodeGroup `json:"groups"`
+
+	// Cluster overrides the document's cluster template for the member cluster
+	// this node set becomes, for a node set whose hardware differs from the
+	// rest. A field left unset takes the template's value. Valid on a document
+	// with more than one node set, or one naming a cluster in clusterRef.
+	// +optional
+	Cluster *NodeSetClusterOverrides `json:"cluster,omitempty"`
+}
+
+// NodeSetClusterOverrides is the sizing a node set's member cluster takes in
+// place of the document's cluster template. A field left unset takes the
+// template's value.
+type NodeSetClusterOverrides struct {
+	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
+	// this member.
+	// +kubebuilder:validation:Minimum=4
+	// +optional
+	VCPUCount *int32 `json:"vcpuCount,omitempty"`
+
+	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
+	// node of this member serves.
+	// +kubebuilder:validation:Minimum=10
+	// +kubebuilder:validation:Maximum=75
+	// +optional
+	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
+
+	// MinHugePagesSize is the smallest huge-page allocation each storage node of
+	// this member makes: 100G or 1T, where a bare number is gigabytes.
+	// +kubebuilder:validation:MaxLength=32
+	// +optional
+	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
+
+	// SocketsToUse are the NUMA sockets that run storage nodes on this member's
+	// workers. With NodesPerSocket it decides how many storage nodes each worker
+	// runs.
+	// +kubebuilder:validation:items:MaxLength=16
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=set
+	// +optional
+	SocketsToUse []string `json:"socketsToUse,omitempty"`
+
+	// NodesPerSocket is how many storage nodes run per NUMA socket on this
+	// member's workers.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=8
+	// +optional
+	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
+
+	// Stripe is this member's erasure-coding layout.
+	// +optional
+	Stripe *StripeSpec `json:"stripe,omitempty"`
 }
 
 // ClusterTemplate is the StorageCluster the expansion creates, where it creates
@@ -506,6 +563,25 @@ type ClusterTemplate struct {
 	// +optional
 	EnableAtomicity4K *bool `json:"enableAtomicity4K,omitempty"`
 
+	// EnableCpuTopology turns on topology-aware CPU assignment on the storage
+	// nodes. It is valid only when spec.environment is Vanilla, whose workers
+	// the environment does not describe. Every other environment decides it:
+	// OpenShift turns it on, and the rest leave it off. Unset on a Vanilla
+	// document leaves it off.
+	// +optional
+	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`
+
+	// EnableKubeletConfiguration lets the storage nodes rewrite the kubelet
+	// configuration of their workers and restart the kubelet. It is valid only
+	// when spec.environment is Vanilla, for a fleet whose workers keep the
+	// configuration where the storage node cannot write it. Every other
+	// environment decides it: on for OpenShift, Rancher, and K3s, and off for
+	// Talos, EKS, GKE, AKS, and OKE, whose kubelet configuration is not
+	// writable or is rebuilt with every node. Unset on a Vanilla document
+	// turns it on.
+	// +optional
+	EnableKubeletConfiguration *bool `json:"enableKubeletConfiguration,omitempty"`
+
 	// Stripe is the erasure-coding layout.
 	// +optional
 	Stripe *StripeSpec `json:"stripe,omitempty"`
@@ -607,12 +683,11 @@ type ImageSpec struct {
 	// is not written downstream, so the field it would fill keeps its own
 	// default rather than being overridden with nothing.
 	//
-	// The registry set is the one every image field in this API is held to,
-	// which is what keeps a reviewed document from naming a build nobody
-	// published.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// Every image field in this API is held to the same reference format and
+	// to no particular registry, so an air-gapped deployment can name its own
+	// mirror.
 	// +optional
-	Image string `json:"image,omitempty"`
+	Image crdtypes.ImageReference `json:"image,omitempty"`
 
 	// ImagePullPolicy is when that image is pulled. It defaults to Always,
 	// because every image this product ships by default is a moving tag and a
@@ -679,8 +754,10 @@ type DeploymentImages struct {
 // document carries no field for it.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval cannot be withdrawn"
-// +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))) || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group must name the same device class: all nvme or all block"
+// +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)) || s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group of a node set must name the same device class: all nvme or all block"
+// +kubebuilder:validation:XValidation:rule="size(self.nodeSets) > 1 || has(self.clusterRef) || self.nodeSets.all(s, !has(s.cluster))",message="a node set overrides the cluster template only when the document has more than one node set or names a cluster in clusterRef"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
+// +kubebuilder:validation:XValidation:rule="!has(self.cluster) || (!has(self.cluster.enableCpuTopology) && !has(self.cluster.enableKubeletConfiguration)) || (has(self.environment) && self.environment == 'Vanilla')",message="spec.cluster.enableCpuTopology and spec.cluster.enableKubeletConfiguration are stated only when spec.environment is Vanilla: every other environment decides both"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
 	// and is validated but otherwise inert before that, which is what makes
@@ -719,8 +796,10 @@ type ClusterDeploymentConfigSpec struct {
 	// +optional
 	EdgeCluster *bool `json:"edgeCluster,omitempty"`
 
-	// ClusterRef names an existing StorageCluster this document adds nodes to.
-	// Absent means the document creates the cluster in Cluster. Setting it to a
+	// ClusterRef names an existing StorageCluster this document adds to: the
+	// nodes of every node set to a standalone cluster or a member, and one new
+	// member per node set to a supercluster. Absent means the document creates
+	// the cluster in Cluster. Setting it to a
 	// cluster that does not exist, or leaving it absent when one already does,
 	// is refused rather than reconciled.
 	//
@@ -730,7 +809,9 @@ type ClusterDeploymentConfigSpec struct {
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
 
-	// Cluster is the StorageCluster to create. Ignored when ClusterRef is set.
+	// Cluster is the StorageCluster to create, or the sizing of the members to
+	// add when ClusterRef names a supercluster, whose name is then not used.
+	// Ignored when ClusterRef names a standalone cluster or a member.
 	// +optional
 	Cluster *ClusterTemplate `json:"cluster,omitempty"`
 
@@ -748,6 +829,15 @@ type ClusterDeploymentConfigSpec struct {
 }
 
 // ClusterDeploymentConfigStatus is the observed state of the document.
+// ExpansionMember is a member cluster the expansion drew a name for.
+type ExpansionMember struct {
+	// NodeSet is the node set the member is made of.
+	NodeSet string `json:"nodeSet"`
+
+	// Cluster is the member StorageCluster's name, <cluster>-<nodeset>-<suffix>.
+	Cluster string `json:"cluster"`
+}
+
 type ClusterDeploymentConfigStatus struct {
 	// Phase is the operator's own view of the document.
 	// +optional
@@ -758,11 +848,21 @@ type ClusterDeploymentConfigStatus struct {
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
-	// ClusterRef names the StorageCluster the expansion produced or added to. It
-	// is a record rather than a dependency: nothing resolves it after expansion,
-	// which is what makes the document safe to delete.
+	// ClusterRef names the StorageCluster the expansion produced or added to,
+	// the supercluster when it produced one. It is a record rather than a
+	// dependency: nothing resolves it after expansion, which is what makes the
+	// document safe to delete.
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
+
+	// Members are the member clusters the expansion created or is creating, one
+	// per node set, when the document produces a supercluster. Each name is
+	// recorded before its member is created, so that a retry creates the same
+	// member rather than drawing another name.
+	// +optional
+	// +listType=map
+	// +listMapKey=nodeSet
+	Members []ExpansionMember `json:"members,omitempty"`
 
 	// NodeRefs names the StorageNode objects the expansion created, for the same
 	// reason.

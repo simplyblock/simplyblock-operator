@@ -19,6 +19,7 @@ package v1alpha2
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/simplyblock/atlas/statemachine"
 )
@@ -78,19 +79,25 @@ const (
 // StorageBackupOpsStep is one step of a running backup operation. The enum stays
 // flat as actions are added, because which steps belong to which action is
 // declared by the graph rather than by this type.
-// +kubebuilder:validation:Enum=Validating;Restoring;AwaitingVolume;Binding
+// +kubebuilder:validation:Enum=Validating;Restoring;AwaitingVolume;AwaitingVolumes;Binding
 type StorageBackupOpsStep string
 
 const (
 	// StorageBackupOpsStepValidating belongs to every action.
 	StorageBackupOpsStepValidating StorageBackupOpsStep = "Validating"
 
-	// The Restore action's three remaining steps. Restoring is where the control
-	// plane is asked for the copy back, so it is the last step from which an
-	// abort undoes nothing: everything after it has a logical volume behind it.
-	StorageBackupOpsStepRestoring      StorageBackupOpsStep = "Restoring"
-	StorageBackupOpsStepAwaitingVolume StorageBackupOpsStep = "AwaitingVolume"
-	StorageBackupOpsStepBinding        StorageBackupOpsStep = "Binding"
+	// The Restore action's remaining steps. Restoring is where the control plane
+	// is asked for the copy back, so it is the last step from which an abort
+	// undoes nothing: everything after it has a logical volume behind it.
+	//
+	// A single-backup restore waits on its one volume at AwaitingVolume; a group
+	// restore drives N member recoveries at Restoring and waits for all of them at
+	// AwaitingVolumes before Binding creates one claim per member. The step the
+	// graph takes is chosen by whether spec.groupBackupID is set.
+	StorageBackupOpsStepRestoring       StorageBackupOpsStep = "Restoring"
+	StorageBackupOpsStepAwaitingVolume  StorageBackupOpsStep = "AwaitingVolume"
+	StorageBackupOpsStepAwaitingVolumes StorageBackupOpsStep = "AwaitingVolumes"
+	StorageBackupOpsStepBinding         StorageBackupOpsStep = "Binding"
 )
 
 // RestoreSpec parameterizes the Restore action.
@@ -137,6 +144,7 @@ type RestoreSpec struct {
 }
 
 // StorageBackupOpsSpec is one operation to perform against a backup.
+// +kubebuilder:validation:XValidation:rule="(has(self.backupRef) ? 1 : 0) + (has(self.groupBackupID) ? 1 : 0) + (has(self.groupBackupRef) ? 1 : 0) == 1",message="set exactly one of backupRef, groupBackupRef and groupBackupID: an operation acts on a single backup or on one whole group backup"
 type StorageBackupOpsSpec struct {
 	// ClusterRef names the StorageCluster the operation runs against. Its
 	// namespace defaults to this operation's. The cluster's StoragePool, which
@@ -148,12 +156,48 @@ type StorageBackupOpsSpec struct {
 	// +k8s:immutable
 	ClusterRef NamespacedDnsReference `json:"clusterRef"`
 
-	// BackupRef names the StorageBackup this operation acts on. Its namespace
-	// defaults to this operation's. A backup in another namespace needs the
-	// requesting user to be allowed to read it there.
-	// +kubebuilder:validation:Required
+	// omitzero, not omitempty, on BackupRef: a struct is never "empty" to
+	// encoding/json, so omitempty serialized an unset BackupRef as {"name": ""}
+	// on every write the controller made to the object (its finalizer update,
+	// first of all). The API server then refused the operation it had just
+	// admitted: the CEL rule saw both backupRef and groupBackupID set, and name
+	// failed its minimum length. Every group restore died on its first
+	// reconcile (live 2026-10-20). Kept out of the doc comment so the CRD
+	// description stays the field's, not the bug's.
+
+	// BackupRef names the single StorageBackup this operation acts on. Its
+	// namespace defaults to this operation's. A backup in another namespace needs
+	// the requesting user to be allowed to read it there. Set exactly one of this
+	// and GroupBackupID: an operation acts on one backup or on a whole group
+	// backup.
 	// +k8s:immutable
-	BackupRef NamespacedReference `json:"backupRef"`
+	// +optional
+	BackupRef NamespacedReference `json:"backupRef,omitzero"`
+
+	// GroupBackupID restores a whole consistency-group backup instead of the
+	// single backup named by BackupRef, producing one PersistentVolumeClaim per
+	// member labeled into one restored consistency group. Its value is the
+	// control-plane group backup id carried by the storage.simplyblock.io/group-backup-id
+	// label on the member StorageBackups, which are resolved beside the cluster,
+	// so a requester in another namespace needs to be allowed to list
+	// StorageBackups there. It is the path for a group backup no request object
+	// stands for: one a StorageBackupPolicy scheduled, or one imported. Set
+	// exactly one of this, GroupBackupRef, and BackupRef.
+	// +kubebuilder:validation:MaxLength=253
+	// +k8s:immutable
+	// +optional
+	GroupBackupID string `json:"groupBackupID,omitempty"`
+
+	// GroupBackupRef restores the whole group backup a StorageGroupBackup
+	// produced. Its namespace defaults to this operation's, and a
+	// StorageGroupBackup in another namespace needs the requesting user to be
+	// allowed to read it there, the same rule as BackupRef. The member copies are
+	// recorded beside the StorageGroupBackup, so restoring a group taken in an
+	// application's namespace needs no access to any other namespace's backups.
+	// Set exactly one of this, GroupBackupID, and BackupRef.
+	// +k8s:immutable
+	// +optional
+	GroupBackupRef NamespacedReference `json:"groupBackupRef,omitzero"`
 
 	// Action is the operation to perform.
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
@@ -178,6 +222,59 @@ type StorageBackupOpsSpec struct {
 	Restore *RestoreSpec `json:"restore,omitempty"`
 }
 
+// RestoredGroupMember is one volume a group restore produced: the logical volume
+// the control plane created, the source member it came from, and the claim it is
+// bound to once Binding produces one.
+type RestoredGroupMember struct {
+	// LvolID is the restored logical volume's backend id.
+	// +kubebuilder:validation:Required
+	LvolID string `json:"lvolID"`
+
+	// MemberName is the source member's volume name, which the restored claim's
+	// name is formed from (claimName-memberName) and which tells the members apart.
+	// +optional
+	MemberName string `json:"memberName,omitempty"`
+
+	// ClaimName is the PersistentVolumeClaim this member was bound to, written by
+	// Binding. Empty until the claim is produced.
+	// +optional
+	ClaimName string `json:"claimName,omitempty"`
+}
+
+// BackupsNamespace is the namespace the operation's StorageBackups live in:
+// the StorageCluster's, since the mirror records every copy of a cluster's
+// store beside the cluster (StorageBackupReconciler.recordOf), not beside the
+// operations that restore them. An operation created in an application's
+// namespace with a clusterRef into the operator's namespace resolves its group
+// members here; listing them in the operation's own namespace found none and
+// the admission webhook refused every such restore (live 2026-10-20).
+func (ops *StorageBackupOps) BackupsNamespace() string {
+	return ops.Spec.ClusterRef.In(ops.Namespace).Namespace
+}
+
+// IsGroupRestore reports an operation on a whole group backup, named by id or
+// by the StorageGroupBackup that produced it, rather than on one StorageBackup. It is
+// decided by the spec alone, so every step branches the same way from the
+// operation's first pass.
+func (ops *StorageBackupOps) IsGroupRestore() bool {
+	return ops.Spec.GroupBackupID != "" || ops.Spec.GroupBackupRef.Name != ""
+}
+
+// GroupBackupKey is the StorageGroupBackup a groupBackupRef names.
+func (ops *StorageBackupOps) GroupBackupKey() types.NamespacedName {
+	return ops.Spec.GroupBackupRef.In(ops.Namespace)
+}
+
+// TargetGroupBackupID is the group backup a group restore restores: the id the
+// spec names, or the one Validating read from the StorageGroupBackup and
+// recorded in status.backupID.
+func (ops *StorageBackupOps) TargetGroupBackupID() string {
+	if ops.Spec.GroupBackupID != "" {
+		return ops.Spec.GroupBackupID
+	}
+	return ops.Status.BackupID
+}
+
 // StorageBackupOpsStatus is the observed state of one backup operation.
 type StorageBackupOpsStatus struct {
 	// Phase is the operation's own progress.
@@ -188,7 +285,7 @@ type StorageBackupOpsStatus struct {
 	// Step is the position of the running action's state machine. It is
 	// persisted before the side effect that step performs, so a step reported
 	// here is a step that started.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Restoring','AwaitingVolume','Binding']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Restoring','AwaitingVolume','AwaitingVolumes','Binding']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
@@ -203,9 +300,26 @@ type StorageBackupOpsStatus struct {
 
 	// RestoredLvolID is the logical volume the control plane created. It is
 	// written before the claim, so a restarted Binding step knows what it is
-	// binding.
+	// binding. For a group restore it holds the first member's volume; the full
+	// set is tracked per member as the group drive binds them.
 	// +optional
 	RestoredLvolID string `json:"restoredLvolID,omitempty"`
+
+	// RestoredGroupID is the consistency group a group restore formed, written
+	// once the control-plane group restore returns, so the operation says which
+	// group it produced. Empty for a single-backup restore.
+	// +optional
+	RestoredGroupID string `json:"restoredGroupID,omitempty"`
+
+	// RestoredGroupMembers is one entry per restored member volume of a group
+	// restore, written when the control plane accepts the restore and carrying the
+	// claim each is bound to as Binding produces them. It is how a restarted
+	// AwaitingVolumes or Binding step knows which volumes to wait on and which
+	// claims to produce. Empty for a single-backup restore.
+	// +optional
+	// +listType=map
+	// +listMapKey=lvolID
+	RestoredGroupMembers []RestoredGroupMember `json:"restoredGroupMembers,omitempty"`
 
 	// PoolUUID is the backend identifier of spec.restore.targetPool, resolved
 	// once at Validating.
@@ -251,6 +365,7 @@ type StorageBackupOpsStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=sbops
 // +kubebuilder:printcolumn:name="Backup",type=string,JSONPath=".spec.backupRef.name"
+// +kubebuilder:printcolumn:name="GroupBackup",type=string,JSONPath=".spec.groupBackupID",priority=1
 // +kubebuilder:printcolumn:name="Action",type=string,JSONPath=".spec.action"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Step",type=string,JSONPath=".status.step.state"

@@ -18,6 +18,8 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/simplyblock/atlas/crdtypes"
 )
 
 // ControlPlaneSpec holds configuration for the singleton ControlPlane resource
@@ -26,12 +28,11 @@ type ControlPlaneSpec struct {
 	// Image is the container image used for all simplyblock control-plane and
 	// storage-node workloads (e.g., `quay.io/simplyblock-io/simplyblock:26.2.2`).
 	// StorageNodeSet CRs that omit spec.clusterImage inherit this value.
-	// Must reference one of the trusted registries (`quay.io/simplyblock-io`,
-	// `docker.io/simplyblock`, `public.ecr.aws/simply-block`). Digest pinning
+	// Any registry is accepted, mirrors included, as long as the value is a
+	// well-formed reference carrying a tag, a digest, or both. Digest pinning
 	// (@sha256:...) is recommended.
 	// +optional
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
-	Image string `json:"image,omitempty"`
+	Image crdtypes.ImageReference `json:"image,omitempty"`
 }
 
 // ControlPlaneStatus reflects the observed readiness of the simplyblock

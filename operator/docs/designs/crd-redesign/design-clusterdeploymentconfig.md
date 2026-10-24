@@ -2,7 +2,7 @@
 
 **Status:** Implemented, with the exceptions §12 records  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-29 (last updated 2026-09-17)  
+**Date:** 2026-08-29 (last updated 2026-10-24)  
 **Target Release:** simplyblock 26.4  
 **Test Plan:** [`tests/test-plan-clusterdeploymentconfig.md`](../../tests/test-plan-clusterdeploymentconfig.md)  
 **Example:** [`assets/example-cluster-config.yaml`](assets/example-cluster-config.yaml)  
@@ -218,8 +218,9 @@ Each slot is an image and a pull policy, and either may be stated without the
 other: an override of the image keeps the default policy, and a pin of the policy
 keeps the default image. A slot the document does not state is written nowhere, so
 the field it would have filled keeps its own default rather than being overridden
-with an empty string. Every image is held to the trusted-registry set the rest of
-this API holds them to.
+with an empty string. Every image is held to the image-reference format the rest
+of this API holds them to, and to no particular registry, so a mirror in an
+air-gapped installation is accepted.
 
 `images.nodeAgent` is spent only where the document creates the cluster. A document
 naming an existing one in `spec.clusterRef` adds nodes to a DaemonSet already
@@ -270,6 +271,17 @@ is read, which [`design-storagenode.md`](design-storagenode.md) §5.1 carries as
 `enableKubeletConfiguration` and `enableCpuTopology` on the cluster, and the
 `openshift` block whose presence states the distribution. Naming `OpenShift` once decides all three, and `CreatingNodes` stamps
 them onto every `StorageNode` it creates (§4.2).
+
+**A Vanilla document states the two flags itself.** `Vanilla` names no
+distribution, so it says nothing about where its workers keep the kubelet
+configuration or whether they support topology-aware CPU assignment.
+`spec.cluster.enableKubeletConfiguration` and `spec.cluster.enableCpuTopology`
+replace what the environment would decide, and the schema takes them only when
+`spec.environment` is `Vanilla`: every other environment has a reason for its
+answer, such as a managed service rebuilding the kubelet configuration with every
+node, and overriding that answer gives the fleet a configuration it cannot run. Left unset
+on a Vanilla document, they resolve as before: the kubelet configured, CPU
+topology off.
 
 **`spec.hostOS` is the other half of the same question, and it is a separate
 field because it has a separate answer.** The distribution decides what
@@ -1225,6 +1237,7 @@ from review history. §4.2 is where the answer went: the table below is what
 | `OpenShift`                 | Applied               | Read         | Yes       |
 | `Vanilla`, `Rancher`, `K3s` | Applied               | Unset        | No        |
 | `Talos`                     | Not applied           | Unset        | No        |
+| `EKS`, `GKE`, `AKS`, `OKE`  | Not applied           | Unset        | No        |
 
 `Talos` is the row the shorthand exists for: it has no writable kubelet
 configuration and no package manager, so a node applies neither, and a deployment
@@ -1235,6 +1248,13 @@ deployment this product has shipped configures it. `ubuntuHost` is not in the
 table: it describes the worker's host OS rather than the distribution running on
 it, so it is `spec.hostOS`'s to decide (§3.1), which a discovery run fills in
 from what the probes read.
+
+The managed services (`EKS`, `GKE`, `AKS`, and `OKE`) do not apply the kubelet
+configuration because the provider owns it. The provider rebuilds the node image
+and its kubelet configuration whenever it replaces a node, so an edit made by a
+storage node is gone on the next node of the pool. The storage node also edits
+`/var/lib/kubelet/config.yaml`, and the node images of EKS, GKE, and AKS keep
+their kubelet configuration elsewhere, so the edit fails on the first node.
 
 ---
 
@@ -1335,7 +1355,7 @@ const (
 // KubernetesEnvironment is the distribution a deployment targets. The values are
 // the distributions' own names, which is the exception design-crd-model.md §7.8
 // carries for a word this group did not invent.
-// +kubebuilder:validation:Enum=Vanilla;OpenShift;Rancher;K3s;Talos
+// +kubebuilder:validation:Enum=Vanilla;OpenShift;Rancher;K3s;Talos;EKS;GKE;AKS;OKE
 type KubernetesEnvironment string
 
 // ClusterPortsSpec is where a cluster's storage nodes listen.
@@ -1821,9 +1841,8 @@ type ImageSpec struct {
 	// Image is the repository and tag, optionally digest-pinned. An empty value
 	// is not written downstream, so the field it would fill keeps its own
 	// default rather than being overridden with nothing.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
-	Image string `json:"image,omitempty"`
+	Image crdtypes.ImageReference `json:"image,omitempty"`
 
 	// ImagePullPolicy is when that image is pulled, and defaults to Always
 	// because every image this product ships by default is a moving tag.

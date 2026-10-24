@@ -68,6 +68,12 @@ var ErrClusterNotFound = errors.New("storage cluster not found")
 // matching StorageCluster exists but its Status.UUID has not been populated yet.
 var ErrClusterUUIDNotReady = errors.New("storage cluster UUID not yet populated")
 
+// ErrAggregateCluster is returned by cluster-lookup helpers when the named
+// StorageCluster is a supercluster. A supercluster has no backend cluster: its
+// status.uuid is an identifier the control plane does not know, so a caller
+// that needs a backend cluster has to resolve one of the members instead.
+var ErrAggregateCluster = errors.New("storage cluster is a supercluster, which has no backend cluster")
+
 func ResolvePoolUUID(
 	ctx context.Context,
 	c client.Client,
@@ -118,6 +124,9 @@ func ResolveClusterUUID(
 		if cluster.Name != clusterName {
 			continue
 		}
+		if cluster.Spec.Supercluster != nil {
+			return "", fmt.Errorf("%w: cluster %q in namespace %q", ErrAggregateCluster, clusterName, namespace)
+		}
 		if cluster.Status.UUID == "" {
 			return "", fmt.Errorf("%w: cluster %q in namespace %q", ErrClusterUUIDNotReady, clusterName, namespace)
 		}
@@ -138,9 +147,14 @@ func ResolveClusterIdentifier(ctx context.Context, k8sClient client.Client, name
 			return "", fmt.Errorf("failed to validate cluster UUID %q in namespace %q: %w", cluster, namespace, err)
 		}
 		for i := range list.Items {
-			if list.Items[i].Status.UUID == cluster {
-				return cluster, nil
+			if list.Items[i].Status.UUID != cluster {
+				continue
 			}
+			if list.Items[i].Spec.Supercluster != nil {
+				return "", fmt.Errorf("%w: cluster %q in namespace %q",
+					ErrAggregateCluster, list.Items[i].Name, namespace)
+			}
+			return cluster, nil
 		}
 		return "", fmt.Errorf("cluster UUID %q not found in namespace %q", cluster, namespace)
 	}
@@ -272,7 +286,7 @@ var rebalancingTaskTypes = map[string]bool{
 // It asks twice, because the authoritative answer is not always there. The
 // control plane knows — it refuses the migration with a 400 saying the cluster
 // is rebalancing — but it does not always say so in the status it reports, and
-// a cluster running two node_add jobs has been seen reporting "active". So the
+// a cluster running two node_add jobs has been seen reporting `active`. So the
 // status is read first and the mirrored task list second, and the second is
 // what makes this usable before the first is fixed.
 //

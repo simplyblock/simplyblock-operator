@@ -134,7 +134,7 @@ func capturedHost(path, name, address string, memory statedMemory) nodeprobe.Rep
 		// Linux-only, so a fixture that read would say "this is darwin" or not,
 		// depending on who generated it. Blank is what these disks held: the
 		// fleet was captured on fresh machines before a cluster took them.
-		Prober: blockdev.NewProberWithOpener(blankDevice),
+		Prober: blockdev.NewProberWithOpener(capturedDevice(root)),
 		// And whether the kernel would hand the device over is stated the same
 		// way, for the same two reasons: there is no kernel holding these disks
 		// here, and the real question is Linux-only. Free is what they were.
@@ -178,13 +178,34 @@ func capturedHost(path, name, address string, memory statedMemory) nodeprobe.Rep
 	for i, sentence := range report.Unreadable {
 		report.Unreadable[i] = strings.ReplaceAll(sentence, hostRoot, nodeprobe.HostRootMount)
 	}
+	// A device that could not be read names the path it was opened at, which
+	// was inside the temporary tree as well.
+	for i := range report.Devices {
+		for j := range report.Devices[i].Rejections {
+			rejection := &report.Devices[i].Rejections[j]
+			rejection.Detail = strings.ReplaceAll(rejection.Detail, devRoot, blockdev.DefaultDevRoot)
+		}
+	}
 	return report
 }
 
-// blankDevice opens a device that reads as zeros, which is a blank disk. See
-// the Prober above.
-func blankDevice(context.Context, blockdev.Device) (blockdev.Reader, error) {
-	return zeroReader{}, nil
+// capturedDevice opens a device of the transcript at root: a whole disk reads
+// as zeros, which is a blank disk (see the Prober above), and a partition does
+// not open at all.
+//
+// The partitions are the boot disk's, and blank is not what they held: the
+// captured machines booted from them. A transcript carries no partition
+// contents, so the honest reading is that none was taken, for the reason the
+// mount table below is left empty rather than invented. The disk itself is
+// still refused for its partition table, and each partition is refused as
+// unreadable rather than proposed as free.
+func capturedDevice(root string) blockdev.Opener {
+	return func(_ context.Context, dev blockdev.Device) (blockdev.Reader, error) {
+		if _, err := os.Stat(filepath.Join(root, "class", "block", dev.Name, "partition")); err == nil {
+			return nil, fmt.Errorf("the transcript carries no contents for partition %s", dev.Name)
+		}
+		return zeroReader{}, nil
+	}
 }
 
 // zeroReader answers every read with zeros and never fails.

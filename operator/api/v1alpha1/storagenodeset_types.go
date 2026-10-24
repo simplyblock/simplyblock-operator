@@ -19,6 +19,8 @@ package v1alpha1
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/simplyblock/atlas/crdtypes"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
@@ -41,19 +43,22 @@ type StorageNodeSetSpec struct {
 	ClusterName string `json:"clusterName"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Image"
 	// ClusterImage is the container image used for storage-node workloads.
-	// Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
-	ClusterImage string `json:"clusterImage,omitempty"`
+	// Any registry is accepted, mirrors included, as long as the value is a
+	// well-formed reference carrying a tag, a digest, or both. Digest pinning
+	// (@sha256:...) is recommended.
+	ClusterImage crdtypes.ImageReference `json:"clusterImage,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="SPDK Image"
 	// SpdkImage is the SPDK image reference used by node services.
-	// Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
-	SpdkImage string `json:"spdkImage,omitempty"`
+	// Any registry is accepted, mirrors included, as long as the value is a
+	// well-formed reference carrying a tag, a digest, or both. Digest pinning
+	// (@sha256:...) is recommended.
+	SpdkImage crdtypes.ImageReference `json:"spdkImage,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="SPDK Proxy Image"
 	// SpdkProxyImage is the SPDK proxy image reference used by node services.
-	// Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
-	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
+	// Any registry is accepted, mirrors included, as long as the value is a
+	// well-formed reference carrying a tag, a digest, or both. Digest pinning
+	// (@sha256:...) is recommended.
+	SpdkProxyImage crdtypes.ImageReference `json:"spdkProxyImage,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Management Interface"
 	// MgmtIfname is the management interface name used by storage nodes.
 	// +k8s:immutable

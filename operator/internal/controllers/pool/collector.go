@@ -158,8 +158,12 @@ func (c *Collector) collect(ctx context.Context, log logr.Logger) error {
 		poolCapacityBytes.WithLabelValues(cluster, name).Set(float64(parseSize(limitCapacity(p))))
 		poolStorageClassesCount.WithLabelValues(cluster, name).
 			Set(float64(len(p.Status.StorageClassNames)))
-		poolBoundVolumesCount.WithLabelValues(cluster, name).
-			Set(float64(bound[p.Status.UUID] + bound[p.Name]))
+		backends := c.backendPools(ctx, p)
+		boundCount := bound[p.Name]
+		for _, backend := range backends {
+			boundCount += bound[backend.pool]
+		}
+		poolBoundVolumesCount.WithLabelValues(cluster, name).Set(float64(boundCount))
 		for _, phase := range poolPhases {
 			value := 0.0
 			if p.Status.Phase == phase {
@@ -167,12 +171,26 @@ func (c *Collector) collect(ctx context.Context, log logr.Logger) error {
 			}
 			poolPhaseState.WithLabelValues(cluster, name, string(phase)).Set(value)
 		}
-		if count, ok := volumeCounts[p.Status.UUID]; ok {
-			poolVolumesCount.WithLabelValues(cluster, name).Set(float64(count))
+		volumes, counted := 0, false
+		for _, backend := range backends {
+			if count, ok := volumeCounts[backend.pool]; ok {
+				volumes, counted = volumes+count, true
+			}
+		}
+		if counted {
+			poolVolumesCount.WithLabelValues(cluster, name).Set(float64(volumes))
 		}
 
-		sample, ok := samples.forPool(ctx, c.clusterUUID(ctx, p), p.Status.UUID)
-		if !ok {
+		var sample prometheus.Capacity
+		sampled := false
+		for _, backend := range backends {
+			if s, ok := samples.forPool(ctx, backend.cluster, backend.pool); ok {
+				sample.Used += s.Used
+				sample.Provisioned += s.Provisioned
+				sampled = true
+			}
+		}
+		if !sampled {
 			continue
 		}
 		poolUsedBytes.WithLabelValues(cluster, name).Set(float64(sample.Used))
@@ -220,6 +238,32 @@ func (c *Collector) reportExhaustion(
 		}
 	}
 	c.exhausted[key] = full
+}
+
+// backendPool is one backend pool of a pool: the cluster it is in and its UUID.
+type backendPool struct {
+	cluster, pool string
+}
+
+// backendPools are the pool's backend pools: its own, or for a pool of a
+// supercluster, the one in each member, so the pool is reported as the sum of
+// what they hold.
+func (c *Collector) backendPools(ctx context.Context, p *simplyblockv1alpha2.StoragePool) []backendPool {
+	if p.Status.UUID != "" {
+		return []backendPool{{cluster: c.clusterUUID(ctx, p), pool: p.Status.UUID}}
+	}
+	backends := make([]backendPool, 0, len(p.Status.Members))
+	for _, row := range p.Status.Members {
+		if row.UUID == "" {
+			continue
+		}
+		var member simplyblockv1alpha2.StorageCluster
+		if err := c.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: row.Cluster}, &member); err != nil {
+			continue
+		}
+		backends = append(backends, backendPool{cluster: member.Status.UUID, pool: row.UUID})
+	}
+	return backends
 }
 
 // clusterUUID resolves the pool's cluster to the id the exporter labels its

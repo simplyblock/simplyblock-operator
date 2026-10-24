@@ -1,0 +1,14 @@
+# The remediation template a NodeHealthCheck names to remediate storage-fenced
+# nodes of a two-node cluster with spec.arbitration.hostFencing on. See
+# operator/docs/runbooks/two-node-storage-fencing.md for the NodeHealthCheck that uses it.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageFenceRemediationTemplate
+metadata:
+  name: storage-fence
+  namespace: simplyblock
+spec:
+  template:
+    spec:
+      # Refuse the out-of-service taint while a volume of another CSI driver is
+      # attached to the node: the taint force-detaches it, and it is not fenced.
+      allowForeignVolumes: false

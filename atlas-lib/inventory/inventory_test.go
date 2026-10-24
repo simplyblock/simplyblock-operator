@@ -25,7 +25,9 @@ import (
 // presents, which is what Collect walks.
 func wholeHost() fixture {
 	whole := fixture{files: map[string]string{}, links: map[string]string{}}
-	for _, part := range []fixture{smtHost(), hugePageHost(), netHost(), diskHost(), osReleaseFixture()} {
+	for _, part := range []fixture{smtHost(), hugePageHost(), netHost(), diskHost(), osReleaseFixture(), kernelHost(map[string]string{
+		"module/nvme_core/parameters/multipath": "Y",
+	})} {
 		maps.Copy(whole.files, part.files)
 		maps.Copy(whole.links, part.links)
 		whole.dirs = append(whole.dirs, part.dirs...)
@@ -67,6 +69,12 @@ func TestCollectFillsEveryReading(t *testing.T) {
 	// say why they are not candidates.
 	if len(inv.Devices) != 4 {
 		t.Errorf("read %d block devices, want 4: %+v", len(inv.Devices), inv.Devices)
+	}
+	if inv.HostOS.Kernel.Release != kernelRelease {
+		t.Errorf("read the kernel release as %q, want %q", inv.HostOS.Kernel.Release, kernelRelease)
+	}
+	if inv.HostOS.Kernel.NVMeMultipath.State != MultipathEnabled {
+		t.Errorf("read native NVMe multipath as %q, want %q", inv.HostOS.Kernel.NVMeMultipath.State, MultipathEnabled)
 	}
 }
 

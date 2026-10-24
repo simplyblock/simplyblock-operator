@@ -27,6 +27,7 @@ import (
 
 	"github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/link"
+	"github.com/simplyblock/atlas/placement/placementrpc"
 	atlasprom "github.com/simplyblock/atlas/prometheus"
 
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
@@ -72,6 +73,7 @@ import (
 	twonodecp "github.com/simplyblock/simplyblock-operator/internal/controllers/twonode/cpadapter"
 	volumecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/volume"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
+	"github.com/simplyblock/simplyblock-operator/internal/placement"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -213,11 +215,13 @@ func main() {
 			"be carried across.")
 	var csiLinkEnabled bool
 	var csiLinkAddr, csiLinkCertPath, csiLinkCertName, csiLinkCertKey, csiLinkAudience string
+	var csiLinkClientCAFile string
 	flag.BoolVar(&csiLinkEnabled, "csi-link", false, "Serve the CSI link.")
 	flag.StringVar(&csiLinkAddr, "csi-link-bind-address", ":9500",
 		"The address the CSI link endpoint binds to.")
 	flag.StringVar(&csiLinkCertPath, "csi-link-cert-path", "",
-		"The directory that contains the CSI link serving certificate. Unset serves the link "+
+		"The directory that contains the CSI link serving certificate. Set, the link serves TLS "+
+			"only, waiting for the certificate if it is not there yet. Unset serves the link "+
 			"without TLS, and peers' bearer tokens then travel in the clear.")
 	flag.StringVar(&csiLinkCertName, "csi-link-cert-name", "tls.crt",
 		"The name of the CSI link serving certificate file.")
@@ -225,6 +229,9 @@ func main() {
 		"The name of the CSI link serving key file.")
 	flag.StringVar(&csiLinkAudience, "csi-link-audience", "simplyblock-csi-link",
 		"The audience the peers' projected ServiceAccount tokens must carry.")
+	flag.StringVar(&csiLinkClientCAFile, "csi-link-client-ca-file", "",
+		"The CA bundle that verifies the CSI peers' client certificates. Set, the link requires "+
+			"mutual TLS, admitting only the CSI node and controller client certificates.")
 
 	var enableMetricsAPI bool
 	var metricsAPIPort int
@@ -386,8 +393,22 @@ func main() {
 	// link.ErrNoSession as a requeue rather than a failure.
 	//
 	// Off by default, on with --csi-link. TLS when a certificate is
-	// configured, plaintext when none is.
+	// configured, plaintext when none is, and mutual TLS when a client CA
+	// bundle is configured as well.
 	var csiPeers *link.Registry
+	// Placement for superclusters is served on the link (design-superclusters.md
+	// §7.2): the CSI controller asks which member a new volume goes to. Its
+	// control-plane lookups and capacity source are set below, beside the
+	// supercluster reconciler that feeds it readings.
+	placementService := &placement.Service{
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorder("placement"),
+	}
+	placementServer, err := placementrpc.NewServer(placementService)
+	if err != nil {
+		setupLog.Error(err, "unable to build the placement service")
+		os.Exit(1)
+	}
 	if csiLinkEnabled {
 		var certFile, keyFile string
 		if csiLinkCertPath != "" {
@@ -395,15 +416,21 @@ func main() {
 			keyFile = filepath.Join(csiLinkCertPath, csiLinkCertKey)
 		}
 		var err error
+		// ClientNames are the client certificates the chart issues to the two
+		// plugins. The metadata server presents the node plugin's.
 		csiPeers, err = csilink.Setup(mgr, csilink.Config{
 			BindAddress:              csiLinkAddr,
 			CertFile:                 certFile,
 			KeyFile:                  keyFile,
+			ClientCAFile:             csiLinkClientCAFile,
+			ClientNames:              []string{"simplyblock-csi-node", "simplyblock-csi-controller"},
 			Namespace:                operatorNamespace,
 			Audiences:                []string{csiLinkAudience},
 			NodeServiceAccount:       "simplyblock-csi-node-sa",
 			ControllerServiceAccount: "simplyblock-csi-controller-sa",
 			MDSServiceAccount:        "simplyblock-csi-mds-sa",
+			Register:                 placementServer.Register,
+			Capabilities:             placementrpc.Capabilities(),
 		})
 		if err != nil {
 			setupLog.Error(err, "unable to set up the CSI link")
@@ -452,6 +479,18 @@ func main() {
 		setupLog.Error(err, "unable to schedule the stale self-budget cleanup")
 		os.Exit(1)
 	}
+
+	// The controllers start once the operator's own admission webhooks can be
+	// reached (webhook_gate.go). Everything registered through ctrlMgr waits for
+	// that. The collectors and the stream subscriptions write no object a webhook
+	// admits, so they start with the manager.
+	webhookGate := newWebhookGate(mgr.GetAPIReader(), operatorNamespace, utils.WebhookServiceName,
+		ctrl.Log.WithName("webhook-gate"))
+	if err := mgr.Add(webhookGate); err != nil {
+		setupLog.Error(err, "unable to add the webhook gate")
+		os.Exit(1)
+	}
+	ctrlMgr := gatedManager{Manager: mgr, gate: webhookGate.open}
 
 	cpSubscriptions := cpinformer.NewSubscriptionManager(streamCfg, ctrl.Log.WithName("cpinformer"), cpinformer.LeaderOnly)
 	deviceSubscription := subscriptions.NewDeviceSubscription()
@@ -502,7 +541,7 @@ func main() {
 		nfsExportReconciler.Assembler = controller.NewLinkAssembler(csiPeers)
 		nfsExportReconciler.Flows = csilink.NewFlows(csilink.RegistryNodePeers(csiPeers))
 	}
-	if err := nfsExportReconciler.SetupWithManager(mgr); err != nil {
+	if err := nfsExportReconciler.SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NFSExport")
 		os.Exit(1)
 	}
@@ -511,7 +550,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Devices:  deviceSubscription,
 		Recorder: mgr.GetEventRecorder("storagedevice-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageDevice")
 		os.Exit(1)
 	}
@@ -604,7 +643,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("controlplane-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlane")
 		os.Exit(1)
 	}
@@ -612,7 +651,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("controlplaneops-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlaneOps")
 		os.Exit(1)
 	}
@@ -636,7 +675,7 @@ func main() {
 			&backupSubscription.ClusterRegistry,
 			&backupPolicySubscription.ClusterRegistry,
 		},
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageCluster")
 		os.Exit(1)
 	}
@@ -649,7 +688,7 @@ func main() {
 		TLSProvider:      tlsProvider,
 		TLSMutualEnabled: tlsMutualEnabled,
 		Workload:         storageNodeWorkload,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeWorkload")
 		os.Exit(1)
 	}
@@ -659,7 +698,7 @@ func main() {
 		Recorder:         mgr.GetEventRecorder("storagepool-controller"),
 		VolumeScopes:     volumeScopes,
 		EndpointResolver: controlPlaneEndpoint,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StoragePool")
 		os.Exit(1)
 	}
@@ -667,14 +706,14 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagepoolops-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StoragePoolOps")
 		os.Exit(1)
 	}
 	if err := (&controller.TaskReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Task")
 		os.Exit(1)
 	}
@@ -696,7 +735,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Backups:  backupSubscription,
 		Recorder: mgr.GetEventRecorder("storagebackup-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackup")
 		os.Exit(1)
 	}
@@ -706,8 +745,18 @@ func main() {
 		Recorder: mgr.GetEventRecorder("storagebackuprequest-controller"),
 		API:      backupAPI,
 		Backups:  backupSubscription,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupRequest")
+		os.Exit(1)
+	}
+	if err := (&backupcontrollers.StorageGroupBackupReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagegroupbackup-controller"),
+		API:      backupAPI,
+		Backups:  backupSubscription,
+	}).SetupWithManager(ctrlMgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageGroupBackup")
 		os.Exit(1)
 	}
 	if err := (&backupcontrollers.StorageBackupPolicyReconciler{
@@ -715,7 +764,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagebackuppolicy-controller"),
 		API:      backupAPI,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupPolicy")
 		os.Exit(1)
 	}
@@ -731,11 +780,12 @@ func main() {
 			"spec.backupRef and spec.clusterRef. Delete them and restart the operator",
 			"operations", legacyOps)
 	} else if err := (&backupcontrollers.StorageBackupOpsReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("storagebackupops-controller"),
-		API:      backupAPI,
-	}).SetupWithManager(mgr); err != nil {
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorder("storagebackupops-controller"),
+		API:       backupAPI,
+		Placement: placementService,
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupOps")
 		os.Exit(1)
 	}
@@ -743,7 +793,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("backuprestore-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupRestore")
 		os.Exit(1)
 	}
@@ -751,7 +801,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("backuppolicy-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupPolicy")
 		os.Exit(1)
 	}
@@ -759,7 +809,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("backupimport-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupImport")
 		os.Exit(1)
 	}
@@ -776,7 +826,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("persistentvolumeops-controller"),
 		API:      backupAPI,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeOps")
 		os.Exit(1)
 	}
@@ -790,7 +840,7 @@ func main() {
 			Client:   mgr.GetClient(),
 			Scheme:   mgr.GetScheme(),
 			Recorder: mgr.GetEventRecorder("volumemigration-controller"),
-		}).SetupWithManager(mgr); err != nil {
+		}).SetupWithManager(ctrlMgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "VolumeMigration")
 			os.Exit(1)
 		}
@@ -801,7 +851,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("pinnedvolume-controller"),
 		Mover:    volumeMover,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeClaim")
 		os.Exit(1)
 	}
@@ -817,7 +867,7 @@ func main() {
 		DeviceScopes: deviceScopes,
 		Capacity:     nodeCapacity,
 		Workload:     storageNodeWorkload,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
 	}
@@ -830,7 +880,7 @@ func main() {
 		Clusters: clusterSubscription,
 		Workload: storageNodeWorkload,
 		Mover:    volumeMover,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeOps")
 		os.Exit(1)
 	}
@@ -848,22 +898,12 @@ func main() {
 	// image is read from the environment rather than from the running pod,
 	// because a pod may name its image by a tag the registry has since moved and
 	// what a Job needs is the reference the operator was deployed with.
-	// A fresh install raises one discovery run by itself, so an administrator
-	// finds a draft of what the fleet has rather than an empty namespace. It is
-	// declined the moment anything already exists (design-clusterdeploymentconfig.md §8).
-	if err := (&deployment.InitialDiscovery{
-		Client:    mgr.GetClient(),
-		Namespace: operatorNamespace,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to add the initial discovery check")
-		os.Exit(1)
-	}
 	if err := (&deployment.ClusterDeploymentConfigReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		Recorder:  mgr.GetEventRecorder("clusterdeploymentconfig-controller"),
 		Namespace: operatorNamespace,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ClusterDeploymentConfig")
 		os.Exit(1)
 	}
@@ -873,8 +913,7 @@ func main() {
 		Recorder:   mgr.GetEventRecorder("operatorops-controller"),
 		Discovery:  operatorOpsDiscovery,
 		ProbeImage: os.Getenv(deployment.NodeProbeImageEnv),
-		Namespace:  operatorNamespace,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OperatorOps")
 		os.Exit(1)
 	}
@@ -893,7 +932,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagedeviceops-controller"),
 		API:      backupAPI,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageDeviceOps")
 		os.Exit(1)
 	}
@@ -902,7 +941,7 @@ func main() {
 		Scheme:    mgr.GetScheme(),
 		Recorder:  mgr.GetEventRecorder("simplyblockdriver-controller"),
 		Snapshots: &driver.DiscoveredSnapshotAPI{Discovery: operatorOpsDiscovery},
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SimplyblockDriver")
 		os.Exit(1)
 	}
@@ -914,8 +953,37 @@ func main() {
 		Clusters: clusterSubscription,
 		Nodes:    nodeSubscription,
 		Tasks:    taskSubscription,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageClusterOps")
+		os.Exit(1)
+	}
+	// A member's capacity exists only in the metrics the control plane exports
+	// (design-superclusters.md §16 Q13). An endpoint that cannot be reached
+	// leaves the supercluster's capacity unreported and the rest of its status
+	// correct.
+	var memberCapacity clustercontroller.MemberCapacitySource
+	if provider, err := atlasprom.New(prometheusURL); err != nil {
+		setupLog.Error(err, "supercluster capacity will be absent", "prometheusURL", prometheusURL)
+	} else {
+		memberCapacity = provider
+		placementService.Capacity = provider
+	}
+	placementLookupConfig, err := webapi.ControlPlaneConfig()
+	if err != nil {
+		setupLog.Error(err, "unable to resolve the control plane placement asks")
+		os.Exit(1)
+	}
+	placementService.Lookup = placement.ControlPlaneLookup{Reader: mgr.GetClient(), Config: placementLookupConfig}
+	if err := (&clustercontroller.SuperclusterReconciler{
+		Client:      mgr.GetClient(),
+		Scheme:      mgr.GetScheme(),
+		Recorder:    mgr.GetEventRecorder("supercluster-controller"),
+		Capacity:    memberCapacity,
+		Readings:    placementService,
+		TLSEnabled:  tlsEnabled,
+		TLSProvider: tlsProvider,
+	}).SetupWithManager(ctrlMgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Supercluster")
 		os.Exit(1)
 	}
 	if err := (&controller.VolumeRebalancerReconciler{
@@ -924,7 +992,7 @@ func main() {
 		Recorder:          mgr.GetEventRecorder("volumerebalancer-controller"),
 		LatencyPercentile: latencyPercentile,
 		Mover:             volumeMover,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeRebalancer")
 		os.Exit(1)
 	}
@@ -941,7 +1009,7 @@ func main() {
 		// Resolves each storage node's data-network IP (the NICs endpoint) for the fio baseline;
 		// independent of the provisioner, so it is set for both prod and test paths.
 		APIClient: webapi.NewClient(),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeLatency")
 		os.Exit(1)
 	}
@@ -949,14 +1017,14 @@ func main() {
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
 		EndpointResolver: controlPlaneEndpoint,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationPolicy")
 		os.Exit(1)
 	}
 	if err := (&controller.PVCAnnotationWatcher{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PVCAnnotationWatcher")
 		os.Exit(1)
 	}
@@ -964,7 +1032,7 @@ func main() {
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
 		EndpointResolver: controlPlaneEndpoint,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationPair")
 		os.Exit(1)
 	}
@@ -974,15 +1042,25 @@ func main() {
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		API:    &twonodecp.Adapter{Reader: mgr.GetClient(), EndpointResolver: controlPlaneEndpoint},
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TwoNodeArbitration")
+		os.Exit(1)
+	}
+	// NodeHealthCheck's external remediation for a storage-fenced node (sbcli
+	// docs/design/two-node-kubernetes-fencing.md §1): the out-of-service taint.
+	if err := (&twonode.RemediationReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		API:    &twonodecp.Adapter{Reader: mgr.GetClient(), EndpointResolver: controlPlaneEndpoint},
+	}).SetupWithManager(ctrlMgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageFenceRemediation")
 		os.Exit(1)
 	}
 	if err := (&controller.ReplicationSlotReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("replicationslot-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationSlot")
 		os.Exit(1)
 	}
@@ -990,7 +1068,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("replicationops-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationOps")
 		os.Exit(1)
 	}
@@ -998,7 +1076,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("volumegroupsnapshotops-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeGroupSnapshotOps")
 		os.Exit(1)
 	}
@@ -1021,7 +1099,7 @@ func main() {
 			Client:   mgr.GetClient(),
 			Scheme:   mgr.GetScheme(),
 			Recorder: mgr.GetEventRecorder("testfailover-controller"),
-		}).SetupWithManager(mgr); err != nil {
+		}).SetupWithManager(ctrlMgr); err != nil {
 			return fmt.Errorf("controller TestFailover: %w", err)
 		}
 		// A managed site's storage deployment is requested from the hub through
@@ -1030,7 +1108,7 @@ func main() {
 			Client:   mgr.GetClient(),
 			Scheme:   mgr.GetScheme(),
 			Recorder: mgr.GetEventRecorder("storagesitedeployment-controller"),
-		}).SetupWithManager(mgr); err != nil {
+		}).SetupWithManager(ctrlMgr); err != nil {
 			return fmt.Errorf("controller StorageSiteDeployment: %w", err)
 		}
 		return nil
@@ -1208,7 +1286,12 @@ func main() {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+	// Ready only while the admission webhooks serve: readiness is what puts the
+	// pod into the webhook Service's endpoints, and the controllers wait on those.
+	webhookServing := webhookReadyCheck(webhookReady, func() healthz.Checker {
+		return mgr.GetWebhookServer().StartedChecker()
+	})
+	if err := mgr.AddReadyzCheck("readyz", webhookServing); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}

@@ -27,6 +27,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -92,12 +93,12 @@ func newUncreatedCluster(
 
 func TestACreatedClusterReachesSteadyState(t *testing.T) {
 	api := &fakeControlPlane{
-		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
+		create: func(atlascp.CreateClusterParams) (atlascp.Cluster, error) {
 			reading := activeCluster()
 			reading.Secret = testClusterSecret
 			return reading, nil
 		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{}, newUncreatedCluster())
 
@@ -140,12 +141,12 @@ func TestCSICredentialsCarryTheControlPlanesResolvedEndpoint(t *testing.T) {
 	const hubEndpoint = "http://simplyblock-webappapi.hub.example:31500"
 	api := &fakeControlPlane{
 		endpoint: hubEndpoint,
-		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
+		create: func(atlascp.CreateClusterParams) (atlascp.Cluster, error) {
 			reading := activeCluster()
 			reading.Secret = testClusterSecret
 			return reading, nil
 		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{}, newUncreatedCluster())
 	reconcileCluster(t, r, 6)
@@ -182,15 +183,15 @@ func TestCreationParamsMapDeviceClassToTheWireDeviceMode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var gotParams utils.ClusterAddParams
+			var gotParams atlascp.CreateClusterParams
 			api := &fakeControlPlane{
-				create: func(params utils.ClusterAddParams) (webapi.ClusterResponse, error) {
+				create: func(params atlascp.CreateClusterParams) (atlascp.Cluster, error) {
 					gotParams = params
 					reading := activeCluster()
 					reading.Secret = testClusterSecret
 					return reading, nil
 				},
-				cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+				cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 			}
 			cluster := newUncreatedCluster(func(c *simplyblockv1alpha2.StorageCluster) {
 				c.Spec.DeviceClass = tt.class
@@ -211,14 +212,14 @@ func TestCreationParamsMapDeviceClassToTheWireDeviceMode(t *testing.T) {
 // rather than posting a second cluster.
 func TestAStaleReconcilerCannotClaimTheCreationTwice(t *testing.T) {
 	api := &fakeControlPlane{
-		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
+		create: func(atlascp.CreateClusterParams) (atlascp.Cluster, error) {
 			// A creation response carries the secret the control plane just
 			// minted for the cluster. Only the list response omits it.
 			reading := activeCluster()
 			reading.Secret = testClusterSecret
 			return reading, nil
 		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{}, newUncreatedCluster())
 	ctx := context.Background()
@@ -236,9 +237,13 @@ func TestAStaleReconcilerCannotClaimTheCreationTwice(t *testing.T) {
 	}
 
 	// The stale reconciler's claim is refused as a back-off rather than as an
-	// error, which is why claim returns only a result: a 409 means somebody
-	// else owns the creation, and that is an outcome rather than a failure.
-	if result := r.claim(ctx, &stale); result.RequeueAfter == 0 {
+	// error: a 409 means somebody else owns the creation, and that is an
+	// outcome rather than a failure.
+	result, err := r.claim(ctx, &stale)
+	if err != nil {
+		t.Fatalf("a refused claim returned an error: %v", err)
+	}
+	if result.RequeueAfter == 0 {
 		t.Error("a refused claim did not back off")
 	}
 	if api.createCalls != 0 {
@@ -270,7 +275,7 @@ func TestAControlPlaneThatIsNotReadyHoldsTheCreation(t *testing.T) {
 // Nothing is posted, and the cluster the Secret names is taken over.
 func TestAnUpgradeSecretAdoptsRatherThanCreating(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(id string) (webapi.ClusterResponse, error) {
+		cluster: func(id string) (atlascp.Cluster, error) {
 			if id != testClusterUUID {
 				t.Errorf("the upgrade secret's cluster was not read, %q was", id)
 			}
@@ -307,7 +312,7 @@ func TestAnUpgradeSecretAdoptsRatherThanCreating(t *testing.T) {
 // using the secret the upgrade Secret names.
 func TestAnUpgradeSecretAuthenticatesTheAdoptionReadAsTheAdoptedCluster(t *testing.T) {
 	// Every Cluster() call across the run is checked, not just the last: a
-	// later, correctly-authenticated steady-state read would otherwise
+	// later, correctly authenticated steady-state read would otherwise
 	// overwrite a single captured value and hide a regression in the
 	// adoption read specifically.
 	var calls []struct {
@@ -315,7 +320,7 @@ func TestAnUpgradeSecretAuthenticatesTheAdoptionReadAsTheAdoptedCluster(t *testi
 		ok    bool
 	}
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) {
+		cluster: func(string) (atlascp.Cluster, error) {
 			return activeCluster(), nil
 		},
 		clusterCtx: func(ctx context.Context) {
@@ -361,12 +366,12 @@ func TestStorageClusterSyncAuthenticatesAsTheClusterOnceItsSecretIsKnown(t *test
 		ok    bool
 	}
 	api := &fakeControlPlane{
-		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
+		create: func(atlascp.CreateClusterParams) (atlascp.Cluster, error) {
 			reading := activeCluster()
 			reading.Secret = testClusterSecret
 			return reading, nil
 		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		clusterCtx: func(ctx context.Context) {
 			token, ok := webapi.BearerTokenFromContext(ctx)
 			calls = append(calls, struct {
@@ -401,19 +406,19 @@ func TestStorageClusterSyncAuthenticatesAsTheClusterOnceItsSecretIsKnown(t *test
 // resourceVersions, and a response lost after the backend committed.
 func TestAFailedPostAdoptsAClusterThatAlreadyExists(t *testing.T) {
 	api := &fakeControlPlane{
-		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
-			return webapi.ClusterResponse{}, &ControlPlaneError{
+		create: func(atlascp.CreateClusterParams) (atlascp.Cluster, error) {
+			return atlascp.Cluster{}, &ControlPlaneError{
 				Status: http.StatusConflict, Body: "a cluster of that name exists",
 			}
 		},
-		byName: func(string) (utils.ClusterListEntry, bool, error) {
-			return utils.ClusterListEntry{
-				UUID: testClusterUUID, Secret: testClusterSecret,
+		byName: func(string) (atlascp.Cluster, bool, error) {
+			return atlascp.Cluster{
+				ID: testClusterUUID, Secret: testClusterSecret,
 				Name: testClusterName, Status: utils.ClusterStatusActive,
 				NDCS: 2, NPCS: 1,
 			}, true, nil
 		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	rec := &recorder{}
 	r := newClusterReconciler(t, api, rec, newUncreatedCluster())
@@ -433,8 +438,8 @@ func TestAFailedPostAdoptsAClusterThatAlreadyExists(t *testing.T) {
 // operator's log.
 func TestARefusedCreationCarriesTheControlPlanesAnswer(t *testing.T) {
 	api := &fakeControlPlane{
-		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
-			return webapi.ClusterResponse{}, &ControlPlaneError{
+		create: func(atlascp.CreateClusterParams) (atlascp.Cluster, error) {
+			return atlascp.Cluster{}, &ControlPlaneError{
 				Status: http.StatusBadRequest, Body: "distr_ndcs must be positive",
 			}
 		},
@@ -491,7 +496,7 @@ func TestAMissingBackupSecretHoldsTheCreation(t *testing.T) {
 // in it, newest first, and never more than twenty.
 func TestTheTaskWindowHoldsOnlyWhatIsRunning(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		tasks: func(string) ([]subscriptions.TaskDTO, error) {
 			tasks := []subscriptions.TaskDTO{
 				{ID: "running-1", Type: "balancing_on_restart", Status: "running"},
@@ -532,7 +537,7 @@ func TestTheTaskWindowHoldsOnlyWhatIsRunning(t *testing.T) {
 // what remains of it. The list is a window and the events are the history.
 func TestATaskLeavingTheWindowEmitsAnEvent(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		tasks:   func(string) ([]subscriptions.TaskDTO, error) { return nil, nil },
 	}
 	rec := &recorder{}
@@ -557,7 +562,7 @@ func TestATaskLeavingTheWindowEmitsAnEvent(t *testing.T) {
 // that.
 func TestAFailedTaskReadLeavesTheWindowAlone(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		tasks: func(string) ([]subscriptions.TaskDTO, error) {
 			return nil, errors.New("connection refused")
 		},
@@ -581,7 +586,7 @@ func TestAFailedTaskReadLeavesTheWindowAlone(t *testing.T) {
 // one authoritative number rather than recomputing it.
 func TestTheEffectiveRestartLimitIsClampedToTheFaultTolerance(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	asked := newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
 		c.Spec.MaxConcurrentWorkerRestarts = ptr.To(int32(4))
@@ -603,7 +608,11 @@ func TestTheEffectiveRestartLimitIsClampedToTheFaultTolerance(t *testing.T) {
 // orphaning the cluster behind it.
 func TestARefusedDeleteKeepsTheFinalizer(t *testing.T) {
 	api := &fakeControlPlane{
-		deleteCall: func(string) error { return errors.New("the control plane is unreachable") },
+		deleteCall: func(string) error { return errors.New("the control plane refused") },
+		// The cluster is still there, so the refusal is a refusal.
+		clusters: func() ([]atlascp.Cluster, error) {
+			return []atlascp.Cluster{{ID: testClusterUUID}}, nil
+		},
 	}
 	now := metav1.Now()
 	deleting := newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
@@ -617,6 +626,50 @@ func TestARefusedDeleteKeepsTheFinalizer(t *testing.T) {
 	}
 	if api.deleteCalls != 1 {
 		t.Errorf("the control plane was asked to delete %d times, want 1", api.deleteCalls)
+	}
+}
+
+// A delete that cannot be answered, by a control plane that cannot list its
+// clusters either, keeps the finalizer: nothing says the cluster is gone.
+func TestAnUnreachableControlPlaneKeepsTheFinalizer(t *testing.T) {
+	api := &fakeControlPlane{
+		deleteCall: func(string) error { return errors.New("the control plane is unreachable") },
+		clusters:   func() ([]atlascp.Cluster, error) { return nil, errors.New("unreachable") },
+	}
+	now := metav1.Now()
+	deleting := newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.DeletionTimestamp = &now
+	})
+	r := newClusterReconciler(t, api, &recorder{}, deleting)
+
+	if cluster := reconcileCluster(t, r, 1); len(cluster.Finalizers) == 0 {
+		t.Fatal("the finalizer was removed while nothing said the backend cluster is gone")
+	}
+}
+
+// A delete refused after the cluster is gone releases the object. The forced
+// delete can finish after the client gave up, and the retry, sent as the
+// cluster whose secret went with it, is answered 401: the control plane's own
+// list, read as the operator, is what says the cluster is gone.
+func TestADeleteRefusedForAClusterAlreadyGoneReleasesTheObject(t *testing.T) {
+	api := &fakeControlPlane{
+		deleteCall: func(string) error { return errors.New(`the control plane answered 401: {"detail":"Invalid token"}`) },
+		clusters:   func() ([]atlascp.Cluster, error) { return []atlascp.Cluster{{ID: "another-cluster"}}, nil },
+	}
+	now := metav1.Now()
+	deleting := newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.DeletionTimestamp = &now
+	})
+	r := newClusterReconciler(t, api, &recorder{}, deleting)
+
+	ctx := context.Background()
+	key := types.NamespacedName{Namespace: testNamespace, Name: testClusterName}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var cluster simplyblockv1alpha2.StorageCluster
+	if err := r.Get(ctx, key, &cluster); err == nil && len(cluster.Finalizers) > 0 {
+		t.Errorf("finalizers = %v, want them released for a cluster already gone", cluster.Finalizers)
 	}
 }
 
@@ -666,5 +719,64 @@ func TestDeletingAnUncreatedClusterAsksTheControlPlaneNothing(t *testing.T) {
 	}
 	if api.deleteCalls != 0 {
 		t.Errorf("a cluster that was never created was deleted %d times", api.deleteCalls)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Roles within a supercluster
+// ---------------------------------------------------------------------------
+
+// I-02: every ordinary cluster reports what it is within a supercluster, a
+// member as PlacementGroup and any other as Standalone.
+func TestAnOrdinaryClusterReportsItsRole(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*simplyblockv1alpha2.StorageCluster)
+		want   simplyblockv1alpha2.StorageClusterRole
+	}{
+		{name: "standalone", mutate: func(*simplyblockv1alpha2.StorageCluster) {},
+			want: simplyblockv1alpha2.StorageClusterRoleStandalone},
+		{name: "member", mutate: func(c *simplyblockv1alpha2.StorageCluster) { c.Spec.SuperclusterRef = "prod" },
+			want: simplyblockv1alpha2.StorageClusterRolePlacementGroup},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &fakeControlPlane{
+				cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
+			}
+			r := newClusterReconciler(t, api, &recorder{}, newTestCluster(tc.mutate))
+
+			cluster := reconcileCluster(t, r, 1)
+			if cluster.Status.Role != tc.want {
+				t.Errorf("status.role = %q, want %q", cluster.Status.Role, tc.want)
+			}
+		})
+	}
+}
+
+// A supercluster has no backend cluster, so the reconciler that creates and
+// reads backend clusters leaves it to its own reconciler: no finalizer, no
+// creation claim, and no call to the control plane. The fake answers no call,
+// so reaching it fails the test as well.
+func TestTheClusterReconcilerLeavesASuperclusterAlone(t *testing.T) {
+	supercluster := newUncreatedCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.Finalizers = nil
+		c.Spec = simplyblockv1alpha2.StorageClusterSpec{
+			Supercluster: &simplyblockv1alpha2.SuperclusterSpec{},
+		}
+	})
+	r := newClusterReconciler(t, &fakeControlPlane{
+		ready: func() error {
+			t.Fatal("the control plane was asked whether it is ready to create a supercluster")
+			return nil
+		},
+	}, &recorder{}, supercluster)
+
+	cluster := reconcileCluster(t, r, 3)
+	if len(cluster.Finalizers) != 0 {
+		t.Errorf("finalizers = %v, want none on a supercluster", cluster.Finalizers)
+	}
+	if cluster.Status.Step.State != "" || cluster.Status.Phase != "" {
+		t.Errorf("the creation machine ran on a supercluster: step %q, phase %q",
+			cluster.Status.Step.State, cluster.Status.Phase)
 	}
 }

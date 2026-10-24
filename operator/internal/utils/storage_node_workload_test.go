@@ -9,10 +9,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	atlaskube "github.com/simplyblock/atlas/kube"
 )
 
 func TestStorageNodeSetAPIAddress(t *testing.T) {
-	got := StorageNodeSetAPIAddress("worker-1", "simplyblock")
+	got := StorageNodeSetAPIAddress("worker-1", "simplyblock", atlaskube.ConstantWorkloadNames())
 	want := "worker-1.simplyblock-storage-node-api.simplyblock.svc.cluster.local:5000"
 	if got != want {
 		t.Fatalf("StorageNodeSetAPIAddress = %q, want %q", got, want)
@@ -66,7 +68,7 @@ func TestBuildStorageNodeDaemonSetConfigGeneratorMountsDevAndSys(t *testing.T) {
 }
 
 // TestConfigGeneratorAndMainContainerRunAsRootWithoutSudo is a regression test:
-// 2026-09-29, k3s on Ubuntu 24.04. Both containers ran as the image's default
+// 2026-09-29, K3s on Ubuntu 24.04. Both containers ran as the image's default
 // non-root user and started their command through sudo, which fails its PAM
 // account check in this image ("Authentication service cannot retrieve
 // authentication info"): s-node-api-config-generator exited at once and every

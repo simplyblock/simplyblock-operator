@@ -28,6 +28,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -174,7 +175,11 @@ func (r *ClusterDeploymentConfigReconciler) Reconcile(
 func (r *ClusterDeploymentConfigReconciler) expand(
 	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) (ctrl.Result, error) {
-	machine, err := statemachine.NewFromSnapshot(ctx, expansionGraph(),
+	members, err := AddsMembers(ctx, r.Client, config)
+	if err != nil {
+		return ctrl.Result{RequeueAfter: configRetry}, err
+	}
+	machine, err := statemachine.NewFromSnapshot(ctx, expansionGraph(clustersBuilt(config, members)),
 		statemachine.FromKube[configStep](config.Status.Step))
 	if err != nil {
 		// An unrecognized step is a downgrade, a hand-edited object, or a rename
@@ -219,11 +224,13 @@ func (r *ClusterDeploymentConfigReconciler) expand(
 	}
 
 	if machine.IsTerminal() {
-		// The expansion does not wait for the nodes to come up. It created the
-		// objects and is finished; provisioning them is the node controller's and
-		// is bounded by nodeProvisioningBudget, and a document that stayed Expanding
-		// until a twenty-node fleet was online would be reporting the fleet's
-		// progress rather than its own (§4.2).
+		// The expansion does not wait for the last cluster's nodes to come up. It
+		// created the objects and is finished; provisioning them is the node
+		// controller's and is bounded by nodeProvisioningBudget, and a document that
+		// stayed Expanding until a twenty-node fleet was online would be reporting
+		// the fleet's progress rather than its own (§4.2). A supercluster's earlier
+		// members are waited for in CreatingNodes, because the next member's nodes
+		// are not created until they are online.
 		return ctrl.Result{}, r.succeed(ctx, config)
 	}
 
@@ -391,8 +398,14 @@ func (r *ClusterDeploymentConfigReconciler) succeed(
 		config.Status.ClusterRef, len(config.Status.NodeRefs))
 	r.emit(config, corev1.EventTypeNormal, NodesCreated, message)
 	observeExpansion(config)
-	return r.note(ctx, config,
-		simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanded, message)
+	// The step is the position within Expanding, so it goes with the phase. A
+	// failure keeps its step, which says where the expansion stopped.
+	return r.writeStatus(ctx, config,
+		func(status *simplyblockv1alpha2.ClusterDeploymentConfigStatus) {
+			status.Phase = simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanded
+			status.Message = message
+			status.Step = statemachine.KubeSnapshot{}
+		})
 }
 
 // fail records a terminal refusal.
@@ -544,7 +557,8 @@ func equalConfigStatus(a, b simplyblockv1alpha2.ClusterDeploymentConfigStatus) b
 		a.ClusterRef != b.ClusterRef ||
 		a.ObservedGeneration != b.ObservedGeneration ||
 		a.Step.State != b.Step.State ||
-		len(a.NodeRefs) != len(b.NodeRefs) {
+		len(a.NodeRefs) != len(b.NodeRefs) ||
+		!slices.Equal(a.Members, b.Members) {
 		return false
 	}
 	if (a.Step.Deadline == nil) != (b.Step.Deadline == nil) {

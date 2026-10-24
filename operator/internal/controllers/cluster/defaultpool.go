@@ -29,6 +29,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -53,6 +54,13 @@ const annotationDefaultPool = "storage.simplyblock.io/default-pool"
 // would hold up everything else the cluster does.
 func (r *StorageClusterReconciler) ensureDefaultPool(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+) {
+	ensureDefaultPool(ctx, r.Client, r.Scheme, cluster)
+}
+
+// ensureDefaultPool writes the first pool of a cluster or a supercluster, once.
+func ensureDefaultPool(
+	ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *simplyblockv1alpha2.StorageCluster,
 ) {
 	log := logf.FromContext(ctx)
 
@@ -82,12 +90,12 @@ func (r *StorageClusterReconciler) ensureDefaultPool(
 			VolumeDefaults: &simplyblockv1alpha2.VolumeDefaults{},
 		},
 	}
-	if err := controllerutil.SetControllerReference(cluster, p, r.Scheme); err != nil {
+	if err := controllerutil.SetControllerReference(cluster, p, scheme); err != nil {
 		log.Error(err, "leaving the default pool unwritten", "pool", name)
 		return
 	}
 
-	err := r.Create(ctx, p)
+	err := c.Create(ctx, p)
 	switch {
 	case apierrors.IsAlreadyExists(err):
 		// A pool of that name is already there, and it need not be this
@@ -97,7 +105,7 @@ func (r *StorageClusterReconciler) ensureDefaultPool(
 		// another, and nothing would ever notice, because this runs once.
 		existing := &simplyblockv1alpha2.StoragePool{}
 		key := client.ObjectKey{Namespace: cluster.Namespace, Name: name}
-		if getErr := r.Get(ctx, key, existing); getErr != nil {
+		if getErr := c.Get(ctx, key, existing); getErr != nil {
 			log.Error(getErr, "reading the pool that already has the default name", "pool", name)
 			return
 		}
@@ -111,7 +119,7 @@ func (r *StorageClusterReconciler) ensureDefaultPool(
 		return
 	}
 
-	if err := r.markDefaultPoolWritten(ctx, cluster, name); err != nil {
+	if err := markDefaultPoolWritten(ctx, c, cluster, name); err != nil {
 		// The pool exists and the note of it does not, so the next pass tries
 		// the create again and finds it already there. That is the harmless
 		// half of the two orderings; writing the note first would be the other
@@ -122,15 +130,15 @@ func (r *StorageClusterReconciler) ensureDefaultPool(
 	log.Info("wrote the cluster's default pool", "pool", name)
 }
 
-func (r *StorageClusterReconciler) markDefaultPoolWritten(
-	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, name string,
+func markDefaultPoolWritten(
+	ctx context.Context, c client.Client, cluster *simplyblockv1alpha2.StorageCluster, name string,
 ) error {
 	base := cluster.DeepCopy()
 	if cluster.Annotations == nil {
 		cluster.Annotations = map[string]string{}
 	}
 	cluster.Annotations[annotationDefaultPool] = name
-	if err := r.Patch(ctx, cluster, client.MergeFrom(base)); err != nil {
+	if err := c.Patch(ctx, cluster, client.MergeFrom(base)); err != nil {
 		return fmt.Errorf("annotate cluster %s/%s: %w", cluster.Namespace, cluster.Name, err)
 	}
 	return nil

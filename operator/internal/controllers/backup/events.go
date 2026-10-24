@@ -28,6 +28,20 @@ const (
 	ReasonOperationSucceeded = "OperationSucceeded"
 	ReasonOperationFailed    = "OperationFailed"
 
+	// The group-restore terminal reasons. A group restore reports its own start,
+	// success, and failure rather than the generic operation reasons, so a group
+	// drive is legible as one unit: Started when the control plane accepts the N
+	// member recoveries, Restored when every member is online and bound, Failed
+	// when the operation unwound. One reason per condition, not one per member.
+	ReasonGroupRestoreStarted = "GroupRestoreStarted"
+	ReasonGroupRestored       = "GroupRestored"
+	ReasonGroupRestoreFailed  = "GroupRestoreFailed"
+
+	// ReasonGroupBackupAvailable and ReasonGroupBackupFailed are a group backup
+	// taken on demand reaching its end: every member completed, or one failed.
+	ReasonGroupBackupAvailable = "GroupBackupAvailable"
+	ReasonGroupBackupFailed    = "GroupBackupFailed"
+
 	// ReasonOperationAborted cannot fire from the last two steps of a restore,
 	// because the graph declares no abort edge there. It is declared anyway, so
 	// that a reason appearing when an action gains an edge is one every consumer

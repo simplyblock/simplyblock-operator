@@ -68,6 +68,7 @@ File: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_t
 | U-24     | A cluster whose creation fails: the phase becomes `Failed` with the reason                                | Negative | —                                                                                            |
 | U-25     | `AwaitingCluster` holds until `status.uuid` is set                                                        | Negative | —                                                                                            |
 | U-26     | A step's deadline expires: `StepDeadlineExceeded`, phase does not advance                                 | Boundary | —                                                                                            |
+| U-231    | A document reaching `Expanded` carries no step                                                            | Positive | `TestAnExpandedDocumentCarriesNoStep`                                                        |
 | U-185    | The template's `nodeProvisioningBudget` reaches the cluster the expansion creates                         | Positive | `TestTheProvisioningBudgetReachesTheCreatedCluster`                                          |
 | U-186    | A template stating no budget leaves the field unset, so the cluster's default decides it                  | Negative | `TestAnUnstatedProvisioningBudgetIsNotInvented`                                              |
 | U-223    | `CreatingNodes` maps every group's `failureDomain` into the cluster's `status.failureDomains`             | Positive | `TestCreatingNodesMapsTheDocumentsFailureDomains`                                            |
@@ -289,6 +290,11 @@ and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-199     | The same run's draft states those tolerations for the cluster it proposes                                                       | Positive   | `TestTheDraftCarriesTheTolerationsTheRunProbedWith`               |
 | U-200     | A growth run with tolerations: the draft describes no cluster, so there is nowhere to state them                                | Boundary   | `TestAGrowthDraftCarriesNoTolerations`                            |
 | U-201     | A migration validation Job on a tainted node: it tolerates what the cluster's storage nodes tolerate                            | Positive   | `TestJobPlacementCarriesTheClustersTolerations`                   |
+| U-239     | A Vanilla document states the kubelet and CPU topology flags, and they replace the environment's                                | Positive   | `TestAVanillaDocumentStatesItsNodeFlags`                          |
+| U-240     | A document stating neither flag leaves both to its environment: Talos, kubelet off and topology unset                           | Boundary   | `TestUnstatedNodeFlagsAreTheEnvironments`                         |
+| U-241     | A non-Vanilla document stating either flag is refused by the schema, and the same document as Vanilla is not                    | Negative   | `TestTheKubeletAndTopologyFlagsNeedAVanillaEnvironment`           |
+| U-237     | A worker whose taint the run tolerates is inspected (regression 2026-10-24-discovery-ignores-tolerations)                       | Regression | `TestDiscoverInspectsAWorkerWhoseTaintTheRunTolerates`            |
+| U-238     | A worker with a tolerated and an untolerated taint is declined, and the event names the untolerated one                         | Regression | `TestDiscoverDeclinesAWorkerWithATaintTheRunDoesNotTolerate`      |
 | U-202     | A cluster that states no tolerations: the Job placement carries none, which is what it carried before                           | Boundary   | `TestJobPlacementOfAClusterThatTakesNoTaint`                      |
 | U-203     | The latency baseline Job: it tolerates what the storage nodes of its cluster tolerate                                           | Positive   | `TestTheBaselineJobToleratesWhatTheStorageNodesDo`                |
 | U-204     | `spec.cluster.containerResources`: the cluster's storage-node container is sized as the document states                         | Positive   | `TestTheDocumentsContainerResourcesReachTheStorageNodes`          |
@@ -633,11 +639,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 173       | 40      | 133         | 9         |
+| Unit        | 174       | 41      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **243**   | **43**  | **200**     | **12**    |
+| **Total**   | **244**   | **44**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as

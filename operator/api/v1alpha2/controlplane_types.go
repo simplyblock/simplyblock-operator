@@ -17,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/simplyblock/atlas/crdtypes"
 	"github.com/simplyblock/atlas/statemachine"
 )
 
@@ -114,6 +115,15 @@ type FoundationDBSpec struct {
 	// takes more of them than the redundancy mode was configured to survive.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations are applied to the database's own processes, and nothing else
+	// the control plane runs. Unset leaves them with the control plane's
+	// tolerations, spec.source.local.tolerations. When set, they replace those
+	// for the database rather than adding to them, the rule NodeSelector
+	// follows: the database confined to tainted workers tolerates their taint,
+	// and the rest of the control plane does not follow it there.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 }
 
 // ControlPlaneTLSProvider is who issues the control plane's serving certificate.
@@ -198,12 +208,11 @@ func (l *LocalControlPlane) TLSProvider() ControlPlaneTLSProvider {
 // so the ownership spine starts at a real edge rather than at a Helm release.
 type LocalControlPlane struct {
 	// Image is the management API and control-plane image.
-	// Must reference one of the trusted registries (`quay.io/simplyblock-io`,
-	// `docker.io/simplyblock`, `public.ecr.aws/simply-block`); digest pinning
+	// Any registry is accepted, mirrors included, as long as the value is a
+	// well-formed reference carrying a tag, a digest, or both. Digest pinning
 	// (@sha256:...) is recommended.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +kubebuilder:validation:Required
-	Image string `json:"image"`
+	Image crdtypes.ImageReference `json:"image"`
 
 	// ImagePullPolicy controls when that image is pulled.
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
@@ -351,9 +360,8 @@ type ManagedControlPlane struct {
 	// there is no equivalent to fall back to without this field -- every
 	// StorageCluster on a managed deployment must get an image from here or
 	// from its own spec.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
-	StorageNodeImage string `json:"storageNodeImage,omitempty"`
+	StorageNodeImage crdtypes.ImageReference `json:"storageNodeImage,omitempty"`
 }
 
 // ControlPlaneSource selects whether this cluster hosts its control plane or is

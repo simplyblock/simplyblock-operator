@@ -18,6 +18,7 @@ package cluster
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -81,7 +83,7 @@ func reconcileOps(
 // ---------------------------------------------------------------------------
 
 func TestAnOperationTakesTheClusterLockAndReleasesItWhenItFinishes(t *testing.T) {
-	api := &fakeControlPlane{cluster: func(string) (webapi.ClusterResponse, error) {
+	api := &fakeControlPlane{cluster: func(string) (atlascp.Cluster, error) {
 		return activeCluster(), nil
 	}}
 	rec := &recorder{}
@@ -224,7 +226,7 @@ func TestAnOperationAgainstNoClusterFails(t *testing.T) {
 // fired, so the only thing that makes the re-entry safe is reading the state
 // first.
 func TestAnActivateAgainstAnActiveClusterIssuesNoCall(t *testing.T) {
-	api := &fakeControlPlane{cluster: func(string) (webapi.ClusterResponse, error) {
+	api := &fakeControlPlane{cluster: func(string) (atlascp.Cluster, error) {
 		return activeCluster(), nil
 	}}
 	r := newOpsReconciler(t, api, &recorder{},
@@ -245,7 +247,7 @@ func TestAnActivateAgainstAnActiveClusterIssuesNoCall(t *testing.T) {
 func TestAShutdownIssuesOneCallAndWaitsForTheCluster(t *testing.T) {
 	active := true
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) {
+		cluster: func(string) (atlascp.Cluster, error) {
 			reading := activeCluster()
 			if !active {
 				reading.Status = statusSuspended
@@ -280,7 +282,7 @@ func TestAnOperationAuthenticatesAsItsClusterOnceItsSecretIsKnown(t *testing.T) 
 	}
 	active := true
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) {
+		cluster: func(string) (atlascp.Cluster, error) {
 			reading := activeCluster()
 			if !active {
 				reading.Status = statusSuspended
@@ -325,7 +327,7 @@ func TestAnOperationAuthenticatesAsItsClusterOnceItsSecretIsKnown(t *testing.T) 
 func TestARestartShutsDownThenStarts(t *testing.T) {
 	status := utils.ClusterStatusActive
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) {
+		cluster: func(string) (atlascp.Cluster, error) {
 			reading := activeCluster()
 			reading.Status = status
 			return reading, nil
@@ -422,7 +424,7 @@ func TestAnAbortFromAnAbortableStepEndsTheOperation(t *testing.T) {
 // refused and said so, and the operation runs on. Stopping there would leave
 // nothing driving the cluster back to a state somebody can reason about.
 func TestAnAbortThatArrivesTooLateIsRefusedAndTheOperationRunsOn(t *testing.T) {
-	api := &fakeControlPlane{cluster: func(string) (webapi.ClusterResponse, error) {
+	api := &fakeControlPlane{cluster: func(string) (atlascp.Cluster, error) {
 		return activeCluster(), nil
 	}}
 	ops := newTestOps(simplyblockv1alpha2.StorageClusterOpsActionShutdown,
@@ -453,7 +455,7 @@ func TestAnAbortThatArrivesTooLateIsRefusedAndTheOperationRunsOn(t *testing.T) {
 func TestCancelTaskWaitsForTheTaskToLeaveTheList(t *testing.T) {
 	running := true
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		tasks: func(string) ([]subscriptions.TaskDTO, error) {
 			if !running {
 				return nil, nil
@@ -488,7 +490,7 @@ func TestCancelTaskWaitsForTheTaskToLeaveTheList(t *testing.T) {
 // outcome the operation asked for reached by another route.
 func TestCancelingATaskThatIsAlreadyGoneSucceedsWithoutCalling(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		tasks:   func(string) ([]subscriptions.TaskDTO, error) { return nil, nil },
 	}
 	ops := newTestOps(simplyblockv1alpha2.StorageClusterOpsActionCancelTask,
@@ -510,7 +512,7 @@ func TestCancelingATaskThatIsAlreadyGoneSucceedsWithoutCalling(t *testing.T) {
 // retrying, so it is terminal rather than requeued.
 func TestCancelTaskWithNoTaskIDFails(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	r := newOpsReconciler(t, api, &recorder{}, newTestCluster(),
 		newTestOps(simplyblockv1alpha2.StorageClusterOpsActionCancelTask))
@@ -524,8 +526,8 @@ func TestCancelTaskWithNoTaskIDFails(t *testing.T) {
 // A control plane that is briefly unreachable is retried rather than failed,
 // which is the distinction terminalStepError draws.
 func TestAnUnreachableControlPlaneRequeuesRatherThanFailing(t *testing.T) {
-	api := &fakeControlPlane{cluster: func(string) (webapi.ClusterResponse, error) {
-		return webapi.ClusterResponse{}, errors.New("connection refused")
+	api := &fakeControlPlane{cluster: func(string) (atlascp.Cluster, error) {
+		return atlascp.Cluster{}, errors.New("connection refused")
 	}}
 	r := newOpsReconciler(t, api, &recorder{},
 		newTestCluster(), newTestOps(simplyblockv1alpha2.StorageClusterOpsActionActivate))
@@ -533,5 +535,34 @@ func TestAnUnreachableControlPlaneRequeuesRatherThanFailing(t *testing.T) {
 	got, _ := reconcileOps(t, r, 4)
 	if got.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseRunning {
 		t.Errorf("phase = %q, want the operation still Running", got.Status.Phase)
+	}
+}
+
+// A supercluster's status.uuid names no backend cluster, so an operation on
+// one would send the aggregate's identifier to the control plane. Until the
+// fan-out walk over the members exists (design-superclusters.md §9.6), the
+// operation fails before any call, and says that a member is the target.
+// The fake control plane answers no cluster read, so reaching it fails the
+// test as well.
+func TestAnOperationOnASuperclusterFailsWithoutReachingTheControlPlane(t *testing.T) {
+	api := &fakeControlPlane{}
+	supercluster := newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.Spec = simplyblockv1alpha2.StorageClusterSpec{
+			Supercluster: &simplyblockv1alpha2.SuperclusterSpec{},
+		}
+		c.Status.UUID = "0d6f1b2e-1f0a-4c71-9a0e-5b7d2c3e4f50"
+	})
+	r := newOpsReconciler(t, api, &recorder{},
+		supercluster, newTestOps(simplyblockv1alpha2.StorageClusterOpsActionShutdown))
+
+	ops, _ := reconcileOps(t, r, 6)
+	if ops.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseFailed {
+		t.Fatalf("phase = %q, want Failed (message: %s)", ops.Status.Phase, ops.Status.Message)
+	}
+	if !strings.Contains(ops.Status.Message, "supercluster") {
+		t.Errorf("the failure does not say the target is a supercluster: %s", ops.Status.Message)
+	}
+	if api.shutdownCalls != 0 {
+		t.Errorf("the control plane was asked to shut down %d times, want 0", api.shutdownCalls)
 	}
 }

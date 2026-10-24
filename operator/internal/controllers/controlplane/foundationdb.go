@@ -376,7 +376,7 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 			template["spec"].(map[string]any)["nodeSelector"] = toAnyMap(selector)
 		}
 		if tolerations := foundationDBTolerations(cp); len(tolerations) > 0 {
-			template["spec"].(map[string]any)["tolerations"] = tolerations
+			template["spec"].(map[string]any)["tolerations"] = toAnyTolerations(tolerations)
 		}
 		if peerTLS {
 			// The operator replaces general.podTemplate wholesale for a class
@@ -413,7 +413,8 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 			toAnyMap(selector)
 	}
 	if tolerations := foundationDBTolerations(cp); len(tolerations) > 0 {
-		general["podTemplate"].(map[string]any)["spec"].(map[string]any)["tolerations"] = tolerations
+		general["podTemplate"].(map[string]any)["spec"].(map[string]any)["tolerations"] =
+			toAnyTolerations(tolerations)
 	}
 	if peerTLS {
 		general["podTemplate"].(map[string]any)["spec"].(map[string]any)["volumes"] = fdbPeerVolume()
@@ -550,42 +551,6 @@ func foundationDBNodeSelector(cp *simplyblockv1alpha2.ControlPlane) map[string]s
 	return local.NodeSelector
 }
 
-// foundationDBTolerations is the control plane's tolerations in the
-// unstructured shape the FoundationDBCluster's pod templates take.
-//
-// The database is placed with the control plane, so it has to tolerate what the
-// control plane tolerates: a nodeSelector onto a tainted node group without the
-// matching toleration leaves every process Pending, and the install waits on
-// FoundationDB for ever.
-func foundationDBTolerations(cp *simplyblockv1alpha2.ControlPlane) []any {
-	local := cp.Spec.Source.Local
-	if local == nil || len(local.Tolerations) == 0 {
-		return nil
-	}
-	out := make([]any, 0, len(local.Tolerations))
-	for i := range local.Tolerations {
-		t := local.Tolerations[i]
-		entry := map[string]any{}
-		if t.Key != "" {
-			entry["key"] = t.Key
-		}
-		if t.Operator != "" {
-			entry["operator"] = string(t.Operator)
-		}
-		if t.Value != "" {
-			entry["value"] = t.Value
-		}
-		if t.Effect != "" {
-			entry["effect"] = string(t.Effect)
-		}
-		if t.TolerationSeconds != nil {
-			entry["tolerationSeconds"] = *t.TolerationSeconds
-		}
-		out = append(out, entry)
-	}
-	return out
-}
-
 // coordinatorCount is spec.source.local.foundationDB.replicas, or the API's
 // default. Three is the smallest count that survives one loss.
 func coordinatorCount(fdb *simplyblockv1alpha2.FoundationDBSpec) int64 {
@@ -623,6 +588,52 @@ func fdbMonitorImageRepository() string {
 }
 
 // toAnyMap converts a string map to the shape an unstructured object holds.
+// foundationDBTolerations is what the database's processes tolerate, by the
+// rule foundationDBNodeSelector follows: the database's own tolerations win over
+// the control plane's whole and do not merge with them. A database confined to
+// tainted workers states the taint it tolerates there, and a merge would also
+// carry the control plane's tolerations onto workers it was kept off.
+//
+// Like the selector it covers only the processes; the FoundationDB operator's
+// controller Deployment takes the control plane's through scheduling.
+func foundationDBTolerations(cp *simplyblockv1alpha2.ControlPlane) []corev1.Toleration {
+	local := cp.Spec.Source.Local
+	if local == nil {
+		return nil
+	}
+	if fdb := local.FoundationDB; fdb != nil && len(fdb.Tolerations) > 0 {
+		return fdb.Tolerations
+	}
+	return local.Tolerations
+}
+
+// toAnyTolerations renders tolerations for an unstructured pod template, in
+// the shape their JSON encoding takes: every field of a Toleration, each left
+// out when unset, as its omitempty tags leave it out.
+func toAnyTolerations(in []corev1.Toleration) []any {
+	out := make([]any, 0, len(in))
+	for _, t := range in {
+		entry := map[string]any{}
+		if t.Key != "" {
+			entry["key"] = t.Key
+		}
+		if t.Operator != "" {
+			entry["operator"] = string(t.Operator)
+		}
+		if t.Value != "" {
+			entry["value"] = t.Value
+		}
+		if t.Effect != "" {
+			entry["effect"] = string(t.Effect)
+		}
+		if t.TolerationSeconds != nil {
+			entry["tolerationSeconds"] = *t.TolerationSeconds
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
 func toAnyMap(in map[string]string) map[string]any {
 	out := make(map[string]any, len(in))
 	for k, v := range in {

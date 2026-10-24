@@ -668,22 +668,19 @@ func TestAnUnpinnedDatabaseStaysWithTheControlPlane(t *testing.T) {
 	}
 }
 
-// The database runs where the control plane runs, so it has to tolerate what the
-// control plane tolerates. Placing it with the control plane's nodeSelector but
-// none of its tolerations left every process Pending on a tainted control-plane
-// node group, and the install waited on FoundationDB for ever (EKS bed
-// 2026-10-22).
-func TestTheDatabaseToleratesWhatTheControlPlaneTolerates(t *testing.T) {
+// The control plane's tolerations reach every database process when the
+// database states none of its own, as its node selector does. The FoundationDB
+// cluster is an unstructured object, so the walk over Deployments and
+// StatefulSets in TestSchedulingReachesEveryPodTheInstallCreates never saw its
+// process templates.
+func TestAnUntoleratedDatabaseTakesTheControlPlanesTolerations(t *testing.T) {
 	cp := localControlPlane()
-	cp.Spec.Source.Local.NodeSelector = map[string]string{"sb-role": "controlplane"}
 	cp.Spec.Source.Local.Tolerations = []corev1.Toleration{{
-		Key: "simplyblock.io/role", Operator: corev1.TolerationOpEqual,
-		Value: "controlplane", Effect: corev1.TaintEffectNoSchedule,
+		Key: "simplyblock.io/dedicated", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule,
 	}}
 
 	want := []any{map[string]any{
-		"key": "simplyblock.io/role", "operator": "Equal",
-		"value": "controlplane", "effect": "NoSchedule",
+		"key": "simplyblock.io/dedicated", "operator": "Exists", "effect": "NoSchedule",
 	}}
 	cluster := foundationDBCluster(cp)
 	for _, class := range []string{"general", "storage", "log"} {
@@ -691,6 +688,57 @@ func TestTheDatabaseToleratesWhatTheControlPlaneTolerates(t *testing.T) {
 			"spec", "processes", class, "podTemplate", "spec", "tolerations")
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("process class %s tolerates %v, want %v", class, got, want)
+		}
+	}
+}
+
+// Tolerations stated for the database win over the control plane's, and do not
+// merge with them, the rule its node selector follows. The rest of the control
+// plane keeps its own.
+func TestTheDatabasesOwnTolerationsWinForTheDatabaseAlone(t *testing.T) {
+	cp := localControlPlane()
+	cp.Spec.Source.Local.Tolerations = []corev1.Toleration{{
+		Key: "simplyblock.io/dedicated", Operator: corev1.TolerationOpExists,
+	}}
+	cp.Spec.Source.Local.FoundationDB = &simplyblockv1alpha2.FoundationDBSpec{
+		Tolerations: []corev1.Toleration{{
+			Key: "storage.simplyblock.io/foundationdb", Operator: corev1.TolerationOpEqual,
+			Value: "true", Effect: corev1.TaintEffectNoSchedule,
+		}},
+	}
+
+	want := []any{map[string]any{
+		"key": "storage.simplyblock.io/foundationdb", "operator": "Equal",
+		"value": "true", "effect": "NoSchedule",
+	}}
+	cluster := foundationDBCluster(cp)
+	for _, class := range []string{"general", "storage", "log"} {
+		got := nestedAny(t, cluster.Object,
+			"spec", "processes", class, "podTemplate", "spec", "tolerations")
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("process class %s tolerates %v, want %v", class, got, want)
+		}
+	}
+
+	for _, obj := range managementAPIObjects(cp) {
+		deployment, ok := obj.(*appsv1.Deployment)
+		if !ok {
+			continue
+		}
+		if got := deployment.Spec.Template.Spec.Tolerations; !reflect.DeepEqual(
+			got, cp.Spec.Source.Local.Tolerations) {
+			t.Errorf("%s took the database's tolerations %v", obj.GetName(), got)
+		}
+	}
+}
+
+// With no tolerations anywhere, the process templates carry none.
+func TestADatabaseWithNoTolerationsAnywhereCarriesNone(t *testing.T) {
+	cluster := foundationDBCluster(localControlPlane())
+	for _, class := range []string{"general", "storage", "log"} {
+		if got := nestedAny(t, cluster.Object,
+			"spec", "processes", class, "podTemplate", "spec", "tolerations"); got != nil {
+			t.Errorf("process class %s tolerates %v, want nothing", class, got)
 		}
 	}
 }

@@ -65,6 +65,8 @@ type config struct {
 	linkHubAddress string
 	linkServerName string
 	linkCAFile     string
+	linkCertFile   string
+	linkKeyFile    string
 	linkTokenFile  string
 	podUID         string
 
@@ -122,7 +124,11 @@ func parseFlags() config {
 	flag.StringVar(&c.linkServerName, "link-server-name", "",
 		"Name to verify against the operator's link certificate, when it differs from the address dialed")
 	flag.StringVar(&c.linkCAFile, "link-ca-file", "",
-		"CA bundle signing the operator's link certificate; empty or absent dials plaintext")
+		"CA bundle signing the operator's link certificate, re-read on every attempt; empty dials plaintext")
+	flag.StringVar(&c.linkCertFile, "link-cert-file", "",
+		"Client certificate presented to an operator that requires mutual TLS on the link")
+	flag.StringVar(&c.linkKeyFile, "link-key-file", "",
+		"Key of the client certificate given by --link-cert-file")
 	flag.StringVar(&c.linkTokenFile, "link-token-file", "/var/run/secrets/simplyblock.io/link/token",
 		"Projected ServiceAccount token presented to the operator")
 	flag.StringVar(&c.podUID, "pod-uid", os.Getenv("POD_UID"),
@@ -299,6 +305,8 @@ func linkWhenReady(ctx context.Context, c config, sup *runner.Supervisor, agentA
 	if _, err := csilink.Start(ctx, csilink.Config{
 		HubAddress:   c.linkHubAddress,
 		CAFile:       c.linkCAFile,
+		CertFile:     c.linkCertFile,
+		KeyFile:      c.linkKeyFile,
 		ServerName:   c.linkServerName,
 		TokenFile:    c.linkTokenFile,
 		ID:           link.MDSPeer(c.hostname),

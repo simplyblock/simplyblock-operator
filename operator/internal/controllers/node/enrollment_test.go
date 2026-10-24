@@ -34,6 +34,7 @@ import (
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 const (
@@ -72,7 +73,8 @@ func aWorkloadReconcilerWith(
 }
 
 // aSizedCluster carries the sizing its workers boot from, without which the
-// workload refuses before it reaches anything this file is about.
+// workload refuses before it reaches anything this file is about, and the
+// workload names its own reconciler records before the workload is built.
 func aSizedCluster() *simplyblockv1alpha2.StorageCluster {
 	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: enrollCluster, Namespace: enrollNamespace},
@@ -82,6 +84,9 @@ func aSizedCluster() *simplyblockv1alpha2.StorageCluster {
 			StorageNodes: &simplyblockv1alpha2.StorageNodesSpec{
 				Image: "example.test/storage-node:test",
 			},
+		},
+		Status: simplyblockv1alpha2.StorageClusterStatus{
+			WorkloadNames: utils.WorkloadNamesStatus(atlaskube.ConstantWorkloadNames()),
 		},
 	}
 }

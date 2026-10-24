@@ -166,6 +166,9 @@ type fakeControlPlane struct {
 	read    controlplane.Migration
 	readErr error
 	reads   int
+
+	// fakeRelocation answers the calls a Relocate makes.
+	fakeRelocation
 }
 
 func (f *fakeControlPlane) Volume(context.Context, lvol.VolumeHandle) (lvol.Volume, error) {

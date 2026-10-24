@@ -17,7 +17,7 @@ import (
 // through the source themselves.
 func localImage(cp *simplyblockv1alpha2.ControlPlane) string {
 	if local := cp.Spec.Source.Local; local != nil {
-		return local.Image
+		return string(local.Image)
 	}
 	return ""
 }

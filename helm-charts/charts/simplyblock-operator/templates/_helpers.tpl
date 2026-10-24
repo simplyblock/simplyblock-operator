@@ -134,3 +134,45 @@ to land them at the right column inside an `env:` list.
   value: "anonymous"
 {{- end }}
 {{- end -}}
+{{/*
+How long Graylog writes into one index before it rotates to the next, as whole
+hours. Graylog deletes the oldest index once there are more than maxNumberIndex
+of them, so retentionPeriod is divided across that many: 7d over 3 indices is
+56h each. The period is a count followed by h, d, or w.
+*/}}
+{{- define "simplyblock.graylogMaxTimePerIndex" -}}
+{{- $graylog := .Values.controlplane.observability.graylog }}
+{{- $period := toString $graylog.retentionPeriod }}
+{{- if not (regexMatch "^[1-9][0-9]*[hdw]$" $period) }}
+{{- fail (printf "controlplane.observability.graylog.retentionPeriod %q is not a count followed by h, d, or w, such as 7d" $period) }}
+{{- end }}
+{{- $unit := get (dict "h" 1 "d" 24 "w" 168) (regexFind "[hdw]$" $period) }}
+{{- $hours := mul (atoi (regexFind "^[0-9]+" $period)) $unit }}
+{{- $indices := atoi (toString $graylog.maxNumberIndex) }}
+{{- if lt $indices 1 }}
+{{- fail (printf "controlplane.observability.graylog.maxNumberIndex %q is not a positive count" (toString $graylog.maxNumberIndex)) }}
+{{- end }}
+{{- $perIndex := div $hours $indices }}
+{{- if lt $perIndex 1 }}
+{{- fail (printf "controlplane.observability.graylog.retentionPeriod %s over maxNumberIndex %d indices is under an hour each; lengthen the period or lower the count" $period $indices) }}
+{{- end }}
+{{- printf "%dh" $perIndex }}
+{{- end -}}
+
+{{/*
+The Secret holding the CSI link's serving certificate, or nothing when the link
+is served in plaintext.
+
+csiLink.certSecret names one the deployer provides. Otherwise the link follows
+tls.enabled like everything else in this chart: the certificate is issued into
+simplyblock-csi-link-tls, by the chart's ClusterIssuer under cert-manager
+(csi-link-svc.yaml) or by the service-CA operator on OpenShift (the Service's
+serving-cert annotation).
+*/}}
+{{- define "simplyblock.csiLinkCertSecret" -}}
+{{- if .Values.csiLink.certSecret -}}
+{{ .Values.csiLink.certSecret }}
+{{- else if .Values.tls.enabled -}}
+simplyblock-csi-link-tls
+{{- end -}}
+{{- end -}}

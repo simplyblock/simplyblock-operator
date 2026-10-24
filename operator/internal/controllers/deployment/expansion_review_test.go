@@ -110,6 +110,41 @@ func TestOpenShiftStatesItsKubeletFlag(t *testing.T) {
 	}
 }
 
+// A document's own kubelet and CPU topology settings replace what its
+// environment decides, because the environment describes the platform and not
+// where a particular fleet keeps its kubelet configuration.
+func TestAVanillaDocumentStatesItsNodeFlags(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentVanilla
+		c.Spec.Cluster.EnableKubeletConfiguration = ptr.To(false)
+		c.Spec.Cluster.EnableCpuTopology = ptr.To(true)
+	})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if workload.EnableKubeletConfiguration == nil || *workload.EnableKubeletConfiguration {
+		t.Errorf("the kubelet flag is %v, want the document's false over Vanilla's true",
+			workload.EnableKubeletConfiguration)
+	}
+	if workload.EnableCpuTopology == nil || !*workload.EnableCpuTopology {
+		t.Errorf("the CPU topology flag is %v, want the document's true", workload.EnableCpuTopology)
+	}
+}
+
+// A document that states neither leaves both to the environment, as before.
+func TestUnstatedNodeFlagsAreTheEnvironments(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentTalos
+	})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if workload.EnableKubeletConfiguration == nil || *workload.EnableKubeletConfiguration {
+		t.Errorf("Talos's kubelet flag is %v, want false", workload.EnableKubeletConfiguration)
+	}
+	if workload.EnableCpuTopology != nil {
+		t.Errorf("Talos's CPU topology flag is %v, want unset", *workload.EnableCpuTopology)
+	}
+}
+
 // A growth document's nodes join a cluster that is already serving, which the
 // control plane reads as a request to rebalance onto them.
 func TestAGrowthDocumentMarksItsNodesAsAnExpansion(t *testing.T) {
