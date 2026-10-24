@@ -83,6 +83,11 @@ and *writes* the draft. The rejections are grouped by the stage that produces th
 )
 
 #v(4pt)
+#note[`kubectl simplyblock bundle -n <ns> --run <run>` collects all of the following into one archive. The script
+is `helm-charts/scripts/kubectl-simplyblock-bundle` in the operator repository, and the symptom index shows how
+to fetch and run it.]
+
+#v(4pt)
 #grid((1.5fr, 3fr), ([What to collect], [Command]),
   [Run status and summary], [`kubectl get operatorops -n <ns>` and `kubectl get operatorops <run> -n <ns> -o jsonpath='{.status.message}'`],
   [Every refusal, one event each], [`kubectl describe operatorops <run> -n <ns>`],
