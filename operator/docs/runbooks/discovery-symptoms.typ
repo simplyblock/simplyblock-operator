@@ -65,7 +65,20 @@ for section 7.3 of the detection document. Placeholders are written in angle bra
 
 = Before anything else
 
-Ask for these four things first. Together they answer most cases without a second round trip.
+Ask the customer for a support bundle. One command collects everything below, plus the probe pods' logs,
+the nodes, and the operator's log since the run started, into one archive. It only reads from the cluster
+and never reads a Secret:
+
+```
+curl -fsSLO https://raw.githubusercontent.com/simplyblock/simplyblock-operator/main/helm-charts/scripts/kubectl-simplyblock-bundle
+bash kubectl-simplyblock-bundle -n <ns> --run <run>
+```
+
+Without `--run`, it takes the newest discovery run in the namespace. Placed on the `PATH` and made
+executable, the script also runs as `kubectl simplyblock bundle`. A read that failed is listed in
+`errors.txt` inside the archive, and the rest is still collected.
+
+Without the bundle, ask for these four things. Together they answer most cases without a second round trip.
 
 #grid((1.6fr, 3.4fr), ([What], [Command]),
   [The run and its events], [`kubectl describe operatorops <run> -n <ns>`],
