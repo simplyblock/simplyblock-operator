@@ -555,7 +555,7 @@ data:
             },
             {
               "reason": "Unreadable",
-              "detail": "the device could not be read: blockdev: open /var/folders/4y/jwqr9s1s6_b72zj4r9429kq40000gn/T/discoveryfixtures-host-3863611555/dev/nvme0n1p1: the transcript carries no contents for partition nvme0n1p1"
+              "detail": "the device could not be read: blockdev: open /dev/nvme0n1p1: the transcript carries no contents for partition nvme0n1p1"
             }
           ]
         },
@@ -575,7 +575,7 @@ data:
             },
             {
               "reason": "Unreadable",
-              "detail": "the device could not be read: blockdev: open /var/folders/4y/jwqr9s1s6_b72zj4r9429kq40000gn/T/discoveryfixtures-host-3863611555/dev/nvme0n1p2: the transcript carries no contents for partition nvme0n1p2"
+              "detail": "the device could not be read: blockdev: open /dev/nvme0n1p2: the transcript carries no contents for partition nvme0n1p2"
             }
           ]
         }

@@ -50,6 +50,66 @@ func TestReadKernelReadsTheRelease(t *testing.T) {
 	}
 }
 
+func TestParseKernelVersion(t *testing.T) {
+	cases := []struct {
+		release string
+		want    KernelVersion
+		ok      bool
+	}{
+		{"6.18.24-talos", KernelVersion{6, 18, 24}, true},
+		{"6.1.155-176.282.amzn2023.x86_64", KernelVersion{6, 1, 155}, true},
+		{"5.15.0-122-generic", KernelVersion{5, 15, 0}, true},
+		{"4.18.0-553.el8_10.x86_64", KernelVersion{4, 18, 0}, true},
+		{"6.6.58+rpt-rpi-v8", KernelVersion{6, 6, 58}, true},
+		{"6.12.0", KernelVersion{6, 12, 0}, true},
+		{"6.8-rc1", KernelVersion{6, 8, 0}, true},
+		{"6.8", KernelVersion{6, 8, 0}, true},
+		{"", KernelVersion{}, false},
+		{"6", KernelVersion{}, false},
+		{"talos", KernelVersion{}, false},
+		{"6.x.1", KernelVersion{}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.release, func(t *testing.T) {
+			got, ok := ParseKernelVersion(c.release)
+			if got != c.want || ok != c.ok {
+				t.Errorf("parsed %q as %+v, %v, want %+v, %v", c.release, got, ok, c.want, c.ok)
+			}
+		})
+	}
+}
+
+func TestReadKernelReadsTheVersion(t *testing.T) {
+	facts := kernelOf(t, kernelHost(nil))
+	if want := (KernelVersion{6, 1, 155}); facts.Version != want {
+		t.Errorf("read the version as %+v, want %+v", facts.Version, want)
+	}
+}
+
+func TestKernelVersionCompare(t *testing.T) {
+	version := KernelVersion{6, 1, 155}
+	cases := []struct {
+		other KernelVersion
+		want  int
+	}{
+		{KernelVersion{6, 1, 155}, 0},
+		{KernelVersion{6, 1, 154}, 1},
+		{KernelVersion{6, 0, 200}, 1},
+		{KernelVersion{5, 19, 0}, 1},
+		{KernelVersion{6, 1, 156}, -1},
+		{KernelVersion{6, 2, 0}, -1},
+		{KernelVersion{7, 0, 0}, -1},
+	}
+	for _, c := range cases {
+		if got := version.Compare(c.other); got != c.want {
+			t.Errorf("%+v.Compare(%+v) is %d, want %d", version, c.other, got, c.want)
+		}
+	}
+	if (KernelVersion{}).Compare(KernelVersion{0, 0, 1}) >= 0 {
+		t.Error("a version that was not read is not earlier than 0.0.1")
+	}
+}
+
 func TestReadKernelReportsAnUnreadableRelease(t *testing.T) {
 	root := fixture{}.write(t)
 	_, err := ReadKernel(Config{SysfsRoot: root, ProcRoot: root, HostRoot: root})
@@ -127,6 +187,22 @@ func TestReadKernelReadsTheMultipathConfigurationFromProc(t *testing.T) {
 	}
 	if facts.NVMeMultipath.State != MultipathNotBuilt {
 		t.Errorf("concluded %q, want %q", facts.NVMeMultipath.State, MultipathNotBuilt)
+	}
+	// The host's path, for the reason the release error names the host's path.
+	if detail := facts.NVMeMultipath.Detail; !strings.Contains(detail, "/proc/config.gz") || strings.Contains(detail, root) {
+		t.Errorf("the evidence %q does not name the host's /proc/config.gz alone", detail)
+	}
+}
+
+func TestReadKernelNamesTheModuleTreesConfigurationByTheHostsPath(t *testing.T) {
+	root := kernelHost(map[string]string{modulesDir + "config": "# CONFIG_NVME_MULTIPATH is not set"}).write(t)
+	facts, err := ReadKernel(Config{SysfsRoot: root, ProcRoot: root, HostRoot: root})
+	if err != nil {
+		t.Fatalf("read the kernel: %v", err)
+	}
+	detail := facts.NVMeMultipath.Detail
+	if !strings.Contains(detail, "/"+modulesDir+"config") || strings.Contains(detail, root) {
+		t.Errorf("the evidence %q does not name the host's /%sconfig alone", detail, modulesDir)
 	}
 }
 

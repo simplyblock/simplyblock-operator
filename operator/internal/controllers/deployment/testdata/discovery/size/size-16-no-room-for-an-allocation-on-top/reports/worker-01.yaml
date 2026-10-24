@@ -163,6 +163,11 @@ data:
         "architecture": "x86_64",
         "kernel": {
           "release": "5.15.0-122-generic",
+          "version": {
+            "major": 5,
+            "minor": 15,
+            "patch": 0
+          },
           "nvmeMultipath": {
             "state": "Enabled",
             "detail": "nvme_core.multipath is Y"

@@ -19,12 +19,14 @@ package inventory
 
 import (
 	"bufio"
+	"cmp"
 	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -95,6 +97,10 @@ type KernelFacts struct {
 	// as `6.1.155-176.282.amzn2023.x86_64`.
 	Release string
 
+	// Version is the version number the release opens with. It is the zero
+	// value when the release is unreadable or does not open with one.
+	Version KernelVersion
+
 	// NVMeMultipath decides whether the host can mount a volume served over
 	// more than one path. Storage nodes do not depend on it: the storage
 	// engine runs in user space and does not use the kernel's NVMe initiator.
@@ -110,6 +116,52 @@ type KernelFacts struct {
 	// from CONFIG_PNFS_BLOCK), which a pNFS client needs to write to a
 	// volume directly instead of through the metadata server.
 	PNFSBlock Capability
+}
+
+// KernelVersion is the upstream version a kernel release is built from:
+// `6.1.155` of `6.1.155-176.282.amzn2023.x86_64`. A distribution backports fixes
+// without changing it, so it places a kernel in upstream's history and does not
+// say which fixes the kernel carries.
+type KernelVersion struct {
+	Major, Minor, Patch int
+}
+
+// ParseKernelVersion reads the version a release opens with: two or three
+// dot-separated numbers, ended by the end of the string or by anything that is
+// neither a digit nor a dot. A release with no patch number, such as `6.8-rc1`,
+// is patch 0. It reports false for a release that does not open with a major
+// and a minor number.
+func ParseKernelVersion(release string) (KernelVersion, bool) {
+	end := strings.IndexFunc(release, func(r rune) bool { return r != '.' && (r < '0' || r > '9') })
+	if end < 0 {
+		end = len(release)
+	}
+	parts := strings.Split(release[:end], ".")
+	if len(parts) < 2 {
+		return KernelVersion{}, false
+	}
+	var numbers [3]int
+	for i := 0; i < len(parts) && i < len(numbers); i++ {
+		number, err := strconv.Atoi(parts[i])
+		if err != nil {
+			return KernelVersion{}, false
+		}
+		numbers[i] = number
+	}
+	return KernelVersion{Major: numbers[0], Minor: numbers[1], Patch: numbers[2]}, true
+}
+
+// Compare orders two versions the way cmp.Compare orders numbers: -1 when v is
+// the earlier, 0 when they are equal, and +1 when v is the later. The zero
+// value, a version that was not read, is earlier than every kernel.
+func (v KernelVersion) Compare(other KernelVersion) int {
+	if c := cmp.Compare(v.Major, other.Major); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(v.Minor, other.Minor); c != 0 {
+		return c
+	}
+	return cmp.Compare(v.Patch, other.Patch)
 }
 
 // ReadKernel reads the running kernel's release and capabilities.
@@ -132,6 +184,7 @@ func ReadKernel(cfg Config) (KernelFacts, error) {
 		err = fmt.Errorf("read the kernel release from /proc/sys/kernel/osrelease: %w", readErr)
 	}
 	facts.Release = strings.TrimSpace(string(raw))
+	facts.Version, _ = ParseKernelVersion(facts.Release)
 
 	k := kernelSources{cfg: cfg, release: facts.Release}
 	k.load()
@@ -154,7 +207,8 @@ type kernelSources struct {
 	indexed           bool
 
 	// config is the build configuration, keyed by option, and configFrom is
-	// the file it came from. config is nil when none was readable.
+	// the host's path of the file it came from. config is nil when none was
+	// readable.
 	config     map[string]string
 	configFrom string
 }
@@ -165,35 +219,36 @@ func (k *kernelSources) load() {
 		return
 	}
 	for _, dir := range k.moduleDirs() {
-		builtin, builtinErr := readModuleList(filepath.Join(dir, "modules.builtin"))
-		loadable, loadableErr := readModuleList(filepath.Join(dir, "modules.dep"))
+		resolved := filepath.Join(k.cfg.host(), dir)
+		builtin, builtinErr := readModuleList(filepath.Join(resolved, "modules.builtin"))
+		loadable, loadableErr := readModuleList(filepath.Join(resolved, "modules.dep"))
 		if builtinErr == nil || loadableErr == nil {
 			k.builtin, k.loadable, k.indexed = builtin, loadable, true
 			break
 		}
 	}
 
-	candidates := []string{k.cfg.procPath("config.gz")}
+	// Each candidate as the host names it and as this reader resolves it. The
+	// evidence names the former, because a reviewer checks it on the host, where
+	// the reader's mount of the host does not exist.
+	type candidate struct{ host, resolved string }
+	candidates := []candidate{{"/proc/config.gz", k.cfg.procPath("config.gz")}}
 	for _, dir := range k.moduleDirs() {
-		candidates = append(candidates, filepath.Join(dir, "config"))
+		candidates = append(candidates, candidate{dir + "/config", filepath.Join(k.cfg.host(), dir, "config")})
 	}
-	for _, path := range candidates {
-		if config, err := readKernelConfig(path); err == nil {
-			k.config, k.configFrom = config, path
+	for _, c := range candidates {
+		if config, err := readKernelConfig(c.resolved); err == nil {
+			k.config, k.configFrom = config, c.host
 			return
 		}
 	}
 }
 
-// moduleDirs is where the release's modules may be: /usr/lib/modules on a host
-// whose /lib is merged into /usr, which every distribution this product
-// supports is, and /lib/modules on one that is not.
+// moduleDirs is where the release's modules may be on the host: /usr/lib/modules
+// on a host whose /lib is merged into /usr, which every distribution this
+// product supports is, and /lib/modules on one that is not.
 func (k *kernelSources) moduleDirs() []string {
-	root := k.cfg.host()
-	return []string{
-		filepath.Join(root, "usr", "lib", "modules", k.release),
-		filepath.Join(root, "lib", "modules", k.release),
-	}
+	return []string{"/usr/lib/modules/" + k.release, "/lib/modules/" + k.release}
 }
 
 // moduleState is what the kernel has of one module.

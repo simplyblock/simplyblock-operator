@@ -120,6 +120,11 @@ data:
           "tun": {
             "detail": "the kernel has registered /dev/net/tun",
             "state": "Available"
+          },
+          "version": {
+            "major": 5,
+            "minor": 15,
+            "patch": 0
           }
         },
         "prettyName": "Ubuntu 22.04.4 LTS",

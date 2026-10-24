@@ -533,7 +533,7 @@ data:
             },
             {
               "reason": "Unreadable",
-              "detail": "the device could not be read: blockdev: open /var/folders/4y/jwqr9s1s6_b72zj4r9429kq40000gn/T/discoveryfixtures-host-486361354/dev/sda1: the transcript carries no contents for partition sda1"
+              "detail": "the device could not be read: blockdev: open /dev/sda1: the transcript carries no contents for partition sda1"
             }
           ]
         },
@@ -553,7 +553,7 @@ data:
             },
             {
               "reason": "Unreadable",
-              "detail": "the device could not be read: blockdev: open /var/folders/4y/jwqr9s1s6_b72zj4r9429kq40000gn/T/discoveryfixtures-host-486361354/dev/sda2: the transcript carries no contents for partition sda2"
+              "detail": "the device could not be read: blockdev: open /dev/sda2: the transcript carries no contents for partition sda2"
             }
           ]
         }
