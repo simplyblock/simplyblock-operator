@@ -168,3 +168,22 @@ func TestTheCDCsYAMLIsADocumentToApply(t *testing.T) {
 		}
 	}
 }
+
+func TestTheSameObjectTwiceDoesNotStopTheChecks(t *testing.T) {
+	a := analyze(t, "bundle-v10", func(name string, data []byte) ([]byte, bool) {
+		if name == "nodes.yaml" {
+			doc := string(data)
+			first := doc[strings.Index(doc, "  - apiVersion: v1"):strings.Index(doc, "  - apiVersion: v1\n    kind: Node\n    metadata:\n      name: worker-02")]
+			return []byte(doc + first), true
+		}
+		return data, true
+	})
+	if a.CDC == nil {
+		t.Fatal("the bundle's CDC is not shown")
+	}
+	for _, f := range a.CDC.Findings {
+		if f.Reason == "ChecksNotRun" {
+			t.Errorf("a node listed twice kept the operator's checks from running: %s", f.Message)
+		}
+	}
+}

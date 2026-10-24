@@ -16,6 +16,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/yaml"
 
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/discovery"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/supportbundle"
@@ -23,7 +24,12 @@ import (
 
 // Analysis is everything the tool shows about one bundle.
 type Analysis struct {
-	Bundle         string   `json:"bundle"`
+	Bundle string `json:"bundle"`
+
+	// Diagnoses are the bundle's problems, errors first: what the page opens
+	// with, so the reason a discovery went wrong is the first thing read.
+	Diagnoses []Diagnosis `json:"diagnoses"`
+
 	Run            *Run     `json:"run,omitempty"`
 	Workers        []Worker `json:"workers"`
 	Cluster        Cluster  `json:"cluster"`
@@ -128,10 +134,14 @@ type Cluster struct {
 
 // Object is one of them.
 type Object struct {
-	Name    string `json:"name"`
-	Phase   string `json:"phase,omitempty"`
-	Worker  string `json:"worker,omitempty"`
-	Cluster string `json:"cluster,omitempty"`
+	Name  string `json:"name"`
+	Phase string `json:"phase,omitempty"`
+	// Role is a StorageCluster's: Standalone, Supercluster, or PlacementGroup
+	// for a member, and Supercluster names a member's supercluster.
+	Role         string `json:"role,omitempty"`
+	Supercluster string `json:"supercluster,omitempty"`
+	Worker       string `json:"worker,omitempty"`
+	Cluster      string `json:"cluster,omitempty"`
 }
 
 // CDC is the bundle's ClusterDeploymentConfig and what is wrong with it.
@@ -205,6 +215,7 @@ func Analyze(b *supportbundle.Bundle) Analysis {
 	if b.CDC != nil {
 		a.CDC = cdcOf(b)
 	}
+	a.Diagnoses = diagnose(b, a)
 	return a
 }
 
@@ -348,7 +359,9 @@ func clusterOf(b *supportbundle.Bundle) Cluster {
 		c.ControlPlanes = append(c.ControlPlanes, Object{Name: o.Name, Phase: string(o.Status.Phase)})
 	}
 	for _, o := range b.StorageClusters {
-		c.StorageClusters = append(c.StorageClusters, Object{Name: o.Name, Phase: string(o.Status.Phase)})
+		c.StorageClusters = append(c.StorageClusters, Object{
+			Name: o.Name, Phase: string(o.Status.Phase), Role: roleOf(o), Supercluster: o.Spec.SuperclusterRef,
+		})
 	}
 	for _, o := range b.StorageNodes {
 		c.StorageNodes = append(c.StorageNodes, Object{
@@ -356,4 +369,18 @@ func clusterOf(b *supportbundle.Bundle) Cluster {
 		})
 	}
 	return c
+}
+
+// roleOf is a cluster's role as its status records it, or as its spec implies
+// for a cluster whose status predates the field.
+func roleOf(c simplyblockv1alpha2.StorageCluster) string {
+	switch {
+	case c.Status.Role != "":
+		return string(c.Status.Role)
+	case c.Spec.Supercluster != nil:
+		return string(simplyblockv1alpha2.StorageClusterRoleSupercluster)
+	case c.Spec.SuperclusterRef != "":
+		return string(simplyblockv1alpha2.StorageClusterRolePlacementGroup)
+	}
+	return string(simplyblockv1alpha2.StorageClusterRoleStandalone)
 }

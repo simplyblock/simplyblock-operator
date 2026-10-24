@@ -28,6 +28,21 @@ build: ## Build bin/support-tool.
 run: ## Serve the tool on $(LISTEN).
 	go run . -listen $(LISTEN)
 
+# The fixtures under testdata, packed the way kubectl-simplyblock-bundle packs a
+# collection, so each one can be opened in the tool: two healthy bundles and
+# one per kind of problem.
+.PHONY: samples
+samples: ## Pack every testdata bundle into bin/samples/<name>.tar.gz.
+	@mkdir -p bin/samples
+	@for dir in testdata/bundle-*; do \
+		name=$$(basename $$dir); \
+		rm -rf bin/samples/$$name; mkdir -p bin/samples/stage; \
+		cp -R $$dir bin/samples/stage/simplyblock-$$name; \
+		COPYFILE_DISABLE=1 tar -czf bin/samples/$$name.tar.gz -C bin/samples/stage simplyblock-$$name; \
+		rm -rf bin/samples/stage; \
+		echo "bin/samples/$$name.tar.gz"; \
+	done
+
 .PHONY: test
 test: ## Run the tests.
 	go test -race ./...

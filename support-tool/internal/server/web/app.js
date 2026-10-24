@@ -113,6 +113,9 @@ function show(name) {
 
 function render() {
   history.replaceState(null, "", `?bundle=${encodeURIComponent(state.id)}#${state.tab}`);
+  const errors = (state.analysis?.diagnoses || []).filter((d) => d.severity === "error").length;
+  const overviewTab = document.querySelector('#tabs button[data-tab="overview"]');
+  overviewTab.replaceChildren("Overview", errors ? el("span", { class: "badge err tab-badge" }, String(errors)) : "");
   for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("active", b.dataset.tab === state.tab);
   const views = { overview, workers, cluster, cdc, editor };
   document.getElementById("view").replaceChildren(views[state.tab]());
@@ -142,6 +145,7 @@ function overview() {
     (w.storageNodes || []).length ? badge(w.storageNodes.join(", "), "muted") : "",
   ]);
   return el("div", {},
+    diagnosisCard(a.diagnoses || []),
     el("div", { class: "grid" },
       card("Discovery run", facts([
         ["Name", run.name], ["Namespace", run.namespace], ["Action", run.action],
@@ -158,6 +162,30 @@ function overview() {
     card(`Workers (${a.workers.length})`,
       table(["Worker", "Roles", "Internal IP", "Report", "OS", "Kernel", "CPU", "Memory", "Available devices", "Storage nodes"], workerRows,
         (i) => { state.worker = a.workers[i].name; state.tab = "workers"; render(); })));
+}
+
+// diagnosisCard lists what went wrong, errors first. An entry about a worker or
+// a view opens it.
+function diagnosisCard(list) {
+  const counts = { error: 0, warning: 0, info: 0 };
+  for (const d of list) counts[d.severity]++;
+  const summary = list.length
+    ? el("div", { class: "row" },
+      counts.error ? badge(`${counts.error} error(s)`, "err") : null,
+      counts.warning ? badge(`${counts.warning} warning(s)`, "warn") : null,
+      counts.info ? badge(`${counts.info} note(s)`, "muted") : null)
+    : el("p", { class: "note" }, "Nothing in this bundle points at a problem.");
+  return card("Diagnosis", summary, list.map((d) => el("div", {
+    class: `finding ${d.severity} clickable`,
+    title: d.tab ? "Open" : null,
+    onclick: () => {
+      if (!d.tab) return;
+      state.tab = d.tab;
+      if (d.worker) state.worker = d.worker;
+      render();
+    },
+  }, el("div", {}, el("span", { class: "reason" }, d.title), el("span", { class: "source" }, d.code)),
+  d.detail ? el("div", { class: "detail" }, d.detail) : null)));
 }
 
 // ─── Workers ───────────────────────────────────────────────────────────────
@@ -225,10 +253,11 @@ function workerDetail(w) {
   out.push(card("Block devices",
     hidden ? el("div", { class: "row" }, el("label", { class: "row" }, el("input", { type: "checkbox", checked: !!state.showNoise,
       onchange: (e) => { state.showNoise = e.target.checked; render(); } }), `Show loop, network, RAM, and empty devices (${hidden})`)) : null,
+    !devices.length ? el("p", { class: "note" }, hidden ? "Only loop, network, RAM, and empty devices." : "The report lists no block device.") :
     table(["Device", "Kind", "Transport", "Size", "Model", "NUMA", "CDC name", "Status"],
       devices.map((d) => [
         el("span", {}, el("strong", {}, d.name), el("br"), el("span", { class: "muted" }, d.stablePath || d.path)),
-        d.kind, d.transport || "", bytes(d.sizeBytes), d.model || "", d.numaNode >= 0 ? d.numaNode : "",
+        d.kind, d.transport || "", bytes(d.sizeBytes), d.model || "", numa(d.numaNode),
         d.kind === "Disk" ? el("code", {}, d.nvmeID || d.blockID || "") : "",
         d.available ? badge(d.content || "available", "ok")
           : el("div", {}, (d.rejections || []).map((x) => el("div", {}, badge(x.reason, "err"), " ", el("span", { class: "muted" }, x.detail || "")))),
@@ -240,12 +269,28 @@ function workerDetail(w) {
         i.speedMbps ? `${i.speedMbps / 1000} Gb/s` : "", i.driver || "", (i.addresses || []).join(", ")]))),
     card("NVMe controllers", (r.nvmeControllers || []).length
       ? table(["Address", "Driver", "Vendor", "Product", "NUMA", "In use"], r.nvmeControllers.map((c) => [
-        el("code", {}, c.address), c.driver || badge("none", "muted"), c.vendor || "", c.product || "", c.numaNode >= 0 ? c.numaNode : "",
-        c.inUse === undefined ? badge("unknown", "muted") : c.inUse ? badge("held", "err") : badge("free", "ok")]))
+        el("code", {}, c.address), c.driver || badge("none", "muted"), c.vendor || "", c.product || "", numa(c.numaNode),
+        inUseOf(c)]))
       : el("p", { class: "note" }, "None."),
     (r.reclaimed || []).length ? [el("h3", {}, "Returned to the kernel by the probe"), pre(r.reclaimed.map((c) => c.address).join("\n"))] : null)));
   if ((r.unreadable || []).length) out.push(card("Readings the probe could not take", el("ul", {}, r.unreadable.map((u) => el("li", {}, u)))));
   return el("div", {}, out);
+}
+
+// numa is a NUMA node, and says so when the kernel places the device on none,
+// which is every device of a virtual machine without a NUMA topology.
+function numa(n) {
+  return n >= 0 ? String(n) : el("span", { class: "muted", title: "the kernel reports -1: no NUMA locality, as on most virtual machines" }, "none");
+}
+
+// inUseOf says whether a controller is held. Only one a userspace driver owns
+// is checked: the kernel's own driver presents its namespaces as block devices,
+// which the block-device checks cover.
+function inUseOf(c) {
+  const userspace = c.driver === "vfio-pci" || c.driver === "uio_pci_generic";
+  if (!userspace) return el("span", { class: "muted", title: "not checked: its disks are block devices" }, c.driver ? "kernel driver" : "no driver");
+  if (c.inUse === undefined) return badge("could not be checked", "warn");
+  return c.inUse ? badge("held", "err") : badge("free", "ok");
 }
 
 // ─── Cluster ───────────────────────────────────────────────────────────────
@@ -257,7 +302,7 @@ function cluster() {
     : el("p", { class: "note" }, "None in the bundle.");
   return el("div", {},
     card("Control planes", objects(c.controlPlanes, [])),
-    card("Storage clusters", objects(c.storageClusters, [])),
+    card("Storage clusters", objects(c.storageClusters, [["Role", "role"], ["Supercluster", "supercluster"]])),
     card("Storage nodes", objects(c.storageNodes, [["Worker", "worker"], ["Cluster", "cluster"]])));
 }
 

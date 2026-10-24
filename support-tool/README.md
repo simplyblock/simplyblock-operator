@@ -21,6 +21,14 @@ make -C support-tool build        # writes support-tool/bin/support-tool
 
 ## What it shows
 
+The page opens with the bundle's diagnosis: the run's failure, workers the run
+selected and has no report for, workers it did not inspect and why, workers that
+hand over no device and what refused their disks, NVMe controllers a userspace
+driver holds, readings a probe could not take, kernels without native NVMe
+multipath, management interfaces with different names, the CDC's errors,
+collection errors, and Warning events. Errors come first, and each entry opens
+the view that explains it.
+
 | View                    | Content                                                                                                                                                                                                              |
 |-------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Overview                | The discovery run and its settings, what the bundle could not tell (unreadable files, collection errors, warning events), and one line per worker                                                                    |
@@ -45,6 +53,20 @@ keeps every field the editor does not show, such as tolerations, images, and KMS
 An approved CDC is immutable, so the editor writes its edit under another name.
 A document built here is never approved: approval stays a decision made on the
 cluster.
+
+## Sample bundles
+
+`make -C support-tool samples` packs every bundle under `testdata` into
+`support-tool/bin/samples/<name>.tar.gz` to open in the tool:
+
+| Bundle                    | What it shows                                                                                                                                                                                |
+|---------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `bundle-v10`              | A healthy three-worker NVMe fleet with version-10 reports and its draft                                                                                                                      |
+| `bundle-v9`               | The same fleet with version-9 reports, which carry no kernel facts                                                                                                                           |
+| `bundle-run-failed`       | A failed run: every disk of the fleet is mounted                                                                                                                                             |
+| `bundle-held-controllers` | A failed run: a userspace driver holds every NVMe controller of the worker                                                                                                                   |
+| `bundle-probe-trouble`    | A probe that never reported, a report of version 8, a cordoned and a tainted node, readings a probe could not take, a kernel without native multipath, collection errors, and Warning events |
+| `bundle-cdc-broken`       | A CDC naming a worker, a device, and interfaces that do not exist, management interfaces with different names, a worker already in use, and a supercluster with a member                     |
 
 ## How it is built
 

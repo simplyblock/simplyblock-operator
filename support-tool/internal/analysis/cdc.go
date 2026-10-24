@@ -98,7 +98,17 @@ func CheckCDC(b *supportbundle.Bundle, cdc *simplyblockv1alpha2.ClusterDeploymen
 // operatorFindings runs the operator's draft checks against a fake cluster
 // holding the bundle's nodes and simplyblock objects. Every one of them holds a
 // draft, so each is an error.
-func operatorFindings(b *supportbundle.Bundle, cdc *simplyblockv1alpha2.ClusterDeploymentConfig) []Finding {
+//
+// The checks are the operator's code running on what a customer's cluster
+// produced, so a panic in them is reported as checks that could not run rather
+// than taking the tool down.
+func operatorFindings(b *supportbundle.Bundle, cdc *simplyblockv1alpha2.ClusterDeploymentConfig) (out []Finding) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = []Finding{{Source: "operator", Severity: SeverityWarning, Reason: "ChecksNotRun",
+				Message: fmt.Sprintf("the operator's checks stopped on this bundle: %v", r)}}
+		}
+	}()
 	c, err := fakeClusterOf(b)
 	if err == nil {
 		var found []deployment.Finding
@@ -140,10 +150,20 @@ func fakeClusterOf(b *supportbundle.Bundle) (client.Client, error) {
 	for i := range b.StorageNodes {
 		objects = append(objects, b.StorageNodes[i].DeepCopy())
 	}
+	// An object listed twice is one object to an API server, and the fake one
+	// refuses the second copy.
+	seen := map[string]bool{}
+	unique := objects[:0]
 	for _, o := range objects {
+		key := fmt.Sprintf("%T/%s/%s", o, o.GetNamespace(), o.GetName())
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		o.SetResourceVersion("")
+		unique = append(unique, o)
 	}
-	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build(), nil
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(unique...).Build(), nil
 }
 
 // bundleFindings reads every group against its workers' probe reports.

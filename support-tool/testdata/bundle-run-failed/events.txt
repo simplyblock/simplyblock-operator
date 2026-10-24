@@ -1,0 +1,8 @@
+LAST SEEN   TYPE      REASON            OBJECT                MESSAGE
+2m          Normal    DeviceDeclined    operatorops/discover-mounted   worker-01/nvme0n1: declined by available because the probe refused it: Mounted
+2m          Normal    DeviceDeclined    operatorops/discover-mounted   worker-01/nvme1n1: declined by available because the probe refused it: Mounted
+2m          Normal    DeviceDeclined    operatorops/discover-mounted   worker-01/nvme2n1: declined by available because the probe refused it: Mounted
+2m          Normal    DeviceDeclined    operatorops/discover-mounted   worker-01/nvme3n1: declined by available because the probe refused it: Mounted
+2m          Normal    DeviceDeclined    operatorops/discover-mounted   worker-01: declined by has devices because no device of it survived the device rules
+2m          Normal    DeviceDeclined    operatorops/discover-mounted   worker-02/nvme0n1: declined by available because the probe refused it: Mounted
+1m          Warning   OperationFailed   operatorops/discover-mounted   no worker has a device this run would use: 12 device(s) across 3 worker(s), none usable: 12 declined by available: the probe refused it: Mounted
