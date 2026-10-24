@@ -23,8 +23,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/discovery"
+	"github.com/simplyblock/simplyblock-operator/internal/erasurecoding"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/supportbundle"
 )
@@ -81,6 +84,32 @@ type Cluster struct {
 	EnableFailureDomains     *bool    `json:"enableFailureDomains,omitempty"`
 	EnableChecksumValidation *bool    `json:"enableChecksumValidation,omitempty"`
 	EnableAtomicity4K        *bool    `json:"enableAtomicity4K,omitempty"`
+
+	// EnableCpuTopology and EnableKubeletConfiguration are stated only on a
+	// Vanilla document; every other environment decides both, and Build drops
+	// them there rather than writing a document the schema refuses.
+	EnableCpuTopology          *bool `json:"enableCpuTopology,omitempty"`
+	EnableKubeletConfiguration *bool `json:"enableKubeletConfiguration,omitempty"`
+
+	// ForceJournalDevice dedicates a journal device even where a worker's
+	// smallest devices tie, as spec.discover.forceJournalDevice does for a run.
+	// A document has no such field: it writes enableJournalDevice, and the
+	// editor stops warning about the tie.
+	ForceJournalDevice bool `json:"forceJournalDevice,omitempty"`
+}
+
+// Environments are the values spec.environment takes, in the order the editor
+// offers them.
+var Environments = []simplyblockv1alpha2.KubernetesEnvironment{
+	simplyblockv1alpha2.KubernetesEnvironmentVanilla,
+	simplyblockv1alpha2.KubernetesEnvironmentOpenShift,
+	simplyblockv1alpha2.KubernetesEnvironmentRancher,
+	simplyblockv1alpha2.KubernetesEnvironmentK3s,
+	simplyblockv1alpha2.KubernetesEnvironmentTalos,
+	simplyblockv1alpha2.KubernetesEnvironmentEKS,
+	simplyblockv1alpha2.KubernetesEnvironmentGKE,
+	simplyblockv1alpha2.KubernetesEnvironmentAKS,
+	simplyblockv1alpha2.KubernetesEnvironmentOKE,
 }
 
 // defaultNodeSet is the node set a discovery run drafts into.
@@ -142,6 +171,7 @@ func prefillFromCDC(b *supportbundle.Bundle) Request {
 			EnableDriveFormat: c.EnableDriveFormat, EnableJournalDevice: c.EnableJournalDevice,
 			EnableFailureDomains: c.EnableFailureDomains, EnableChecksumValidation: c.EnableChecksumValidation,
 			EnableAtomicity4K: c.EnableAtomicity4K,
+			EnableCpuTopology: c.EnableCpuTopology, EnableKubeletConfiguration: c.EnableKubeletConfiguration,
 		}
 		if c.Stripe != nil {
 			req.Cluster.DataChunks, req.Cluster.ParityChunks = c.Stripe.DataChunks, c.Stripe.ParityChunks
@@ -206,8 +236,13 @@ func prefillFromReports(b *supportbundle.Bundle) Request {
 	on := true
 	thirty := int32(30)
 	req.Cluster = Cluster{Name: req.Name + "-cluster", EnableDriveFormat: &on, MaxSubsystemCount: &thirty}
+	// 2+1 where the workers carry it, 1+1 where they are too few for 2+1's
+	// spare: the operator's own minimums, which a proposal it refuses would
+	// only send back.
 	data, parity := int32(2), int32(1)
 	switch {
+	case len(req.Workers) >= 3 && len(req.Workers) < (erasurecoding.Scheme{DataChunks: 2, ParityChunks: 1}).MinimumNodes():
+		data = 1
 	case len(req.Workers) == 2:
 		data, req.Cluster.ClusterMode = 1, string(simplyblockv1alpha2.ClusterModeDual)
 	case len(req.Workers) == 1:
@@ -335,6 +370,13 @@ func clusterOf(base *simplyblockv1alpha2.ClusterTemplate, req Request) *simplybl
 	c.EnableDriveFormat, c.EnableJournalDevice = e.EnableDriveFormat, e.EnableJournalDevice
 	c.EnableFailureDomains, c.EnableChecksumValidation = e.EnableFailureDomains, e.EnableChecksumValidation
 	c.EnableAtomicity4K = e.EnableAtomicity4K
+	if e.ForceJournalDevice {
+		c.EnableJournalDevice = ptr.To(true)
+	}
+	c.EnableCpuTopology, c.EnableKubeletConfiguration = nil, nil
+	if req.Environment == string(simplyblockv1alpha2.KubernetesEnvironmentVanilla) {
+		c.EnableCpuTopology, c.EnableKubeletConfiguration = e.EnableCpuTopology, e.EnableKubeletConfiguration
+	}
 	c.Stripe = nil
 	if e.DataChunks != nil || e.ParityChunks != nil {
 		c.Stripe = &simplyblockv1alpha2.StripeSpec{DataChunks: e.DataChunks, ParityChunks: e.ParityChunks}

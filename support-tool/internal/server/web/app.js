@@ -350,9 +350,70 @@ function cdc() {
 
 // ─── Editor ────────────────────────────────────────────────────────────────
 
+// currentRequest is what the editor has chosen, as the API takes it.
+function currentRequest() {
+  const { req } = state.edit;
+  return { ...req, workers: Object.values(state.edit.byWorker).filter((w) => state.edit.included.has(w.name)) };
+}
+
+// journalSelect offers the journal device. Force exists for logical block
+// devices: a document has no field for it and writes the device on, and the
+// editor stops warning that the worker's smallest devices tie.
+function journalSelect(c, mode) {
+  const value = c.forceJournalDevice ? "force" : String(c.enableJournalDevice ?? "");
+  const options = [["", "unset"], ["true", "on"], ["false", "off"]];
+  if (mode === "block") options.push(["force", "force (accept tied smallest devices)"]);
+  return el("select", { onchange: (e) => {
+    const v = e.target.value;
+    c.forceJournalDevice = v === "force";
+    c.enableJournalDevice = v === "" ? null : v !== "false";
+    refreshStripes();
+  } }, options.map(([v, l]) => el("option", { value: v, selected: value === v }, l)));
+}
+
+// stripeSelect offers the supported schemes, the ones the chosen workers and
+// devices do not carry disabled with the operator's reason. refreshStripes
+// fills it from the server whenever a choice it depends on changes.
+function stripeSelect(c) {
+  const select = el("select", { id: "stripe", onchange: (e) => {
+    const [d, p] = e.target.value.split("+").map(Number);
+    c.dataChunks = d; c.parityChunks = p;
+  } }, el("option", { value: "" }, `${c.dataChunks ?? "?"}+${c.parityChunks ?? "?"}`));
+  queueMicrotask(refreshStripes);
+  return el("div", {}, select, el("div", { id: "stripe-note", class: "note" }));
+}
+
+let stripeTimer = null;
+function refreshStripes() {
+  clearTimeout(stripeTimer);
+  stripeTimer = setTimeout(async () => {
+    const select = document.getElementById("stripe");
+    const note = document.getElementById("stripe-note");
+    if (!select || !state.edit?.req) return;
+    const c = state.edit.req.cluster;
+    const current = `${c.dataChunks}+${c.parityChunks}`;
+    try {
+      const out = await api("POST", `/api/bundles/${state.id}/cdc/stripes`, currentRequest());
+      const options = out.options || [];
+      select.replaceChildren(...options.map((o) => el("option", {
+        value: o.name, selected: o.name === current, disabled: !o.valid,
+        title: (o.reasons || []).join("\n"),
+      }, o.valid ? o.name : `${o.name} (not carried)`)));
+      if (!options.some((o) => o.name === current)) select.prepend(el("option", { value: current, selected: true }, current));
+      const chosen = options.find((o) => o.name === current);
+      note.textContent = out.error ? out.error
+        : chosen && !chosen.valid ? (chosen.reasons || []).join(" ")
+          : `${options.filter((o) => o.valid).length} of ${options.length} schemes fit the chosen workers and devices.`;
+    } catch (e) {
+      note.textContent = e.message;
+    }
+  }, 150);
+}
+
 function editor() {
   if (!state.edit) {
-    api("GET", `/api/bundles/${state.id}/cdc/prefill`).then((req) => {
+    Promise.all([api("GET", `/api/bundles/${state.id}/cdc/prefill`), state.meta || api("GET", "/api/meta")]).then(([req, meta]) => {
+      state.meta = meta;
       // A list the server or a document leaves out is an empty one here.
       req.workers = (req.workers || []).map((w) => ({ ...w, devices: w.devices || [], dataInterfaces: w.dataInterfaces || [] }));
       req.cluster = req.cluster || {};
@@ -375,17 +436,30 @@ function editor() {
   const docCard = card("Document", el("div", { class: "form" },
     el("label", {}, "Name"), text(req, "name"),
     el("label", {}, "Namespace"), text(req, "namespace"),
-    el("label", {}, "Device mode"), el("select", { onchange: (e) => { req.mode = e.target.value; for (const w of Object.values(state.edit.byWorker)) w.devices = []; render(); } },
+    el("label", {}, "Device mode"), el("select", { onchange: (e) => {
+      req.mode = e.target.value;
+      for (const w of Object.values(state.edit.byWorker)) w.devices = [];
+      if (req.mode !== "block") req.cluster.forceJournalDevice = false;
+      render();
+    } },
       [["nvme", "NVMe (PCI addresses)"], ["block", "Logical block devices (paths)"]].map(([v, l]) => el("option", { value: v, selected: req.mode === v }, l))),
     el("label", {}, "Grow existing cluster"), text(req, "clusterRef", { placeholder: "empty: the document creates a cluster" }),
-    el("label", {}, "Environment"), text(req, "environment")),
+    el("label", {}, "Environment"), el("select", { onchange: (e) => {
+      req.environment = e.target.value;
+      // Only a Vanilla document states the node flags: every other environment
+      // decides them, and the schema refuses them there.
+      if (req.environment !== "Vanilla") { delete req.cluster.enableCpuTopology; delete req.cluster.enableKubeletConfiguration; }
+      render();
+    } }, ["", ...(state.meta?.environments || [])].map((v) => el("option", { value: v, selected: (req.environment || "") === v }, v || "unset")))),
   req.fromCDC ? el("p", { class: "note" }, "Built on the bundle's ClusterDeploymentConfig: the fields this editor does not show are kept.") : null);
 
   const c = req.cluster;
   const clusterCard = card("Cluster settings", req.clusterRef ? el("p", { class: "note" }, "A document that grows a cluster states no cluster settings.") : el("div", { class: "form" },
     el("label", {}, "Cluster name"), text(c, "name"),
-    el("label", {}, "Stripe (data + parity)"), el("div", { class: "row" }, num(c, "dataChunks"), "+", num(c, "parityChunks")),
-    el("label", {}, "Cluster mode"), pick(c, "clusterMode", [["", "Standard (default)"], ["Standard", "Standard"], ["Dual", "Dual (two nodes)"], ["Single", "Single (one node)"]]),
+    el("label", {}, "Stripe (data + parity)"), stripeSelect(c),
+    el("label", {}, "Cluster mode"), el("select", { onchange: (e) => { c.clusterMode = e.target.value; refreshStripes(); } },
+      [["", "Standard (default)"], ["Standard", "Standard"], ["Dual", "Dual (two nodes)"], ["Single", "Single (one node)"]]
+        .map(([v, l]) => el("option", { value: v, selected: (c.clusterMode ?? "") === v }, l))),
     el("label", {}, "vCPU count"), num(c, "vcpuCount"),
     el("label", {}, "Max subsystem count"), num(c, "maxSubsystemCount"),
     el("label", {}, "Min huge pages size"), text(c, "minHugePagesSize", { placeholder: "for example 16G" }),
@@ -393,10 +467,15 @@ function editor() {
     el("label", {}, "Sockets to use"), el("input", { type: "text", value: (c.socketsToUse || []).join(","), placeholder: "for example 0,1",
       oninput: (e) => { c.socketsToUse = e.target.value.split(",").map((s) => s.trim()).filter(Boolean); } }),
     el("label", {}, "Format drives"), tri(c, "enableDriveFormat"),
-    el("label", {}, "Journal device"), tri(c, "enableJournalDevice"),
+    el("label", {}, "Journal device"), journalSelect(c, req.mode),
     el("label", {}, "Failure domains"), tri(c, "enableFailureDomains"),
     el("label", {}, "Checksum validation"), tri(c, "enableChecksumValidation"),
-    el("label", {}, "4K atomicity"), tri(c, "enableAtomicity4K")));
+    el("label", {}, "4K atomicity"), tri(c, "enableAtomicity4K"),
+    ...(req.environment === "Vanilla"
+      ? [el("label", {}, "CPU topology"), tri(c, "enableCpuTopology"),
+        el("label", {}, "Kubelet configuration"), tri(c, "enableKubeletConfiguration")]
+      : [el("label", {}, "CPU topology, kubelet"), el("span", { class: "note" },
+        req.environment ? `decided by ${req.environment}` : "decided by the environment; choose Vanilla to state them")])));
 
   const rows = workersWithReports.map((w) => {
     let choice = state.edit.byWorker[w.name];
@@ -418,6 +497,7 @@ function editor() {
         return el("label", { class: d.available ? "" : "refused" },
           el("input", { type: "checkbox", checked: choice.devices.includes(id), onchange: (e) => {
             choice.devices = e.target.checked ? [...choice.devices, id] : choice.devices.filter((x) => x !== id);
+            refreshStripes();
           } }),
           el("span", {}, el("code", {}, id), ` ${bytes(d.sizeBytes)} ${d.model || ""} `,
             d.available ? "" : badge((d.rejections || []).map((r) => r.reason).join(", ") || "refused", "err")));
@@ -425,6 +505,7 @@ function editor() {
     return [
       el("label", { class: "row" }, el("input", { type: "checkbox", checked: included, onchange: (e) => {
         if (e.target.checked) state.edit.included.add(w.name); else state.edit.included.delete(w.name);
+        refreshStripes();
       } }), el("strong", {}, w.name)),
       text(choice, "nodeSet"),
       text(choice, "failureDomain", { placeholder: "none" }),
@@ -460,7 +541,7 @@ function editor() {
   }
 
   const build = async () => {
-    const body = { ...req, workers: Object.values(state.edit.byWorker).filter((w) => state.edit.included.has(w.name)) };
+    const body = currentRequest();
     try {
       state.built = await api("POST", `/api/bundles/${state.id}/cdc`, body);
       state.built.error = null;

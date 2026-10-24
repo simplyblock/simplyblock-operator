@@ -171,3 +171,82 @@ func TestThePrefillOfABundleWithoutAUsableDeviceIsAList(t *testing.T) {
 		t.Errorf("workers is %s, want a list", got)
 	}
 }
+
+func TestTheMetaNamesTheEnvironments(t *testing.T) {
+	rec := do(t, New(), http.MethodGet, "/api/meta", "", nil)
+	var meta struct {
+		Environments []string `json:"environments"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("meta: %d %s", rec.Code, rec.Body)
+	}
+	if len(meta.Environments) != 9 || meta.Environments[0] != "Vanilla" {
+		t.Errorf("the environments are %v", meta.Environments)
+	}
+}
+
+func prefillOf(t *testing.T, s http.Handler, id string) cdcedit.Request {
+	t.Helper()
+	rec := do(t, s, http.MethodGet, "/api/bundles/"+id+"/cdc/prefill", "", nil)
+	var req cdcedit.Request
+	if err := json.Unmarshal(rec.Body.Bytes(), &req); err != nil {
+		t.Fatalf("prefill: %d %s", rec.Code, rec.Body)
+	}
+	return req
+}
+
+func TestTheStripeOptionsAreTheEditorsChoices(t *testing.T) {
+	s := New()
+	up := uploadFixture(t, s)
+	body, _ := json.Marshal(prefillOf(t, s, up.ID))
+
+	rec := do(t, s, http.MethodPost, "/api/bundles/"+up.ID+"/cdc/stripes", "application/json", bytes.NewReader(body))
+	var out struct {
+		Options []analysis.StripeOption `json:"options"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("stripes: %d %s", rec.Code, rec.Body)
+	}
+	valid := map[string]bool{}
+	for _, o := range out.Options {
+		valid[o.Name] = o.Valid
+	}
+	if !valid["1+1"] || valid["2+1"] {
+		t.Errorf("for three workers the options are %v", valid)
+	}
+}
+
+func TestAForcedJournalSilencesTheTieWarning(t *testing.T) {
+	s := New()
+	up := uploadFixture(t, s)
+	req := prefillOf(t, s, up.ID)
+	req.Mode = cdcedit.ModeBlock
+	on := true
+	req.Cluster.EnableJournalDevice = &on
+	for i := range req.Workers {
+		req.Workers[i].Devices = []string{"/dev/nvme0n1", "/dev/nvme1n1", "/dev/nvme2n1"}
+	}
+
+	ties := func() int {
+		body, _ := json.Marshal(req)
+		rec := do(t, s, http.MethodPost, "/api/bundles/"+up.ID+"/cdc", "application/json", bytes.NewReader(body))
+		var built analysis.CDC
+		if err := json.Unmarshal(rec.Body.Bytes(), &built); err != nil || rec.Code != http.StatusOK {
+			t.Fatalf("build: %d %s", rec.Code, rec.Body)
+		}
+		n := 0
+		for _, f := range built.Findings {
+			if f.Reason == "JournalDeviceTied" {
+				n++
+			}
+		}
+		return n
+	}
+	if n := ties(); n != 3 {
+		t.Errorf("%d tie warnings for three workers of equal disks, want 3", n)
+	}
+	req.Cluster.ForceJournalDevice = true
+	if n := ties(); n != 0 {
+		t.Errorf("%d tie warnings with the journal forced", n)
+	}
+}

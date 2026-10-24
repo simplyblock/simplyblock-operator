@@ -56,6 +56,8 @@ func New() *Server {
 	s.mux.HandleFunc("GET /api/bundles/{id}", s.analysis)
 	s.mux.HandleFunc("GET /api/bundles/{id}/cdc/prefill", s.prefill)
 	s.mux.HandleFunc("POST /api/bundles/{id}/cdc", s.build)
+	s.mux.HandleFunc("POST /api/bundles/{id}/cdc/stripes", s.stripes)
+	s.mux.HandleFunc("GET /api/meta", s.meta)
 	return s
 }
 
@@ -120,9 +122,8 @@ func (s *Server) build(w http.ResponseWriter, r *http.Request) {
 	if b == nil {
 		return
 	}
-	var req cdcedit.Request
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		fail(w, http.StatusBadRequest, "the request does not parse: "+err.Error())
+	req, ok := decodeRequest(w, r)
+	if !ok {
 		return
 	}
 	cdc, err := cdcedit.Build(b, req)
@@ -132,7 +133,50 @@ func (s *Server) build(w http.ResponseWriter, r *http.Request) {
 	}
 	view := analysis.ViewOf(cdc)
 	view.Findings = analysis.CheckCDC(b, cdc)
+	// A document has no field for a forced journal: forcing it is accepting
+	// the tie, so the warning is the editor's to drop.
+	if !req.Cluster.ForceJournalDevice {
+		view.Findings = append(view.Findings, analysis.JournalTies(b, cdc)...)
+	}
 	reply(w, view)
+}
+
+// stripes answers with every supported scheme and whether the request's
+// workers and devices carry it, by the operator's own checks. A request no
+// document can state has no options, and says why.
+func (s *Server) stripes(w http.ResponseWriter, r *http.Request) {
+	b := s.bundle(w, r)
+	if b == nil {
+		return
+	}
+	req, ok := decodeRequest(w, r)
+	if !ok {
+		return
+	}
+	options := []analysis.StripeOption{}
+	cdc, err := cdcedit.Build(b, req)
+	if err != nil {
+		reply(w, map[string]any{"options": options, "error": err.Error()})
+		return
+	}
+	if found := analysis.StripeOptions(b, cdc); found != nil {
+		options = found
+	}
+	reply(w, map[string]any{"options": options})
+}
+
+// meta is what the editor offers that does not depend on a bundle.
+func (s *Server) meta(w http.ResponseWriter, _ *http.Request) {
+	reply(w, map[string]any{"environments": cdcedit.Environments})
+}
+
+func decodeRequest(w http.ResponseWriter, r *http.Request) (cdcedit.Request, bool) {
+	var req cdcedit.Request
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		fail(w, http.StatusBadRequest, "the request does not parse: "+err.Error())
+		return req, false
+	}
+	return req, true
 }
 
 func (s *Server) keep(b *supportbundle.Bundle) string {

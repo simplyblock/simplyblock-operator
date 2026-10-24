@@ -48,7 +48,13 @@ A CDC's findings come from two places:
   that already runs a storage node of another cluster.
 
 The editor groups workers that share their node set, devices, interfaces, and
-failure domain, which is how the API states a fleet. Editing the bundle's own CDC
+failure domain, which is how the API states a fleet. Its stripe choice lists the
+supported schemes, and disables those the chosen workers and devices do not carry,
+with the operator's reason. The environment is one of the API's values, and only a
+Vanilla document offers `enableCpuTopology` and `enableKubeletConfiguration`,
+which every other environment decides. In logical block device mode the journal
+device offers force as well, which accepts a worker whose smallest devices tie:
+the document states `enableJournalDevice` either way, and the editor stops warning. Editing the bundle's own CDC
 keeps every field the editor does not show, such as tolerations, images, and KMS.
 An approved CDC is immutable, so the editor writes its edit under another name.
 A document built here is never approved: approval stays a decision made on the

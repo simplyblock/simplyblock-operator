@@ -23,9 +23,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/yaml"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
+	"github.com/simplyblock/simplyblock-operator/internal/erasurecoding"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/cdcedit"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/supportbundle"
@@ -264,4 +267,109 @@ func checkInterface(
 		}
 	}
 	add(SeverityError, "InterfaceNotOnWorker", "%s/%s: %s has no %s interface %s", set, group, worker, role, name)
+}
+
+// StripeOption is one erasure-coding scheme and whether the document's workers
+// and devices carry it.
+type StripeOption struct {
+	Name         string   `json:"name"`
+	DataChunks   int      `json:"dataChunks"`
+	ParityChunks int      `json:"parityChunks"`
+	Valid        bool     `json:"valid"`
+	Reasons      []string `json:"reasons,omitempty"`
+}
+
+// StripeOptions is every supported scheme, checked against the document by the
+// operator's own stripe checks against the fleet the bundle captured. A
+// document that grows a cluster states no stripe, and is offered none.
+func StripeOptions(b *supportbundle.Bundle, cdc *simplyblockv1alpha2.ClusterDeploymentConfig) []StripeOption {
+	if cdc.Spec.Cluster == nil {
+		return nil
+	}
+	c, err := fakeClusterOf(b)
+	if err != nil {
+		return nil
+	}
+	var out []StripeOption
+	for _, scheme := range erasurecoding.Supported() {
+		option := StripeOption{
+			Name: scheme.String(), DataChunks: scheme.DataChunks, ParityChunks: scheme.ParityChunks, Valid: true,
+		}
+		doc := cdc.DeepCopy()
+		doc.Spec.Cluster.Stripe = &simplyblockv1alpha2.StripeSpec{
+			DataChunks: ptr.To(int32(scheme.DataChunks)), ParityChunks: ptr.To(int32(scheme.ParityChunks)),
+		}
+		checks, err := stripeChecks(c, doc)
+		if err != nil {
+			option.Valid, option.Reasons = false, []string{err.Error()}
+		}
+		for _, check := range checks {
+			option.Valid = false
+			option.Reasons = append(option.Reasons, check.Message)
+		}
+		out = append(out, option)
+	}
+	return out
+}
+
+// stripeChecks runs the operator's stripe checks, reporting a panic in them as
+// an error for the reason operatorFindings does.
+func stripeChecks(c client.Client, doc *simplyblockv1alpha2.ClusterDeploymentConfig) (checks []deployment.StripeCheck, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("the operator's stripe checks stopped on this bundle: %v", r)
+		}
+	}()
+	return deployment.StripeChecks(context.Background(), c, doc.Namespace, doc)
+}
+
+// JournalTies reports the workers of a logical block device document with a
+// journal device whose smallest chosen devices tie, so that which one carries
+// the journal is the control plane's choice.
+func JournalTies(b *supportbundle.Bundle, cdc *simplyblockv1alpha2.ClusterDeploymentConfig) []Finding {
+	c := cdc.Spec.Cluster
+	if c == nil || c.EnableJournalDevice == nil || !*c.EnableJournalDevice {
+		return nil
+	}
+	reports := map[string]nodeprobe.Report{}
+	for _, r := range b.Reports {
+		if r.Err == "" {
+			reports[r.Report.Node] = r.Report
+		}
+	}
+	var out []Finding
+	for _, set := range cdc.Spec.NodeSets {
+		for _, g := range set.Groups {
+			if g.Devices == nil || len(g.Devices.Block) == 0 {
+				continue
+			}
+			for _, worker := range g.Workers {
+				report, ok := reports[worker]
+				if !ok {
+					continue
+				}
+				smallest, tied := uint64(0), []string(nil)
+				for _, id := range g.Devices.Block {
+					for _, d := range report.Devices {
+						if d.Path != id && d.StablePath != id {
+							continue
+						}
+						switch {
+						case smallest == 0 || d.SizeBytes < smallest:
+							smallest, tied = d.SizeBytes, []string{id}
+						case d.SizeBytes == smallest:
+							tied = append(tied, id)
+						}
+					}
+				}
+				if len(tied) > 1 {
+					out = append(out, Finding{Source: "bundle", Severity: SeverityWarning, Reason: "JournalDeviceTied",
+						Message: fmt.Sprintf("%s/%s: %s's smallest devices tie at %d bytes (%s), so which one carries "+
+							"the journal is the control plane's choice: choose force to accept that",
+							set.Name, g.Name, worker, smallest, strings.Join(tied, ", "))})
+				}
+			}
+		}
+	}
+	return out
 }

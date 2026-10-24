@@ -227,3 +227,87 @@ func TestThePrefillTakesTheRunsDeviceMode(t *testing.T) {
 		t.Errorf("the prefill for an NVMe run is in %s mode", req.Mode)
 	}
 }
+
+func TestAVanillaDocumentCarriesItsNodeFlags(t *testing.T) {
+	b := fixture(t, withoutCDC)
+	req := Prefill(b)
+	req.Environment = "Vanilla"
+	on, off := true, false
+	req.Cluster.EnableCpuTopology, req.Cluster.EnableKubeletConfiguration = &on, &off
+
+	built, err := Build(b, req)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	c := built.Spec.Cluster
+	if c.EnableCpuTopology == nil || !*c.EnableCpuTopology || c.EnableKubeletConfiguration == nil || *c.EnableKubeletConfiguration {
+		t.Errorf("the flags are %v and %v", c.EnableCpuTopology, c.EnableKubeletConfiguration)
+	}
+}
+
+func TestTheNodeFlagsAreDroppedOutsideVanilla(t *testing.T) {
+	b := fixture(t, withoutCDC)
+	req := Prefill(b)
+	req.Environment = "Talos"
+	on := true
+	req.Cluster.EnableCpuTopology, req.Cluster.EnableKubeletConfiguration = &on, &on
+
+	built, err := Build(b, req)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if c := built.Spec.Cluster; c.EnableCpuTopology != nil || c.EnableKubeletConfiguration != nil {
+		t.Errorf("a Talos document carries the flags the schema refuses on it: %v, %v",
+			c.EnableCpuTopology, c.EnableKubeletConfiguration)
+	}
+}
+
+func TestAForcedJournalIsAnEnabledOne(t *testing.T) {
+	b := fixture(t, withoutCDC)
+	req := Prefill(b)
+	req.Mode = ModeBlock
+	req.Cluster.ForceJournalDevice = true
+	req.Cluster.EnableJournalDevice = nil
+	for i := range req.Workers {
+		req.Workers[i].Devices = []string{"/dev/nvme0n1", "/dev/nvme1n1"}
+	}
+
+	built, err := Build(b, req)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if j := built.Spec.Cluster.EnableJournalDevice; j == nil || !*j {
+		t.Errorf("a forced journal wrote enableJournalDevice %v", j)
+	}
+}
+
+func TestTheEnvironmentsAreTheAPIs(t *testing.T) {
+	want := []string{"Vanilla", "OpenShift", "Rancher", "K3s", "Talos", "EKS", "GKE", "AKS", "OKE"}
+	if len(Environments) != len(want) {
+		t.Fatalf("%d environments, want %d", len(Environments), len(want))
+	}
+	for i, e := range Environments {
+		if string(e) != want[i] {
+			t.Errorf("environment %d is %s, want %s", i, e, want[i])
+		}
+	}
+}
+
+func TestThePrefillProposesAStripeTheWorkersCarry(t *testing.T) {
+	// Three workers carry 1+1 and not 2+1, which needs a fourth to rebuild
+	// onto, so a proposal of 2+1 is one the operator refuses.
+	req := Prefill(fixture(t, withoutCDC))
+	if len(req.Workers) != 3 {
+		t.Fatalf("%d workers", len(req.Workers))
+	}
+	if d, p := req.Cluster.DataChunks, req.Cluster.ParityChunks; d == nil || p == nil || *d != 1 || *p != 1 {
+		t.Errorf("three workers are proposed %v+%v, want 1+1", deref(d), deref(p))
+	}
+}
+
+func deref(p *int32) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
