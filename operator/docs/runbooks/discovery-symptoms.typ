@@ -172,6 +172,9 @@ D 12.
 = Review and deployment
 
 #grid(cols, head,
+  [The draft no longer matches the hardware], [When the run happened (`metadata.creationTimestamp` of the OperatorOps)],
+  [The draft is never updated after the run. Workers added, removed, or relabeled since, and disks that changed since, are not in it.],
+  [R 10],
   [The draft stays in `Draft`], [`status.message` of the CDC and its Warning events],
   [A document check fails. Without a problem, the message is `the document is valid and is waiting for spec.approved`, which means it is waiting for approval.],
   [R 6],

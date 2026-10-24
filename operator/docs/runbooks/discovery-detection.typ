@@ -520,7 +520,8 @@ A choice is changed in one of two places:
 A finished run is not run again. A new run is a new OperatorOps
 with another name. Its draft is named after the run unless `spec.discover.configName` names it, and a draft
 that already exists is left as it is (event `ConfigExists`). Delete the old draft first, or give the new run
-another name.
+another name. When a new run is needed, and how long a run's objects stay, is in section 10 of the
+rejections document.
 
 == Workers and disks
 

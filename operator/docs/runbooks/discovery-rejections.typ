@@ -478,3 +478,53 @@ All under `spec.discover` of the OperatorOps.
   [`clusterRef`], [The draft adds workers to an existing cluster.],
   [`configName`], [Name of the draft CDC.],
 )
+
+#pagebreak(weak: true)
+= Running discovery again
+
+A run reads the fleet once. Its draft describes the fleet as it was then and is never updated, and a finished
+run never runs again: editing its OperatorOps changes nothing. Whatever changed since needs a new run.
+
+== When a new run is needed
+
+#grid((1.6fr, 2.4fr, 2.6fr), ([After], [Why the existing draft is wrong], [What to do]),
+  [Resolving a rejection: a wiped disk, an uncordoned worker, a label, a taint toleration, a filter, the device mode], [The draft was written from what the run saw, and leaves out what it refused.], [A new run. For a small change, editing the draft instead is often quicker (detection document, section 12).],
+  [Adding workers to the Kubernetes cluster], [The draft does not name them.], [A new run. To add them to a cluster that is already deployed, set `spec.discover.clusterRef` to that cluster.],
+  [Removing or renaming a worker], [The draft check reports `WorkerNotFound` and holds the draft.], [Remove the worker from the draft, or run again.],
+  [A disk changing after the run: data written to it, mounted, replaced, or removed], [Nothing notices. The draft checks look at the nodes, not at the disks.], [Run again before approving. `enableDriveFormat` is on in every draft unless it was edited, so approving formats every listed disk, including one that received data after the run.],
+  [Upgrading the operator while a run is in progress], [When the new operator reads another report version, reports written by the previous probe image are refused with `ReportUnreadable`, and their workers are left out.], [A new run. A run that finished before the upgrade is unaffected, and so is its draft.],
+  [A failed or aborted run], [It wrote no draft, or a partial one, and never resumes.], [Fix the cause from its message, then start a new run.],
+  [`helm upgrade` with changed `discovery` values], [The chart's run keeps its name, and a finished run is not run again, so an upgrade does not discover again.], [Write the OperatorOps by hand.],
+)
+
+== Starting one
+
+A new run is a new OperatorOps with a name not used before. Its draft is called `discovered-<run>` unless
+`spec.discover.configName` names it, and a run whose draft name is taken leaves the existing draft as it is
+(event `ConfigExists`) instead of overwriting a document someone may have reviewed.
+
+```yaml
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: discovery-2
+  namespace: <ns>
+spec:
+  action: Discover
+  discover: {}        # the settings of section 9, as the earlier run had them plus the change
+```
+
+A worker that already runs a storage node is never inspected again. A worker named in another draft is, and
+nothing refuses approving two documents that name the same worker, so delete a draft that will not be used.
+
+== What a run leaves behind, and for how long
+
+#grid((1.6fr, 2.4fr, 2.6fr), ([Object], [Lifetime], [Notes]),
+  [OperatorOps], [Until deleted.], [The run's record: its phase, status message, and environment. Deleting a running one aborts it first. `spec.abort: true` stops it without deleting it.],
+  [Probe report ConfigMaps (label `storage.simplyblock.io/nodeprobe-run=<run>`)], [As long as the OperatorOps exists.], [Deleted with the run. Collect them first if the case is open.],
+  [Probe Jobs and pods], [One hour after they finish.], [Their logs go with them. A failed probe is retried twice.],
+  [Events on the OperatorOps], [About one hour, the Kubernetes default.], [The status message and the probe reports keep the essentials after the events are gone.],
+  [The draft ClusterDeploymentConfig], [Until deleted. Deleting the run does not delete it.], [It carries the run's name in the label `storage.simplyblock.io/nodeprobe-run`.],
+  [NVMe controllers a probe returned to the kernel driver], [Permanently.], [Listed under `reclaimed` in that worker's report.],
+)
+
