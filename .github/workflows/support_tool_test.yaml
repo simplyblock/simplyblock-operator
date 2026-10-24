@@ -1,0 +1,35 @@
+# The support tool's tests. It compiles against the operator's API types, its
+# probe report, its discovery package, and its draft checks, and against
+# atlas-lib through them, so a change to either of those runs these too.
+name: "Support tool: Tests"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "support-tool/**"
+      - "operator/api/**"
+      - "operator/internal/**"
+      - "atlas-lib/**"
+      - ".github/workflows/support_tool_test.yaml"
+  pull_request:
+    paths:
+      - "support-tool/**"
+      - "operator/api/**"
+      - "operator/internal/**"
+      - "atlas-lib/**"
+      - ".github/workflows/support_tool_test.yaml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: support-tool
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: support-tool/go.mod
+      - run: go vet ./...
+      - run: go test -race ./...

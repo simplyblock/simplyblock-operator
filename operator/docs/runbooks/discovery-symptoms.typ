@@ -70,13 +70,18 @@ the nodes, and the operator's log since the run started, into one archive. It on
 and never reads a Secret:
 
 ```
-curl -fsSLO https://raw.githubusercontent.com/simplyblock/simplyblock-operator/main/helm-charts/scripts/kubectl-simplyblock-bundle
-bash kubectl-simplyblock-bundle -n <ns> --run <run>
+curl -s -L https://install.simplyblock.io/scripts/discovery-bundler | bash
 ```
 
-Without `--run`, it takes the newest discovery run in the namespace. Placed on the `PATH` and made
-executable, the script also runs as `kubectl simplyblock bundle`. A read that failed is listed in
-`errors.txt` inside the archive, and the rest is still collected.
+It takes the namespace of the current kubectl context and its newest discovery run. To name them:
+
+```
+curl -s -L https://install.simplyblock.io/scripts/discovery-bundler | bash -s -- -n <ns> --run <run>
+```
+
+A read that failed is listed in `errors.txt` inside the archive, and the rest is still collected. A
+customer who cannot run a downloaded script runs its steps by hand: the support tool lists them as
+individual commands under _Without the script_.
 
 Without the bundle, ask for these four things. Together they answer most cases without a second round trip.
 

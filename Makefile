@@ -1,5 +1,5 @@
 # Root Makefile orchestrating build & test across the monorepo components:
-#   atlas-lib (shared library), csi-driver, operator, fleet-manager
+#   atlas-lib (shared library), csi-driver, operator, fleet-manager, support-tool
 #
 # Each target delegates to the relevant component's own Makefile.
 
@@ -7,6 +7,7 @@ ATLAS_DIR       := atlas-lib
 CSI_DIR         := csi-driver
 OPERATOR_DIR    := operator
 FLEET_DIR       := fleet
+SUPPORT_DIR     := support-tool
 HELM_DIR        := helm-charts
 INTEGRATION_DIR := test/integration
 
@@ -52,21 +53,22 @@ SBCLI_REQUIREMENTS := $(wildcard $(SBCLI_DIR)/requirements.txt)
         csi csi-build csi-test csi-lint csi-fmt csi-vet \
         operator operator-manifests operator-build-installer operator-build operator-test operator-lint operator-fmt operator-vet \
         fleet fleet-manifests fleet-build fleet-test fleet-lint fleet-fmt fleet-vet \
+        support-tool support-tool-build support-tool-run support-tool-test support-tool-lint support-tool-fmt support-tool-vet \
         helm-sync \
         configure openapi-sync openapi-diff openapi-ref openapi-checkout
 
 # ─── Aggregate ──────────────────────────────────────────────────────────────
 all: build test ## Build and test every component.
 
-build: atlas-build csi-build operator-build-installer operator-build fleet-build helm-sync ## Build every component.
+build: atlas-build csi-build operator-build-installer operator-build fleet-build support-tool-build helm-sync ## Build every component.
 
-test: atlas-test csi-test operator-test fleet-test ## Test every component.
+test: atlas-test csi-test operator-test fleet-test support-tool-test ## Test every component.
 
-lint: atlas-lint csi-lint operator-lint fleet-lint ## Lint every component.
+lint: atlas-lint csi-lint operator-lint fleet-lint support-tool-lint ## Lint every component.
 
-fmt: atlas-fmt csi-fmt operator-fmt fleet-fmt ## Format every component.
+fmt: atlas-fmt csi-fmt operator-fmt fleet-fmt support-tool-fmt ## Format every component.
 
-vet: atlas-vet csi-vet operator-vet fleet-vet ## Vet every component.
+vet: atlas-vet csi-vet operator-vet fleet-vet support-tool-vet ## Vet every component.
 
 # ─── atlas ────────────────────────────────────────────────────────────────
 atlas: atlas-build atlas-test ## Build and test atlas.
@@ -155,6 +157,29 @@ fleet-fmt: ## Format the fleet manager.
 
 fleet-vet: ## Vet the fleet manager.
 	$(MAKE) -C $(FLEET_DIR) vet
+
+# ─── support-tool ───────────────────────────────────────────────────────────
+# The local web application support agents read support bundles and build
+# ClusterDeploymentConfigs with. It runs on the agent's machine only.
+support-tool: support-tool-build support-tool-test ## Build and test the support tool.
+
+support-tool-build: ## Build the support tool binary.
+	$(MAKE) -C $(SUPPORT_DIR) build
+
+support-tool-run: ## Serve the support tool on 127.0.0.1:8099.
+	$(MAKE) -C $(SUPPORT_DIR) run
+
+support-tool-test: ## Test the support tool.
+	$(MAKE) -C $(SUPPORT_DIR) test
+
+support-tool-lint: ## Lint the support tool.
+	$(MAKE) -C $(SUPPORT_DIR) lint
+
+support-tool-fmt: ## Format the support tool.
+	$(MAKE) -C $(SUPPORT_DIR) fmt
+
+support-tool-vet: ## Vet the support tool.
+	$(MAKE) -C $(SUPPORT_DIR) vet
 
 # ─── helm ─────────────────────────────────────────────────────────────────
 # Sync the operator's generated CRDs and RBAC roles into the Helm chart. Depends

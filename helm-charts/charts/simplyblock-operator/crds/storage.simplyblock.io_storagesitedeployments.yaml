@@ -495,6 +495,14 @@ spec:
                           nobody can turn it on for. A deployment that wants its data checked has to
                           say so here or not at all.
                         type: boolean
+                      enableCpuTopology:
+                        description: |-
+                          EnableCpuTopology turns on topology-aware CPU assignment on the storage
+                          nodes. It is valid only when spec.environment is Vanilla, whose workers
+                          the environment does not describe. Every other environment decides it:
+                          OpenShift turns it on, and the rest leave it off. Unset on a Vanilla
+                          document leaves it off.
+                        type: boolean
                       enableDriveFormat:
                         description: |-
                           EnableDriveFormat formats every device the document names before a storage
@@ -528,6 +536,17 @@ spec:
                           built with is not one a later document can vary. It also costs a drive of
                           capacity per node, which is a trade a reviewer approves rather than one a
                           default makes for them.
+                        type: boolean
+                      enableKubeletConfiguration:
+                        description: |-
+                          EnableKubeletConfiguration lets the storage nodes rewrite the kubelet
+                          configuration of their workers and restart the kubelet. It is valid only
+                          when spec.environment is Vanilla, for a fleet whose workers keep the
+                          configuration where the storage node cannot write it. Every other
+                          environment decides it: on for OpenShift, Rancher, and K3s, and off for
+                          Talos, EKS, GKE, AKS, and OKE, whose kubelet configuration is not
+                          writable or is rebuilt with every node. Unset on a Vanilla document
+                          turns it on.
                         type: boolean
                       enableNodeAffinity:
                         description: |-

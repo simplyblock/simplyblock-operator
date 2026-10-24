@@ -272,6 +272,17 @@ is read, which [`design-storagenode.md`](design-storagenode.md) §5.1 carries as
 `openshift` block whose presence states the distribution. Naming `OpenShift` once decides all three, and `CreatingNodes` stamps
 them onto every `StorageNode` it creates (§4.2).
 
+**A Vanilla document states the two flags itself.** `Vanilla` names no
+distribution, so it says nothing about where its workers keep the kubelet
+configuration or whether they support topology-aware CPU assignment.
+`spec.cluster.enableKubeletConfiguration` and `spec.cluster.enableCpuTopology`
+replace what the environment would decide, and the schema takes them only when
+`spec.environment` is `Vanilla`: every other environment has a reason for its
+answer, such as a managed service rebuilding the kubelet configuration with every
+node, and overriding that answer gives the fleet a configuration it cannot run. Left unset
+on a Vanilla document, they resolve as before: the kubelet configured, CPU
+topology off.
+
 **`spec.hostOS` is the other half of the same question, and it is a separate
 field because it has a separate answer.** The distribution decides what
 Kubernetes does to a machine; the host OS decides what the machine itself

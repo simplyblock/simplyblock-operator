@@ -8,5 +8,6 @@ use (
 	./csi-driver
 	./fleet
 	./operator
+	./support-tool
 	./test/integration
 )

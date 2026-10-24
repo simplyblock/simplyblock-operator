@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -309,6 +310,34 @@ func TestAnOpenShiftBlockNeedsAnOpenShiftEnvironment(t *testing.T) {
 	config.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentOpenShift
 	if err := apiClient.Update(context.Background(), config); err != nil {
 		t.Fatalf("an OpenShift document was refused its own block: %v", err)
+	}
+}
+
+// The kubelet and CPU topology flags are the environment's to decide everywhere
+// but Vanilla, whose workers it does not describe, so a document states them
+// only for a Vanilla fleet.
+func TestTheKubeletAndTopologyFlagsNeedAVanillaEnvironment(t *testing.T) {
+	apiClient := apiServer(t)
+	for _, set := range []func(*simplyblockv1alpha2.ClusterTemplate){
+		func(c *simplyblockv1alpha2.ClusterTemplate) { c.EnableKubeletConfiguration = ptr.To(false) },
+		func(c *simplyblockv1alpha2.ClusterTemplate) { c.EnableCpuTopology = ptr.To(true) },
+	} {
+		config := aStoredDocument(t, apiClient, fmt.Sprintf("vanilla-flags-%d", time.Now().UnixNano()))
+		set(config.Spec.Cluster)
+		config.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentTalos
+
+		err := apiClient.Update(context.Background(), config)
+		if err == nil {
+			t.Fatal("a Talos document stated a flag Talos decides")
+		}
+		if !strings.Contains(err.Error(), "Vanilla") {
+			t.Errorf("the refusal does not say what is wrong: %v", err)
+		}
+
+		config.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentVanilla
+		if err := apiClient.Update(context.Background(), config); err != nil {
+			t.Fatalf("a Vanilla document was refused the flag: %v", err)
+		}
 	}
 }
 
