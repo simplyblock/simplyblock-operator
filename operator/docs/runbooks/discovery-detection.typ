@@ -77,7 +77,7 @@ host's, read by the probe through a host mount.
 #v(4pt)
 The probe report carries a schema version (currently 10). A report from a probe image of another version is
 refused, and the probe is run again. A reading the probe could not take is listed under `unreadable` in the
-report, one sentence each. The rest of the report stays valid.
+report, one sentence each. The rest of the report stays valid. Section 11 shows a complete report.
 
 = Cluster environment
 
@@ -420,3 +420,85 @@ derived.]
   [`enableFailureDomains`], [Failure-domain label], [On when every worker carries a valid value and the stripe fits the domains.],
   [`hostOS`], [os-release], [Set when every worker runs the same distribution.],
 )
+
+#pagebreak(weak: true)
+= Example probe report
+
+One worker's report as the probe writes it, under the key `report.json` of the probe report ConfigMap: an
+Ubuntu 22.04 worker with two blank NVMe disks, a SATA boot disk, and one NVMe controller a userspace driver
+holds. Fields with no value are left out rather than written empty. Sizes are bytes, and a `numaNode` of `-1`
+is a device the kernel places on no memory node. A reading that failed adds an `unreadable` list of sentences
+at the end, one sentence for each, such as
+`read the kernel: read the kernel release from /proc/sys/kernel/osrelease: no such file or directory`.
+
+#v(4pt)
+#block(fill: rgb("#f6f8fa"), stroke: 0.6pt + rgb("#d0d7de"), inset: 8pt, radius: 2pt, width: 100%)[
+#set text(size: 7.2pt)
+#set par(leading: 0.42em)
+```json
+{
+  "version": 10,
+  "node": "worker-01",
+  "probedAt": "2026-09-18T09:00:00Z",
+  "cpu": {
+    "onlineCPUs": 32, "physicalCores": 16, "sockets": 1, "threadsPerCore": 2, "hyperThreading": true,
+    "numaNodes": [
+      { "node": 0, "onlineCPUs": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+          21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31], "physicalCores": 16 }
+    ]
+  },
+  "memory": {
+    "totalBytes": 274877906944, "freeBytes": 64424509440, "availableBytes": 257698037760,
+    "numaNodes": [
+      { "node": 0, "totalBytes": 137438953472, "freeBytes": 68719476736 },
+      { "node": 1, "totalBytes": 137438953472, "freeBytes": 68719476736 }
+    ]
+  },
+  "hugePages": [
+    { "sizeBytes": 1073741824, "total": 32, "free": 32,
+      "numaNodes": [ { "node": 0, "total": 16, "free": 16 }, { "node": 1, "total": 16, "free": 16 } ] }
+  ],
+  "interfaces": [
+    { "name": "eth0", "speedMbps": 25000, "mtu": 1500, "state": "up", "driver": "mlx5_core", "numaNode": 0,
+      "kind": "physical", "addresses": ["10.10.10.1/24"] },
+    { "name": "eth1", "speedMbps": 25000, "mtu": 1500, "state": "up", "driver": "mlx5_core", "numaNode": 1,
+      "kind": "physical", "addresses": ["10.10.11.1/24"] }
+  ],
+  "devices": [
+    { "name": "nvme0n1", "path": "/dev/nvme0n1", "pciAddress": "0000:5e:00.0", "sizeBytes": 3298534883328,
+      "kind": "Disk", "transport": "NVMe", "model": "SAMSUNG MZQL23T8HCLS-00A07", "numaNode": 0,
+      "available": true, "content": "Blank" },
+    { "name": "nvme1n1", "path": "/dev/nvme1n1", "pciAddress": "0000:5f:00.0", "sizeBytes": 3298534883328,
+      "kind": "Disk", "transport": "NVMe", "model": "SAMSUNG MZQL23T8HCLS-00A07", "numaNode": 0,
+      "available": true, "content": "Blank" },
+    { "name": "sda", "path": "/dev/sda", "stablePath": "/dev/disk/by-id/ata-SAMSUNG_MZ7L3480HCHQ-00A07_S6Q1NX0T",
+      "sizeBytes": 480103981056, "kind": "Disk", "transport": "SATA", "model": "SAMSUNG MZ7L3480HCHQ-00A07",
+      "numaNode": -1, "available": false,
+      "rejections": [ { "reason": "Partitioned", "detail": "the device carries the partitions [sda1 sda2]" } ] },
+    { "name": "sda1", "path": "/dev/sda1", "sizeBytes": 1127219200, "kind": "Partition", "transport": "SATA",
+      "numaNode": -1, "available": false,
+      "rejections": [ { "reason": "NotAWholeDisk", "detail": "the device is a Partition" },
+                      { "reason": "Mounted", "detail": "mounted at [/boot/efi]" } ] }
+  ],
+  "hostOS": {
+    "distro": "ubuntu", "family": "Debian", "version": "22.04", "prettyName": "Ubuntu 22.04.4 LTS",
+    "architecture": "x86_64",
+    "kernel": {
+      "release": "5.15.0-122-generic",
+      "version": { "major": 5, "minor": 15, "patch": 0 },
+      "nvmeMultipath": { "state": "Enabled", "detail": "nvme_core.multipath is Y" },
+      "kvm": { "state": "Available", "detail": "the kernel has registered /dev/kvm" },
+      "tun": { "state": "Available", "detail": "the kernel has registered /dev/net/tun" },
+      "pnfsBlock": { "state": "Loadable",
+                     "detail": "blocklayoutdriver is a module of 5.15.0-122-generic and not loaded" }
+    }
+  },
+  "nvmeControllers": [
+    { "address": "0000:5e:00.0", "driver": "nvme", "vendor": "0x144d", "product": "0xa80a", "numaNode": 0 },
+    { "address": "0000:5f:00.0", "driver": "nvme", "vendor": "0x144d", "product": "0xa80a", "numaNode": 0 },
+    { "address": "0000:62:00.0", "driver": "uio_pci_generic", "vendor": "0x144d", "product": "0xa80a",
+      "numaNode": 0, "inUse": true }
+  ]
+}
+```
+]
