@@ -40,6 +40,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -398,9 +399,9 @@ func (r *OperatorOpsReconciler) inspect(
 		// infrastructure ones, so an infra node passes every check the run had
 		// before this one and its being the storage tier went unnoticed.
 		role := discoverypkg.RoleOf(node)
-		if !UsableWorker(node, useControlPlane) {
+		if !usableWorker(node, useControlPlane, spec.Tolerations) {
 			r.event(ops, corev1.EventTypeNormal, WorkerDeclined,
-				fmt.Sprintf("%s is not used: %s", node.Name, declinedBecause(node, role)))
+				fmt.Sprintf("%s is not used: %s", node.Name, declinedBecause(node, role, spec.Tolerations)))
 			continue
 		}
 		if !role.HoldsStorageNodes() {
@@ -1018,61 +1019,67 @@ func (r *OperatorOpsReconciler) event(
 	r.Recorder.Eventf(ops, nil, eventType, reason, action, "%s", boundEventMessage(message))
 }
 
-// schedulable reports whether a node is one work can be placed on.
-//
-// A cordoned node and a node carrying a NoSchedule taint are both excluded: a
-// probe Job is pinned with spec.nodeName and would run on either, and a worker
-// the cluster is not scheduling to is not one to hand to a storage cluster.
-// UsableWorker reports whether a discovery run would inspect this machine.
-//
-// It is exported so that the one thing deciding whether a run is worth raising at
-// all reads the same predicate the run itself applies. A bootstrap that raised a
-// run against a cluster with nothing to inspect would create an object whose only
-// outcome is to fail, and on a namespace delete that object holds a finalizer the
-// operator may no longer be alive to clear.
-func UsableWorker(node corev1.Node, useControlPlane bool) bool {
-	if !schedulable(node) {
+// usableWorker reports whether a discovery run would inspect this machine.
+func usableWorker(node corev1.Node, useControlPlane bool, tolerations []corev1.Toleration) bool {
+	if !schedulable(node, tolerations) {
 		return false
 	}
 	role := discoverypkg.RoleOf(node)
 	return role.HoldsStorageNodes() || useControlPlane
 }
 
-// declinedBecause says why UsableWorker refused the machine, so the event a
+// declinedBecause says why usableWorker refused the machine, so the event a
 // reviewer reads names the condition rather than only the outcome.
-func declinedBecause(node corev1.Node, role discoverypkg.NodeRole) string {
-	if !schedulable(node) {
-		return unschedulableReason(node)
+func declinedBecause(node corev1.Node, role discoverypkg.NodeRole, tolerations []corev1.Toleration) string {
+	if !schedulable(node, tolerations) {
+		return unschedulableReason(node, tolerations)
 	}
 	return fmt.Sprintf("it is %s; set spec.discover.enableControlPlaneNodes to include it",
 		role.Describe())
 }
 
 // unschedulableReason says which of the two conditions excluded the node, so an
-// administrator reads "it is cordoned" rather than a bare refusal.
-func unschedulableReason(node corev1.Node) string {
+// administrator reads "it is cordoned" rather than a bare refusal, and the
+// taint named is one the run does not tolerate.
+func unschedulableReason(node corev1.Node, tolerations []corev1.Toleration) string {
 	if node.Spec.Unschedulable {
 		return "it is cordoned"
 	}
-	for _, taint := range node.Spec.Taints {
-		if taint.Effect == corev1.TaintEffectNoSchedule || taint.Effect == corev1.TaintEffectNoExecute {
-			return fmt.Sprintf("it carries the taint %s=%s:%s",
-				taint.Key, taint.Value, taint.Effect)
-		}
+	if taint := untoleratedTaint(node, tolerations); taint != nil {
+		return fmt.Sprintf("it carries the taint %s=%s:%s, which spec.discover.tolerations does not tolerate",
+			taint.Key, taint.Value, taint.Effect)
 	}
 	return "it is not schedulable"
 }
 
-func schedulable(node corev1.Node) bool {
-	if node.Spec.Unschedulable {
-		return false
-	}
-	for _, taint := range node.Spec.Taints {
-		if taint.Effect == corev1.TaintEffectNoSchedule || taint.Effect == corev1.TaintEffectNoExecute {
-			return false
+// schedulable reports whether the run's work can be placed on a node.
+//
+// A cordoned node is excluded, and so is a node carrying a NoSchedule or
+// NoExecute taint the run does not tolerate. A probe Job is pinned with
+// spec.nodeName and would run on either, but a worker the cluster is not
+// scheduling to is not one to hand to a storage cluster. A taint the run
+// tolerates is the opposite case: it is how a fleet dedicates machines to
+// storage, and the draft carries the same tolerations to the storage nodes.
+func schedulable(node corev1.Node, tolerations []corev1.Toleration) bool {
+	return !node.Spec.Unschedulable && untoleratedTaint(node, tolerations) == nil
+}
+
+// untoleratedTaint is the node's first NoSchedule or NoExecute taint that none
+// of the tolerations tolerates, or nil.
+func untoleratedTaint(node corev1.Node, tolerations []corev1.Toleration) *corev1.Taint {
+	for i := range node.Spec.Taints {
+		taint := &node.Spec.Taints[i]
+		if taint.Effect != corev1.TaintEffectNoSchedule && taint.Effect != corev1.TaintEffectNoExecute {
+			continue
+		}
+		// Nothing here is worth logging, and the Gt and Lt operators are an alpha
+		// feature the probe Job does not rely on either.
+		tolerates := func(t corev1.Toleration) bool { return t.ToleratesTaint(logr.Discard(), taint, false) }
+		if !slices.ContainsFunc(tolerations, tolerates) {
+			return taint
 		}
 	}
-	return true
+	return nil
 }
 
 // jobExhausted reports whether a Job has used up its retries.

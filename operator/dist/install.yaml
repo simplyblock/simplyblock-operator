@@ -3410,7 +3410,9 @@ spec:
                       onto it, which bypasses the scheduler and not the taints: a NoSchedule
                       taint still keeps the pod off, and a NoExecute taint evicts one that
                       landed. A fleet that dedicates machines to storage taints them, so a run
-                      against one that tolerates nothing inspects nothing.
+                      against one that tolerates nothing inspects nothing. A worker carrying a
+                      NoSchedule or NoExecute taint that none of these tolerates is not
+                      inspected, and its WorkerDeclined event names that taint.
 
                       They reach the draft as well, because the taints a run was allowed to
                       probe through are the taints the cluster it proposes has to live with.
