@@ -282,11 +282,14 @@ func TestDetectEnvironmentRecognizesTheManagedServices(t *testing.T) {
 func TestDetectEnvironmentIgnoresTheCloudProvidersOwnLabels(t *testing.T) {
 	// A self-managed cluster on a cloud runs the provider's cloud controller
 	// manager too, and that labels the nodes it registers. Those labels say
-	// which cloud the machine is in, not who installed its kubelet.
+	// which cloud the machine is in, not who installed its kubelet. The AKS
+	// keys are whole keys, so a longer key that starts with one is not AKS.
 	env := DetectEnvironment(nil, []corev1.Node{node("worker-1",
 		labeled("oci.oraclecloud.com/fault-domain", "FAULT-DOMAIN-1"),
 		labeled("topology.k8s.aws/zone-id", "euc1-az2"),
 		labeled("kubernetes.azure.com/managed", "false"),
+		labeled("kubernetes.azure.com/cluster-name", "self-managed"),
+		labeled("kubernetes.azure.com/agentpool-custom", "storage"),
 	)})
 
 	if env.Distribution != DistributionVanilla {

@@ -201,8 +201,8 @@ var osImageMarkers = map[string]Distribution{
 // its own node pools. The cloud controller manager's labels are not among them
 // (oci.oraclecloud.com/, topology.k8s.aws/, and kubernetes.azure.com/managed),
 // because a self-managed cluster on the same cloud runs that controller too.
-// AKS is matched by two whole keys for that reason, since it shares its prefix
-// with the Azure cloud controller manager.
+// AKS shares its prefix with the Azure cloud controller manager, so it is
+// matched by whole keys in nodeKeyExactMarkers instead.
 var nodeKeyMarkers = map[string]Distribution{
 	"node.openshift.io/":                 DistributionOpenShift,
 	"machineconfiguration.openshift.io/": DistributionOpenShift,
@@ -214,9 +214,14 @@ var nodeKeyMarkers = map[string]Distribution{
 	"cattle.io/":                         DistributionRancher,
 	"eks.amazonaws.com/":                 DistributionEKS,
 	"cloud.google.com/gke-":              DistributionGKE,
-	"kubernetes.azure.com/agentpool":     DistributionAKS,
-	"kubernetes.azure.com/cluster":       DistributionAKS,
 	"oke.oraclecloud.com/":               DistributionOKE,
+}
+
+// nodeKeyExactMarkers are label and annotation keys that identify a
+// distribution only when they match whole.
+var nodeKeyExactMarkers = map[string]Distribution{
+	"kubernetes.azure.com/agentpool": DistributionAKS,
+	"kubernetes.azure.com/cluster":   DistributionAKS,
 }
 
 // CollectEnvironment reads the API groups the server registers and concludes a
@@ -310,11 +315,14 @@ func nodeEvidence(n corev1.Node) []Evidence {
 	return evidence
 }
 
-// markerFor matches a label or annotation key against the key prefixes, longest
-// prefix first: cattle.io/ and management.cattle.io/ both point at Rancher
+// markerFor matches a label or annotation key against the whole keys first, then
+// against the key prefixes, longest prefix first: cattle.io/ and management.cattle.io/ both point at Rancher
 // today, and a shorter prefix must not shadow a longer one that could point
 // somewhere else tomorrow.
 func markerFor(key string) (Distribution, bool) {
+	if dist, ok := nodeKeyExactMarkers[key]; ok {
+		return dist, true
+	}
 	for _, prefix := range nodeKeyPrefixes {
 		if strings.HasPrefix(key, prefix) {
 			return nodeKeyMarkers[prefix], true
