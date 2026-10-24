@@ -184,6 +184,7 @@ func runningUbuntu() nodeprobe.HostOS {
 func ubuntuKernel() nodeprobe.Kernel {
 	return nodeprobe.Kernel{
 		Release:       "5.15.0-122-generic",
+		Version:       &nodeprobe.KernelVersion{Major: 5, Minor: 15},
 		NVMeMultipath: nodeprobe.Fact{State: string(inventory.MultipathEnabled), Detail: "nvme_core.multipath is Y"},
 		KVM: nodeprobe.Fact{State: string(inventory.CapabilityAbsent),
 			Detail: "the CPU reports neither vmx nor svm: it has no hardware virtualization, " +

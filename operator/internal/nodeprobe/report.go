@@ -169,6 +169,10 @@ type Kernel struct {
 	// and Unreadable then says why.
 	Release string `json:"release,omitempty"`
 
+	// Version is the upstream version the release opens with, and is absent
+	// when the release does not open with one.
+	Version *KernelVersion `json:"version,omitempty"`
+
 	// NVMeMultipath is `Enabled`, `Disabled`, `NotBuilt`, or `Unknown`. A worker
 	// on which it is not Enabled can host a storage node and cannot mount a
 	// volume over more than one path: each path is a disk of its own.
@@ -179,6 +183,15 @@ type Kernel struct {
 	KVM       Fact `json:"kvm"`
 	TUN       Fact `json:"tun"`
 	PNFSBlock Fact `json:"pnfsBlock"`
+}
+
+// KernelVersion is the upstream kernel version, `6.1.155` as three numbers. A
+// distribution backports fixes without changing it, so it places a kernel in
+// upstream's history and does not say which fixes the kernel carries.
+type KernelVersion struct {
+	Major int `json:"major"`
+	Minor int `json:"minor"`
+	Patch int `json:"patch"`
 }
 
 // Fact is one conclusion about the kernel and the evidence for it.

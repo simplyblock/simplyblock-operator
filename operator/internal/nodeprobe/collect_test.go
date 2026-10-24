@@ -346,6 +346,7 @@ func TestFromInventoryCarriesTheKernelFacts(t *testing.T) {
 	host := ubuntuHost()
 	host.Kernel = inventory.KernelFacts{
 		Release: "6.1.155-176.282.amzn2023.x86_64",
+		Version: inventory.KernelVersion{Major: 6, Minor: 1, Patch: 155},
 		NVMeMultipath: inventory.Multipath{State: inventory.MultipathNotBuilt,
 			Detail: "nvme_core is loaded and has no multipath parameter"},
 		KVM:       inventory.Capability{State: inventory.CapabilityAbsent, Detail: "no vmx or svm"},
@@ -358,6 +359,9 @@ func TestFromInventoryCarriesTheKernelFacts(t *testing.T) {
 	if kernel.Release != "6.1.155-176.282.amzn2023.x86_64" {
 		t.Errorf("the report names the kernel release %q", kernel.Release)
 	}
+	if want := (KernelVersion{Major: 6, Minor: 1, Patch: 155}); kernel.Version == nil || *kernel.Version != want {
+		t.Errorf("the report names the kernel version %+v, want %+v", kernel.Version, want)
+	}
 	for name, got := range map[string]Fact{
 		"NVMe multipath": kernel.NVMeMultipath, "KVM": kernel.KVM, "TUN": kernel.TUN, "pNFS block": kernel.PNFSBlock,
 	} {
@@ -367,6 +371,18 @@ func TestFromInventoryCarriesTheKernelFacts(t *testing.T) {
 	}
 	if kernel.NVMeMultipath.State != string(inventory.MultipathNotBuilt) {
 		t.Errorf("the report names NVMe multipath %q, want %q", kernel.NVMeMultipath.State, inventory.MultipathNotBuilt)
+	}
+}
+
+func TestFromInventoryOmitsAKernelVersionThatWasNotRead(t *testing.T) {
+	// A release the parser does not recognize leaves the version unset, and the
+	// report says nothing rather than claiming kernel 0.0.0.
+	host := ubuntuHost()
+	host.Kernel = inventory.KernelFacts{Release: "talos"}
+	report := FromInventory(testNode, probedAt, inventory.Inventory{HostOS: host}, nil)
+
+	if report.HostOS.Kernel.Version != nil {
+		t.Errorf("the report names the kernel version %+v for an unparsed release", *report.HostOS.Kernel.Version)
 	}
 }
 

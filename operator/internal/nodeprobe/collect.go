@@ -55,12 +55,22 @@ func hostOSOf(os inventory.HostOS) HostOS {
 		Architecture: os.Architecture,
 		Kernel: Kernel{
 			Release:       os.Kernel.Release,
+			Version:       kernelVersionOf(os.Kernel.Version),
 			NVMeMultipath: Fact{State: string(os.Kernel.NVMeMultipath.State), Detail: os.Kernel.NVMeMultipath.Detail},
 			KVM:           capabilityOf(os.Kernel.KVM),
 			TUN:           capabilityOf(os.Kernel.TUN),
 			PNFSBlock:     capabilityOf(os.Kernel.PNFSBlock),
 		},
 	}
+}
+
+// kernelVersionOf is the kernel version in the report, or nil for one that was
+// not read.
+func kernelVersionOf(version inventory.KernelVersion) *KernelVersion {
+	if version == (inventory.KernelVersion{}) {
+		return nil
+	}
+	return &KernelVersion{Major: version.Major, Minor: version.Minor, Patch: version.Patch}
 }
 
 // capabilityOf is one optional kernel capability in the report's vocabulary.

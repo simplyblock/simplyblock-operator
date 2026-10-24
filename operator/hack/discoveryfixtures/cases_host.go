@@ -178,6 +178,14 @@ func capturedHost(path, name, address string, memory statedMemory) nodeprobe.Rep
 	for i, sentence := range report.Unreadable {
 		report.Unreadable[i] = strings.ReplaceAll(sentence, hostRoot, nodeprobe.HostRootMount)
 	}
+	// A device that could not be read names the path it was opened at, which
+	// was inside the temporary tree as well.
+	for i := range report.Devices {
+		for j := range report.Devices[i].Rejections {
+			rejection := &report.Devices[i].Rejections[j]
+			rejection.Detail = strings.ReplaceAll(rejection.Detail, devRoot, blockdev.DefaultDevRoot)
+		}
+	}
 	return report
 }
 
