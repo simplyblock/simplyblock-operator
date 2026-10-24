@@ -171,7 +171,10 @@ while IFS=$'\t' read -r ns pod; do
 done < <(enumerate get pods -A -l "$OPERATOR_LABEL" \
   -o 'jsonpath={range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}')
 
-tar -czf "$OUTPUT" -C "$STAGE" "$NAME"
+# COPYFILE_DISABLE keeps tar on macOS from adding an AppleDouble ._<name> entry
+# beside every file with extended attributes, which is every file kubectl wrote
+# there. tar elsewhere ignores it.
+COPYFILE_DISABLE=1 tar -czf "$OUTPUT" -C "$STAGE" "$NAME"
 echo "wrote $OUTPUT"
 if [[ -s "$ERRORS" ]]; then
   echo "some of it could not be collected; $NAME/errors.txt in the archive says what and why"
