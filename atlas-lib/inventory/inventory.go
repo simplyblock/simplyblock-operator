@@ -489,6 +489,10 @@ func Collect(ctx context.Context, cfg Config) (Inventory, error) {
 	if err != nil {
 		errs = append(errs, fmt.Errorf("read the host OS: %w", err))
 	}
+	hostOS.Kernel, err = ReadKernel(cfg)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("read the kernel: %w", err))
+	}
 	inv.HostOS = hostOS
 
 	ifaces, err := ReadInterfaces(cfg)
