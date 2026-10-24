@@ -37,9 +37,7 @@ func newPolicyReconciler(t *testing.T, objects ...client.Object) (*ReplicationPo
 		// so their full structs (including status) are preserved by WithObjects.
 		WithStatusSubresource(&simplyblockv1alpha1.ReplicationPolicy{}).
 		WithObjects(allObjects...).
-		WithIndex(&simplyblockv1alpha1.ReplicationSlot{}, "spec.policyRef", func(obj client.Object) []string {
-			return []string{obj.(*simplyblockv1alpha1.ReplicationSlot).Spec.PolicyRef}
-		}).
+		WithIndex(&simplyblockv1alpha1.ReplicationSlot{}, "spec.policyRef", slotPolicyRefIndex).
 		Build()
 	return &ReplicationPolicyReconciler{Client: cl, Scheme: scheme}, cl
 }

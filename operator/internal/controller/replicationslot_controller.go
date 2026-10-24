@@ -128,9 +128,11 @@ func (r *ReplicationSlotReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, r.Update(ctx, &slot)
 	}
 
-	// Fetch the owning ReplicationPolicy; fail fast if it is not ready.
+	// Fetch the owning ReplicationPolicy; fail fast if it is not ready. It may
+	// live in another namespace than the slot ("<namespace>/<name>").
+	policyNS, policyName := utils.SplitRef(slot.Spec.PolicyRef, slot.Namespace)
 	var policy simplyblockv1alpha1.ReplicationPolicy
-	if err := r.Get(ctx, types.NamespacedName{Name: slot.Spec.PolicyRef, Namespace: slot.Namespace}, &policy); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: policyName, Namespace: policyNS}, &policy); err != nil {
 		if apierrors.IsNotFound(err) {
 			return r.setError(ctx, &slot, fmt.Sprintf("ReplicationPolicy %q not found", slot.Spec.PolicyRef))
 		}

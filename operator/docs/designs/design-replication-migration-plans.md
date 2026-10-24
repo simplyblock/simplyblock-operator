@@ -53,8 +53,8 @@ The storage control plane now has **migration plans** (sbcli
 
 **Goals**
 
-- One `ReplicationOps` migrates a whole storage cluster's claims in a namespace,
-  enrolling the ones that are not replicated yet.
+- One `ReplicationOps` migrates a whole storage cluster's claims, in every
+  namespace, enrolling the ones that are not replicated yet.
 - The operation stays `Running` until every volume has cut over, and ends
   `Failed`, with per-volume results, when any volume did not.
 - Status carries per-volume progress and a migration-wide forecast.
@@ -68,8 +68,6 @@ The storage control plane now has **migration plans** (sbcli
   `design-crd-model.md` §3).
 - Canceling a running plan from Kubernetes. Deleting the `ReplicationOps`
   releases its lock; the plan continues in the control plane.
-- Claims in other namespaces. A slot lives in its policy's namespace, so a
-  cluster-scoped migration covers the namespace of the operation.
 
 ## 3. API Changes
 
@@ -123,13 +121,18 @@ stateDiagram-v2
 
 1. **Scope.**
    - `scope: policy`, `volume`, and `target` use the slots they always did.
-   - `scope: cluster` lists the bound claims in the namespace. A claim counts
-     when its persistent volume's CSI handle names the source cluster.
+   - `scope: cluster` lists the bound claims of **every namespace**. A claim
+     counts when its persistent volume's CSI handle names the source cluster.
+     Workloads keep their claims in their own namespaces, while the
+     StorageCluster and the replication objects live in the storage namespace,
+     so a scope limited to the operation's namespace would miss them.
      - A claim with a slot under `policyRef` is included.
      - A claim with a slot under another policy is skipped.
      - A claim with no slot is enrolled by setting the
        `storage.simplyblock.io/replication-policy` annotation. The PVC
        annotation watcher then creates the slot as for any annotated claim.
+       A claim outside the policy's namespace is annotated with
+       `<namespace>/<name>`; see §4.1.
      - A claim that the annotation, or its StorageClass, already assigns to
        another policy is skipped. It is never overwritten.
 2. **Wait.** The plan is created only once every included slot is
@@ -165,6 +168,31 @@ cutover-proceed run as before. The commit path set slots to `cutover_pending`
 early so they polled at the 5 s cutover interval. A plan can spend hours on the
 initial copy, so setting slots early there would poll every volume at 5 s for
 the whole copy.
+
+### 4.1 Cross-namespace references
+
+A slot is owned by its claim, and an owner reference cannot cross namespaces,
+so the slot always lives beside the claim. The policy it follows can live
+elsewhere, so a policy reference is written either way:
+
+| Written as        | Means                                                               |
+|-------------------|---------------------------------------------------------------------|
+| `pol`             | the policy `pol` in the referring object's own namespace, as before |
+| `simplyblock/pol` | the policy `pol` in namespace `simplyblock`                         |
+
+- **Where it applies:** the PVC (or StorageClass) annotation and
+  `ReplicationSlot.spec.policyRef`. The PVC watcher, the slot reconciler, and
+  the policy reconciler resolve both forms (`utils.SplitRef`).
+- **Slot names:** a slot is still named `<policy name>-<claim>`. The namespace
+  part of a reference never reaches an object name.
+- **Index:** the `spec.policyRef` slot index holds the canonical
+  `<namespace>/<name>` form, so a policy's `slotCount` and its deletion guard
+  count the slots of every namespace. Otherwise, a policy could be deleted while
+  a claim elsewhere still follows it.
+- **Results:** `pvcRef` and `slotRef` stay bare names in the operation's
+  namespace, and are written `<namespace>/<name>` for objects elsewhere.
+- **RBAC:** unchanged. The operator's ClusterRole already lists and patches
+  claims cluster-wide.
 
 ## 5. Control-Plane Contract
 
@@ -217,5 +245,6 @@ not retested here.
 - **Cancellation.** The control plane can cancel a plan
   (`DELETE /migration-plans/{id}`). A `spec.abort` on the operation could map to
   it. That waits for a user who needs it.
-- **Claims in other namespaces.** A migration of a whole cluster currently
-  needs one operation per namespace.
+- **Scopes other than `cluster`.** `policy` and `target` still collect the
+  slots of the operation's namespace only. Widening them changes what an
+  existing operation touches, so it waits for a request.

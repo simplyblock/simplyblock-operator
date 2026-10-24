@@ -639,7 +639,7 @@ func (r *ReplicationOpsReconciler) collectAffectedSlots(
 		var list simplyblockv1alpha1.ReplicationSlotList
 		if err := r.List(ctx, &list,
 			client.InNamespace(ops.Namespace),
-			client.MatchingFields{"spec.policyRef": policy.Name},
+			client.MatchingFields{"spec.policyRef": policy.Namespace + "/" + policy.Name},
 		); err != nil {
 			return nil, fmt.Errorf("list ReplicationSlots for policy %q: %w", policy.Name, err)
 		}
@@ -670,7 +670,7 @@ func (r *ReplicationOpsReconciler) collectSlotsForPair(
 		var slots simplyblockv1alpha1.ReplicationSlotList
 		if err := r.List(ctx, &slots,
 			client.InNamespace(namespace),
-			client.MatchingFields{"spec.policyRef": pol.Name},
+			client.MatchingFields{"spec.policyRef": pol.Namespace + "/" + pol.Name},
 		); err != nil {
 			return nil, fmt.Errorf("list slots for policy %q: %w", pol.Name, err)
 		}
