@@ -251,3 +251,64 @@ func TestDetectEnvironmentReadsEveryNodeAndNotOnlyTheFirst(t *testing.T) {
 			env.Distribution, DistributionK3s)
 	}
 }
+
+func TestDetectEnvironmentRecognizesTheManagedServices(t *testing.T) {
+	// Each managed service is recognized from what a worker it provisioned
+	// carries, and from one marker alone: a self-managed node group has no
+	// node-pool label, and a node pool labeled by hand may carry no other.
+	cases := []struct {
+		name   string
+		worker corev1.Node
+		want   Distribution
+	}{
+		{"EKS by its kubelet version", node("worker-1", kubelet("v1.30.8-eks-2d5f260")), DistributionEKS},
+		{"EKS by its node-group label", node("worker-1", labeled("eks.amazonaws.com/nodegroup", "storage")), DistributionEKS},
+		{"GKE by its kubelet version", node("worker-1", kubelet("v1.30.5-gke.1014001")), DistributionGKE},
+		{"GKE by its node-pool label", node("worker-1", labeled("cloud.google.com/gke-nodepool", "storage")), DistributionGKE},
+		{"AKS by its agent-pool label", node("worker-1", labeled("kubernetes.azure.com/agentpool", "storage")), DistributionAKS},
+		{"AKS by its cluster label", node("worker-1", labeled("kubernetes.azure.com/cluster", "MC_rg_aks_westeurope")), DistributionAKS},
+		{"OKE by its node-pool label", node("worker-1", labeled("oke.oraclecloud.com/pool.name", "storage")), DistributionOKE},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			env := DetectEnvironment(nil, []corev1.Node{c.worker})
+			if env.Distribution != c.want {
+				t.Errorf("concluded %q, want %q", env.Distribution, c.want)
+			}
+		})
+	}
+}
+
+func TestDetectEnvironmentIgnoresTheCloudProvidersOwnLabels(t *testing.T) {
+	// A self-managed cluster on a cloud runs the provider's cloud controller
+	// manager too, and that labels the nodes it registers. Those labels say
+	// which cloud the machine is in, not who installed its kubelet.
+	env := DetectEnvironment(nil, []corev1.Node{node("worker-1",
+		labeled("oci.oraclecloud.com/fault-domain", "FAULT-DOMAIN-1"),
+		labeled("topology.k8s.aws/zone-id", "euc1-az2"),
+		labeled("kubernetes.azure.com/managed", "false"),
+	)})
+
+	if env.Distribution != DistributionVanilla {
+		t.Errorf("concluded %q from cloud-provider labels, want %q", env.Distribution, DistributionVanilla)
+	}
+}
+
+func TestDetectEnvironmentPrefersTheManagedServiceOverRancher(t *testing.T) {
+	// An EKS cluster imported into Rancher carries both. The managed service
+	// installed the kubelet and owns its configuration, so it is the answer.
+	env := DetectEnvironment(
+		[]string{"management.cattle.io"},
+		[]corev1.Node{node("worker-1",
+			kubelet("v1.30.8-eks-2d5f260"),
+			annotated("management.cattle.io/pod-requests", "{}"),
+		)},
+	)
+
+	if env.Distribution != DistributionEKS {
+		t.Errorf("concluded %q, want %q", env.Distribution, DistributionEKS)
+	}
+	if !evidenceFor(env, DistributionRancher) {
+		t.Errorf("recorded %+v, and the Rancher markers are missing from it", env.Evidence)
+	}
+}

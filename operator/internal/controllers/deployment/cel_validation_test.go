@@ -312,6 +312,24 @@ func TestAnOpenShiftBlockNeedsAnOpenShiftEnvironment(t *testing.T) {
 	}
 }
 
+// A discovery run writes the managed service it detected into the document, so
+// the schema has to take every one of them.
+func TestTheSchemaTakesTheManagedServices(t *testing.T) {
+	apiClient := apiServer(t)
+	for _, environment := range []simplyblockv1alpha2.KubernetesEnvironment{
+		simplyblockv1alpha2.KubernetesEnvironmentEKS,
+		simplyblockv1alpha2.KubernetesEnvironmentGKE,
+		simplyblockv1alpha2.KubernetesEnvironmentAKS,
+		simplyblockv1alpha2.KubernetesEnvironmentOKE,
+	} {
+		config := aStoredDocument(t, apiClient, "environment-"+strings.ToLower(string(environment)))
+		config.Spec.Environment = environment
+		if err := apiClient.Update(context.Background(), config); err != nil {
+			t.Errorf("the %s document was refused: %v", environment, err)
+		}
+	}
+}
+
 // The cluster template carries the cluster's arbitration settings, and the
 // schema refuses them on a template that is not Dual, as it does on the
 // StorageCluster they are copied to: the document is where the mistake can
