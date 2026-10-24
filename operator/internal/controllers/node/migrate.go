@@ -70,7 +70,7 @@ func (r *StorageNodeOpsReconciler) performMigrateStep(
 	case stepRelocating:
 		return r.migrateRelocate(ctx, ops, node, target, clusterID, nodeID)
 	case stepAwaitingNode:
-		return r.migrateAwaitNode(ctx, clusterID, nodeID)
+		return r.migrateAwaitNode(ctx, target, clusterID, nodeID)
 	case stepPromoting:
 		return r.migratePromote(ctx, ops, node, target, clusterID, nodeID)
 	default:
@@ -178,14 +178,32 @@ func (r *StorageNodeOpsReconciler) migrateRelocate(
 // migrateAwaitNode waits for the node to be online again, on the host it was
 // relocated onto. It performs nothing: the restart is running and this step is the
 // half of the pair that observes it finish.
+//
+// Online alone is not the answer. A restart aimed at the target can fail inside
+// the control plane, whose task runner then retries it against the node's stored
+// address and brings the node online on the origin host.
 func (r *StorageNodeOpsReconciler) migrateAwaitNode(
-	ctx context.Context, clusterID, nodeID string,
+	ctx context.Context, target, clusterID, nodeID string,
 ) (bool, error) {
 	reading, err := r.nodeReading(ctx, clusterID, nodeID)
 	if err != nil {
 		return false, err
 	}
-	return reading.Status == nodeStatusOnline, nil
+	if reading.Status != nodeStatusOnline {
+		return false, nil
+	}
+	return r.runsOn(ctx, target, reading)
+}
+
+// runsOn reports whether the control plane places the node on the worker.
+func (r *StorageNodeOpsReconciler) runsOn(
+	ctx context.Context, worker string, reading NodeReading,
+) (bool, error) {
+	identity, err := readWorkerIdentity(ctx, r.Client, worker)
+	if err != nil {
+		return false, err
+	}
+	return identity.owns(reading), nil
 }
 
 // migratePromote activates the relocated node and then re-points the Kubernetes
@@ -215,6 +233,11 @@ func (r *StorageNodeOpsReconciler) migratePromote(
 	}
 	if reading.Status != nodeStatusOnline {
 		return false, nil
+	}
+	// Promoting a node that is online on the origin host would activate the
+	// target's devices and fail the origin's under a node that runs on the origin.
+	if onTarget, err := r.runsOn(ctx, target, reading); err != nil || !onTarget {
+		return false, err
 	}
 
 	// A node whose object already names the target has been promoted by an

@@ -436,3 +436,73 @@ func replaceNode(t *testing.T, apiClient client.Client, node *simplyblockv1alpha
 		t.Fatalf("seeding the case's node status: %v", err)
 	}
 }
+
+// aNodeReportedAt moves the control plane's reading of the node to one address,
+// which is the storage-plane address of the machine it says the node runs on.
+func aNodeReportedAt(api *scriptedControlPlane, address string) *scriptedControlPlane {
+	reading := api.nodes[opsNodeID]
+	reading.ManagementIP = address
+	api.nodes[opsNodeID] = reading
+	return api
+}
+
+// aTargetWorkerAt is the migration's target, with the address its node would be
+// reported at once the node runs there.
+func aTargetWorkerAt(address string) *corev1.Node {
+	worker := aWorker(opsTarget, true)
+	worker.Status.Addresses[0].Address = address
+	return worker
+}
+
+// Regression: 2026-10-24-migrate-await-origin-host — the restart aimed at the
+// target timed out inside the control plane, whose task runner then retried it
+// against the node's stored address and brought the node online on the origin
+// worker. The wait took online from any host as the relocation finishing, so the
+// migration went on to re-point the node at a worker it never ran on.
+func TestTheWaitForTheRelocatedNodeIgnoresAnOnlineNodeOnTheOriginHost(t *testing.T) {
+	const origin, target = "10.0.0.9", "10.0.0.2"
+	r, _ := anOpsWorld(t, aNodeReportedAt(aControlPlane(), origin), aTargetWorkerAt(target))
+
+	done, err := performing(t, r, aRelocation(), stepAwaitingNode)
+	if err != nil {
+		t.Fatalf("awaiting the node: %v", err)
+	}
+	if done {
+		t.Error("the wait finished for a node that came back online on the origin host")
+	}
+}
+
+// The other half of the same contract: the wait does end once the node is online
+// at the target's address, so the guard cannot be satisfied by never finishing.
+func TestTheWaitForTheRelocatedNodeEndsWhenItIsOnlineOnTheTarget(t *testing.T) {
+	const target = "10.0.0.2"
+	r, _ := anOpsWorld(t, aNodeReportedAt(aControlPlane(), target), aTargetWorkerAt(target))
+
+	done, err := performing(t, r, aRelocation(), stepAwaitingNode)
+	if err != nil {
+		t.Fatalf("awaiting the node: %v", err)
+	}
+	if !done {
+		t.Error("the wait did not finish for a node that is online on the target host")
+	}
+}
+
+// Regression: 2026-10-24-migrate-await-origin-host — a promote against a node
+// that is online on the origin host activates the target's devices, fails the
+// origin's, and re-points the node at a worker that is not running it.
+func TestAPromoteIsRefusedForAnOnlineNodeOnTheOriginHost(t *testing.T) {
+	const origin, target = "10.0.0.9", "10.0.0.2"
+	api := aNodeReportedAt(aControlPlane(), origin)
+	r, _ := anOpsWorld(t, api, aTargetWorkerAt(target))
+
+	done, err := performing(t, r, aRelocation(), stepPromoting)
+	if err != nil {
+		t.Fatalf("promoting: %v", err)
+	}
+	if done {
+		t.Error("the step finished for a node that is online on the origin host")
+	}
+	if asked := api.asked("Promote"); asked != 0 {
+		t.Errorf("the control plane was asked to promote %d time(s) a node on the origin host", asked)
+	}
+}

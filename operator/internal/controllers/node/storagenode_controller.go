@@ -1531,8 +1531,16 @@ func (w workerIdentity) owns(reading NodeReading) bool {
 func (r *StorageNodeReconciler) workerIdentity(
 	ctx context.Context, worker string,
 ) (workerIdentity, error) {
+	return readWorkerIdentity(ctx, r.Client, worker)
+}
+
+// readWorkerIdentity is workerIdentity for a caller that is not a
+// StorageNodeReconciler.
+func readWorkerIdentity(
+	ctx context.Context, reader client.Reader, worker string,
+) (workerIdentity, error) {
 	var object corev1.Node
-	if err := r.Get(ctx, types.NamespacedName{Name: worker}, &object); err != nil {
+	if err := reader.Get(ctx, types.NamespacedName{Name: worker}, &object); err != nil {
 		return workerIdentity{}, client.IgnoreNotFound(err)
 	}
 	identity := workerIdentity{systemUUID: object.Status.NodeInfo.SystemUUID}

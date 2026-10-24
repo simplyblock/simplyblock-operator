@@ -178,7 +178,7 @@ func TestAnAbortThatArrivedTooLateIsRefusedAndTheOperationRunsOn(t *testing.T) {
 		simplyblockv1alpha2.StorageNodeOpsActionMigrate, stepPromoting)
 	ops.Spec.Abort = true
 	ops.Spec.Migrate = &simplyblockv1alpha2.MigrateSpec{TargetWorkerNode: opsTarget}
-	r, apiClient := anOpsWorld(t, api, ops)
+	r, apiClient := anOpsWorld(t, api, ops, aWorker(opsTarget, true))
 	lockedBy(t, apiClient, "a-relocation")
 
 	for range 2 {
