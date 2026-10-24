@@ -215,3 +215,15 @@ func TestRenderIsADocumentToApply(t *testing.T) {
 		}
 	}
 }
+
+func TestThePrefillTakesTheRunsDeviceMode(t *testing.T) {
+	// Every disk of this fleet is NVMe and refused. The run scanned NVMe, so a
+	// document for the same fleet names its disks by PCI address.
+	b, err := supportbundle.Read(bytes.NewReader(bundletest.Archive(t, bundletest.Fixture(t, "bundle-run-failed"), nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req := Prefill(b); req.Mode != ModeNVMe {
+		t.Errorf("the prefill for an NVMe run is in %s mode", req.Mode)
+	}
+}

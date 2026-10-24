@@ -353,6 +353,9 @@ function cdc() {
 function editor() {
   if (!state.edit) {
     api("GET", `/api/bundles/${state.id}/cdc/prefill`).then((req) => {
+      // A list the server or a document leaves out is an empty one here.
+      req.workers = (req.workers || []).map((w) => ({ ...w, devices: w.devices || [], dataInterfaces: w.dataInterfaces || [] }));
+      req.cluster = req.cluster || {};
       state.edit = { req, included: new Set(req.workers.map((w) => w.name)), byWorker: Object.fromEntries(req.workers.map((w) => [w.name, w])) };
       render();
     }).catch((e) => { state.edit = { error: e.message }; render(); });

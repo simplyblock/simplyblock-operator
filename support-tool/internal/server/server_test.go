@@ -147,3 +147,27 @@ func TestThePageIsServed(t *testing.T) {
 		t.Errorf("the page answered %d %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
 }
+
+// Regression: 2026-10-24-editor-null-workers. A bundle with no CDC whose run
+// found no usable device prefilled no worker, and the empty list went out as
+// null, which the editor could not read.
+func TestThePrefillOfABundleWithoutAUsableDeviceIsAList(t *testing.T) {
+	s := New()
+	rec := upload(t, s, bundletest.Archive(t, bundletest.Fixture(t, "bundle-run-failed"), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upload: %d %s", rec.Code, rec.Body)
+	}
+	var up uploaded
+	if err := json.Unmarshal(rec.Body.Bytes(), &up); err != nil {
+		t.Fatal(err)
+	}
+
+	rec = do(t, s, http.MethodGet, "/api/bundles/"+up.ID+"/cdc/prefill", "", nil)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("prefill: %d %s", rec.Code, rec.Body)
+	}
+	if got := string(raw["workers"]); !strings.HasPrefix(got, "[") {
+		t.Errorf("workers is %s, want a list", got)
+	}
+}

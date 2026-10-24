@@ -90,10 +90,16 @@ const defaultNodeSet = "discovered"
 // request for what a discovery run would draft from the bundle's reports. An
 // approved CDC is immutable, so its prefill carries another name.
 func Prefill(b *supportbundle.Bundle) Request {
+	req := prefillFromReports(b)
 	if b.CDC != nil {
-		return prefillFromCDC(b)
+		req = prefillFromCDC(b)
 	}
-	return prefillFromReports(b)
+	// A list the editor iterates, also when nothing qualifies: a fleet whose
+	// every disk was refused still has workers to choose devices on.
+	if req.Workers == nil {
+		req.Workers = []Worker{}
+	}
+	return req
 }
 
 func prefillFromCDC(b *supportbundle.Bundle) Request {
@@ -163,11 +169,21 @@ func prefillFromReports(b *supportbundle.Bundle) Request {
 		nodes[n.Name] = n
 	}
 
+	// The run's own mode, which holds even when it refused every disk. Without
+	// a run, the fleet's available disks decide.
 	reports := readable(b)
-	for _, r := range reports {
-		if len(available(r, ModeNVMe)) > 0 {
-			req.Mode = ModeNVMe
-			break
+	switch {
+	case b.Run != nil:
+		req.Mode = ModeNVMe
+		if d := b.Run.Spec.Discover; d != nil && d.EnableLogicalBlockDevices != nil && *d.EnableLogicalBlockDevices {
+			req.Mode = ModeBlock
+		}
+	default:
+		for _, r := range reports {
+			if len(available(r, ModeNVMe)) > 0 {
+				req.Mode = ModeNVMe
+				break
+			}
 		}
 	}
 	devicesPerWorker := 0
