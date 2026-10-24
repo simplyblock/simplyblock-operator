@@ -14,6 +14,9 @@
 // operator/internal/discovery (interface choice, network alignment, NUMA placement,
 // node roles, failure domains, and the derived cluster settings).
 // The document is written for support staff, so it names no code locations.
+//
+// discovery-symptoms.typ cites this document by section number: renumbering a
+// section here means updating its Read column.
 
 #set document(title: "Deployment discovery detection", author: "simplyblock")
 #set page(
