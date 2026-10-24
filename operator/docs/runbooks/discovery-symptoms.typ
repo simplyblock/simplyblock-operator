@@ -69,7 +69,7 @@ Ask for these four things first. Together they answer most cases without a secon
 
 #grid((1.6fr, 3.4fr), ([What], [Command]),
   [The run and its events], [`kubectl describe operatorops <run> -n <ns>`],
-  [The probe reports], [`kubectl get cm -n <ns> -l storage.simplyblock.io/nodeprobe-run=<run> -o yaml`],
+  [The probe reports (a complete example is in D 11)], [`kubectl get cm -n <ns> -l storage.simplyblock.io/nodeprobe-run=<run> -o yaml`],
   [The draft and its events], [`kubectl get cdc <name> -n <ns> -o yaml` and `kubectl describe cdc <name> -n <ns>`],
   [Every warning], [`kubectl get events -n <ns> --field-selector type=Warning`],
 )
@@ -122,7 +122,7 @@ expire after an hour by default. The probe reports and the run's `status.message
   [R 4, D 8.5],
   [Volumes on a worker show one disk per path, or do not fail over], [`NVMeMultipathUnavailable` warning, and `hostOS.kernel.nvmeMultipath` in the worker's report],
   [The worker's kernel is built without native NVMe multipath (Amazon Linux 2023 EKS images), or it was booted with `nvme_core.multipath=N`.],
-  [R 8.1, D 4],
+  [R 8.1, D 4.1],
   [A partition is not used], [The run's mode],
   [Partitions are used only in logical block device mode, and only empty ones.],
   [R 5.1],
