@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+#
+# Collects everything support needs to explain a discovery run into one archive:
+# the OperatorOps and its events, every probe report, the probe pods' logs, the
+# draft ClusterDeploymentConfig, the namespace's events, the nodes, the
+# deployment's custom resources, and the operator's log since the run started.
+#
+# It is what a customer runs instead of answering a list of kubectl commands one
+# round trip at a time. It runs with the customer's own kubeconfig, needs
+# nothing installed in the cluster, and only reads: it never changes an object
+# and never reads a Secret. A read that fails is recorded in errors.txt and the
+# rest is still collected, because a partial bundle answers more than none.
+#
+# Installed on the PATH, kubectl runs it as a plugin: `kubectl simplyblock bundle`.
+#
+# Usage:
+#   kubectl-simplyblock-bundle [-n NAMESPACE] [--run OPERATOROPS] [--output FILE]
+#
+# The namespace defaults to the current context's, then to simplyblock. The run
+# defaults to the namespace's newest OperatorOps with action Discover.
+set -euo pipefail
+
+usage() {
+  cat <<EOF
+Usage: kubectl simplyblock bundle [-n NAMESPACE] [--run OPERATOROPS] [--output FILE]
+
+Collect a discovery run's resources, reports, events, and logs into one archive
+for simplyblock support. Only reads from the cluster, and never reads a Secret.
+
+Options:
+  -n, --namespace NAME  Namespace of the run (default: the current context's,
+                        or simplyblock)
+      --run NAME        The OperatorOps to collect (default: the newest
+                        discovery run in the namespace)
+  -o, --output FILE     Archive to write (default:
+                        ./simplyblock-bundle-<run>-<time>.tar.gz)
+  -h, --help            Show this help message
+EOF
+}
+
+NAMESPACE=""
+RUN=""
+OUTPUT=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n | --namespace) NAMESPACE="${2:?$1 needs a value}"; shift 2 ;;
+    --run) RUN="${2:?$1 needs a value}"; shift 2 ;;
+    -o | --output) OUTPUT="${2:?$1 needs a value}"; shift 2 ;;
+    -h | --help) usage; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+if [[ -z "$NAMESPACE" ]]; then
+  NAMESPACE="$(kubectl config view --minify -o 'jsonpath={..namespace}' 2>/dev/null || true)"
+  NAMESPACE="${NAMESPACE:-simplyblock}"
+fi
+
+PROBE_LABEL="storage.simplyblock.io/nodeprobe-run"
+OPERATOR_LABEL="control-plane=simplyblock-operator"
+
+# The newest OperatorOps whose action is Discover. Timestamps are RFC 3339 in
+# UTC, so they sort as strings.
+if [[ -z "$RUN" ]]; then
+  RUN="$(kubectl get operatorops -n "$NAMESPACE" \
+    -o 'jsonpath={range .items[*]}{.metadata.creationTimestamp}{"\t"}{.metadata.name}{"\t"}{.spec.action}{"\n"}{end}' |
+    awk -F'\t' '$3 == "Discover"' | sort | tail -1 | cut -f2)"
+  if [[ -z "$RUN" ]]; then
+    echo "no discovery run in namespace $NAMESPACE: name one with --run, or the namespace with -n" >&2
+    exit 1
+  fi
+fi
+
+if ! fields="$(kubectl get operatorops "$RUN" -n "$NAMESPACE" \
+  -o 'jsonpath={.metadata.creationTimestamp}{"\t"}{.status.configRef}' 2>&1)"; then
+  echo "the run $RUN cannot be read in namespace $NAMESPACE: $fields" >&2
+  exit 1
+fi
+STARTED="$(cut -f1 <<<"$fields")"
+CONFIG="$(cut -f2 <<<"$fields")"
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+NAME="simplyblock-bundle-$RUN-$STAMP"
+OUTPUT="${OUTPUT:-$PWD/$NAME.tar.gz}"
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+DIR="$STAGE/$NAME"
+mkdir -p "$DIR/reports" "$DIR/logs/probe" "$DIR/logs/operator"
+ERRORS="$DIR/errors.txt"
+: > "$ERRORS"
+
+# collect FILE ARGS... runs kubectl ARGS into FILE under the bundle. A failure
+# is recorded in errors.txt with kubectl's own message and does not stop the
+# collection. An answer with nothing in it keeps kubectl's message instead,
+# such as "No resources found", so an empty file never has to be explained.
+collect() {
+  local file="$DIR/$1" err
+  shift
+  err="$(mktemp)"
+  if ! kubectl "$@" > "$file" 2> "$err"; then
+    { echo "kubectl $*"; sed 's/^/  /' "$err"; } >> "$ERRORS"
+  elif [[ ! -s "$file" ]]; then
+    cat "$err" > "$file"
+  fi
+  rm -f "$err"
+}
+
+echo "collecting discovery run $RUN in namespace $NAMESPACE"
+
+collect version.txt version
+collect operatorops.yaml get operatorops "$RUN" -n "$NAMESPACE" -o yaml
+collect operatorops-describe.txt describe operatorops "$RUN" -n "$NAMESPACE"
+collect events.txt get events -n "$NAMESPACE" -o wide --sort-by=.lastTimestamp
+collect nodes.yaml get nodes -o yaml
+collect nodes-wide.txt get nodes -o wide
+
+# The probe reports, and each report.json on its own, which is what a reviewer
+# reads and compares across workers.
+collect probe-reports.yaml get configmaps -n "$NAMESPACE" -l "$PROBE_LABEL=$RUN" -o yaml
+for cm in $(kubectl get configmaps -n "$NAMESPACE" -l "$PROBE_LABEL=$RUN" \
+  -o 'jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true); do
+  collect "reports/$cm.json" get configmap "$cm" -n "$NAMESPACE" -o 'jsonpath={.data.report\.json}'
+done
+
+# The probe Jobs and pods are deleted an hour after the run, so these are
+# empty for an older run, and an empty answer is not a failure.
+collect probe-pods.txt get jobs,pods -n "$NAMESPACE" -l "$PROBE_LABEL=$RUN" -o wide
+collect probe-pods-describe.txt describe jobs,pods -n "$NAMESPACE" -l "$PROBE_LABEL=$RUN"
+for pod in $(kubectl get pods -n "$NAMESPACE" -l "$PROBE_LABEL=$RUN" \
+  -o 'jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true); do
+  collect "logs/probe/$pod.log" logs "$pod" -n "$NAMESPACE" --all-containers --timestamps
+done
+
+if [[ -n "$CONFIG" ]]; then
+  collect cdc.yaml get clusterdeploymentconfigs "$CONFIG" -n "$NAMESPACE" -o yaml
+  collect cdc-describe.txt describe clusterdeploymentconfigs "$CONFIG" -n "$NAMESPACE"
+fi
+
+# What the draft deployed, if it was approved: empty lists otherwise.
+collect deployment.yaml get controlplanes,storageclusters,storagenodes -n "$NAMESPACE" -o yaml
+
+# The operator may run in another namespace than the run. Its log is read from
+# the run's start, which is everything it said about the run and little else.
+while IFS=$'\t' read -r ns pod; do
+  [[ -n "$pod" ]] || continue
+  collect "logs/operator/$pod.log" logs "$pod" -n "$ns" --all-containers --timestamps --since-time="$STARTED"
+done < <(kubectl get pods -A -l "$OPERATOR_LABEL" \
+  -o 'jsonpath={range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+
+tar -czf "$OUTPUT" -C "$STAGE" "$NAME"
+echo "wrote $OUTPUT"
+if [[ -s "$ERRORS" ]]; then
+  echo "some of it could not be collected; $NAME/errors.txt in the archive says what and why"
+fi
