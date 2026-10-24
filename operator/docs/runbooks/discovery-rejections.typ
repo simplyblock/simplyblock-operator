@@ -83,9 +83,9 @@ and *writes* the draft. The rejections are grouped by the stage that produces th
 )
 
 #v(4pt)
-#note[`kubectl simplyblock bundle -n <ns> --run <run>` collects all of the following into one archive. The script
-is `helm-charts/scripts/kubectl-simplyblock-bundle` in the operator repository, and the symptom index shows how
-to fetch and run it.]
+#note[`curl -s -L https://install.simplyblock.io/scripts/discovery-bundler | bash` collects all of the following
+into one archive. The symptom index shows how to name the namespace and the run, and what to do without the
+script.]
 
 #v(4pt)
 #grid((1.5fr, 3fr), ([What to collect], [Command]),
