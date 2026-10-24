@@ -1,0 +1,39 @@
+<!doctype html>
+<!-- The support tool's one page: upload a support bundle, read its analysis,
+     and build a ClusterDeploymentConfig. app.js renders every view into
+     #view from the server's JSON. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>simplyblock support</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">simplyblock <span>support</span></div>
+    <div id="bundle-name" class="bundle-name"></div>
+    <label class="upload">
+      <input id="file" type="file" accept=".tar.gz,.tgz,application/gzip">
+      <span>Open bundle…</span>
+    </label>
+  </header>
+  <nav id="tabs" hidden>
+    <button data-tab="overview" class="active">Overview</button>
+    <button data-tab="workers">Workers</button>
+    <button data-tab="cluster">Cluster</button>
+    <button data-tab="cdc">ClusterDeploymentConfig</button>
+    <button data-tab="editor">Editor</button>
+  </nav>
+  <main id="view">
+    <section id="drop" class="drop">
+      <h1>Open a support bundle</h1>
+      <p>Drop the <code>simplyblock-bundle-*.tar.gz</code> a customer collected with
+        <code>kubectl simplyblock bundle</code> here, or choose it with <em>Open bundle…</em>.</p>
+      <p class="muted">The bundle stays on this machine: it is read by the server you started,
+        held in memory, and never sent anywhere else.</p>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
