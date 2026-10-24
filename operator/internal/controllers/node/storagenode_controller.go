@@ -1613,7 +1613,13 @@ func (r *StorageNodeReconciler) addParams(
 	}
 
 	// The control plane's failure domain is an integer, and this API's is a label.
-	// The cluster's status.failureDomains translates one into the other.
+	// The cluster's status.failureDomains translates one into the other. A cluster
+	// created without failure domains refuses an add that names one, and a node
+	// carries a label there whenever discovery read a zone but left the feature
+	// off, so the label is sent only to a cluster that has the feature.
+	if !ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains) {
+		return params
+	}
 	if index := domainIndex(config.FailureDomain, cluster.Status.FailureDomains); index != nil {
 		params.FailureDomain = index
 	}
