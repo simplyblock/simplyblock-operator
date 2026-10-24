@@ -79,6 +79,18 @@ fi
 STARTED="$(cut -f1 <<<"$fields")"
 CONFIG="$(cut -f2 <<<"$fields")"
 
+# The run's name as the operator writes it into its probe objects' label: a
+# label value holds at most 63 characters, so a longer name is cut there and
+# loses the dots and dashes it then ends on. A selector carrying the whole name
+# matches nothing.
+label_value() {
+  local v
+  v="$(tr '[:upper:]' '[:lower:]' <<<"$1" | sed -E 's/[^a-z0-9.-]+/-/g; s/^[._-]+//; s/[._-]+$//')"
+  v="${v:0:63}"
+  sed -E 's/[._-]+$//' <<<"$v"
+}
+SELECTOR="$PROBE_LABEL=$(label_value "$RUN")"
+
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 NAME="simplyblock-bundle-$RUN-$STAMP"
 OUTPUT="${OUTPUT:-$PWD/$NAME.tar.gz}"
@@ -105,6 +117,18 @@ collect() {
   rm -f "$err"
 }
 
+# enumerate ARGS... prints what kubectl ARGS lists, one entry per line. A
+# listing that fails is recorded in errors.txt like any other read, because an
+# empty list and a refused one lead to the same empty bundle otherwise.
+enumerate() {
+  local err
+  err="$(mktemp)"
+  if ! kubectl "$@" 2> "$err"; then
+    { echo "kubectl $*"; sed 's/^/  /' "$err"; } >> "$ERRORS"
+  fi
+  rm -f "$err"
+}
+
 echo "collecting discovery run $RUN in namespace $NAMESPACE"
 
 collect version.txt version
@@ -116,18 +140,18 @@ collect nodes-wide.txt get nodes -o wide
 
 # The probe reports, and each report.json on its own, which is what a reviewer
 # reads and compares across workers.
-collect probe-reports.yaml get configmaps -n "$NAMESPACE" -l "$PROBE_LABEL=$RUN" -o yaml
-for cm in $(kubectl get configmaps -n "$NAMESPACE" -l "$PROBE_LABEL=$RUN" \
-  -o 'jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true); do
+collect probe-reports.yaml get configmaps -n "$NAMESPACE" -l "$SELECTOR" -o yaml
+for cm in $(enumerate get configmaps -n "$NAMESPACE" -l "$SELECTOR" \
+  -o 'jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}'); do
   collect "reports/$cm.json" get configmap "$cm" -n "$NAMESPACE" -o 'jsonpath={.data.report\.json}'
 done
 
 # The probe Jobs and pods are deleted an hour after the run, so these are
 # empty for an older run, and an empty answer is not a failure.
-collect probe-pods.txt get jobs,pods -n "$NAMESPACE" -l "$PROBE_LABEL=$RUN" -o wide
-collect probe-pods-describe.txt describe jobs,pods -n "$NAMESPACE" -l "$PROBE_LABEL=$RUN"
-for pod in $(kubectl get pods -n "$NAMESPACE" -l "$PROBE_LABEL=$RUN" \
-  -o 'jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true); do
+collect probe-pods.txt get jobs,pods -n "$NAMESPACE" -l "$SELECTOR" -o wide
+collect probe-pods-describe.txt describe jobs,pods -n "$NAMESPACE" -l "$SELECTOR"
+for pod in $(enumerate get pods -n "$NAMESPACE" -l "$SELECTOR" \
+  -o 'jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}'); do
   collect "logs/probe/$pod.log" logs "$pod" -n "$NAMESPACE" --all-containers --timestamps
 done
 
@@ -144,8 +168,8 @@ collect deployment.yaml get controlplanes,storageclusters,storagenodes -n "$NAME
 while IFS=$'\t' read -r ns pod; do
   [[ -n "$pod" ]] || continue
   collect "logs/operator/$pod.log" logs "$pod" -n "$ns" --all-containers --timestamps --since-time="$STARTED"
-done < <(kubectl get pods -A -l "$OPERATOR_LABEL" \
-  -o 'jsonpath={range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+done < <(enumerate get pods -A -l "$OPERATOR_LABEL" \
+  -o 'jsonpath={range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}')
 
 tar -czf "$OUTPUT" -C "$STAGE" "$NAME"
 echo "wrote $OUTPUT"

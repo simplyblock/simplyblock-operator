@@ -51,6 +51,10 @@ case "$1 $2" in
     cat "$STUB_DIR/reports/$3"
     exit 0 ;;
   "get pods")
+    if [[ " $* " == *" -A "* && -n "${STUB_FORBID_CLUSTER_PODS:-}" ]]; then
+      echo 'Error from server (Forbidden): pods is forbidden: User "support" cannot list resource "pods" at the cluster scope' >&2
+      exit 1
+    fi
     if [[ " $* " == *" -l control-plane=simplyblock-operator "* ]]; then
       echo "operator-ns${tab}simplyblock-operator-7d9f"
     elif [[ " $* " == *" -o jsonpath="* ]]; then
@@ -197,6 +201,31 @@ expect_file events.txt
 [[ -n "$TREE" ]] && ! grep -q "No resources found" "$TREE/events.txt" &&
   fail "events.txt does not say that there were no events"
 [[ -z "$TREE" || ! -s "$TREE/errors.txt" ]] || fail "an empty answer was counted as a failure"
+[[ $FAILED -eq 0 ]] && echo "ok   $CASE"
+FAILED=$((FAILED || FAILED_BEFORE))
+
+FAILED_BEFORE=$FAILED; FAILED=0
+new_case "a refused listing is recorded, not taken for an empty one"
+STUB_FORBID_CLUSTER_PODS=1 bundle -n simplyblock --run run-new
+[[ $STATUS -eq 0 ]] || fail "exit $STATUS: $OUT"
+[[ -n "$TREE" ]] && ! grep -q "Forbidden" "$TREE/errors.txt" 2>/dev/null &&
+  fail "the refused operator pod listing is not in errors.txt"
+grep -qi "could not be collected" <<<"$OUT" || fail "the output does not say that something is missing"
+[[ $FAILED -eq 0 ]] && echo "ok   $CASE"
+FAILED=$((FAILED || FAILED_BEFORE))
+
+FAILED_BEFORE=$FAILED; FAILED=0
+new_case "a run name longer than a label value selects as the operator labeled it"
+# 75 characters, the 63rd of them a dash: the operator cuts the label value at
+# 63 and trims the dash it ends on.
+long="discovery-$(printf 'a%.0s' {1..52})-after-repair"
+label="discovery-$(printf 'a%.0s' {1..52})"
+printf '%s\t%s\t%s\t%s\n' "2026-10-24T09:00:00Z" "$long" Discover "" > "$WORK/$CASE_ID/runs.tsv"
+bundle -n simplyblock --run "$long"
+[[ $STATUS -eq 0 ]] || fail "exit $STATUS: $OUT"
+grep -q -- "-l storage.simplyblock.io/nodeprobe-run=$label " "$CALLS" ||
+  fail "the probe objects were not selected by the label value $label"
+grep -q -- "nodeprobe-run=$long" "$CALLS" && fail "a selector carries the full run name, which no label holds"
 [[ $FAILED -eq 0 ]] && echo "ok   $CASE"
 FAILED=$((FAILED || FAILED_BEFORE))
 
