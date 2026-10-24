@@ -7,7 +7,9 @@ replace github.com/simplyblock/atlas => ../atlas-lib
 replace github.com/simplyblock/simplyblock-operator => ../operator
 
 require (
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/simplyblock/simplyblock-operator v0.0.0-00010101000000-000000000000
+	go.yaml.in/yaml/v3 v3.0.4
 	k8s.io/api v0.36.2
 	k8s.io/apiextensions-apiserver v0.36.2
 	k8s.io/apiserver v0.36.2
@@ -69,7 +71,6 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
 	github.com/prometheus/procfs v0.20.1 // indirect
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/speakeasy-api/jsonpath v0.6.3 // indirect
 	github.com/speakeasy-api/openapi v1.24.0 // indirect
 	github.com/spf13/cobra v1.10.2 // indirect
@@ -82,7 +83,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
-	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93 // indirect
 	golang.org/x/mod v0.41.0 // indirect

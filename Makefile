@@ -184,8 +184,9 @@ support-tool-vet: ## Vet the support tool.
 # ─── helm ─────────────────────────────────────────────────────────────────
 # Sync the operator's generated CRDs and RBAC roles into the Helm chart. Depends
 # on operator-manifests so the copied sources are freshly generated (not stale).
-helm-sync: operator-manifests ## Sync operator CRDs and RBAC into the Helm chart.
+helm-sync: operator-manifests ## Sync operator CRDs and RBAC into the Helm chart, and the chart's values into the support tool.
 	bash $(HELM_DIR)/scripts/sync-from-operator.sh $(OPERATOR_DIR)
+	$(MAKE) -C $(SUPPORT_DIR) chart
 
 # ─── openapi ──────────────────────────────────────────────────────────────
 # shared/openapi.json is the contract atlas-lib's generated client and the

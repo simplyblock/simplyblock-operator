@@ -6,7 +6,7 @@
 
 "use strict";
 
-const state = { id: null, analysis: null, tab: "overview", worker: null, edit: null, built: null, ops: null };
+const state = { id: null, analysis: null, tab: "overview", worker: null, edit: null, built: null, ops: null, helm: null };
 
 // landing is the page before a bundle is open: the drop zone and how to
 // collect a bundle. It is kept to show again on a bundle view with no bundle.
@@ -157,14 +157,14 @@ function show(name) {
   const id = new URLSearchParams(location.search).get("bundle");
   if (!id) {
     // The run editor needs no bundle, so a link to it opens it.
-    if (location.hash === "#run") { state.tab = "run"; render(); }
+    if (["#run", "#helm"].includes(location.hash)) { state.tab = location.hash.slice(1); render(); }
     return;
   }
   try {
     state.analysis = await api("GET", `/api/bundles/${encodeURIComponent(id)}`);
     state.id = id;
     const tab = location.hash.slice(1);
-    if (["overview", "workers", "cluster", "cdc", "editor", "run"].includes(tab)) state.tab = tab;
+    if (["overview", "workers", "cluster", "cdc", "editor", "run", "helm"].includes(tab)) state.tab = tab;
     show(state.analysis.bundle);
   } catch (e) {
     history.replaceState(null, "", location.pathname);
@@ -178,8 +178,8 @@ function render() {
   const overviewTab = document.querySelector('#tabs button[data-tab="overview"]');
   overviewTab.replaceChildren("Overview", errors ? el("span", { class: "badge err tab-badge" }, String(errors)) : "");
   for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("active", b.dataset.tab === state.tab);
-  const views = { overview, workers, cluster, cdc, editor, run: runEditor };
-  const bundleView = state.tab !== "run";
+  const views = { overview, workers, cluster, cdc, editor, run: runEditor, helm: helmEditor };
+  const bundleView = !["run", "helm"].includes(state.tab);
   document.getElementById("view").replaceChildren(bundleView && !state.analysis ? landing : views[state.tab]());
 }
 
@@ -408,6 +408,151 @@ function cdc() {
     card("Findings", findingsOf(c.findings)),
     card("Layout", nodeSetsOf(c.nodeSets), c.cluster ? [el("h3", {}, "spec.cluster"), pre(c.cluster)] : null),
     card("YAML", pre(c.yaml)));
+}
+
+// ─── Helm values editor ────────────────────────────────────────────────────
+
+// getAt, setAt, and deleteAt read and write a dotted path in nested objects.
+// deleteAt drops parents it leaves empty, so the overrides stay minimal.
+const getAt = (obj, path) => path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), obj);
+function setAt(obj, path, value) {
+  const keys = path.split(".");
+  let node = obj;
+  for (const k of keys.slice(0, -1)) node = node[k] = (node[k] && typeof node[k] === "object" && !Array.isArray(node[k])) ? node[k] : {};
+  node[keys[keys.length - 1]] = value;
+}
+function deleteAt(obj, path) {
+  const keys = path.split(".");
+  const walk = (node, i) => {
+    if (!node || typeof node !== "object") return;
+    if (i === keys.length - 1) { delete node[keys[i]]; return; }
+    walk(node[keys[i]], i + 1);
+    if (node[keys[i]] && typeof node[keys[i]] === "object" && !Object.keys(node[keys[i]]).length) delete node[keys[i]];
+  };
+  walk(obj, 0);
+}
+const countLeaves = (o) => (o && typeof o === "object" && !Array.isArray(o) ? Object.values(o).reduce((n, v) => n + countLeaves(v), 0) : 1);
+
+// helmEditor edits the chart's values. Only what differs from the chart's
+// defaults is kept, and that is the values file it writes.
+function helmEditor() {
+  if (!state.helm) {
+    api("GET", "/api/helm").then((out) => {
+      state.helm = { ...out, overrides: {}, yaml: {}, section: null };
+      render();
+    }).catch((e) => { state.helm = { error: e.message }; render(); });
+    return card(null, el("p", {}, "Reading the chart…"));
+  }
+  const h = state.helm;
+  if (h.error) return el("div", { class: "error-banner" }, h.error);
+
+  const general = h.fields.filter((f) => f.kind !== "object");
+  const sections = [...(general.length ? [{ key: "General", path: "", children: general, help: "The chart's top-level values." }] : []),
+    ...h.fields.filter((f) => f.kind === "object")];
+  if (!h.section) h.section = sections[0]?.key;
+  const current = sections.find((s) => s.key === h.section) || sections[0];
+  // How many values a section changes: the leaves set under it, and the
+  // values given as YAML.
+  const overridesIn = (section) => {
+    if (!section.path) return general.filter((f) => h.overrides[f.key] !== undefined).length;
+    const set = getAt(h.overrides, section.path);
+    return (set === undefined ? 0 : countLeaves(set)) + Object.keys(h.yaml).filter((p) => p.startsWith(section.path + ".")).length;
+  };
+
+  const control = (f) => {
+    const value = getAt(h.overrides, f.path);
+    const set = (v) => { if (v === undefined) deleteAt(h.overrides, f.path); else setAt(h.overrides, f.path, v); };
+    const shown = (v) => (v === undefined || v === null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
+    if (f.enum?.length || f.kind === "bool") {
+      const options = f.kind === "bool" ? ["true", "false"] : f.enum;
+      return el("select", { onchange: (e) => {
+        const v = e.target.value;
+        set(v === "" ? undefined : f.kind === "bool" ? v === "true" : v);
+        render();
+      } }, el("option", { value: "" }, `default (${shown(f.default) || "unset"})`),
+      options.map((o) => el("option", { value: o, selected: value !== undefined && String(value) === o }, o)));
+    }
+    if (f.kind === "list") {
+      return el("textarea", { rows: 2, placeholder: (f.default || []).join("\n") || "one per line",
+        onchange: (e) => { const v = lines(e.target.value); set(v.length ? v : undefined); render(); } }, lineText(value));
+    }
+    if (f.kind === "map") {
+      return el("textarea", { rows: 2, placeholder: "key=value, one per line",
+        onchange: (e) => {
+          const entries = lines(e.target.value).map((l) => l.split("=")).map(([k, ...v]) => [k.trim(), v.join("=").trim()]);
+          set(entries.length ? Object.fromEntries(entries) : undefined); render();
+        } }, Object.entries(value || {}).map(([k, v]) => `${k}=${v}`).join("\n"));
+    }
+    if (f.kind === "yaml") {
+      return el("textarea", { rows: 3, placeholder: `YAML; default ${shown(f.default) || "empty"}`,
+        onchange: (e) => { if (e.target.value.trim()) h.yaml[f.path] = e.target.value; else delete h.yaml[f.path]; render(); } }, h.yaml[f.path] || "");
+    }
+    return el("input", { type: f.kind === "int" || f.kind === "number" ? "number" : "text", value: shown(value), placeholder: shown(f.default),
+      onchange: (e) => {
+        const v = e.target.value;
+        set(v === "" ? undefined : f.kind === "int" || f.kind === "number" ? Number(v) : v);
+        render();
+      } });
+  };
+  const help = (f) => (f.help ? el("div", { class: "help", title: f.help }, f.help.split("\n").slice(0, 2).join(" ")) : null);
+  const fieldsOf = (list) => list.map((f) => f.kind === "object"
+    ? el("details", { class: "value-group", open: getAt(h.overrides, f.path) !== undefined || Object.keys(h.yaml).some((p) => p.startsWith(f.path + ".")) },
+      el("summary", {}, el("strong", {}, f.key), help(f)), fieldsOf(f.children || []))
+    : el("div", { class: "value-row" }, el("div", {}, el("code", {}, f.key), help(f)), control(f)));
+
+  const importDialog = () => {
+    const area = el("textarea", { rows: 18, placeholder: "paste a values.yaml" });
+    const dialog = el("dialog", { class: "modal" },
+      el("div", { class: "row modal-head" }, el("h2", {}, "Import a values file"), el("button", { class: "secondary", onclick: () => dialog.close() }, "Close")),
+      el("p", { class: "note" }, "The file becomes the overrides, replacing what is set here, and is checked against the chart."),
+      area,
+      el("div", { class: "row", style: "margin-top:8px" }, el("button", { class: "primary", onclick: async () => {
+        try {
+          const out = await api("POST", "/api/helm/import", { text: area.value });
+          h.overrides = out.overrides || {}; h.yaml = {}; h.built = null; h.imported = out.findings;
+          dialog.close(); render();
+        } catch (e) { area.setCustomValidity(e.message); area.reportValidity(); }
+      } }, "Import")));
+    dialog.addEventListener("close", () => dialog.remove());
+    document.body.append(dialog);
+    dialog.showModal();
+  };
+
+  const build = async () => {
+    try {
+      h.built = await api("POST", "/api/helm/values", { overrides: h.overrides, yaml: h.yaml });
+    } catch (e) {
+      h.built = { error: e.message };
+    }
+    render();
+  };
+  const findingsList = (list) => (list || []).length
+    ? list.map((x) => el("div", { class: `finding ${x.severity}` }, x.path ? el("span", { class: "reason" }, x.path) : null, x.message))
+    : el("p", { class: "note" }, "The chart's schema takes these values.");
+  const result = !h.built ? null : h.built.error ? el("div", { class: "error-banner" }, h.built.error) : el("div", {},
+    card("Findings", findingsList(h.built.findings)),
+    card("values.yaml", el("div", { class: "row" },
+      el("button", { class: "primary", onclick: () => download("values.yaml", h.built.yaml) }, "Download values.yaml"),
+      el("button", { class: "secondary", onclick: () => navigator.clipboard?.writeText(h.built.yaml) }, "Copy")),
+    pre(h.built.yaml)),
+    card("Install or upgrade with it", el("p", { class: "note" }, "The install for a new release, the upgrade for an existing one:"),
+      h.built.commands.map((c) => commandLine(c))));
+
+  return el("div", {},
+    el("div", { class: "row", style: "margin-bottom:12px" },
+      el("span", { class: "muted" }, `${h.chart.name} ${h.chart.version}`),
+      el("button", { class: "secondary", onclick: importDialog }, "Import values.yaml…"),
+      el("button", { class: "primary", onclick: build }, "Build values"),
+      el("button", { class: "secondary", onclick: () => { h.overrides = {}; h.yaml = {}; h.built = null; h.imported = null; render(); } }, "Reset to defaults")),
+    h.imported ? card("Imported file", findingsList(h.imported)) : null,
+    el("div", { class: "split" },
+      card(null, el("div", { class: "list" }, sections.map((sec) => {
+        const n = overridesIn(sec);
+        return el("button", { class: sec.key === current.key ? "active" : "", onclick: () => { h.section = sec.key; render(); } },
+          sec.key, n > 0 ? el("span", { class: "badge warn", style: "margin-left:6px" }, String(n)) : null);
+      }))),
+      card(current.key, help(current), fieldsOf(current.children || []))),
+    el("div", { style: "margin-top:16px" }, result));
 }
 
 // ─── Discovery run editor ──────────────────────────────────────────────────

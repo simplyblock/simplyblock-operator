@@ -267,3 +267,9 @@ textarea {
 }
 nav button.tool { margin-left: auto; }
 
+.value-row { display: grid; grid-template-columns: minmax(200px, 1fr) 1.2fr; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.value-row .help, details.value-group > summary .help { color: var(--muted); font-size: 12px; margin-top: 2px; }
+details.value-group { margin: 6px 0; padding-left: 12px; border-left: 2px solid var(--line); }
+details.value-group > summary { cursor: pointer; padding: 4px 0; }
+@media (max-width: 800px) { .value-row { grid-template-columns: 1fr; } }
+

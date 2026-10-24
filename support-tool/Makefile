@@ -43,6 +43,14 @@ samples: ## Pack every testdata bundle into bin/samples/<name>.tar.gz.
 		echo "bin/samples/$$name.tar.gz"; \
 	done
 
+# The chart files the Helm values editor carries. go:embed cannot reach
+# outside this module, so they are copies, and a test fails when one differs
+# from the chart.
+CHART := ../helm-charts/charts/simplyblock-operator
+.PHONY: chart
+chart: ## Copy the chart's values, schema, and Chart.yaml into internal/helmvalues/chart.
+	cp $(CHART)/values.yaml $(CHART)/values.schema.json $(CHART)/Chart.yaml internal/helmvalues/chart/
+
 .PHONY: test
 test: ## Run the tests.
 	go test -race ./...

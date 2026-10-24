@@ -63,6 +63,25 @@ An approved CDC is immutable, so the editor writes its edit under another name.
 A document built here is never approved: approval stays a decision made on the
 cluster.
 
+## Editors that need no bundle
+
+Two editors work without a bundle, and take a bundle's settings when one is open.
+
+- **Discovery run:** builds an OperatorOps with action Discover from every
+  `spec.discover` field. With a bundle, it starts from that run's settings under
+  the next name. The run is checked the way the API server checks it: the CRD's
+  OpenAPI schema and CEL rules, evaluated offline by the API server's own
+  validators against the CRDs the operator embeds, and the operator's admission
+  webhook. The same offline admission runs on every CDC the tool shows or builds.
+- **Helm values:** every value of the simplyblock-operator chart, with its
+  default and the comment `values.yaml` documents it with, by section. The
+  values file it writes holds only what differs from the defaults, checked
+  against the chart's `values.schema.json` with the JSON Schema library Helm
+  uses, and a value the chart does not have is a warning. A customer's
+  `values.yaml` can be imported and checked the same way. The chart's values,
+  schema, and `Chart.yaml` are copies under `internal/helmvalues/chart`;
+  `make helm-sync` refreshes them, and a test fails when they differ.
+
 ## Sample bundles
 
 `make -C support-tool samples` packs every bundle under `testdata` into
@@ -91,6 +110,10 @@ the binary, with no build step.
 | `internal/analysis`      | The view model, and the CDC checks                         |
 | `internal/cdcedit`       | The editor's request, the prefill, and building a CDC      |
 | `internal/server`        | The HTTP API and the embedded page                         |
+| `internal/admission`     | The CRDs' schema and CEL rules, evaluated offline          |
+| `internal/opsedit`       | The discovery run editor                                   |
+| `internal/helmvalues`    | The chart's values, their documentation, and their check   |
+| `internal/manifest`      | Rendering an object as YAML to apply                       |
 | `internal/bundletest`    | Packing the fixture bundles under `testdata` for the tests |
 
 The fixtures under `testdata` are two bundles of the discovery test fleet

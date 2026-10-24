@@ -14,6 +14,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/analysis"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/cdcedit"
+	"github.com/simplyblock/simplyblock-operator/support-tool/internal/helmvalues"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/opsedit"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/supportbundle"
 )
@@ -61,6 +63,9 @@ func New() *Server {
 	s.mux.HandleFunc("GET /api/meta", s.meta)
 	s.mux.HandleFunc("GET /api/operatorops/prefill", s.opsPrefill)
 	s.mux.HandleFunc("POST /api/operatorops", s.opsBuild)
+	s.mux.HandleFunc("GET /api/helm", s.helmChart)
+	s.mux.HandleFunc("POST /api/helm/values", s.helmValues)
+	s.mux.HandleFunc("POST /api/helm/import", s.helmImport)
 	return s
 }
 
@@ -216,6 +221,73 @@ func (s *Server) opsBuild(w http.ResponseWriter, r *http.Request) {
 		findings = []opsedit.Finding{}
 	}
 	reply(w, map[string]any{"yaml": string(out), "findings": findings})
+}
+
+// helmChart is the chart the values editor edits: its name, its version, and
+// every value with its default and its documentation.
+func (s *Server) helmChart(w http.ResponseWriter, _ *http.Request) {
+	name, version := helmvalues.Chart()
+	reply(w, map[string]any{
+		"chart":  map[string]string{"name": name, "version": version},
+		"fields": helmvalues.Fields(),
+	})
+}
+
+// helmValues answers with the overrides as a values file, every problem with
+// them, and the commands that install or upgrade the chart with it.
+func (s *Server) helmValues(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Overrides map[string]any `json:"overrides"`
+		// YAML is the values the editor takes as YAML text, by dotted path.
+		YAML map[string]string `json:"yaml"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		fail(w, http.StatusBadRequest, "the request does not parse: "+err.Error())
+		return
+	}
+	if req.Overrides == nil {
+		req.Overrides = map[string]any{}
+	}
+	for path, text := range req.YAML {
+		if err := helmvalues.SetYAML(req.Overrides, path, text); err != nil {
+			fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	out, err := helmvalues.Render(req.Overrides)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	name, version := helmvalues.Chart()
+	reply(w, map[string]any{
+		"yaml":     string(out),
+		"findings": helmvalues.Check(req.Overrides),
+		"commands": []string{
+			"helm repo add simplyblock https://simplyblock.github.io/helm-charts/charts",
+			"helm repo update",
+			fmt.Sprintf("helm install %s simplyblock/%s --namespace simplyblock --create-namespace --version %s -f values.yaml", name, name, version),
+			fmt.Sprintf("helm upgrade %s simplyblock/%s --namespace simplyblock --version %s -f values.yaml", name, name, version),
+		},
+	})
+}
+
+// helmImport reads a values file into overrides, with every problem the chart's
+// schema and values find in it: what support checks a customer's file with.
+func (s *Server) helmImport(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&req); err != nil {
+		fail(w, http.StatusBadRequest, "the request does not parse: "+err.Error())
+		return
+	}
+	overrides, err := helmvalues.Import(req.Text)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	reply(w, map[string]any{"overrides": overrides, "findings": helmvalues.Check(overrides)})
 }
 
 // meta is what the editor offers that does not depend on a bundle.
