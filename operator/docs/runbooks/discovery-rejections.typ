@@ -211,9 +211,9 @@ Before anything is inspected, workers that cannot host storage are left out. The
 rest. Each one is reported as a `WorkerDeclined` event.
 
 #grid(cols, head,
-  [Cordoned or tainted], [`<worker> is not used: it is cordoned`, `... it carries the taint <key>=<value>:<effect>`, or `... it is not schedulable`],
-  [The node is cordoned, or it has a `NoSchedule` or `NoExecute` taint.],
-  [Ask whether the node is meant for storage. If so, `kubectl uncordon <node>` or remove the taint. Adding tolerations to the run is not enough: a tainted node is still skipped.],
+  [Cordoned or tainted], [`<worker> is not used: it is cordoned`, `... it carries the taint <key>=<value>:<effect>, which spec.discover.tolerations does not tolerate`, or `... it is not schedulable`],
+  [The node is cordoned, or it has a `NoSchedule` or `NoExecute` taint the run does not tolerate.],
+  [Ask whether the node is meant for storage. If so, `kubectl uncordon <node>`. For a taint that dedicates the node to storage, add a matching entry to `spec.discover.tolerations` and run discovery again: the draft carries it to the storage nodes. Any other taint has to be removed.],
   [Control-plane node], [`<worker> is not used: it is <role>; set spec.discover.enableControlPlaneNodes to include it`],
   [The node is a control-plane node. Infrastructure nodes are used without this setting.],
   [Ask whether storage is meant to run there (typical for three-node compact clusters). If so, set `spec.discover.enableControlPlaneNodes: true`.],
@@ -470,7 +470,7 @@ All under `spec.discover` of the OperatorOps.
   [`forceJournalDevice`], [Logical block device mode: picks a journal disk when several disks tie for the smallest size.],
   [`enableControlPlaneNodes`], [Includes control-plane nodes. Infrastructure nodes are always included.],
   [`workers` or `nodeSelector`], [Which workers to inspect; use one or the other.],
-  [`tolerations`], [Lets the probe run on tainted nodes and carries over to the deployment. Does not make a tainted node usable.],
+  [`tolerations`], [Includes workers whose `NoSchedule` and `NoExecute` taints these tolerate, lets the probe run there, and carries over to the deployment.],
   [`failureDomainLabel`], [The node label that names each worker's failure domain.],
   [`deviceFilter.pcieAllowList`, `pcieDenyList`, `pcieModel`], [NVMe mode disk filters, by PCI address and model.],
   [`deviceFilter.blockAllowList`, `blockDenyList`], [Logical block device mode disk filters, by `/dev/...` path.],
