@@ -75,9 +75,9 @@ host's, read by the probe through a host mount.
 )
 
 #v(4pt)
-The probe report carries a schema version (currently 9). A report from a probe image of another version is
+The probe report carries a schema version (currently 10). A report from a probe image of another version is
 refused, and the probe is run again. A reading the probe could not take is listed under `unreadable` in the
-report, one sentence each. The rest of the report stays valid.
+report, one sentence each. The rest of the report stays valid. Section 11 shows a complete report.
 
 = Cluster environment
 
@@ -143,6 +143,42 @@ Read from the host's `/etc/os-release` (`ID`, `ID_LIKE`, `VERSION_ID`, `PRETTY_N
 The draft sets `hostOS` (distribution and family) only when every worker reports the same distribution.
 Workers on different distributions, or a worker whose os-release could not be read, leave it unset with a note
 naming the workers.
+
+== Kernel
+
+The kernel release is read from `/proc/sys/kernel/osrelease` (what `uname -r` prints), and the report carries
+the upstream version it opens with as `version.major`, `version.minor`, and `version.patch`: `6.1.155` of
+`6.1.155-176.282.amzn2023.x86_64`, and `6.8.0` of `6.8-rc1`. A release that does not open with two numbers
+leaves `version` out. Distributions backport fixes without changing the version, so it places a kernel in
+upstream's history and does not say which fixes it carries.
+
+Each fact below is read
+from the first source that answers, in this order: the running kernel (`/sys/module`, `/sys/class/misc`), the
+module index of the booted release (`/usr/lib/modules/<release>/modules.builtin` and `modules.dep`), and the
+kernel build configuration (`/proc/config.gz`, or `/usr/lib/modules/<release>/config` on RHEL, Fedora, and Amazon
+Linux). Ubuntu keeps its configuration only in `/boot`, which the probe does not read. Every fact carries a
+`detail` naming the source that answered. The report holds them under `hostOS.kernel`.
+
+#grid((1.1fr, 3fr, 2.6fr), ([Native NVMe multipath], [How it is recognized], [Meaning]),
+  [`Enabled`], [`/sys/module/nvme_core/parameters/multipath` is `Y`, or the configuration sets `CONFIG_NVME_MULTIPATH=y`.], [A volume served over several paths is one disk, and the kernel fails over between the paths.],
+  [`Disabled`], [The parameter is `N`, or the configuration sets the option and the kernel command line carries `nvme_core.multipath=N`.], [Each path is a disk of its own until the host reboots without the parameter.],
+  [`NotBuilt`], [The configuration does not set `CONFIG_NVME_MULTIPATH`, or `nvme_core` is loaded without a `multipath` parameter and no configuration is readable. This is the default Amazon Linux 2023 EKS node image.], [Each path is a disk of its own, and only another kernel changes that.],
+  [`Unknown`], [`nvme_core` is not loaded and no configuration is readable.], [Nothing was concluded.],
+)
+
+#v(4pt)
+#grid((1fr, 2.2fr, 1.6fr, 1.6fr, 1.6fr), ([Capability], [`Available`], [`Loadable`], [`Absent`], [Module and option]),
+  [`/dev/kvm`], [`/sys/class/misc/kvm` exists.], [The CPU reports `vmx` or `svm`, and `kvm_intel` or `kvm_amd` is a module that is not loaded.], [The CPU reports neither `vmx` nor `svm` (no hardware virtualization, or a VM without nested virtualization), KVM is loaded and registered no device, or the kernel lacks KVM.], [`kvm`, `kvm_intel`, `kvm_amd`, `CONFIG_KVM`],
+  [`/dev/net/tun`], [`/sys/class/misc/tun` exists, or `tun` is loaded or built in.], [`tun` is a module that is not loaded. The kernel loads it on the first open of `/dev/net/tun`.], [Neither the module index nor the configuration has it.], [`tun`, `CONFIG_TUN`],
+  [pNFS block layout], [`blocklayoutdriver` is loaded or built in.], [`blocklayoutdriver` is a module that is not loaded.], [Neither the module index nor the configuration has it.], [`blocklayoutdriver`, `CONFIG_PNFS_BLOCK`],
+)
+
+#v(4pt)
+A capability nothing could answer for is `Unknown`. A worker whose native NVMe multipath is `NotBuilt` or `Disabled`
+gets a Warning event `NVMeMultipathUnavailable` on the OperatorOps. It is not refused. The storage engine runs in
+user space and does not use the kernel's NVMe initiator, so the worker hosts a storage node. It cannot mount a
+volume over more than one path, so workloads with volumes need nodes on another kernel, for example, the Ubuntu
+24.04 EKS image.
 
 = CPU
 
@@ -384,3 +420,85 @@ derived.]
   [`enableFailureDomains`], [Failure-domain label], [On when every worker carries a valid value and the stripe fits the domains.],
   [`hostOS`], [os-release], [Set when every worker runs the same distribution.],
 )
+
+#pagebreak(weak: true)
+= Example probe report
+
+One worker's report as the probe writes it, under the key `report.json` of the probe report ConfigMap: an
+Ubuntu 22.04 worker with two blank NVMe disks, a SATA boot disk, and one NVMe controller a userspace driver
+holds. Fields with no value are left out rather than written empty. Sizes are bytes, and a `numaNode` of `-1`
+is a device the kernel places on no memory node. A reading that failed adds an `unreadable` list of sentences
+at the end, one sentence for each, such as
+`read the kernel: read the kernel release from /proc/sys/kernel/osrelease: no such file or directory`.
+
+#v(4pt)
+#block(fill: rgb("#f6f8fa"), stroke: 0.6pt + rgb("#d0d7de"), inset: 8pt, radius: 2pt, width: 100%)[
+#set text(size: 7.2pt)
+#set par(leading: 0.42em)
+```json
+{
+  "version": 10,
+  "node": "worker-01",
+  "probedAt": "2026-09-18T09:00:00Z",
+  "cpu": {
+    "onlineCPUs": 32, "physicalCores": 16, "sockets": 1, "threadsPerCore": 2, "hyperThreading": true,
+    "numaNodes": [
+      { "node": 0, "onlineCPUs": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+          21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31], "physicalCores": 16 }
+    ]
+  },
+  "memory": {
+    "totalBytes": 274877906944, "freeBytes": 64424509440, "availableBytes": 257698037760,
+    "numaNodes": [
+      { "node": 0, "totalBytes": 137438953472, "freeBytes": 68719476736 },
+      { "node": 1, "totalBytes": 137438953472, "freeBytes": 68719476736 }
+    ]
+  },
+  "hugePages": [
+    { "sizeBytes": 1073741824, "total": 32, "free": 32,
+      "numaNodes": [ { "node": 0, "total": 16, "free": 16 }, { "node": 1, "total": 16, "free": 16 } ] }
+  ],
+  "interfaces": [
+    { "name": "eth0", "speedMbps": 25000, "mtu": 1500, "state": "up", "driver": "mlx5_core", "numaNode": 0,
+      "kind": "physical", "addresses": ["10.10.10.1/24"] },
+    { "name": "eth1", "speedMbps": 25000, "mtu": 1500, "state": "up", "driver": "mlx5_core", "numaNode": 1,
+      "kind": "physical", "addresses": ["10.10.11.1/24"] }
+  ],
+  "devices": [
+    { "name": "nvme0n1", "path": "/dev/nvme0n1", "pciAddress": "0000:5e:00.0", "sizeBytes": 3298534883328,
+      "kind": "Disk", "transport": "NVMe", "model": "SAMSUNG MZQL23T8HCLS-00A07", "numaNode": 0,
+      "available": true, "content": "Blank" },
+    { "name": "nvme1n1", "path": "/dev/nvme1n1", "pciAddress": "0000:5f:00.0", "sizeBytes": 3298534883328,
+      "kind": "Disk", "transport": "NVMe", "model": "SAMSUNG MZQL23T8HCLS-00A07", "numaNode": 0,
+      "available": true, "content": "Blank" },
+    { "name": "sda", "path": "/dev/sda", "stablePath": "/dev/disk/by-id/ata-SAMSUNG_MZ7L3480HCHQ-00A07_S6Q1NX0T",
+      "sizeBytes": 480103981056, "kind": "Disk", "transport": "SATA", "model": "SAMSUNG MZ7L3480HCHQ-00A07",
+      "numaNode": -1, "available": false,
+      "rejections": [ { "reason": "Partitioned", "detail": "the device carries the partitions [sda1 sda2]" } ] },
+    { "name": "sda1", "path": "/dev/sda1", "sizeBytes": 1127219200, "kind": "Partition", "transport": "SATA",
+      "numaNode": -1, "available": false,
+      "rejections": [ { "reason": "NotAWholeDisk", "detail": "the device is a Partition" },
+                      { "reason": "Mounted", "detail": "mounted at [/boot/efi]" } ] }
+  ],
+  "hostOS": {
+    "distro": "ubuntu", "family": "Debian", "version": "22.04", "prettyName": "Ubuntu 22.04.4 LTS",
+    "architecture": "x86_64",
+    "kernel": {
+      "release": "5.15.0-122-generic",
+      "version": { "major": 5, "minor": 15, "patch": 0 },
+      "nvmeMultipath": { "state": "Enabled", "detail": "nvme_core.multipath is Y" },
+      "kvm": { "state": "Available", "detail": "the kernel has registered /dev/kvm" },
+      "tun": { "state": "Available", "detail": "the kernel has registered /dev/net/tun" },
+      "pnfsBlock": { "state": "Loadable",
+                     "detail": "blocklayoutdriver is a module of 5.15.0-122-generic and not loaded" }
+    }
+  },
+  "nvmeControllers": [
+    { "address": "0000:5e:00.0", "driver": "nvme", "vendor": "0x144d", "product": "0xa80a", "numaNode": 0 },
+    { "address": "0000:5f:00.0", "driver": "nvme", "vendor": "0x144d", "product": "0xa80a", "numaNode": 0 },
+    { "address": "0000:62:00.0", "driver": "uio_pci_generic", "vendor": "0x144d", "product": "0xa80a",
+      "numaNode": 0, "inUse": true }
+  ]
+}
+```
+]

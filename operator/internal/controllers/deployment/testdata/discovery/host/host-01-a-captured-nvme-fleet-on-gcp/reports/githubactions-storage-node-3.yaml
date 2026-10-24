@@ -2,7 +2,7 @@ apiVersion: v1
 data:
   report.json: |-
     {
-      "version": 9,
+      "version": 10,
       "node": "githubactions-storage-node-3",
       "probedAt": "2026-09-18T09:00:00Z",
       "cpu": {
@@ -530,6 +530,10 @@ data:
             {
               "reason": "NotAWholeDisk",
               "detail": "the device is a Partition"
+            },
+            {
+              "reason": "Unreadable",
+              "detail": "the device could not be read: blockdev: open /dev/sda1: the transcript carries no contents for partition sda1"
             }
           ]
         },
@@ -546,12 +550,34 @@ data:
             {
               "reason": "NotAWholeDisk",
               "detail": "the device is a Partition"
+            },
+            {
+              "reason": "Unreadable",
+              "detail": "the device could not be read: blockdev: open /dev/sda2: the transcript carries no contents for partition sda2"
             }
           ]
         }
       ],
       "hostOS": {
-        "architecture": "x86_64"
+        "architecture": "x86_64",
+        "kernel": {
+          "nvmeMultipath": {
+            "state": "Unknown",
+            "detail": "nvme_core is not loaded and the kernel configuration is not readable"
+          },
+          "kvm": {
+            "state": "Unknown",
+            "detail": "kvm is not loaded, and neither the module index nor the kernel configuration is readable"
+          },
+          "tun": {
+            "state": "Unknown",
+            "detail": "tun is not loaded, and neither the module index nor the kernel configuration is readable"
+          },
+          "pnfsBlock": {
+            "state": "Unknown",
+            "detail": "blocklayoutdriver is not loaded, and neither the module index nor the kernel configuration is readable"
+          }
+        }
       },
       "nvmeControllers": [
         {
@@ -563,7 +589,8 @@ data:
         }
       ],
       "unreadable": [
-        "read the host OS: the host root /host/root carries no os-release, so its distribution is unknown"
+        "read the host OS: the host root /host/root carries no os-release, so its distribution is unknown",
+        "read the kernel: read the kernel release from /proc/sys/kernel/osrelease: no such file or directory"
       ]
     }
 kind: ConfigMap

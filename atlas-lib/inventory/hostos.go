@@ -142,6 +142,11 @@ type HostOS struct {
 	// the reading process's, so a 32-bit binary on a 64-bit host reports the
 	// host.
 	Architecture string
+
+	// Kernel is what the kernel the host boots offers. It is read by
+	// ReadKernel rather than ReadHostOS, from the host's sysfs and procfs
+	// rather than from its root filesystem.
+	Kernel KernelFacts
 }
 
 // MajorVersion is Version up to its first separator, which is the granularity a
