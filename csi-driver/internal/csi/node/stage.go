@@ -587,15 +587,14 @@ func (ns *Server) publishedConnection(
 		handle = nil
 	}
 
-	if connection, hostNQN, ok := ns.controlPlaneConnection(ctx, vc, handle); ok {
+	connection, hostNQN, cpErr := ns.controlPlaneConnection(ctx, vc, handle)
+	if cpErr == nil {
 		return connection, hostNQN, nil
 	}
 
-	connection := connectionFromContext(vc)
+	connection = connectionFromContext(vc)
 	if connection.NQN == "" {
-		return lvol.Connection{}, "", fmt.Errorf(
-			"volume %s: the control plane did not answer and its stashed context names no subsystem, "+
-				"so there is nothing to attach", volumeID)
+		return lvol.Connection{}, "", noEndpointError(volumeID, cpErr)
 	}
 	klog.Warningf("volume %s: attaching from the stashed context, because the control plane did not answer",
 		volumeID)
@@ -609,21 +608,37 @@ func (ns *Server) controlPlaneConnection(
 	ctx context.Context,
 	vc map[string]string,
 	handle *lvol.Handle,
-) (lvol.Connection, string, bool) {
+) (lvol.Connection, string, error) {
 	client, err := clusters.Client(ctx, clusterIDFor(vc, handle), poolIDFor(vc, handle))
 	if err != nil {
-		klog.Warningf("no control-plane client for the volume's cluster: %v", err)
-		return lvol.Connection{}, "", false
+		err = fmt.Errorf("no control-plane client for the volume's cluster: %w", err)
+		klog.Warning(err)
+		return lvol.Connection{}, "", err
 	}
 
 	responses, err := client.LvolConnections(ctx, controlPlaneLvolID(vc, handle), vc["hostNQN"])
-	if err != nil || len(responses) == 0 {
-		klog.Warningf("the control plane published no endpoint for the volume: %v", err)
-		return lvol.Connection{}, "", false
+	switch {
+	case err != nil:
+		// The control plane's own words, kept: a 403 "Host NQN ... not found
+		// in allowed hosts" is the answer that ends an investigation.
+		err = fmt.Errorf("the control plane refused to publish the volume: %w", err)
+	case len(responses) == 0:
+		err = errors.New("the control plane published no endpoint for the volume")
+	}
+	if err != nil {
+		klog.Warning(err)
+		return lvol.Connection{}, "", err
 	}
 
 	connection, hostNQN := initiator.ConnectionFrom(responses, deviceLvolID(vc))
-	return connection, hostNQN, true
+	return connection, hostNQN, nil
+}
+
+// noEndpointError is the stage failure when neither the control plane nor the
+// stashed context yields a subsystem to attach.
+func noEndpointError(volumeID string, cause error) error {
+	return fmt.Errorf("volume %s: %w; its stashed context names no subsystem, so there is nothing to attach",
+		volumeID, cause)
 }
 
 // controlPlaneLvolID is the volume the control-plane calls name, which is the
