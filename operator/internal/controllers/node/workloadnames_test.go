@@ -24,6 +24,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
@@ -51,7 +52,7 @@ func aNamesReconciler(t *testing.T, objects ...client.Object) *StorageNodeWorklo
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 	return &StorageNodeWorkloadReconciler{
 		Client: c, Scheme: scheme, Namespace: opsNamespace,
-		TLSEnabled: true, TLSProvider: "openshift",
+		TLS:      servingTLS(controlplane.TLSSettings{Enabled: true, Provider: "openshift"}),
 		Workload: &Workload{Client: c},
 	}
 }
@@ -335,7 +336,7 @@ func TestAMemberBuildsNoServiceAndPublishesIntoItsSuperclusters(t *testing.T) {
 	member := aMember("prod-fast-kqv", secondClusterUUID)
 	objects := append([]client.Object{member}, theSharedServices()...)
 	r := aWorkloadReconciler(t, objects...)
-	r.TLSEnabled, r.TLSProvider = true, "openshift"
+	r.TLS = servingTLS(controlplane.TLSSettings{Enabled: true, Provider: "openshift"})
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(member)}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -361,7 +362,7 @@ func TestAMemberBuildsNoServiceAndPublishesIntoItsSuperclusters(t *testing.T) {
 func TestAMemberWaitsForItsSuperclustersServices(t *testing.T) {
 	member := aMember("prod-fast-kqv", secondClusterUUID)
 	r := aWorkloadReconciler(t, member)
-	r.TLSEnabled, r.TLSProvider = true, "openshift"
+	r.TLS = servingTLS(controlplane.TLSSettings{Enabled: true, Provider: "openshift"})
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(member)}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -450,7 +451,7 @@ func TestAMemberAppliesNoCertificate(t *testing.T) {
 	member := aMember("prod-fast-kqv", secondClusterUUID)
 	objects := append([]client.Object{member}, theSharedServices()...)
 	r := aWorkloadReconciler(t, objects...)
-	r.TLSEnabled, r.TLSProvider = true, utils.TLSProviderCertManager
+	r.TLS = servingTLS(controlplane.TLSSettings{Enabled: true, Provider: utils.TLSProviderCertManager})
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(member)}); err != nil {
 		t.Fatalf("Reconcile: %v", err)

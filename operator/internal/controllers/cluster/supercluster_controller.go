@@ -38,6 +38,7 @@ import (
 	atlaskube "github.com/simplyblock/atlas/kube"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -89,10 +90,9 @@ type SuperclusterReconciler struct {
 	// answers from (§7.2). Nil hands them nowhere.
 	Readings ReadingObserver
 
-	// TLSEnabled and TLSProvider decide the serving certificate of the
-	// Services the members share (§6.2), as they do a standalone cluster's.
-	TLSEnabled  bool
-	TLSProvider string
+	// TLS decides the serving certificate of the Services the members share
+	// (§6.2), as it does a standalone cluster's. Nil is plaintext.
+	TLS controlplane.TLSResolver
 }
 
 // MemberCapacitySource supplies a member's latest capacity sample, and whether
@@ -201,15 +201,16 @@ func (r *SuperclusterReconciler) Reconcile(
 
 	// The Services the members are reached through are the supercluster's,
 	// built under the names the write above recorded (§6.2).
+	tls := r.TLS.Settings(ctx)
 	if err := utils.ApplyWorkloadServices(ctx, r.Client, r.Scheme, &supercluster,
-		r.TLSEnabled, r.TLSProvider); err != nil {
+		tls.Enabled, tls.Provider); err != nil {
 		return ctrl.Result{}, fmt.Errorf("apply the shared Services: %w", err)
 	}
 	if err := utils.ApplyServingCertificates(ctx, r.Client, r.Scheme, &supercluster,
-		r.TLSEnabled, r.TLSProvider); err != nil {
+		tls.Enabled, tls.Provider); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := utils.OwnServingSecrets(ctx, r.Client, r.Scheme, &supercluster, r.TLSEnabled); err != nil {
+	if err := utils.OwnServingSecrets(ctx, r.Client, r.Scheme, &supercluster, tls.Enabled); err != nil {
 		return ctrl.Result{}, err
 	}
 
