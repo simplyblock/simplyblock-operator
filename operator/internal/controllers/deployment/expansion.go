@@ -489,6 +489,20 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		simplyblockv1alpha2.KubernetesEnvironmentK3s:
 		workload.EnableKubeletConfiguration = ptr.To(true)
 	}
+
+	// Vanilla says nothing about how its workers are built, so a Vanilla
+	// document may state both flags itself. Admission refuses them on every
+	// other environment, and they are read only here, so a document admitted
+	// before that rule cannot override what its environment decided.
+	if template := config.Spec.Cluster; template != nil &&
+		config.Spec.Environment == simplyblockv1alpha2.KubernetesEnvironmentVanilla {
+		if template.EnableKubeletConfiguration != nil {
+			workload.EnableKubeletConfiguration = ptr.To(*template.EnableKubeletConfiguration)
+		}
+		if template.EnableCpuTopology != nil {
+			workload.EnableCpuTopology = ptr.To(*template.EnableCpuTopology)
+		}
+	}
 	return workload
 }
 

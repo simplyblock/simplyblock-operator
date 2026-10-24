@@ -539,6 +539,16 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.EnableCpuTopology != nil {
+		in, out := &in.EnableCpuTopology, &out.EnableCpuTopology
+		*out = new(bool)
+		**out = **in
+	}
+	if in.EnableKubeletConfiguration != nil {
+		in, out := &in.EnableKubeletConfiguration, &out.EnableKubeletConfiguration
+		*out = new(bool)
+		**out = **in
+	}
 	if in.Stripe != nil {
 		in, out := &in.Stripe, &out.Stripe
 		*out = new(StripeSpec)
