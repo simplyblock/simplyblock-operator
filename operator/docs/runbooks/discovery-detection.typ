@@ -75,7 +75,7 @@ host's, read by the probe through a host mount.
 )
 
 #v(4pt)
-The probe report carries a schema version (currently 9). A report from a probe image of another version is
+The probe report carries a schema version (currently 10). A report from a probe image of another version is
 refused, and the probe is run again. A reading the probe could not take is listed under `unreadable` in the
 report, one sentence each. The rest of the report stays valid.
 
@@ -143,6 +143,36 @@ Read from the host's `/etc/os-release` (`ID`, `ID_LIKE`, `VERSION_ID`, `PRETTY_N
 The draft sets `hostOS` (distribution and family) only when every worker reports the same distribution.
 Workers on different distributions, or a worker whose os-release could not be read, leave it unset with a note
 naming the workers.
+
+== Kernel
+
+The kernel release is read from `/proc/sys/kernel/osrelease` (what `uname -r` prints). Each fact below is read
+from the first source that answers, in this order: the running kernel (`/sys/module`, `/sys/class/misc`), the
+module index of the booted release (`/usr/lib/modules/<release>/modules.builtin` and `modules.dep`), and the
+kernel build configuration (`/proc/config.gz`, or `/usr/lib/modules/<release>/config` on RHEL, Fedora, and Amazon
+Linux). Ubuntu keeps its configuration only in `/boot`, which the probe does not read. Every fact carries a
+`detail` naming the source that answered. The report holds them under `hostOS.kernel`.
+
+#grid((1.1fr, 3fr, 2.6fr), ([Native NVMe multipath], [How it is recognized], [Meaning]),
+  [`Enabled`], [`/sys/module/nvme_core/parameters/multipath` is `Y`, or the configuration sets `CONFIG_NVME_MULTIPATH=y`.], [A volume served over several paths is one disk, and the kernel fails over between the paths.],
+  [`Disabled`], [The parameter is `N`, or the configuration sets the option and the kernel command line carries `nvme_core.multipath=N`.], [Each path is a disk of its own until the host reboots without the parameter.],
+  [`NotBuilt`], [The configuration does not set `CONFIG_NVME_MULTIPATH`, or `nvme_core` is loaded without a `multipath` parameter and no configuration is readable. This is the default Amazon Linux 2023 EKS node image.], [Each path is a disk of its own, and only another kernel changes that.],
+  [`Unknown`], [`nvme_core` is not loaded and no configuration is readable.], [Nothing was concluded.],
+)
+
+#v(4pt)
+#grid((1fr, 2.2fr, 1.6fr, 1.6fr, 1.6fr), ([Capability], [`Available`], [`Loadable`], [`Absent`], [Module and option]),
+  [`/dev/kvm`], [`/sys/class/misc/kvm` exists.], [The CPU reports `vmx` or `svm`, and `kvm_intel` or `kvm_amd` is a module that is not loaded.], [The CPU reports neither `vmx` nor `svm` (no hardware virtualization, or a VM without nested virtualization), KVM is loaded and registered no device, or the kernel lacks KVM.], [`kvm`, `kvm_intel`, `kvm_amd`, `CONFIG_KVM`],
+  [`/dev/net/tun`], [`/sys/class/misc/tun` exists, or `tun` is loaded or built in.], [`tun` is a module that is not loaded. The kernel loads it on the first open of `/dev/net/tun`.], [Neither the module index nor the configuration has it.], [`tun`, `CONFIG_TUN`],
+  [pNFS block layout], [`blocklayoutdriver` is loaded or built in.], [`blocklayoutdriver` is a module that is not loaded.], [Neither the module index nor the configuration has it.], [`blocklayoutdriver`, `CONFIG_PNFS_BLOCK`],
+)
+
+#v(4pt)
+A capability nothing could answer for is `Unknown`. A worker whose native NVMe multipath is `NotBuilt` or `Disabled`
+gets a Warning event `NVMeMultipathUnavailable` on the OperatorOps. It is not refused. The storage engine runs in
+user space and does not use the kernel's NVMe initiator, so the worker hosts a storage node. It cannot mount a
+volume over more than one path, so workloads with volumes need nodes on another kernel, for example, the Ubuntu
+24.04 EKS image.
 
 = CPU
 
