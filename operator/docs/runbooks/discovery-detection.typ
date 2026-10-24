@@ -146,7 +146,13 @@ naming the workers.
 
 == Kernel
 
-The kernel release is read from `/proc/sys/kernel/osrelease` (what `uname -r` prints). Each fact below is read
+The kernel release is read from `/proc/sys/kernel/osrelease` (what `uname -r` prints), and the report carries
+the upstream version it opens with as `version.major`, `version.minor`, and `version.patch`: `6.1.155` of
+`6.1.155-176.282.amzn2023.x86_64`, and `6.8.0` of `6.8-rc1`. A release that does not open with two numbers
+leaves `version` out. Distributions backport fixes without changing the version, so it places a kernel in
+upstream's history and does not say which fixes it carries.
+
+Each fact below is read
 from the first source that answers, in this order: the running kernel (`/sys/module`, `/sys/class/misc`), the
 module index of the booted release (`/usr/lib/modules/<release>/modules.builtin` and `modules.dep`), and the
 kernel build configuration (`/proc/config.gz`, or `/usr/lib/modules/<release>/config` on RHEL, Fedora, and Amazon
