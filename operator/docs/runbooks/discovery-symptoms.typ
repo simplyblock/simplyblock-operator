@@ -83,7 +83,7 @@ expire after an hour by default. The probe reports and the run's `status.message
 
 #grid(cols, head,
   [The run does not finish], [`kubectl get jobs,pods -n <ns> -l storage.simplyblock.io/nodeprobe-run=<run>`],
-  [A probe pod is `Pending` (image pull, a taint without a matching `spec.discover.tolerations` entry) or refused (OpenShift SCC, Pod Security admission). After 15 minutes the run fails with "Probes timed out".],
+  [A probe pod is `Pending` (image pull, or a taint added after the run selected the worker) or refused (OpenShift SCC, Pod Security admission). After 15 minutes the run fails with "Probes timed out".],
   [R 2],
   [The run failed: "no worker is free"], [`WorkerDeclined` events],
   [Every worker is cordoned, tainted, a control-plane node, already a storage node, or outside `spec.discover.workers` or `nodeSelector`.],

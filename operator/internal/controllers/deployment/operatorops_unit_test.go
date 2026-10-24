@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -284,6 +285,70 @@ func TestDiscoverSkipsWorkersNothingCanBePlacedOn(t *testing.T) {
 
 	if !slices.Equal(ops.Status.Workers, []string{"worker-1"}) {
 		t.Errorf("the run settled on %v, want worker-1 alone", ops.Status.Workers)
+	}
+}
+
+// storagePlaneTainted carries the taint storagePlaneTaint tolerates.
+func storagePlaneTainted(node *corev1.Node) {
+	node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{
+		Key: "io.simplyblock.node-type", Value: "storage-plane", Effect: corev1.TaintEffectNoSchedule,
+	})
+}
+
+// gpuTainted carries a taint nothing in these tests tolerates.
+func gpuTainted(node *corev1.Node) {
+	node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{
+		Key: "nvidia.com/gpu", Value: "present", Effect: corev1.TaintEffectNoSchedule,
+	})
+}
+
+// Regression: 2026-10-24-discovery-ignores-tolerations. A worker carrying a
+// taint the run tolerates was declined as tainted, so a fleet that dedicates its
+// storage machines with a taint, and states the toleration in
+// spec.discover.tolerations as the field says to, got no draft at all.
+func TestDiscoverInspectsAWorkerWhoseTaintTheRunTolerates(t *testing.T) {
+	r := newRunner(t,
+		discoverRun(&simplyblockv1alpha2.DiscoverSpec{Tolerations: storagePlaneTaint}),
+		worker("worker-1"),
+		worker("storage-1", storagePlaneTainted),
+	)
+
+	r.step()
+	_, ops := r.step()
+
+	if !slices.Equal(ops.Status.Workers, []string{"storage-1", "worker-1"}) {
+		t.Errorf("the run settled on %v, want storage-1 and worker-1", ops.Status.Workers)
+	}
+}
+
+// Regression: 2026-10-24-discovery-ignores-tolerations. Tolerating one taint is
+// not tolerating the worker. A worker that also carries a taint the run does not
+// tolerate is declined, and the event names that taint rather than the
+// tolerated one, which would send a reviewer after the wrong taint.
+func TestDiscoverDeclinesAWorkerWithATaintTheRunDoesNotTolerate(t *testing.T) {
+	r := newRunner(t,
+		discoverRun(&simplyblockv1alpha2.DiscoverSpec{Tolerations: storagePlaneTaint}),
+		worker("worker-1"),
+		worker("storage-gpu-1", storagePlaneTainted, gpuTainted),
+	)
+	recorder := events.NewFakeRecorder(64)
+	r.reconciler.Recorder = recorder
+
+	r.step()
+	_, ops := r.step()
+
+	if !slices.Equal(ops.Status.Workers, []string{"worker-1"}) {
+		t.Errorf("the run settled on %v, want worker-1 alone", ops.Status.Workers)
+	}
+	var declined string
+	for len(recorder.Events) > 0 {
+		line := <-recorder.Events
+		if strings.Contains(line, WorkerDeclined) && strings.Contains(line, "storage-gpu-1") {
+			declined = line
+		}
+	}
+	if !strings.Contains(declined, "nvidia.com/gpu") {
+		t.Errorf("the decline does not name the untolerated taint: %q", declined)
 	}
 }
 
