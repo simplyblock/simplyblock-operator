@@ -5,8 +5,11 @@ ClusterDeploymentConfig from it. It runs on the support agent's machine, serves
 only loopback, and holds an uploaded bundle in memory only, because a bundle is
 customer data.
 
-The bundle is the archive `kubectl simplyblock bundle` writes
-(`helm-charts/scripts/kubectl-simplyblock-bundle`). Probe reports of versions 9
+The bundle is the archive the bundle script writes
+(`helm-charts/scripts/kubectl-simplyblock-bundle`, published as
+`curl -s -L https://install.simplyblock.io/scripts/discovery-bundler | bash`). The
+tool prints that command when it starts and shows it on every page, with the
+script's steps as individual commands for a customer who cannot run it. Probe reports of versions 9
 and 10 are read. A version-9 report predates the kernel facts, and the tool
 shows those as not reported rather than as unknown.
 

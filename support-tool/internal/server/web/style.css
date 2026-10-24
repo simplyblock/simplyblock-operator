@@ -39,8 +39,14 @@
 
 * { box-sizing: border-box; }
 
+/* The attribute hides an element even where a rule gives it a display. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
   background: var(--bg);
   color: var(--text);
   font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
@@ -102,7 +108,7 @@ nav button {
 }
 nav button.active { color: var(--text); border-bottom-color: var(--accent); }
 
-main { padding: 20px; max-width: 1400px; margin: 0 auto; }
+main { padding: 20px; max-width: 1400px; margin: 0 auto; width: 100%; flex: 1; }
 
 .drop {
   margin: 60px auto;
@@ -209,3 +215,41 @@ input[type=number] { width: 90px; }
 .checks label { display: flex; gap: 6px; align-items: baseline; font-size: 12px; }
 .checks label.refused { color: var(--muted); }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.command { display: flex; gap: 8px; align-items: center; margin: 6px 0; text-align: left; }
+.command code {
+  flex: 1;
+  background: var(--code-bg);
+  border-radius: 6px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+footer .command code { white-space: nowrap; overflow-x: auto; word-break: normal; }
+footer {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 12px;
+}
+footer .command { flex: 1; margin: 0; }
+
+dialog.modal {
+  width: min(960px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 20px;
+}
+dialog.modal::backdrop { background: rgba(0, 0, 0, .55); }
+.modal-head { justify-content: space-between; }
+.modal-head h2 { margin: 0; }
+ol.steps { padding-left: 20px; }
+ol.steps li { margin-bottom: 10px; }
+.step-title { font-weight: 600; margin-bottom: 2px; }
+

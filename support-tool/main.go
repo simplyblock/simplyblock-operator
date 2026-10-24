@@ -42,8 +42,23 @@ func main() {
 		Handler:           server.New(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	fmt.Printf("simplyblock support tool: open http://%s/\n", *listen)
+	fmt.Print(banner(*listen))
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+}
+
+// banner is what the tool prints when it starts.
+func banner(listen string) string {
+	return fmt.Sprintf(`simplyblock support tool: open http://%s/
+
+Have the customer collect a support bundle on their cluster with:
+
+  %s
+
+or, to name the namespace and the discovery run:
+
+  %s
+
+`, listen, server.CollectCommand, server.CollectCommandWithOptions)
 }

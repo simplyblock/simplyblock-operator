@@ -167,7 +167,12 @@ func (s *Server) stripes(w http.ResponseWriter, r *http.Request) {
 
 // meta is what the editor offers that does not depend on a bundle.
 func (s *Server) meta(w http.ResponseWriter, _ *http.Request) {
-	reply(w, map[string]any{"environments": cdcedit.Environments})
+	reply(w, map[string]any{
+		"environments": cdcedit.Environments,
+		"collect": map[string]any{
+			"command": CollectCommand, "withOptions": CollectCommandWithOptions, "manual": ManualCollection(),
+		},
+	})
 }
 
 func decodeRequest(w http.ResponseWriter, r *http.Request) (cdcedit.Request, bool) {

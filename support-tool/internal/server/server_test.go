@@ -250,3 +250,22 @@ func TestAForcedJournalSilencesTheTieWarning(t *testing.T) {
 		t.Errorf("%d tie warnings with the journal forced", n)
 	}
 }
+
+func TestTheMetaCarriesTheCollectionCommand(t *testing.T) {
+	rec := do(t, New(), http.MethodGet, "/api/meta", "", nil)
+	var meta struct {
+		Collect struct {
+			Command     string `json:"command"`
+			WithOptions string `json:"withOptions"`
+		} `json:"collect"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+		t.Fatalf("meta: %d %s", rec.Code, rec.Body)
+	}
+	if meta.Collect.Command != "curl -s -L https://install.simplyblock.io/scripts/discovery-bundler | bash" {
+		t.Errorf("the collection command is %q", meta.Collect.Command)
+	}
+	if !strings.Contains(meta.Collect.WithOptions, "bash -s -- -n <namespace> --run <run>") {
+		t.Errorf("the command with options is %q", meta.Collect.WithOptions)
+	}
+}

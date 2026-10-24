@@ -57,6 +57,58 @@ async function api(method, path, body) {
   return data;
 }
 
+// ─── Collecting a bundle ───────────────────────────────────────────────────
+
+// commandLine is a command with a button that copies it.
+function commandLine(command) {
+  return el("div", { class: "command" }, el("code", {}, command),
+    el("button", { class: "secondary", onclick: (e) => {
+      navigator.clipboard?.writeText(command);
+      e.target.textContent = "Copied";
+      setTimeout(() => { e.target.textContent = "Copy"; }, 1500);
+    } }, "Copy"));
+}
+
+// The command a customer runs is the server's, so the page and the CLI banner
+// never disagree. It is on the empty page in full and in the footer of every
+// view.
+api("GET", "/api/meta").then((meta) => {
+  state.meta = meta;
+  const collect = meta.collect || {};
+  document.getElementById("collect-help")?.replaceChildren(
+    el("h3", {}, "Collecting a bundle"),
+    el("p", { class: "note" }, "The customer runs this on a machine whose kubectl reaches the cluster. It only reads, never reads a Secret, and writes simplyblock-bundle-<run>-<time>.tar.gz to the current directory:"),
+    commandLine(collect.command),
+    el("p", { class: "note" }, "To name the namespace and the discovery run instead of the defaults (the context's namespace, and its newest discovery run):"),
+    commandLine(collect.withOptions),
+    el("p", { class: "note" }, "A customer who cannot or will not run the script runs its steps by hand: ",
+      el("button", { class: "secondary", onclick: () => manualDialog(collect.manual || []) }, "Without the script…")));
+  document.getElementById("footer").replaceChildren(
+    el("span", { class: "muted" }, "Collect a bundle:"), commandLine(collect.command),
+    el("button", { class: "secondary", onclick: () => manualDialog(collect.manual || []) }, "Without the script…"));
+}).catch(() => {});
+
+// manualDialog lists the script's steps as individual commands. They share shell
+// variables, so they run in one session, in order.
+function manualDialog(steps) {
+  const all = steps.map((s) => s.command).join("\n");
+  const dialog = el("dialog", { class: "modal" },
+    el("div", { class: "row modal-head" }, el("h2", {}, "Collecting a bundle without the script"),
+      el("button", { class: "secondary", onclick: () => dialog.close() }, "Close")),
+    el("p", { class: "note" }, "Run these in one bash session, in order, on a machine whose kubectl reaches the cluster. " +
+      "Replace <namespace> and <run> in the first one. They only read, never read a Secret, and write the same " +
+      "simplyblock-bundle-<run>-<time>.tar.gz the script does."),
+    el("ol", { class: "steps" }, steps.map((s) => el("li", {}, el("div", { class: "step-title" }, s.title), commandLine(s.command)))),
+    el("div", { class: "row" }, el("button", { class: "primary", onclick: (e) => {
+      navigator.clipboard?.writeText(all);
+      e.target.textContent = "Copied";
+      setTimeout(() => { e.target.textContent = "Copy all"; }, 1500);
+    } }, "Copy all")));
+  dialog.addEventListener("close", () => dialog.remove());
+  document.body.append(dialog);
+  dialog.showModal();
+}
+
 // ─── Upload ────────────────────────────────────────────────────────────────
 
 async function openBundle(file) {
