@@ -6,7 +6,11 @@
 
 "use strict";
 
-const state = { id: null, analysis: null, tab: "overview", worker: null, edit: null, built: null };
+const state = { id: null, analysis: null, tab: "overview", worker: null, edit: null, built: null, ops: null };
+
+// landing is the page before a bundle is open: the drop zone and how to
+// collect a bundle. It is kept to show again on a bundle view with no bundle.
+const landing = document.getElementById("drop");
 
 // el builds an element. Strings and numbers among the children become text
 // nodes, null and false are skipped, and arrays are flattened.
@@ -144,19 +148,23 @@ document.getElementById("tabs").addEventListener("click", (e) => {
 // finds it again while the server still holds it.
 function show(name) {
   document.getElementById("bundle-name").textContent = name;
-  document.getElementById("tabs").hidden = false;
+  state.ops = null;
   render();
 }
 
 // A URL naming a bundle the server still holds opens it.
 (async () => {
   const id = new URLSearchParams(location.search).get("bundle");
-  if (!id) return;
+  if (!id) {
+    // The run editor needs no bundle, so a link to it opens it.
+    if (location.hash === "#run") { state.tab = "run"; render(); }
+    return;
+  }
   try {
     state.analysis = await api("GET", `/api/bundles/${encodeURIComponent(id)}`);
     state.id = id;
     const tab = location.hash.slice(1);
-    if (["overview", "workers", "cluster", "cdc", "editor"].includes(tab)) state.tab = tab;
+    if (["overview", "workers", "cluster", "cdc", "editor", "run"].includes(tab)) state.tab = tab;
     show(state.analysis.bundle);
   } catch (e) {
     history.replaceState(null, "", location.pathname);
@@ -164,13 +172,15 @@ function show(name) {
 })();
 
 function render() {
-  history.replaceState(null, "", `?bundle=${encodeURIComponent(state.id)}#${state.tab}`);
+  history.replaceState(null, "", state.id ? `?bundle=${encodeURIComponent(state.id)}#${state.tab}` : `#${state.tab}`);
+  for (const b of document.querySelectorAll("#tabs button[data-bundle]")) b.hidden = !state.analysis;
   const errors = (state.analysis?.diagnoses || []).filter((d) => d.severity === "error").length;
   const overviewTab = document.querySelector('#tabs button[data-tab="overview"]');
   overviewTab.replaceChildren("Overview", errors ? el("span", { class: "badge err tab-badge" }, String(errors)) : "");
   for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("active", b.dataset.tab === state.tab);
-  const views = { overview, workers, cluster, cdc, editor };
-  document.getElementById("view").replaceChildren(views[state.tab]());
+  const views = { overview, workers, cluster, cdc, editor, run: runEditor };
+  const bundleView = state.tab !== "run";
+  document.getElementById("view").replaceChildren(bundleView && !state.analysis ? landing : views[state.tab]());
 }
 
 // ─── Overview ──────────────────────────────────────────────────────────────
@@ -398,6 +408,111 @@ function cdc() {
     card("Findings", findingsOf(c.findings)),
     card("Layout", nodeSetsOf(c.nodeSets), c.cluster ? [el("h3", {}, "spec.cluster"), pre(c.cluster)] : null),
     card("YAML", pre(c.yaml)));
+}
+
+// ─── Discovery run editor ──────────────────────────────────────────────────
+
+// lines is a textarea's entries, one per line, and lineText the reverse.
+const lines = (text) => text.split("\n").map((l) => l.trim()).filter(Boolean);
+const lineText = (list) => (list || []).join("\n");
+
+// runEditor builds a discovery run, an OperatorOps with action Discover. It
+// needs no bundle; with one, it starts from the settings of the bundle's run.
+function runEditor() {
+  if (!state.ops) {
+    api("GET", `/api/operatorops/prefill${state.id ? `?bundle=${encodeURIComponent(state.id)}` : ""}`)
+      .then((req) => { req.discover = req.discover || {}; state.ops = { req }; render(); })
+      .catch((e) => { state.ops = { error: e.message }; render(); });
+    return card(null, el("p", {}, "Preparing the run…"));
+  }
+  if (state.ops.error) return el("div", { class: "error-banner" }, state.ops.error);
+  const { req } = state.ops;
+  const d = req.discover;
+  d.deviceFilter = d.deviceFilter || {};
+  const f = d.deviceFilter;
+
+  const text = (obj, key, placeholder) => el("input", { type: "text", value: obj[key] ?? "", placeholder: placeholder || "",
+    oninput: (e) => { obj[key] = e.target.value || undefined; } });
+  const list = (obj, key, placeholder) => el("textarea", { rows: 3, placeholder: placeholder || "one per line",
+    oninput: (e) => { const v = lines(e.target.value); obj[key] = v.length ? v : undefined; } }, lineText(obj[key]));
+  const tri = (obj, key) => el("select", { onchange: (e) => { obj[key] = e.target.value === "" ? undefined : e.target.value === "true"; } },
+    [["", "unset"], ["true", "on"], ["false", "off"]].map(([v, l]) => el("option", { value: v, selected: String(obj[key] ?? "") === v }, l)));
+  const selector = el("textarea", { rows: 3, placeholder: "key=value, one per line",
+    oninput: (e) => {
+      const entries = lines(e.target.value).map((l) => l.split("=")).map(([k, ...v]) => [k.trim(), v.join("=").trim()]);
+      d.nodeSelector = entries.length ? Object.fromEntries(entries) : undefined;
+    } }, Object.entries(d.nodeSelector || {}).map(([k, v]) => `${k}=${v}`).join("\n"));
+
+  d.tolerations = d.tolerations || [];
+  const tolerations = el("div", {},
+    d.tolerations.map((t, i) => el("div", { class: "row" },
+      el("input", { type: "text", value: t.key || "", placeholder: "key", oninput: (e) => { t.key = e.target.value || undefined; } }),
+      el("select", { onchange: (e) => { t.operator = e.target.value; } },
+        ["Equal", "Exists"].map((o) => el("option", { value: o, selected: (t.operator || "Equal") === o }, o))),
+      el("input", { type: "text", value: t.value || "", placeholder: "value", oninput: (e) => { t.value = e.target.value || undefined; } }),
+      el("select", { onchange: (e) => { t.effect = e.target.value || undefined; } },
+        [["", "any effect"], ["NoSchedule", "NoSchedule"], ["PreferNoSchedule", "PreferNoSchedule"], ["NoExecute", "NoExecute"]]
+          .map(([v, l]) => el("option", { value: v, selected: (t.effect || "") === v }, l))),
+      el("button", { class: "secondary", onclick: () => { d.tolerations.splice(i, 1); render(); } }, "Remove"))),
+    el("button", { class: "secondary", onclick: () => { d.tolerations.push({ operator: "Equal" }); render(); } }, "Add toleration"));
+
+  const workerHint = state.analysis
+    ? el("button", { class: "secondary", onclick: () => { d.workers = state.analysis.workers.map((w) => w.name); render(); } }, "Use the bundle's workers")
+    : null;
+
+  const build = async () => {
+    const body = JSON.parse(JSON.stringify(req));
+    const filter = body.discover.deviceFilter;
+    if (filter && !Object.values(filter).some((v) => v !== undefined && v !== null && v !== "")) delete body.discover.deviceFilter;
+    if (!(body.discover.tolerations || []).length) delete body.discover.tolerations;
+    try {
+      state.ops.built = await api("POST", "/api/operatorops", body);
+    } catch (e) {
+      state.ops.built = { error: e.message };
+    }
+    render();
+  };
+
+  const built = state.ops.built;
+  const result = !built ? null : built.error ? el("div", { class: "error-banner" }, built.error) : el("div", {},
+    card("Findings", built.findings.length
+      ? built.findings.map((x) => el("div", { class: "finding error" }, el("span", { class: "reason" }, x.source === "webhook" ? "Webhook" : "Admission"), x.message))
+      : el("p", { class: "note" }, "The API server admits this run.")),
+    card(`${req.name}.yaml`, el("div", { class: "row" },
+      el("button", { class: "primary", onclick: () => download(`${req.name}.yaml`, built.yaml) }, "Download YAML"),
+      el("button", { class: "secondary", onclick: () => navigator.clipboard?.writeText(built.yaml) }, "Copy")),
+    el("p", { class: "note" }, "The customer applies it with kubectl apply -f. The run inspects the workers and writes a ClusterDeploymentConfig in Draft; nothing is deployed until the draft is approved."),
+    pre(built.yaml)));
+
+  return el("div", {},
+    el("div", { class: "grid" },
+      card("Run", el("div", { class: "form" },
+        el("label", {}, "Name"), text(req, "name"),
+        el("label", {}, "Namespace"), text(req, "namespace"),
+        el("label", {}, "Draft name"), text(d, "configName", "discovered-<run>"),
+        el("label", {}, "Grow existing cluster"), text(d, "clusterRef", "empty: the draft creates a cluster")),
+      state.analysis ? el("p", { class: "note" }, `Started from the settings of ${state.analysis.run?.name || "the bundle's run"}.`) : null),
+      card("Which workers", el("div", { class: "form" },
+        el("label", {}, "Workers"), el("div", {}, list(d, "workers", "one node name per line; empty inspects every schedulable worker"), workerHint),
+        el("label", {}, "Node selector"), selector,
+        el("label", {}, "Control-plane nodes"), tri(d, "enableControlPlaneNodes"),
+        el("label", {}, "Failure domain label"), text(d, "failureDomainLabel", "topology.kubernetes.io/zone"),
+        el("label", {}, "Tolerations"), tolerations))),
+    el("div", { class: "grid" },
+      card("Devices", el("div", { class: "form" },
+        el("label", {}, "Logical block devices"), tri(d, "enableLogicalBlockDevices"),
+        el("label", {}, "Partitioned devices"), tri(d, "enablePartitionedDevices"),
+        el("label", {}, "Force journal device"), tri(d, "forceJournalDevice"),
+        el("label", {}, "Size range"), text(f, "driveSizeRange", "for example 500G-4T"))),
+      card("Device filter", el("div", { class: "form" },
+        el("label", {}, "PCI allow list"), list(f, "pcieAllowList", "PCI addresses, NVMe mode"),
+        el("label", {}, "PCI deny list"), list(f, "pcieDenyList", "PCI addresses, NVMe mode"),
+        el("label", {}, "PCI model"), text(f, "pcieModel", "part of the model name, NVMe mode"),
+        el("label", {}, "Block allow list"), list(f, "blockAllowList", "/dev/... paths, block mode"),
+        el("label", {}, "Block deny list"), list(f, "blockDenyList", "/dev/... paths, block mode")))),
+    el("div", { class: "row" }, el("button", { class: "primary", onclick: build }, "Build run"),
+      el("button", { class: "secondary", onclick: () => { state.ops = null; render(); } }, "Start over")),
+    el("div", { style: "margin-top:16px" }, result));
 }
 
 // ─── Editor ────────────────────────────────────────────────────────────────

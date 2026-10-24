@@ -22,6 +22,7 @@ import (
 
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/analysis"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/cdcedit"
+	"github.com/simplyblock/simplyblock-operator/support-tool/internal/opsedit"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/supportbundle"
 )
 
@@ -58,6 +59,8 @@ func New() *Server {
 	s.mux.HandleFunc("POST /api/bundles/{id}/cdc", s.build)
 	s.mux.HandleFunc("POST /api/bundles/{id}/cdc/stripes", s.stripes)
 	s.mux.HandleFunc("GET /api/meta", s.meta)
+	s.mux.HandleFunc("GET /api/operatorops/prefill", s.opsPrefill)
+	s.mux.HandleFunc("POST /api/operatorops", s.opsBuild)
 	return s
 }
 
@@ -176,6 +179,43 @@ func (s *Server) stripes(w http.ResponseWriter, r *http.Request) {
 		options = found
 	}
 	reply(w, map[string]any{"options": options})
+}
+
+// opsPrefill is a discovery run to start from: the defaults, or the settings of
+// the run in the bundle the query names.
+func (s *Server) opsPrefill(w http.ResponseWriter, r *http.Request) {
+	var b *supportbundle.Bundle
+	if id := r.URL.Query().Get("bundle"); id != "" {
+		s.mu.Lock()
+		b = s.bundles[id]
+		s.mu.Unlock()
+	}
+	reply(w, opsedit.Prefill(b))
+}
+
+// opsBuild answers with the run a request describes, as YAML, and every reason
+// the API server would refuse it.
+func (s *Server) opsBuild(w http.ResponseWriter, r *http.Request) {
+	var req opsedit.Request
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		fail(w, http.StatusBadRequest, "the request does not parse: "+err.Error())
+		return
+	}
+	ops, err := opsedit.Build(req)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := opsedit.Render(ops)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	findings := opsedit.Check(ops)
+	if findings == nil {
+		findings = []opsedit.Finding{}
+	}
+	reply(w, map[string]any{"yaml": string(out), "findings": findings})
 }
 
 // meta is what the editor offers that does not depend on a bundle.

@@ -18,6 +18,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/analysis"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/bundletest"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/cdcedit"
+	"github.com/simplyblock/simplyblock-operator/support-tool/internal/opsedit"
 )
 
 // do sends a request to the server as the browser on the agent's machine would.
@@ -305,5 +306,42 @@ func TestALargeUploadNeverTouchesTheDisk(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("the upload left %d file(s) in the temporary directory, the first %s", len(entries), entries[0].Name())
+	}
+}
+
+func TestTheRunEditorNeedsNoBundle(t *testing.T) {
+	s := New()
+	rec := do(t, s, http.MethodGet, "/api/operatorops/prefill", "", nil)
+	var req opsedit.Request
+	if err := json.Unmarshal(rec.Body.Bytes(), &req); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("prefill: %d %s", rec.Code, rec.Body)
+	}
+
+	req.Discover.Workers = []string{"worker-1"}
+	req.Discover.NodeSelector = map[string]string{"role": "storage"}
+	body, _ := json.Marshal(req)
+	rec = do(t, s, http.MethodPost, "/api/operatorops", "application/json", bytes.NewReader(body))
+	var out struct {
+		YAML     string            `json:"yaml"`
+		Findings []opsedit.Finding `json:"findings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("build: %d %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(out.YAML, "kind: OperatorOps") || len(out.Findings) == 0 {
+		t.Errorf("the build answered %+v", out)
+	}
+}
+
+func TestTheRunEditorTakesABundlesRun(t *testing.T) {
+	s := New()
+	up := uploadFixture(t, s)
+	rec := do(t, s, http.MethodGet, "/api/operatorops/prefill?bundle="+up.ID, "", nil)
+	var req opsedit.Request
+	if err := json.Unmarshal(rec.Body.Bytes(), &req); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("prefill: %d %s", rec.Code, rec.Body)
+	}
+	if req.Name != "discover-fleet-03" {
+		t.Errorf("the run after discover-fleet-02 is named %q", req.Name)
 	}
 }

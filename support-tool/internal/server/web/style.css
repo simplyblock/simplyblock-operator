@@ -256,3 +256,14 @@ ol.steps { padding-left: 20px; }
 ol.steps li { margin-bottom: 10px; }
 .step-title { font-weight: 600; margin-bottom: 2px; }
 
+textarea {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: 12px ui-monospace, Menlo, monospace;
+}
+nav button.tool { margin-left: auto; }
+

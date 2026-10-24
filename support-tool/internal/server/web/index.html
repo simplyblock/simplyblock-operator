@@ -18,12 +18,13 @@
       <span>Open bundle…</span>
     </label>
   </header>
-  <nav id="tabs" hidden>
+  <nav id="tabs">
     <button data-tab="overview" class="active">Overview</button>
-    <button data-tab="workers">Workers</button>
-    <button data-tab="cluster">Cluster</button>
-    <button data-tab="cdc">ClusterDeploymentConfig</button>
-    <button data-tab="editor">Editor</button>
+    <button data-tab="workers" data-bundle hidden>Workers</button>
+    <button data-tab="cluster" data-bundle hidden>Cluster</button>
+    <button data-tab="cdc" data-bundle hidden>ClusterDeploymentConfig</button>
+    <button data-tab="editor" data-bundle hidden>Editor</button>
+    <button data-tab="run" class="tool">Discovery run</button>
   </nav>
   <main id="view">
     <section id="drop" class="drop">

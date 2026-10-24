@@ -30,6 +30,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/erasurecoding"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
+	"github.com/simplyblock/simplyblock-operator/support-tool/internal/admission"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/cdcedit"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/supportbundle"
 )
@@ -84,7 +85,8 @@ func devicesOfGroup(g simplyblockv1alpha2.NodeGroup) (string, []string) {
 // CheckCDC returns everything wrong with a CDC against the cluster and the
 // workers the bundle captured, errors first.
 func CheckCDC(b *supportbundle.Bundle, cdc *simplyblockv1alpha2.ClusterDeploymentConfig) []Finding {
-	findings := operatorFindings(b, cdc)
+	findings := admissionFindings(cdc)
+	findings = append(findings, operatorFindings(b, cdc)...)
 	findings = append(findings, bundleFindings(b, cdc)...)
 	slices.SortStableFunc(findings, func(x, y Finding) int {
 		if x.Severity == y.Severity {
@@ -96,6 +98,23 @@ func CheckCDC(b *supportbundle.Bundle, cdc *simplyblockv1alpha2.ClusterDeploymen
 		return 1
 	})
 	return findings
+}
+
+// admissionFindings is what the API server's admission refuses about the
+// document, from the schema and CEL rules of the CRD this build carries. A
+// document from an older operator may break a rule its own release did not
+// have, which is still what applying it today meets.
+func admissionFindings(cdc *simplyblockv1alpha2.ClusterDeploymentConfig) []Finding {
+	refused, err := admission.Validate(cdc)
+	if err != nil {
+		return []Finding{{Source: "admission", Severity: SeverityWarning, Reason: "AdmissionNotChecked",
+			Message: fmt.Sprintf("admission's rules could not be checked: %v", err)}}
+	}
+	out := make([]Finding, 0, len(refused))
+	for _, message := range refused {
+		out = append(out, Finding{Source: "admission", Severity: SeverityError, Reason: "AdmissionRefused", Message: message})
+	}
+	return out
 }
 
 // operatorFindings runs the operator's draft checks against a fake cluster
