@@ -47,6 +47,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -68,9 +69,11 @@ type StorageNodeWorkloadReconciler struct {
 	// singleton the default image comes from lives.
 	Namespace string
 
-	TLSEnabled       bool
-	TLSMutualEnabled bool
-	TLSProvider      string
+	// TLS answers what the installation's ControlPlane states, per reconcile.
+	// Nil is plaintext. It is read each time rather than once at startup, so a
+	// ControlPlane created after the operator started takes effect on the next
+	// pass.
+	TLS controlplane.TLSResolver
 
 	// Workload writes the per-node ConfigMap, which is the one object here whose
 	// contents come from the nodes rather than from the cluster.
@@ -216,7 +219,7 @@ func (r *StorageNodeWorkloadReconciler) Reconcile(
 	// that came up first would wait on a name that resolves to nothing. Those
 	// objects are the supercluster's and wake nothing here, so the wait polls.
 	if cluster.Spec.SuperclusterRef != "" {
-		ready, waiting, err := utils.WorkloadServicesReady(ctx, r.Client, &cluster, r.TLSEnabled)
+		ready, waiting, err := utils.WorkloadServicesReady(ctx, r.Client, &cluster, r.TLS.Settings(ctx).Enabled)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -369,8 +372,9 @@ func (r *StorageNodeWorkloadReconciler) reconcileDaemonSet(
 		return err
 	}
 
+	tls := r.TLS.Settings(ctx)
 	desired := utils.BuildStorageNodeDaemonSet(cluster,
-		r.TLSEnabled, r.TLSMutualEnabled, r.TLSProvider, secretVersion, image)
+		tls.Enabled, tls.Mutual, tls.Provider, secretVersion, image)
 	if err := controllerutil.SetControllerReference(cluster, desired, r.Scheme); err != nil {
 		return err
 	}
@@ -440,7 +444,7 @@ func (r *StorageNodeWorkloadReconciler) image(
 func (r *StorageNodeWorkloadReconciler) tlsSecretVersion(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) (string, error) {
-	if !r.TLSEnabled {
+	if !r.TLS.Settings(ctx).Enabled {
 		return "", nil
 	}
 	names, _ := utils.WorkloadNamesOf(cluster)
@@ -464,7 +468,8 @@ func (r *StorageNodeWorkloadReconciler) reconcileService(
 	if cluster.Spec.SuperclusterRef != "" {
 		return nil
 	}
-	return utils.ApplyWorkloadServices(ctx, r.Client, r.Scheme, cluster, r.TLSEnabled, r.TLSProvider)
+	tls := r.TLS.Settings(ctx)
+	return utils.ApplyWorkloadServices(ctx, r.Client, r.Scheme, cluster, tls.Enabled, tls.Provider)
 }
 
 // reconcileEndpointSlice publishes one per-pod DNS name per worker the cluster's
@@ -673,10 +678,11 @@ func (r *StorageNodeWorkloadReconciler) reconcileCertificates(
 	if cluster.Spec.SuperclusterRef != "" {
 		return nil
 	}
-	if err := utils.ApplyServingCertificates(ctx, r.Client, r.Scheme, cluster, r.TLSEnabled, r.TLSProvider); err != nil {
+	tls := r.TLS.Settings(ctx)
+	if err := utils.ApplyServingCertificates(ctx, r.Client, r.Scheme, cluster, tls.Enabled, tls.Provider); err != nil {
 		return err
 	}
-	return utils.OwnServingSecrets(ctx, r.Client, r.Scheme, cluster, r.TLSEnabled)
+	return utils.OwnServingSecrets(ctx, r.Client, r.Scheme, cluster, tls.Enabled)
 }
 
 // apply creates an object or updates it in place, which is what every object here

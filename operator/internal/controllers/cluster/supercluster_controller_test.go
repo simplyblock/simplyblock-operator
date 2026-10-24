@@ -24,6 +24,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -286,7 +287,9 @@ func TestASuperclusterBuildsTheServicesItsMembersShare(t *testing.T) {
 		Spec:       simplyblockv1alpha2.StorageClusterSpec{Supercluster: &simplyblockv1alpha2.SuperclusterSpec{}},
 	}
 	r := newSuperclusterReconciler(t, &fakeControlPlane{}, &recorder{}, supercluster)
-	r.TLSEnabled, r.TLSProvider = true, "openshift"
+	r.TLS = func(context.Context) controlplane.TLSSettings {
+		return controlplane.TLSSettings{Enabled: true, Provider: "openshift"}
+	}
 
 	key := types.NamespacedName{Namespace: testNamespace, Name: testSuperclusterName}
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
@@ -332,7 +335,9 @@ func TestASuperclusterOwnsItsServingSecrets(t *testing.T) {
 		objects = append(objects, &corev1.Secret{ObjectMeta: objectMeta(name)})
 	}
 	r := newSuperclusterReconciler(t, &fakeControlPlane{}, &recorder{}, objects...)
-	r.TLSEnabled, r.TLSProvider = true, "openshift"
+	r.TLS = func(context.Context) controlplane.TLSSettings {
+		return controlplane.TLSSettings{Enabled: true, Provider: "openshift"}
+	}
 
 	key := types.NamespacedName{Namespace: testNamespace, Name: testSuperclusterName}
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
