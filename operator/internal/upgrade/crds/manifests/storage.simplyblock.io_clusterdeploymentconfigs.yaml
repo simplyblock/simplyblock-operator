@@ -724,6 +724,10 @@ spec:
                 - Rancher
                 - K3s
                 - Talos
+                - EKS
+                - GKE
+                - AKS
+                - OKE
                 type: string
               hostOS:
                 description: |-

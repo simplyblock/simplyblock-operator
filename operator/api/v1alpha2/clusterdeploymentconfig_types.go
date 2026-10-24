@@ -80,8 +80,9 @@ const (
 )
 
 // KubernetesEnvironment is the distribution a deployment targets. The values are
-// the distributions' own names.
-// +kubebuilder:validation:Enum=Vanilla;OpenShift;Rancher;K3s;Talos
+// the distributions' own names: EKS, GKE, AKS, and OKE are the managed services
+// of Amazon, Google, Microsoft, and Oracle.
+// +kubebuilder:validation:Enum=Vanilla;OpenShift;Rancher;K3s;Talos;EKS;GKE;AKS;OKE
 type KubernetesEnvironment string
 
 const (
@@ -90,6 +91,10 @@ const (
 	KubernetesEnvironmentRancher   KubernetesEnvironment = "Rancher"
 	KubernetesEnvironmentK3s       KubernetesEnvironment = "K3s"
 	KubernetesEnvironmentTalos     KubernetesEnvironment = "Talos"
+	KubernetesEnvironmentEKS       KubernetesEnvironment = "EKS"
+	KubernetesEnvironmentGKE       KubernetesEnvironment = "GKE"
+	KubernetesEnvironmentAKS       KubernetesEnvironment = "AKS"
+	KubernetesEnvironmentOKE       KubernetesEnvironment = "OKE"
 )
 
 // HostOSFamily is the packaging tradition a Linux distribution belongs to.

@@ -476,6 +476,14 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		// Talos has no writable kubelet configuration and no package manager, so
 		// the node applies neither.
 		workload.EnableKubeletConfiguration = ptr.To(false)
+	case simplyblockv1alpha2.KubernetesEnvironmentEKS,
+		simplyblockv1alpha2.KubernetesEnvironmentGKE,
+		simplyblockv1alpha2.KubernetesEnvironmentAKS,
+		simplyblockv1alpha2.KubernetesEnvironmentOKE:
+		// A managed service owns the kubelet configuration and builds it again
+		// for every node it replaces, so an edit is lost on the next node. EKS,
+		// GKE, and AKS also keep it outside the path the storage node rewrites.
+		workload.EnableKubeletConfiguration = ptr.To(false)
 	case simplyblockv1alpha2.KubernetesEnvironmentVanilla,
 		simplyblockv1alpha2.KubernetesEnvironmentRancher,
 		simplyblockv1alpha2.KubernetesEnvironmentK3s:

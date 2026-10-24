@@ -2,7 +2,7 @@
 
 **Status:** Implemented, with the exceptions §12 records  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-29 (last updated 2026-09-17)  
+**Date:** 2026-08-29 (last updated 2026-10-24)  
 **Target Release:** simplyblock 26.4  
 **Test Plan:** [`tests/test-plan-clusterdeploymentconfig.md`](../../tests/test-plan-clusterdeploymentconfig.md)  
 **Example:** [`assets/example-cluster-config.yaml`](assets/example-cluster-config.yaml)  
@@ -1226,6 +1226,7 @@ from review history. §4.2 is where the answer went: the table below is what
 | `OpenShift`                 | Applied               | Read         | Yes       |
 | `Vanilla`, `Rancher`, `K3s` | Applied               | Unset        | No        |
 | `Talos`                     | Not applied           | Unset        | No        |
+| `EKS`, `GKE`, `AKS`, `OKE`  | Not applied           | Unset        | No        |
 
 `Talos` is the row the shorthand exists for: it has no writable kubelet
 configuration and no package manager, so a node applies neither, and a deployment
@@ -1236,6 +1237,13 @@ deployment this product has shipped configures it. `ubuntuHost` is not in the
 table: it describes the worker's host OS rather than the distribution running on
 it, so it is `spec.hostOS`'s to decide (§3.1), which a discovery run fills in
 from what the probes read.
+
+The managed services (`EKS`, `GKE`, `AKS`, and `OKE`) do not apply the kubelet
+configuration because the provider owns it. The provider rebuilds the node image
+and its kubelet configuration whenever it replaces a node, so an edit made by a
+storage node is gone on the next node of the pool. The storage node also edits
+`/var/lib/kubelet/config.yaml`, and the node images of EKS, GKE, and AKS keep
+their kubelet configuration elsewhere, so the edit fails on the first node.
 
 ---
 
@@ -1336,7 +1344,7 @@ const (
 // KubernetesEnvironment is the distribution a deployment targets. The values are
 // the distributions' own names, which is the exception design-crd-model.md §7.8
 // carries for a word this group did not invent.
-// +kubebuilder:validation:Enum=Vanilla;OpenShift;Rancher;K3s;Talos
+// +kubebuilder:validation:Enum=Vanilla;OpenShift;Rancher;K3s;Talos;EKS;GKE;AKS;OKE
 type KubernetesEnvironment string
 
 // ClusterPortsSpec is where a cluster's storage nodes listen.
