@@ -258,6 +258,13 @@ func workersOf(b *supportbundle.Bundle) []Worker {
 		return w
 	}
 
+	// The run's own selection first: a worker it selected is part of the story
+	// even when its Node object and its report are both missing from the bundle.
+	if b.Run != nil {
+		for _, name := range b.Run.Status.Workers {
+			get(name)
+		}
+	}
 	for _, node := range b.Nodes {
 		w := get(node.Name)
 		w.InCluster = true

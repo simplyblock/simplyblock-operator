@@ -5,11 +5,13 @@ package server
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -223,7 +225,10 @@ func TestAForcedJournalSilencesTheTieWarning(t *testing.T) {
 	req.Mode = cdcedit.ModeBlock
 	on := true
 	req.Cluster.EnableJournalDevice = &on
+	// Switching the document's mode switches every worker's, as the editor does:
+	// a worker's own mode is what names its devices.
 	for i := range req.Workers {
+		req.Workers[i].Mode = cdcedit.ModeBlock
 		req.Workers[i].Devices = []string{"/dev/nvme0n1", "/dev/nvme1n1", "/dev/nvme2n1"}
 	}
 
@@ -267,5 +272,38 @@ func TestTheMetaCarriesTheCollectionCommand(t *testing.T) {
 	}
 	if !strings.Contains(meta.Collect.WithOptions, "bash -s -- -n <namespace> --run <run>") {
 		t.Errorf("the command with options is %q", meta.Collect.WithOptions)
+	}
+}
+
+// A bundle stays in memory: the multipart parser's own budget is 32 MiB, and
+// past it the default handling writes the upload to a temporary file, which is
+// customer data on the agent's disk.
+func TestALargeUploadNeverTouchesTheDisk(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+
+	noise := make([]byte, 40<<20)
+	if _, err := rand.Read(noise); err != nil {
+		t.Fatal(err)
+	}
+	data := bundletest.Archive(t, bundletest.Fixture(t, "bundle-v10"), func(name string, data []byte) ([]byte, bool) {
+		if name == "version.txt" {
+			return append(data, noise...), true
+		}
+		return data, true
+	})
+	if len(data) <= 32<<20 {
+		t.Fatalf("the archive is %d bytes, under the parser's budget", len(data))
+	}
+
+	if rec := upload(t, New(), data); rec.Code != http.StatusOK {
+		t.Fatalf("upload: %d %s", rec.Code, rec.Body)
+	}
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("the upload left %d file(s) in the temporary directory, the first %s", len(entries), entries[0].Name())
 	}
 }

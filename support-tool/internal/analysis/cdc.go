@@ -72,13 +72,13 @@ func ViewOf(cdc *simplyblockv1alpha2.ClusterDeploymentConfig) CDC {
 func devicesOfGroup(g simplyblockv1alpha2.NodeGroup) (string, []string) {
 	switch {
 	case g.Devices == nil:
-		return "", nil
+		return "", []string{}
 	case len(g.Devices.NVMe) > 0:
 		return "nvme", g.Devices.NVMe
 	case len(g.Devices.Block) > 0:
 		return "block", g.Devices.Block
 	}
-	return "", nil
+	return "", []string{}
 }
 
 // CheckCDC returns everything wrong with a CDC against the cluster and the
@@ -177,9 +177,21 @@ func bundleFindings(b *supportbundle.Bundle, cdc *simplyblockv1alpha2.ClusterDep
 			reports[r.Report.Node] = r.Report
 		}
 	}
-	running := map[string][]string{}
+	running := map[string][]simplyblockv1alpha2.StorageNode{}
 	for _, sn := range b.StorageNodes {
-		running[sn.Spec.WorkerNode] = append(running[sn.Spec.WorkerNode], sn.Name)
+		running[sn.Spec.WorkerNode] = append(running[sn.Spec.WorkerNode], sn)
+	}
+	// The clusters the document adds nodes to: the one it grows and, when that
+	// is a supercluster, its members. A document creating a cluster adds to none
+	// that exist, so every storage node already on a worker is another cluster's.
+	target := map[string]bool{}
+	if ref := cdc.Spec.ClusterRef; ref != "" {
+		target[ref] = true
+		for _, c := range b.StorageClusters {
+			if c.Spec.SuperclusterRef == ref {
+				target[c.Name] = true
+			}
+		}
 	}
 
 	var out []Finding
@@ -190,6 +202,13 @@ func bundleFindings(b *supportbundle.Bundle, cdc *simplyblockv1alpha2.ClusterDep
 		for _, g := range set.Groups {
 			class, devices := devicesOfGroup(g)
 			for _, worker := range g.Workers {
+				for _, sn := range running[worker] {
+					if !target[sn.Spec.ClusterRef] {
+						add(SeverityWarning, "WorkerInUse",
+							"%s/%s: %s already runs StorageNode %s of cluster %s, and this document adds a storage node of another cluster to it",
+							set.Name, g.Name, worker, sn.Name, sn.Spec.ClusterRef)
+					}
+				}
 				report, ok := reports[worker]
 				if !ok {
 					add(SeverityWarning, "NotInspected",
@@ -203,11 +222,6 @@ func bundleFindings(b *supportbundle.Bundle, cdc *simplyblockv1alpha2.ClusterDep
 				checkInterface(add, set.Name, g.Name, worker, "management", g.MgmtInterface, report)
 				for _, iface := range g.DataInterfaces {
 					checkInterface(add, set.Name, g.Name, worker, "data", iface, report)
-				}
-				if names := running[worker]; len(names) > 0 && cdc.Spec.ClusterRef == "" {
-					add(SeverityWarning, "WorkerInUse",
-						"%s/%s: %s already runs StorageNode %s, and this document creates another cluster on it",
-						set.Name, g.Name, worker, strings.Join(names, ", "))
 				}
 			}
 		}

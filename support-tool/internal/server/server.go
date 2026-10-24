@@ -85,22 +85,35 @@ func loopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// upload reads the bundle part of the request as it arrives. FormFile would
+// buffer the request first, and past its 32 MiB budget into a temporary file,
+// which is customer data on the agent's disk.
 func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, MaxUploadBytes)
-	file, _, err := r.FormFile("bundle")
+	parts, err := r.MultipartReader()
 	if err != nil {
-		fail(w, http.StatusBadRequest, "the request carries no bundle file: "+err.Error())
+		fail(w, http.StatusBadRequest, "the request is not a file upload: "+err.Error())
 		return
 	}
-	defer func() { _ = file.Close() }()
-
-	b, err := supportbundle.Read(file)
-	if err != nil {
-		fail(w, http.StatusBadRequest, err.Error())
+	for {
+		part, err := parts.NextPart()
+		if err != nil {
+			fail(w, http.StatusBadRequest, "the request carries no bundle file")
+			return
+		}
+		if part.FormName() != "bundle" {
+			continue
+		}
+		b, err := supportbundle.Read(part)
+		_ = part.Close()
+		if err != nil {
+			fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		id := s.keep(b)
+		reply(w, map[string]any{"id": id, "analysis": analysis.Analyze(b)})
 		return
 	}
-	id := s.keep(b)
-	reply(w, map[string]any{"id": id, "analysis": analysis.Analyze(b)})
 }
 
 func (s *Server) analysis(w http.ResponseWriter, r *http.Request) {

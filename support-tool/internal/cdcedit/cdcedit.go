@@ -66,6 +66,11 @@ type Worker struct {
 	MgmtInterface  string   `json:"mgmtInterface,omitempty"`
 	DataInterfaces []string `json:"dataInterfaces,omitempty"`
 	Devices        []string `json:"devices"`
+
+	// Mode is the device class this worker's devices are named in, and empty
+	// for the request's own. A document may name NVMe devices in one node set
+	// and block devices in another, and an edit keeps each.
+	Mode string `json:"mode,omitempty"`
 }
 
 // Cluster is the cluster settings the editor shows.
@@ -144,21 +149,24 @@ func prefillFromCDC(b *supportbundle.Bundle) Request {
 	if cdc.Spec.Approved {
 		req.Name = cdc.Name + "-edit"
 	}
+	first := true
 	for _, set := range cdc.Spec.NodeSets {
 		for _, g := range set.Groups {
-			devices := []string(nil)
+			mode, devices := ModeNVMe, []string(nil)
 			if g.Devices != nil {
 				devices = g.Devices.NVMe
 				if len(g.Devices.Block) > 0 {
-					req.Mode = ModeBlock
-					devices = g.Devices.Block
+					mode, devices = ModeBlock, g.Devices.Block
 				}
+			}
+			if first {
+				req.Mode, first = mode, false
 			}
 			for _, worker := range g.Workers {
 				req.Workers = append(req.Workers, Worker{
 					Name: worker, NodeSet: set.Name, FailureDomain: g.FailureDomain,
 					MgmtInterface: g.MgmtInterface, DataInterfaces: slices.Clone(g.DataInterfaces),
-					Devices: slices.Clone(devices),
+					Devices: slices.Clone(devices), Mode: mode,
 				})
 			}
 		}
@@ -217,6 +225,7 @@ func prefillFromReports(b *supportbundle.Bundle) Request {
 		}
 	}
 	devicesPerWorker := 0
+	var vcpus int32
 	for _, r := range reports {
 		devices := available(r, req.Mode)
 		if len(devices) == 0 {
@@ -231,11 +240,15 @@ func prefillFromReports(b *supportbundle.Bundle) Request {
 		if devicesPerWorker == 0 || len(devices) < devicesPerWorker {
 			devicesPerWorker = len(devices)
 		}
+		if cores := chosenNodeCores(r, req.Mode, devices); cores > 0 && (vcpus == 0 || cores < vcpus) {
+			vcpus = cores
+		}
 	}
 
 	on := true
 	thirty := int32(30)
-	req.Cluster = Cluster{Name: req.Name + "-cluster", EnableDriveFormat: &on, MaxSubsystemCount: &thirty}
+	vcpus = max(vcpus, minimumVCPUCount)
+	req.Cluster = Cluster{Name: req.Name + "-cluster", EnableDriveFormat: &on, MaxSubsystemCount: &thirty, VCPUCount: &vcpus}
 	// 2+1 where the workers carry it, 1+1 where they are too few for 2+1's
 	// spare: the operator's own minimums, which a proposal it refuses would
 	// only send back.
@@ -246,9 +259,14 @@ func prefillFromReports(b *supportbundle.Bundle) Request {
 	case len(req.Workers) == 2:
 		data, req.Cluster.ClusterMode = 1, string(simplyblockv1alpha2.ClusterModeDual)
 	case len(req.Workers) == 1:
+		// A single node places a stripe across its devices: 2+1 from three,
+		// 1+1 from two, and 1+0 from one, which protects nothing.
 		req.Cluster.ClusterMode = string(simplyblockv1alpha2.ClusterModeSingle)
-		if devicesPerWorker < 3 {
+		switch {
+		case devicesPerWorker == 2:
 			data = 1
+		case devicesPerWorker < 2:
+			data, parity = 1, 0
 		}
 	}
 	req.Cluster.DataChunks, req.Cluster.ParityChunks = &data, &parity
@@ -281,8 +299,42 @@ func available(r nodeprobe.Report, mode string) []string {
 			out = append(out, cmpOr(d.StablePath, d.Path))
 		}
 	}
+	// A controller with several namespaces is one PCI address, which a device
+	// list names once.
 	slices.Sort(out)
-	return out
+	return slices.Compact(out)
+}
+
+// minimumVCPUCount is the API's floor for vcpuCount.
+const minimumVCPUCount int32 = 4
+
+// chosenNodeCores is the physical cores of the memory node a worker's chosen
+// devices hang off, which is how a discovery run sizes vcpuCount. Devices on
+// more than one node, or on a node the CPU reading does not list, give none.
+func chosenNodeCores(r nodeprobe.Report, mode string, chosen []string) int32 {
+	node, found := 0, false
+	for _, d := range r.Devices {
+		id := d.PCIAddress
+		if mode == ModeBlock {
+			id = cmpOr(d.StablePath, d.Path)
+		}
+		if !slices.Contains(chosen, id) {
+			continue
+		}
+		if found && d.NUMANode != node {
+			return 0
+		}
+		node, found = d.NUMANode, true
+	}
+	if !found {
+		return 0
+	}
+	for _, cpus := range r.CPU.NUMANodes {
+		if cpus.Node == node {
+			return int32(cpus.PhysicalCores)
+		}
+	}
+	return 0
 }
 
 func cmpOr(a, b string) string {
@@ -319,13 +371,36 @@ func Build(b *supportbundle.Bundle, req Request) (*simplyblockv1alpha2.ClusterDe
 		cdc.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironment(req.Environment)
 	}
 
-	if req.ClusterRef != "" {
+	// A document growing a supercluster creates its new members, and states
+	// their sizing in spec.cluster. One growing an ordinary cluster states none.
+	if req.ClusterRef != "" && !isSupercluster(b, req.ClusterRef) {
 		cdc.Spec.Cluster = nil
 	} else {
 		cdc.Spec.Cluster = clusterOf(cdc.Spec.Cluster, req)
+		var missing []string
+		if cdc.Spec.Cluster.VCPUCount == nil {
+			missing = append(missing, fmt.Sprintf("a vCPU count (at least %d)", minimumVCPUCount))
+		}
+		if cdc.Spec.Cluster.MaxSubsystemCount == nil {
+			missing = append(missing, "a max subsystem count (at least 10)")
+		}
+		if len(missing) > 0 {
+			return nil, fmt.Errorf("the cluster needs %s", strings.Join(missing, " and "))
+		}
 	}
 	cdc.Spec.NodeSets = nodeSetsOf(b, cdc.Spec.NodeSets, req)
 	return cdc, nil
+}
+
+// isSupercluster reports whether the bundle shows the named cluster as a
+// supercluster.
+func isSupercluster(b *supportbundle.Bundle, name string) bool {
+	for _, c := range b.StorageClusters {
+		if c.Name == name {
+			return c.Spec.Supercluster != nil || c.Status.Role == simplyblockv1alpha2.StorageClusterRoleSupercluster
+		}
+	}
+	return false
 }
 
 func validate(req Request) error {
@@ -341,6 +416,9 @@ func validate(req Request) error {
 	}
 	seen := map[string]bool{}
 	for _, w := range req.Workers {
+		if w.Mode != "" && w.Mode != ModeNVMe && w.Mode != ModeBlock {
+			problems = append(problems, fmt.Sprintf("%s's mode is %q, and is nvme or block", w.Name, w.Mode))
+		}
 		if seen[w.Name] {
 			problems = append(problems, w.Name+" is chosen twice")
 		}
@@ -418,24 +496,25 @@ func nodeSetsOf(
 			setIndex[setName] = si
 			sets = append(sets, simplyblockv1alpha2.NodeSet{Name: setName, Cluster: baseSet[setName].Cluster})
 		}
-		devices := slices.Sorted(slices.Values(w.Devices))
-		key := strings.Join([]string{setName, strings.Join(devices, ","), w.MgmtInterface,
-			strings.Join(w.DataInterfaces, ","), w.FailureDomain}, "|")
+		mode := cmpOr(w.Mode, req.Mode)
+		devices := slices.Compact(slices.Sorted(slices.Values(w.Devices)))
+		// The settings the editor does not show are part of what makes two
+		// workers one group: workers whose groups state different ones stay
+		// apart, and those whose groups state the same ones keep them.
+		key := strings.Join([]string{setName, mode, strings.Join(devices, ","), w.MgmtInterface,
+			strings.Join(w.DataInterfaces, ","), w.FailureDomain, hiddenSettings(baseGroup[w.Name])}, "|")
 		if gi, ok := groupIndex[key]; ok {
 			g := &sets[si].Groups[gi]
 			g.Workers = append(g.Workers, w.Name)
-			if sources[key] != baseGroup[w.Name] {
-				sources[key] = nil
-			}
 			continue
 		}
 		g := simplyblockv1alpha2.NodeGroup{
-			Name:    groupName(len(sets[si].Groups)+1, req.Mode, devices, reports[w.Name]),
+			Name:    groupName(len(sets[si].Groups)+1, mode, devices, reports[w.Name]),
 			Workers: []string{w.Name}, MgmtInterface: w.MgmtInterface,
 			DataInterfaces: w.DataInterfaces, FailureDomain: w.FailureDomain,
 			Devices: &simplyblockv1alpha2.DeviceSelection{},
 		}
-		if req.Mode == ModeNVMe {
+		if mode == ModeNVMe {
 			g.Devices.NVMe = devices
 		} else {
 			g.Devices.Block = devices
@@ -454,6 +533,20 @@ func nodeSetsOf(
 		g.JournalManager = src.JournalManager
 	}
 	return sets
+}
+
+// hiddenSettings is a group's settings the editor does not show, as one string
+// to compare, and empty for a worker no group of the document names.
+func hiddenSettings(g *simplyblockv1alpha2.NodeGroup) string {
+	if g == nil {
+		return ""
+	}
+	out, _ := json.Marshal(struct {
+		SpdkSystemMemory  string
+		ReservedSystemCPU string
+		JournalManager    *simplyblockv1alpha2.JournalManagerSpec
+	}{g.SpdkSystemMemory, g.ReservedSystemCPU, g.JournalManager})
+	return string(out)
 }
 
 // groupName follows the discovery run's pattern: group-<n>-<class>-<count>x<size>.

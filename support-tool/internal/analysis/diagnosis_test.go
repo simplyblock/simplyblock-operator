@@ -131,3 +131,16 @@ func TestStorageClustersShowTheirRole(t *testing.T) {
 		t.Errorf("lab, which states no role, is %+v", roles["lab"])
 	}
 }
+
+func TestASelectedWorkerStaysWhenItsNodeAndReportAreMissing(t *testing.T) {
+	// nodes.yaml could not be collected and worker-03 never reported: the run
+	// still names it, so the analysis does.
+	a := analyze(t, "bundle-probe-trouble", func(name string, data []byte) ([]byte, bool) {
+		return data, name != "nodes.yaml"
+	})
+	w := worker(t, a, "worker-03")
+	if w.InReport || w.InCluster {
+		t.Errorf("worker-03 is %+v", w)
+	}
+	diagnosis(t, a, "ProbeMissing", "worker-03")
+}

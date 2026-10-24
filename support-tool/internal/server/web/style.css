@@ -65,7 +65,10 @@ header {
 .brand span { color: var(--accent); font-weight: 600; }
 .bundle-name { flex: 1; color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.upload input { display: none; }
+/* Hidden from sight, not from the keyboard: the label's span shows the focus. */
+.upload { position: relative; }
+.upload input { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+.upload input:focus-visible + span { outline: 2px solid var(--text); outline-offset: 2px; }
 .upload span, button.primary {
   display: inline-block;
   padding: 6px 14px;

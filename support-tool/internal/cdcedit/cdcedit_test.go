@@ -11,8 +11,10 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/bundletest"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/supportbundle"
 )
@@ -310,4 +312,132 @@ func deref(p *int32) any {
 		return nil
 	}
 	return *p
+}
+
+func TestNodeSetsOfDifferentDeviceClassesKeepTheirClass(t *testing.T) {
+	b := fixture(t, nil)
+	set := b.CDC.Spec.NodeSets[0]
+	nvme := set.Groups[0]
+	nvme.Workers = []string{"worker-01", "worker-02"}
+	block := *nvme.DeepCopy()
+	block.Name = "group-1-block"
+	block.Workers = []string{"worker-03"}
+	block.Devices = &simplyblockv1alpha2.DeviceSelection{Block: []string{"/dev/nvme0n1", "/dev/nvme1n1"}}
+	b.CDC.Spec.NodeSets = []simplyblockv1alpha2.NodeSet{
+		{Name: "rack-a", Groups: []simplyblockv1alpha2.NodeGroup{nvme}},
+		{Name: "rack-b", Groups: []simplyblockv1alpha2.NodeGroup{block}},
+	}
+
+	built, err := Build(b, Prefill(b))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	for _, s := range built.Spec.NodeSets {
+		d := s.Groups[0].Devices
+		switch s.Name {
+		case "rack-a":
+			if len(d.NVMe) == 0 || len(d.Block) != 0 {
+				t.Errorf("the NVMe node set came back as %+v", d)
+			}
+		case "rack-b":
+			if len(d.Block) != 2 || len(d.NVMe) != 0 {
+				t.Errorf("the block node set came back as %+v", d)
+			}
+		}
+	}
+}
+
+func TestGroupsMergedByAnEditKeepTheirHiddenSettings(t *testing.T) {
+	b := fixture(t, nil)
+	g := b.CDC.Spec.NodeSets[0].Groups[0]
+	first, second := *g.DeepCopy(), *g.DeepCopy()
+	first.Name, first.Workers, first.SpdkSystemMemory = "group-a", []string{"worker-01"}, "8G"
+	second.Name, second.Workers, second.SpdkSystemMemory = "group-b", []string{"worker-02", "worker-03"}, "8G"
+	b.CDC.Spec.NodeSets[0].Groups = []simplyblockv1alpha2.NodeGroup{first, second}
+
+	built, err := Build(b, Prefill(b))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	groups := built.Spec.NodeSets[0].Groups
+	if len(groups) != 1 || groups[0].SpdkSystemMemory != "8G" {
+		t.Errorf("two groups with the same choices and settings came back as %+v", groups)
+	}
+
+	b.CDC.Spec.NodeSets[0].Groups[1].SpdkSystemMemory = "16G"
+	built, err = Build(b, Prefill(b))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	memory := map[string]bool{}
+	for _, g := range built.Spec.NodeSets[0].Groups {
+		memory[g.SpdkSystemMemory] = true
+	}
+	if !memory["8G"] || !memory["16G"] {
+		t.Errorf("groups with different settings were merged: %+v", built.Spec.NodeSets[0].Groups)
+	}
+}
+
+func TestADeviceNamedTwiceIsListedOnce(t *testing.T) {
+	b := fixture(t, withoutCDC)
+	req := Prefill(b)
+	req.Workers[0].Devices = append(req.Workers[0].Devices, req.Workers[0].Devices[0])
+
+	built, err := Build(b, req)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	for _, g := range built.Spec.NodeSets[0].Groups {
+		seen := map[string]bool{}
+		for _, d := range g.Devices.NVMe {
+			if seen[d] {
+				t.Errorf("group %s lists %s twice", g.Name, d)
+			}
+			seen[d] = true
+		}
+	}
+}
+
+func TestOneWorkerWithOneDiskIsProposedOnePlusZero(t *testing.T) {
+	b := fixture(t, func(name string, data []byte) ([]byte, bool) {
+		return data, name != "cdc.yaml" && !strings.HasSuffix(name, "worker-02.json") && !strings.HasSuffix(name, "worker-03.json")
+	})
+	report := &b.Reports[0].Report
+	report.Devices = report.Devices[:1]
+
+	req := Prefill(b)
+	if d, p := req.Cluster.DataChunks, req.Cluster.ParityChunks; deref(d) != int32(1) || deref(p) != int32(0) {
+		t.Errorf("one worker with one disk is proposed %v+%v, want 1+0", deref(d), deref(p))
+	}
+}
+
+func TestThePrefillStatesAVCPUCountAndBuildRequiresOne(t *testing.T) {
+	b := fixture(t, withoutCDC)
+	req := Prefill(b)
+	if req.Cluster.VCPUCount == nil || *req.Cluster.VCPUCount < 4 {
+		t.Errorf("the prefill states vcpuCount %v", deref(req.Cluster.VCPUCount))
+	}
+
+	req.Cluster.VCPUCount = nil
+	if _, err := Build(b, req); err == nil || !strings.Contains(err.Error(), "vCPU") {
+		t.Errorf("a cluster without a vCPU count was built: %v", err)
+	}
+}
+
+func TestGrowingASuperclusterKeepsTheMemberSizing(t *testing.T) {
+	b := fixture(t, nil)
+	b.StorageClusters = append(b.StorageClusters, simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "fleet"},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{Supercluster: &simplyblockv1alpha2.SuperclusterSpec{}},
+	})
+	req := Prefill(b)
+	req.ClusterRef = "fleet"
+
+	built, err := Build(b, req)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if built.Spec.Cluster == nil {
+		t.Error("growing a supercluster dropped the sizing its new members are created with")
+	}
 }

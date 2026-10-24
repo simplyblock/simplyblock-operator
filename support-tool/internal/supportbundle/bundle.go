@@ -38,6 +38,15 @@ var SupportedReportVersions = []int{9, 10}
 // memory.
 var MaxEntryBytes int64 = 256 << 20
 
+// MaxTotalBytes is the most a bundle may expand to, and MaxEntries the most
+// files it may hold. Each entry under MaxEntryBytes is not enough: a gzip of
+// many highly compressible files stays small on the wire and expands past any
+// machine's memory.
+var (
+	MaxTotalBytes int64 = 1 << 30
+	MaxEntries          = 20000
+)
+
 // Bundle is one support bundle, as far as it could be read.
 type Bundle struct {
 	// Name is the archive's top directory, simplyblock-bundle-<run>-<time>.
@@ -226,6 +235,8 @@ func unpack(r io.Reader) (map[string][]byte, string, error) {
 
 	files := map[string][]byte{}
 	top := ""
+	var total int64
+	entries := 0
 	tr := tar.NewReader(gz)
 	for {
 		hdr, err := tr.Next()
@@ -240,6 +251,14 @@ func unpack(r io.Reader) (map[string][]byte, string, error) {
 		}
 		if hdr.Size > MaxEntryBytes {
 			return nil, "", fmt.Errorf("%s is %d bytes, over the %d this tool reads", hdr.Name, hdr.Size, MaxEntryBytes)
+		}
+		entries++
+		total += hdr.Size
+		if entries > MaxEntries {
+			return nil, "", fmt.Errorf("the archive holds more than %d files, which no bundle does", MaxEntries)
+		}
+		if total > MaxTotalBytes {
+			return nil, "", fmt.Errorf("the archive expands past %d bytes, which no bundle does", MaxTotalBytes)
 		}
 		first, rest, found := strings.Cut(path.Clean(hdr.Name), "/")
 		// tar on macOS writes an AppleDouble ._<name> beside every file with

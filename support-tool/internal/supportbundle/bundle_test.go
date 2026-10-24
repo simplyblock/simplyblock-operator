@@ -153,3 +153,25 @@ func TestAnEntryLargerThanTheLimitIsRefused(t *testing.T) {
 		t.Error("an entry over the limit was read")
 	}
 }
+
+func TestAnArchiveThatExpandsPastTheTotalIsRefused(t *testing.T) {
+	saved := MaxTotalBytes
+	MaxTotalBytes = 8 << 10 // about half the fixture
+	defer func() { MaxTotalBytes = saved }()
+
+	// Every entry is under MaxEntryBytes; together they are over the total, the
+	// shape of a gzip of many highly compressible files.
+	if _, err := Read(bytes.NewReader(bundletest.Archive(t, "../../testdata/bundle-v10", nil))); err == nil {
+		t.Error("an archive expanding past the total was read")
+	}
+}
+
+func TestAnArchiveOfTooManyEntriesIsRefused(t *testing.T) {
+	saved := MaxEntries
+	MaxEntries = 5
+	defer func() { MaxEntries = saved }()
+
+	if _, err := Read(bytes.NewReader(bundletest.Archive(t, "../../testdata/bundle-v10", nil))); err == nil {
+		t.Error("an archive of more entries than the limit was read")
+	}
+}

@@ -369,7 +369,7 @@ function findingsOf(list) {
 function nodeSetsOf(sets) {
   return (sets || []).map((s) => el("div", {}, el("h3", {}, `Node set ${s.name}`),
     table(["Group", "Workers", "Devices", "Management", "Data", "Failure domain"], (s.groups || []).map((g) => [
-      el("strong", {}, g.name), g.workers.join(", "), el("span", {}, `${g.class} × ${g.devices.length}`, el("br"), el("span", { class: "muted" }, g.devices.join(", "))),
+      el("strong", {}, g.name), g.workers.join(", "), el("span", {}, `${g.class || "none"} × ${(g.devices || []).length}`, el("br"), el("span", { class: "muted" }, (g.devices || []).join(", "))),
       g.mgmtInterface || "", (g.dataInterfaces || []).join(", "), g.failureDomain || ""]))));
 }
 
@@ -490,12 +490,12 @@ function editor() {
     el("label", {}, "Namespace"), text(req, "namespace"),
     el("label", {}, "Device mode"), el("select", { onchange: (e) => {
       req.mode = e.target.value;
-      for (const w of Object.values(state.edit.byWorker)) w.devices = [];
+      for (const w of Object.values(state.edit.byWorker)) { w.devices = []; w.mode = req.mode; }
       if (req.mode !== "block") req.cluster.forceJournalDevice = false;
       render();
     } },
       [["nvme", "NVMe (PCI addresses)"], ["block", "Logical block devices (paths)"]].map(([v, l]) => el("option", { value: v, selected: req.mode === v }, l))),
-    el("label", {}, "Grow existing cluster"), text(req, "clusterRef", { placeholder: "empty: the document creates a cluster" }),
+    el("label", {}, "Grow existing cluster"), text(req, "clusterRef", { placeholder: "empty: the document creates a cluster", onchange: () => render() }),
     el("label", {}, "Environment"), el("select", { onchange: (e) => {
       req.environment = e.target.value;
       // Only a Vanilla document states the node flags: every other environment
@@ -506,7 +506,11 @@ function editor() {
   req.fromCDC ? el("p", { class: "note" }, "Built on the bundle's ClusterDeploymentConfig: the fields this editor does not show are kept.") : null);
 
   const c = req.cluster;
-  const clusterCard = card("Cluster settings", req.clusterRef ? el("p", { class: "note" }, "A document that grows a cluster states no cluster settings.") : el("div", { class: "form" },
+  // Growing a supercluster creates its new members, whose sizing the document
+  // states; growing an ordinary cluster states none.
+  const growsSupercluster = (state.analysis.cluster.storageClusters || []).some((sc) => sc.name === req.clusterRef && sc.role === "Supercluster");
+  const clusterCard = card(growsSupercluster ? "New members' cluster settings" : "Cluster settings",
+    req.clusterRef && !growsSupercluster ? el("p", { class: "note" }, "A document that grows a cluster states no cluster settings.") : el("div", { class: "form" },
     el("label", {}, "Cluster name"), text(c, "name"),
     el("label", {}, "Stripe (data + parity)"), stripeSelect(c),
     el("label", {}, "Cluster mode"), el("select", { onchange: (e) => { c.clusterMode = e.target.value; refreshStripes(); } },
@@ -543,9 +547,13 @@ function editor() {
       .filter((i) => (kinds.includes(i.kind) && !i.loopback && !i.peered && (i.addresses || []).length)
         || i.name === choice.mgmtInterface || (choice.dataInterfaces || []).includes(i.name))
       .map((i) => i.name);
-    const deviceChecks = (w.devices || []).filter((d) => (req.mode === "nvme" ? d.nvmeID : d.blockID) && d.kind === "Disk" && (req.mode === "block" || d.transport === "NVMe"))
+    // A worker's own mode names its devices: a document may name NVMe devices
+    // in one node set and block devices in another.
+    const mode = choice.mode || req.mode;
+    choice.devices = choice.devices || [];
+    const deviceChecks = (w.devices || []).filter((d) => (mode === "nvme" ? d.nvmeID : d.blockID) && d.kind === "Disk" && (mode === "block" || d.transport === "NVMe"))
       .map((d) => {
-        const id = req.mode === "nvme" ? d.nvmeID : d.blockID;
+        const id = mode === "nvme" ? d.nvmeID : d.blockID;
         return el("label", { class: d.available ? "" : "refused" },
           el("input", { type: "checkbox", checked: choice.devices.includes(id), onchange: (e) => {
             choice.devices = e.target.checked ? [...choice.devices, id] : choice.devices.filter((x) => x !== id);

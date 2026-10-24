@@ -187,3 +187,68 @@ func TestTheSameObjectTwiceDoesNotStopTheChecks(t *testing.T) {
 		}
 	}
 }
+
+func inUse(a Analysis, worker string) *Finding {
+	for i, f := range a.CDC.Findings {
+		if f.Reason == "WorkerInUse" && strings.Contains(f.Message, worker+" ") {
+			return &a.CDC.Findings[i]
+		}
+	}
+	return nil
+}
+
+// withClusterRef makes the cdc-broken bundle's CDC grow the cluster named.
+func withClusterRef(ref string) func(string, []byte) ([]byte, bool) {
+	return func(name string, data []byte) ([]byte, bool) {
+		if name == "cdc.yaml" && ref != "" {
+			return bytes.Replace(data, []byte("spec:\n"), []byte("spec:\n  clusterRef: "+ref+"\n"), 1), true
+		}
+		return data, true
+	}
+}
+
+func TestAWorkerInUseIsReportedForTheClusterItBelongsTo(t *testing.T) {
+	// worker-01 runs a storage node of fleet-rack-a, a member of fleet.
+	for _, c := range []struct {
+		ref  string
+		warn bool
+	}{
+		{"", true},              // a new cluster on it
+		{"lab", true},           // another cluster's growth
+		{"fleet-rack-a", false}, // its own cluster's growth
+		{"fleet", false},        // its supercluster's growth
+	} {
+		a := analyze(t, "bundle-cdc-broken", withClusterRef(c.ref))
+		if a.CDC == nil {
+			t.Fatal("the bundle's CDC is not shown")
+		}
+		if got := inUse(a, "worker-01") != nil; got != c.warn {
+			t.Errorf("clusterRef %q: WorkerInUse on worker-01 is %v, want %v", c.ref, got, c.warn)
+		}
+	}
+}
+
+func TestAWorkerInUseIsReportedWithoutItsReport(t *testing.T) {
+	a := analyze(t, "bundle-cdc-broken", func(name string, data []byte) ([]byte, bool) {
+		return data, !strings.HasSuffix(name, "worker-01.json")
+	})
+	if inUse(a, "worker-01") == nil {
+		t.Error("worker-01's storage node went unreported because its probe report is missing")
+	}
+}
+
+func TestAGroupWithoutDevicesListsNone(t *testing.T) {
+	a := analyze(t, "bundle-v10", func(name string, data []byte) ([]byte, bool) {
+		if name == "cdc.yaml" {
+			doc := string(data)
+			start := strings.Index(doc, "      devices:")
+			end := strings.Index(doc, "      mgmtInterface:")
+			return []byte(doc[:start] + doc[end:]), true
+		}
+		return data, true
+	})
+	g := a.CDC.NodeSets[0].Groups[0]
+	if g.Devices == nil {
+		t.Error("a group without a device selection lists nil devices, which the page cannot read")
+	}
+}
