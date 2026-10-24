@@ -174,6 +174,24 @@ func runningUbuntu() nodeprobe.HostOS {
 		Version:      "22.04",
 		PrettyName:   "Ubuntu 22.04.4 LTS",
 		Architecture: "x86_64",
+		Kernel:       ubuntuKernel(),
+	}
+}
+
+// ubuntuKernel is the kernel Ubuntu 22.04 boots: native NVMe multipath on, and
+// the three optional capabilities as its stock kernel offers them on a virtual
+// machine without nested virtualization.
+func ubuntuKernel() nodeprobe.Kernel {
+	return nodeprobe.Kernel{
+		Release:       "5.15.0-122-generic",
+		NVMeMultipath: nodeprobe.Fact{State: string(inventory.MultipathEnabled), Detail: "nvme_core.multipath is Y"},
+		KVM: nodeprobe.Fact{State: string(inventory.CapabilityAbsent),
+			Detail: "the CPU reports neither vmx nor svm: it has no hardware virtualization, " +
+				"or it is a virtual machine without nested virtualization"},
+		TUN: nodeprobe.Fact{State: string(inventory.CapabilityAvailable),
+			Detail: "the kernel has registered /dev/net/tun"},
+		PNFSBlock: nodeprobe.Fact{State: string(inventory.CapabilityLoadable),
+			Detail: "blocklayoutdriver is a module of 5.15.0-122-generic and not loaded"},
 	}
 }
 

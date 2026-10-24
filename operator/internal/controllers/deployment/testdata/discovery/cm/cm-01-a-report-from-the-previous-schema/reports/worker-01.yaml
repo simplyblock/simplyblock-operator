@@ -103,6 +103,25 @@ data:
         "architecture": "x86_64",
         "distro": "ubuntu",
         "family": "Debian",
+        "kernel": {
+          "kvm": {
+            "detail": "the CPU reports neither vmx nor svm: it has no hardware virtualization, or it is a virtual machine without nested virtualization",
+            "state": "Absent"
+          },
+          "nvmeMultipath": {
+            "detail": "nvme_core.multipath is Y",
+            "state": "Enabled"
+          },
+          "pnfsBlock": {
+            "detail": "blocklayoutdriver is a module of 5.15.0-122-generic and not loaded",
+            "state": "Loadable"
+          },
+          "release": "5.15.0-122-generic",
+          "tun": {
+            "detail": "the kernel has registered /dev/net/tun",
+            "state": "Available"
+          }
+        },
         "prettyName": "Ubuntu 22.04.4 LTS",
         "version": "22.04"
       },
@@ -170,7 +189,7 @@ data:
       },
       "node": "worker-01",
       "probedAt": "2026-09-18T09:00:00Z",
-      "version": 8
+      "version": 9
     }
 kind: ConfigMap
 metadata:

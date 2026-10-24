@@ -2,7 +2,7 @@ apiVersion: v1
 data:
   report.json: |-
     {
-      "version": 9,
+      "version": 10,
       "node": "worker-01",
       "probedAt": "2026-09-18T09:00:00Z",
       "cpu": {
@@ -160,7 +160,26 @@ data:
         "family": "Debian",
         "version": "22.04",
         "prettyName": "Ubuntu 22.04.4 LTS",
-        "architecture": "x86_64"
+        "architecture": "x86_64",
+        "kernel": {
+          "release": "5.15.0-122-generic",
+          "nvmeMultipath": {
+            "state": "Enabled",
+            "detail": "nvme_core.multipath is Y"
+          },
+          "kvm": {
+            "state": "Absent",
+            "detail": "the CPU reports neither vmx nor svm: it has no hardware virtualization, or it is a virtual machine without nested virtualization"
+          },
+          "tun": {
+            "state": "Available",
+            "detail": "the kernel has registered /dev/net/tun"
+          },
+          "pnfsBlock": {
+            "state": "Loadable",
+            "detail": "blocklayoutdriver is a module of 5.15.0-122-generic and not loaded"
+          }
+        }
       }
     }
 kind: ConfigMap
