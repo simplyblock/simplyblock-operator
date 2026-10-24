@@ -256,3 +256,25 @@ ol.steps { padding-left: 20px; }
 ol.steps li { margin-bottom: 10px; }
 .step-title { font-weight: 600; margin-bottom: 2px; }
 
+textarea {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: 12px ui-monospace, Menlo, monospace;
+}
+nav button.tool { margin-left: auto; }
+
+.value-row { display: grid; grid-template-columns: minmax(200px, 1fr) 1.2fr; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.value-row .help, details.value-group > summary .help { color: var(--muted); font-size: 12px; margin-top: 2px; }
+details.value-group { margin: 6px 0; padding-left: 12px; border-left: 2px solid var(--line); }
+details.value-group > summary { cursor: pointer; padding: 4px 0; }
+@media (max-width: 800px) { .value-row { grid-template-columns: 1fr; } }
+
+.value-row.changed { background: linear-gradient(90deg, var(--warn-bg), transparent 40%); }
+.value-control { flex-wrap: nowrap; }
+.value-control > :first-child { flex: 1; min-width: 0; }
+button.reset { padding: 3px 8px; font-size: 12px; }
+

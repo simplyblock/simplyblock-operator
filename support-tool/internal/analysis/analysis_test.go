@@ -252,3 +252,27 @@ func TestAGroupWithoutDevicesListsNone(t *testing.T) {
 		t.Error("a group without a device selection lists nil devices, which the page cannot read")
 	}
 }
+
+func TestAdmissionsVerdictIsAmongTheFindings(t *testing.T) {
+	a := analyze(t, "bundle-v10", func(name string, data []byte) ([]byte, bool) {
+		if name == "cdc.yaml" {
+			return bytes.Replace(data, []byte("environment: K3s"), []byte("environment: Nomad"), 1), true
+		}
+		return data, true
+	})
+	for _, f := range a.CDC.Findings {
+		if f.Source == "admission" && f.Severity == SeverityError && strings.Contains(f.Message, "Nomad") {
+			return
+		}
+	}
+	t.Errorf("admission's refusal is not among %+v", a.CDC.Findings)
+}
+
+func TestTheFixtureDraftIsAdmitted(t *testing.T) {
+	a := analyze(t, "bundle-v10", nil)
+	for _, f := range a.CDC.Findings {
+		if f.Source == "admission" {
+			t.Errorf("the draft the run wrote is refused by admission: %s", f.Message)
+		}
+	}
+}

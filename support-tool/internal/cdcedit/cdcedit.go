@@ -21,7 +21,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/yaml"
 
 	"github.com/simplyblock/atlas/ptr"
 
@@ -29,6 +28,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/discovery"
 	"github.com/simplyblock/simplyblock-operator/internal/erasurecoding"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
+	"github.com/simplyblock/simplyblock-operator/support-tool/internal/manifest"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/supportbundle"
 )
 
@@ -574,25 +574,5 @@ func humanSize(bytes uint64) string {
 
 // Render is a document as YAML to apply: no status and no server-set metadata.
 func Render(cdc *simplyblockv1alpha2.ClusterDeploymentConfig) ([]byte, error) {
-	raw, err := json.Marshal(cdc)
-	if err != nil {
-		return nil, err
-	}
-	var doc map[string]any
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return nil, err
-	}
-	doc["apiVersion"] = simplyblockv1alpha2.GroupVersion.String()
-	doc["kind"] = "ClusterDeploymentConfig"
-	delete(doc, "status")
-	if meta, ok := doc["metadata"].(map[string]any); ok {
-		for _, k := range []string{"resourceVersion", "uid", "creationTimestamp", "managedFields", "generation"} {
-			delete(meta, k)
-		}
-	}
-	out, err := json.Marshal(doc)
-	if err != nil {
-		return nil, err
-	}
-	return yaml.JSONToYAML(out)
+	return manifest.Render(cdc, simplyblockv1alpha2.GroupVersion.String(), "ClusterDeploymentConfig")
 }

@@ -18,6 +18,8 @@ import (
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/analysis"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/bundletest"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/cdcedit"
+	"github.com/simplyblock/simplyblock-operator/support-tool/internal/helmvalues"
+	"github.com/simplyblock/simplyblock-operator/support-tool/internal/opsedit"
 )
 
 // do sends a request to the server as the browser on the agent's machine would.
@@ -305,5 +307,113 @@ func TestALargeUploadNeverTouchesTheDisk(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("the upload left %d file(s) in the temporary directory, the first %s", len(entries), entries[0].Name())
+	}
+}
+
+func TestTheRunEditorNeedsNoBundle(t *testing.T) {
+	s := New()
+	rec := do(t, s, http.MethodGet, "/api/operatorops/prefill", "", nil)
+	var req opsedit.Request
+	if err := json.Unmarshal(rec.Body.Bytes(), &req); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("prefill: %d %s", rec.Code, rec.Body)
+	}
+
+	req.Discover.Workers = []string{"worker-1"}
+	req.Discover.NodeSelector = map[string]string{"role": "storage"}
+	body, _ := json.Marshal(req)
+	rec = do(t, s, http.MethodPost, "/api/operatorops", "application/json", bytes.NewReader(body))
+	var out struct {
+		YAML     string            `json:"yaml"`
+		Findings []opsedit.Finding `json:"findings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("build: %d %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(out.YAML, "kind: OperatorOps") || len(out.Findings) == 0 {
+		t.Errorf("the build answered %+v", out)
+	}
+}
+
+func TestTheRunEditorTakesABundlesRun(t *testing.T) {
+	s := New()
+	up := uploadFixture(t, s)
+	rec := do(t, s, http.MethodGet, "/api/operatorops/prefill?bundle="+up.ID, "", nil)
+	var req opsedit.Request
+	if err := json.Unmarshal(rec.Body.Bytes(), &req); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("prefill: %d %s", rec.Code, rec.Body)
+	}
+	if req.Name != "discover-fleet-03" {
+		t.Errorf("the run after discover-fleet-02 is named %q", req.Name)
+	}
+}
+
+func TestTheValuesEditorOffersTheChart(t *testing.T) {
+	rec := do(t, New(), http.MethodGet, "/api/helm", "", nil)
+	var out struct {
+		Chart  struct{ Name, Version string } `json:"chart"`
+		Fields []helmvalues.Field             `json:"fields"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("helm: %d %s", rec.Code, rec.Body)
+	}
+	if out.Chart.Name != "simplyblock-operator" || len(out.Fields) == 0 {
+		t.Errorf("the chart is %+v with %d fields", out.Chart, len(out.Fields))
+	}
+}
+
+func TestTheValuesEditorChecksAndRenders(t *testing.T) {
+	body := `{"overrides":{"tls":{"provider":"letsencrypt"},"discovery":{"name":"first-run"}}}`
+	rec := do(t, New(), http.MethodPost, "/api/helm/values", "application/json", strings.NewReader(body))
+	var out struct {
+		YAML     string               `json:"yaml"`
+		Findings []helmvalues.Finding `json:"findings"`
+		Commands []string             `json:"commands"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("values: %d %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(out.YAML, "first-run") || len(out.Findings) == 0 {
+		t.Errorf("the answer is %+v", out)
+	}
+	joined := strings.Join(out.Commands, "\n")
+	if !strings.Contains(joined, "helm repo add simplyblock https://simplyblock.github.io/helm-charts/charts") ||
+		!strings.Contains(joined, "-f values.yaml") || !strings.Contains(joined, "--version 26.3.0") {
+		t.Errorf("the commands are %v", out.Commands)
+	}
+}
+
+func TestAValueGivenAsYAMLIsParsedIntoTheOverrides(t *testing.T) {
+	body := `{"overrides":{},"yaml":[{"segments":["discovery","tolerations"],"text":"- key: storage\n  operator: Exists\n  effect: NoSchedule\n"}]}`
+	rec := do(t, New(), http.MethodPost, "/api/helm/values", "application/json", strings.NewReader(body))
+	var out struct {
+		YAML     string               `json:"yaml"`
+		Findings []helmvalues.Finding `json:"findings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("values: %d %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(out.YAML, "key: storage") || len(out.Findings) != 0 {
+		t.Errorf("the answer is %+v", out)
+	}
+
+	rec = do(t, New(), http.MethodPost, "/api/helm/values", "application/json",
+		strings.NewReader(`{"overrides":{},"yaml":[{"segments":["discovery","tolerations"],"text":"- key: [unclosed"}]}`))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "discovery.tolerations") {
+		t.Errorf("YAML that does not parse answered %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestAValuesFileIsImportedAsOverrides(t *testing.T) {
+	body := `{"text":"discovery:\n  name: first-run\ntls:\n  provider: letsencrypt\n"}`
+	rec := do(t, New(), http.MethodPost, "/api/helm/import", "application/json", strings.NewReader(body))
+	var out struct {
+		Overrides map[string]any       `json:"overrides"`
+		Findings  []helmvalues.Finding `json:"findings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("import: %d %s", rec.Code, rec.Body)
+	}
+	if out.Overrides["discovery"].(map[string]any)["name"] != "first-run" || len(out.Findings) == 0 {
+		t.Errorf("the import is %+v", out)
 	}
 }
