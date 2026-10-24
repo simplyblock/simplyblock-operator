@@ -20,6 +20,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel"
+	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/listtype"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -111,6 +112,9 @@ func Validate(obj runtime.Object) ([]string, error) {
 	content["apiVersion"], content["kind"] = gvk.GroupVersion().String(), gvk.Kind
 
 	errs := validation.ValidateCustomResource(nil, content, v.schema)
+	// The API server checks list types apart from the schema: a set holding an
+	// entry twice, or a map list holding a key twice, is refused.
+	errs = append(errs, listtype.ValidateListSetsAndMaps(nil, v.structural, content)...)
 	celErrs, _ := v.cel.Validate(context.Background(), nil, v.structural, content, nil, celconfig.RuntimeCELCostBudget)
 	errs = append(errs, celErrs...)
 	out := make([]string, 0, len(errs))

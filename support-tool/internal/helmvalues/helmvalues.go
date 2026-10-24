@@ -35,8 +35,12 @@ var chartYAML []byte
 
 // Field is one value of the chart.
 type Field struct {
-	Key  string `json:"key"`
-	Path string `json:"path"`
+	Key string `json:"key"`
+	// Path is the value's dotted path, for reading, and Segments its keys,
+	// for addressing it: a key may hold dots of its own, such as an annotation
+	// named reloader.stakater.com/auto.
+	Path     string   `json:"path"`
+	Segments []string `json:"segments"`
 	// Kind is bool, string, int, number, list (of scalars), map (of
 	// arbitrary keys), object (of the fields in Children), or `yaml` for a value
 	// the editor takes as YAML.
@@ -87,26 +91,23 @@ func Fields() []Field {
 		if err := yamlv3.Unmarshal(valuesYAML, &doc); err != nil || len(doc.Content) == 0 {
 			return
 		}
-		fields = fieldsOf(doc.Content[0], "")
+		fields = fieldsOf(doc.Content[0], nil)
 	})
 	return fields
 }
 
-func fieldsOf(mapping *yamlv3.Node, prefix string) []Field {
+func fieldsOf(mapping *yamlv3.Node, prefix []string) []Field {
 	var out []Field
 	for i := 0; i+1 < len(mapping.Content); i += 2 {
 		key, value := mapping.Content[i], mapping.Content[i+1]
-		path := key.Value
-		if prefix != "" {
-			path = prefix + "." + key.Value
-		}
-		f := Field{Key: key.Value, Path: path, Help: commentOf(key)}
+		segments := append(append([]string(nil), prefix...), key.Value)
+		f := Field{Key: key.Value, Path: strings.Join(segments, "."), Segments: segments, Help: commentOf(key)}
 		// The parser hands the file's header, the comment above its ---, to
 		// the first key along with the key's own comment.
-		if prefix == "" && i == 0 {
+		if len(prefix) == 0 && i == 0 {
 			f.Help = strings.TrimSpace(strings.TrimPrefix(f.Help, preamble()))
 		}
-		node := schemaAt(path)
+		node := schemaAt(segments)
 		if enum, ok := node["enum"].([]any); ok {
 			for _, e := range enum {
 				f.Enum = append(f.Enum, fmt.Sprint(e))
@@ -114,22 +115,29 @@ func fieldsOf(mapping *yamlv3.Node, prefix string) []Field {
 		}
 		switch value.Kind {
 		case yamlv3.MappingNode:
-			if len(value.Content) == 0 {
-				f.Kind = "map"
-			} else {
+			// key=value lines write strings, so an empty mapping is a map
+			// only where the schema says its values are strings. Anything
+			// else, such as a resources block, may hold objects.
+			switch {
+			case len(value.Content) > 0:
 				f.Kind = "object"
-				f.Children = fieldsOf(value, path)
-			}
-		case yamlv3.SequenceNode:
-			f.Kind = "list"
-			items, _ := node["items"].(map[string]any)
-			if items["type"] == "object" {
+				f.Children = fieldsOf(value, segments)
+			case typeOf(node["additionalProperties"]) == "string":
+				f.Kind = "map"
+			default:
 				f.Kind = "yaml"
 			}
-			for _, item := range value.Content {
-				if item.Kind != yamlv3.ScalarNode {
-					f.Kind = "yaml"
-				}
+		case yamlv3.SequenceNode:
+			// One entry per line writes strings, so a list is lines only where
+			// its items are strings: by the schema, or, without an item schema,
+			// by a default of strings. An empty one says nothing and may hold
+			// objects, as tolerations do.
+			f.Kind = "yaml"
+			switch itemType := typeOf(node["items"]); {
+			case itemType == "string":
+				f.Kind = "list"
+			case itemType == "" && len(value.Content) > 0 && scalarStrings(value):
+				f.Kind = "list"
 			}
 		default:
 			switch value.Tag {
@@ -181,10 +189,27 @@ func commentOf(key *yamlv3.Node) string {
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
+// typeOf is the type a schema node states, or empty for none.
+func typeOf(node any) string {
+	m, _ := node.(map[string]any)
+	t, _ := m["type"].(string)
+	return t
+}
+
+// scalarStrings reports whether every item of a sequence is a string scalar.
+func scalarStrings(seq *yamlv3.Node) bool {
+	for _, item := range seq.Content {
+		if item.Kind != yamlv3.ScalarNode || item.Tag != "!!str" {
+			return false
+		}
+	}
+	return true
+}
+
 // schemaAt is the schema of a value, or nil where the schema says nothing.
-func schemaAt(path string) map[string]any {
+func schemaAt(segments []string) map[string]any {
 	node := schemaDoc
-	for _, key := range strings.Split(path, ".") {
+	for _, key := range segments {
 		properties, _ := node["properties"].(map[string]any)
 		next, ok := properties[key].(map[string]any)
 		if !ok {
@@ -298,13 +323,17 @@ func unknown(overrides map[string]any, known []Field, prefix string) []string {
 }
 
 // merge is overrides laid over values the way Helm coalesces a values file:
-// maps merge key by key, and anything else replaces.
+// maps merge key by key, a null removes the key, and anything else replaces.
 func merge(values, overrides map[string]any) map[string]any {
 	out := make(map[string]any, len(values))
 	for k, v := range values {
 		out[k] = v
 	}
 	for k, v := range overrides {
+		if v == nil {
+			delete(out, k)
+			continue
+		}
 		if base, ok := out[k].(map[string]any); ok {
 			if over, ok := v.(map[string]any); ok {
 				out[k] = merge(base, over)
@@ -316,16 +345,19 @@ func merge(values, overrides map[string]any) map[string]any {
 	return out
 }
 
-// SetYAML parses a value the editor takes as YAML and sets it at its dotted
-// path in the overrides.
-func SetYAML(overrides map[string]any, path, text string) error {
+// SetYAML parses a value the editor takes as YAML and sets it at its path, given
+// as segments, in the overrides.
+func SetYAML(overrides map[string]any, segments []string, text string) error {
+	path := strings.Join(segments, ".")
+	if len(segments) == 0 {
+		return errors.New("a value needs a path")
+	}
 	var value any
 	if err := yaml.Unmarshal([]byte(text), &value); err != nil {
 		return fmt.Errorf("%s does not parse as YAML: %w", path, err)
 	}
-	keys := strings.Split(path, ".")
 	node := overrides
-	for _, key := range keys[:len(keys)-1] {
+	for _, key := range segments[:len(segments)-1] {
 		next, ok := node[key].(map[string]any)
 		if !ok {
 			next = map[string]any{}
@@ -333,7 +365,7 @@ func SetYAML(overrides map[string]any, path, text string) error {
 		}
 		node = next
 	}
-	node[keys[len(keys)-1]] = value
+	node[segments[len(segments)-1]] = value
 	return nil
 }
 

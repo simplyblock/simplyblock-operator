@@ -412,17 +412,17 @@ function cdc() {
 
 // ─── Helm values editor ────────────────────────────────────────────────────
 
-// getAt, setAt, and deleteAt read and write a dotted path in nested objects.
-// deleteAt drops parents it leaves empty, so the overrides stay minimal.
-const getAt = (obj, path) => path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), obj);
-function setAt(obj, path, value) {
-  const keys = path.split(".");
+// getAt, setAt, and deleteAt read and write a path, given as its keys, in
+// nested objects. A key may hold dots of its own, as an annotation such as
+// reloader.stakater.com/auto does, so a path is never split on them. deleteAt
+// drops parents it leaves empty, so the overrides stay minimal.
+const getAt = (obj, keys) => keys.reduce((o, k) => (o == null ? undefined : o[k]), obj);
+function setAt(obj, keys, value) {
   let node = obj;
   for (const k of keys.slice(0, -1)) node = node[k] = (node[k] && typeof node[k] === "object" && !Array.isArray(node[k])) ? node[k] : {};
   node[keys[keys.length - 1]] = value;
 }
-function deleteAt(obj, path) {
-  const keys = path.split(".");
+function deleteAt(obj, keys) {
   const walk = (node, i) => {
     if (!node || typeof node !== "object") return;
     if (i === keys.length - 1) { delete node[keys[i]]; return; }
@@ -432,6 +432,10 @@ function deleteAt(obj, path) {
   walk(obj, 0);
 }
 const countLeaves = (o) => (o && typeof o === "object" && !Array.isArray(o) ? Object.values(o).reduce((n, v) => n + countLeaves(v), 0) : 1);
+// keyOf names a path for the YAML drafts, and under tells whether one path
+// lies within another.
+const keyOf = (keys) => JSON.stringify(keys);
+const under = (keys, prefix) => prefix.length < keys.length && prefix.every((k, i) => keys[i] === k);
 
 // helmEditor edits the chart's values. Only what differs from the chart's
 // defaults is kept, and that is the values file it writes.
@@ -447,21 +451,23 @@ function helmEditor() {
   if (h.error) return el("div", { class: "error-banner" }, h.error);
 
   const general = h.fields.filter((f) => f.kind !== "object");
-  const sections = [...(general.length ? [{ key: "General", path: "", children: general, help: "The chart's top-level values." }] : []),
+  const sections = [...(general.length ? [{ key: "General", segments: [], children: general, help: "The chart's top-level values." }] : []),
     ...h.fields.filter((f) => f.kind === "object")];
   if (!h.section) h.section = sections[0]?.key;
   const current = sections.find((s) => s.key === h.section) || sections[0];
+  const drafts = () => Object.values(h.yaml);
   // How many values a section changes: the leaves set under it, and the
   // values given as YAML.
   const overridesIn = (section) => {
-    if (!section.path) return general.filter((f) => h.overrides[f.key] !== undefined).length;
-    const set = getAt(h.overrides, section.path);
-    return (set === undefined ? 0 : countLeaves(set)) + Object.keys(h.yaml).filter((p) => p.startsWith(section.path + ".")).length;
+    if (!section.segments.length) return general.filter((f) => h.overrides[f.key] !== undefined || h.yaml[keyOf(f.segments)]).length;
+    const set = getAt(h.overrides, section.segments);
+    return (set === undefined ? 0 : countLeaves(set)) + drafts().filter((d) => under(d.segments, section.segments)).length;
   };
+  const changed = (f) => getAt(h.overrides, f.segments) !== undefined || Boolean(h.yaml[keyOf(f.segments)]);
 
   const control = (f) => {
-    const value = getAt(h.overrides, f.path);
-    const set = (v) => { if (v === undefined) deleteAt(h.overrides, f.path); else setAt(h.overrides, f.path, v); };
+    const value = getAt(h.overrides, f.segments);
+    const set = (v) => { if (v === undefined) deleteAt(h.overrides, f.segments); else setAt(h.overrides, f.segments, v); };
     const shown = (v) => (v === undefined || v === null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
     if (f.enum?.length || f.kind === "bool") {
       const options = f.kind === "bool" ? ["true", "false"] : f.enum;
@@ -474,31 +480,52 @@ function helmEditor() {
     }
     if (f.kind === "list") {
       return el("textarea", { rows: 2, placeholder: (f.default || []).join("\n") || "one per line",
-        onchange: (e) => { const v = lines(e.target.value); set(v.length ? v : undefined); render(); } }, lineText(value));
+        onchange: (e) => { set(lines(e.target.value)); render(); } }, lineText(value));
     }
     if (f.kind === "map") {
       return el("textarea", { rows: 2, placeholder: "key=value, one per line",
         onchange: (e) => {
           const entries = lines(e.target.value).map((l) => l.split("=")).map(([k, ...v]) => [k.trim(), v.join("=").trim()]);
-          set(entries.length ? Object.fromEntries(entries) : undefined); render();
+          set(Object.fromEntries(entries)); render();
         } }, Object.entries(value || {}).map(([k, v]) => `${k}=${v}`).join("\n"));
     }
     if (f.kind === "yaml") {
+      // A draft is what was typed; without one, the value set, imported or
+      // not, is shown as JSON, which YAML reads as well. Editing replaces the
+      // value, and emptying the field returns it to the chart's default.
+      const draft = h.yaml[keyOf(f.segments)];
       return el("textarea", { rows: 3, placeholder: `YAML; default ${shown(f.default) || "empty"}`,
-        onchange: (e) => { if (e.target.value.trim()) h.yaml[f.path] = e.target.value; else delete h.yaml[f.path]; render(); } }, h.yaml[f.path] || "");
+        onchange: (e) => {
+          deleteAt(h.overrides, f.segments);
+          if (e.target.value.trim()) h.yaml[keyOf(f.segments)] = { segments: f.segments, text: e.target.value };
+          else delete h.yaml[keyOf(f.segments)];
+          render();
+        } }, draft ? draft.text : value !== undefined ? JSON.stringify(value, null, 2) : "");
     }
-    return el("input", { type: f.kind === "int" || f.kind === "number" ? "number" : "text", value: shown(value), placeholder: shown(f.default),
+    // A text field sets what it holds, the empty string included, since an
+    // empty value can be a setting of its own (an empty prometheusURL turns
+    // capacity sampling off). The reset button returns it to the default.
+    const numeric = f.kind === "int" || f.kind === "number";
+    return el("input", { type: numeric ? "number" : "text", value: shown(value), placeholder: shown(f.default),
       onchange: (e) => {
         const v = e.target.value;
-        set(v === "" ? undefined : f.kind === "int" || f.kind === "number" ? Number(v) : v);
+        set(numeric ? (v === "" ? undefined : Number(v)) : v);
         render();
       } });
   };
+  const reset = (f) => (changed(f)
+    ? el("button", { class: "secondary reset", title: "Return to the chart's default", onclick: () => {
+      deleteAt(h.overrides, f.segments);
+      delete h.yaml[keyOf(f.segments)];
+      render();
+    } }, "Reset")
+    : null);
   const help = (f) => (f.help ? el("div", { class: "help", title: f.help }, f.help.split("\n").slice(0, 2).join(" ")) : null);
   const fieldsOf = (list) => list.map((f) => f.kind === "object"
-    ? el("details", { class: "value-group", open: getAt(h.overrides, f.path) !== undefined || Object.keys(h.yaml).some((p) => p.startsWith(f.path + ".")) },
+    ? el("details", { class: "value-group", open: getAt(h.overrides, f.segments) !== undefined || drafts().some((d) => under(d.segments, f.segments)) },
       el("summary", {}, el("strong", {}, f.key), help(f)), fieldsOf(f.children || []))
-    : el("div", { class: "value-row" }, el("div", {}, el("code", {}, f.key), help(f)), control(f)));
+    : el("div", { class: changed(f) ? "value-row changed" : "value-row" },
+      el("div", {}, el("code", {}, f.key), help(f)), el("div", { class: "row value-control" }, control(f), reset(f))));
 
   const importDialog = () => {
     const area = el("textarea", { rows: 18, placeholder: "paste a values.yaml" });
@@ -520,7 +547,7 @@ function helmEditor() {
 
   const build = async () => {
     try {
-      h.built = await api("POST", "/api/helm/values", { overrides: h.overrides, yaml: h.yaml });
+      h.built = await api("POST", "/api/helm/values", { overrides: h.overrides, yaml: drafts() });
     } catch (e) {
       h.built = { error: e.message };
     }

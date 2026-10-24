@@ -98,3 +98,12 @@ func TestAnEnvironmentOutsideTheSetIsRefused(t *testing.T) {
 		t.Errorf("the refusals are %v", found)
 	}
 }
+
+func TestADuplicateInASetIsRefused(t *testing.T) {
+	found := refusals(t, discoveryRun(&simplyblockv1alpha2.DiscoverSpec{
+		DeviceFilter: &simplyblockv1alpha2.DeviceFilter{PcieAllowList: []string{"0000:5e:00.0", "0000:5e:00.0"}},
+	}))
+	if !contains(found, "pcieAllowList") || !contains(found, "Duplicate") {
+		t.Errorf("a set listing an entry twice is refused with %v", found)
+	}
+}

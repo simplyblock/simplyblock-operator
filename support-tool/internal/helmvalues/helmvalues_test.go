@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -138,5 +139,58 @@ func TestASchemaCombinatorIsNotAFindingOfItsOwn(t *testing.T) {
 		if strings.Contains(f.Message, "'allOf' failed") || strings.Contains(f.Message, "'anyOf' failed") || strings.Contains(f.Message, "'oneOf' failed") {
 			t.Errorf("a combinator wrapping the real findings is reported: %+v", f)
 		}
+	}
+}
+
+func TestAnEmptyMapIsKeyValueOnlyWhenTheSchemaSaysStrings(t *testing.T) {
+	if f := field(t, Fields(), "discovery.nodeSelector"); f.Kind != "map" {
+		t.Errorf("discovery.nodeSelector, a map of strings, is %s", f.Kind)
+	}
+	if f := field(t, Fields(), "driver.pnfs.mds.resources"); f.Kind != "yaml" {
+		t.Errorf("driver.pnfs.mds.resources, which holds objects, is %s", f.Kind)
+	}
+}
+
+func TestAnEmptyListIsLinesOnlyWhenTheSchemaSaysStrings(t *testing.T) {
+	if f := field(t, Fields(), "driver.tolerations"); f.Kind != "yaml" {
+		t.Errorf("driver.tolerations, a list of objects, is %s", f.Kind)
+	}
+}
+
+func TestANullOverrideDeletesTheKeyAsHelmDoes(t *testing.T) {
+	if found := Check(map[string]any{"discovery": map[string]any{"namespace": nil}}); len(found) != 0 {
+		t.Errorf("a null that Helm reads as removing the default is refused: %+v", found)
+	}
+}
+
+// fieldAt finds a field by its path segments, which a key holding dots needs.
+func fieldAt(fields []Field, segments []string) *Field {
+	for i := range fields {
+		f := &fields[i]
+		if len(f.Segments) > len(segments) || !slices.Equal(f.Segments, segments[:len(f.Segments)]) {
+			continue
+		}
+		if len(f.Segments) == len(segments) {
+			return f
+		}
+		return fieldAt(f.Children, segments)
+	}
+	return nil
+}
+
+func TestAKeyHoldingDotsIsOneSegment(t *testing.T) {
+	segments := []string{"prometheus", "server", "podAnnotations", "reloader.stakater.com/auto"}
+	f := fieldAt(Fields(), segments)
+	if f == nil || f.Key != "reloader.stakater.com/auto" {
+		t.Fatalf("no field at %v: %+v", segments, f)
+	}
+
+	overrides := map[string]any{}
+	if err := SetYAML(overrides, segments, `"false"`); err != nil {
+		t.Fatal(err)
+	}
+	annotations := overrides["prometheus"].(map[string]any)["server"].(map[string]any)["podAnnotations"].(map[string]any)
+	if annotations["reloader.stakater.com/auto"] != "false" {
+		t.Errorf("the value was set at %v", overrides)
 	}
 }

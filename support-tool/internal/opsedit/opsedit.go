@@ -56,6 +56,9 @@ func Prefill(b *supportbundle.Bundle) Request {
 	req.Name, req.Namespace = nextName(b.Run.Name), b.Run.Namespace
 	if b.Run.Spec.Discover != nil {
 		req.Discover = *b.Run.Spec.Discover.DeepCopy()
+		// A run whose draft name is taken adopts that draft and leaves it as it
+		// is, so the new run's draft is named after the new run.
+		req.Discover.ConfigName = ""
 	}
 	return req
 }

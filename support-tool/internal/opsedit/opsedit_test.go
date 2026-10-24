@@ -115,3 +115,22 @@ func TestTheNextRunCountsUp(t *testing.T) {
 		}
 	}
 }
+
+func TestThePrefillLeavesTheDraftNameToTheNewRun(t *testing.T) {
+	// A run whose draft name is taken adopts that draft without updating it, so
+	// a new run carrying the old run's configName would leave its findings out.
+	b, err := supportbundle.Read(bytes.NewReader(bundletest.Archive(t, bundletest.Fixture(t, "bundle-v10"),
+		func(name string, data []byte) ([]byte, bool) {
+			if name == "operatorops.yaml" {
+				return bytes.Replace(data, []byte("  action: Discover"),
+					[]byte("  action: Discover\n  discover:\n    configName: reviewed-draft"), 1), true
+			}
+			return data, true
+		})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req := Prefill(b); req.Discover.ConfigName != "" {
+		t.Errorf("the next run writes into %q, the previous run's draft", req.Discover.ConfigName)
+	}
+}

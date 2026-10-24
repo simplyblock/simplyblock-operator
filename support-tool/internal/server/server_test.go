@@ -383,7 +383,7 @@ func TestTheValuesEditorChecksAndRenders(t *testing.T) {
 }
 
 func TestAValueGivenAsYAMLIsParsedIntoTheOverrides(t *testing.T) {
-	body := `{"overrides":{},"yaml":{"discovery.tolerations":"- key: storage\n  operator: Exists\n  effect: NoSchedule\n"}}`
+	body := `{"overrides":{},"yaml":[{"segments":["discovery","tolerations"],"text":"- key: storage\n  operator: Exists\n  effect: NoSchedule\n"}]}`
 	rec := do(t, New(), http.MethodPost, "/api/helm/values", "application/json", strings.NewReader(body))
 	var out struct {
 		YAML     string               `json:"yaml"`
@@ -397,7 +397,7 @@ func TestAValueGivenAsYAMLIsParsedIntoTheOverrides(t *testing.T) {
 	}
 
 	rec = do(t, New(), http.MethodPost, "/api/helm/values", "application/json",
-		strings.NewReader(`{"overrides":{},"yaml":{"discovery.tolerations":"- key: [unclosed"}}`))
+		strings.NewReader(`{"overrides":{},"yaml":[{"segments":["discovery","tolerations"],"text":"- key: [unclosed"}]}`))
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "discovery.tolerations") {
 		t.Errorf("YAML that does not parse answered %d %s", rec.Code, rec.Body)
 	}

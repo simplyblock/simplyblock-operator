@@ -238,8 +238,12 @@ func (s *Server) helmChart(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) helmValues(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Overrides map[string]any `json:"overrides"`
-		// YAML is the values the editor takes as YAML text, by dotted path.
-		YAML map[string]string `json:"yaml"`
+		// YAML is the values the editor takes as YAML text, each at its path
+		// as segments, since a key may hold dots of its own.
+		YAML []struct {
+			Segments []string `json:"segments"`
+			Text     string   `json:"text"`
+		} `json:"yaml"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		fail(w, http.StatusBadRequest, "the request does not parse: "+err.Error())
@@ -248,8 +252,8 @@ func (s *Server) helmValues(w http.ResponseWriter, r *http.Request) {
 	if req.Overrides == nil {
 		req.Overrides = map[string]any{}
 	}
-	for path, text := range req.YAML {
-		if err := helmvalues.SetYAML(req.Overrides, path, text); err != nil {
+	for _, value := range req.YAML {
+		if err := helmvalues.SetYAML(req.Overrides, value.Segments, value.Text); err != nil {
 			fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
