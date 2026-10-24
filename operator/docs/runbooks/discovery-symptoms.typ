@@ -130,6 +130,9 @@ expire after an hour by default. The probe reports and the run's `status.message
 
 = The draft's settings
 
+Each row below says why the draft holds what it does. How to change it, before a run or in the draft, is
+D 12.
+
 #grid(cols, head,
   [The wrong management interface], [`interfaces[]` in the worker's probe report],
   [The interface holding the node's internal IP wins whatever its speed, unless it is a loopback or a peered virtual device. Check which address Kubernetes reports for the node.],

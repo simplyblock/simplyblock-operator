@@ -403,10 +403,9 @@ even when it presents no block device. A held controller, or one that could not 
 #pagebreak(weak: true)
 = What the draft derives
 
-#note[The values `enableDriveFormat`, `maxSubsystemCount`, `stripe`, `enableChecksumValidation`, `socketsToUse`,
-`nodesPerSocket`, `enableFailureDomains`, and `enableAtomicity4K` can be stated by the installation instead. A
-stated value replaces the derived one, and the draft's notes say which values were stated and which were
-derived.]
+#note[Every value below is derived by the run. None can be stated ahead of it, by the Helm chart or otherwise:
+a different value is an edit to the draft before it is approved (section 12). The draft's `ConfigWritten`
+events say how each one was derived.]
 
 #v(4pt)
 #grid((1.4fr, 2.2fr, 3.2fr), ([Draft setting], [From], [Rule]),
@@ -505,3 +504,71 @@ at the end, one sentence for each, such as
 }
 ```
 ]
+
+#pagebreak(weak: true)
+= Changing what discovery chose
+
+A choice is changed in one of two places:
+
+- *Before a run*, through the node labels and taints the run reads and the run's own settings,
+  `spec.discover` of the OperatorOps. The initial run of a Helm install takes them from the chart's
+  `discovery` values.
+- *In the draft*, the ClusterDeploymentConfig, after the run and before `spec.approved: true`. The draft is
+  checked again after every edit, and a problem shows in its `status.message` and Warning events. Once
+  approved, the document can no longer be changed.
+
+A finished run is not run again. A new run is a new OperatorOps
+with another name. Its draft is named after the run unless `spec.discover.configName` names it, and a draft
+that already exists is left as it is (event `ConfigExists`). Delete the old draft first, or give the new run
+another name.
+
+== Workers and disks
+
+#grid((1.3fr, 2.6fr, 2.6fr), ([To], [Before the run], [In the draft]),
+  [Leave a worker out], [`spec.discover.workers` lists the workers to inspect, or `nodeSelector` selects them by label. Use one or the other.], [Remove it from its group's `workers`. A group needs at least one worker, so delete a group whose last worker goes.],
+  [Include a worker that was declined], [Resolve the reason first (rejections, section 3). Cordoned: `kubectl uncordon`. Control-plane node: `enableControlPlaneNodes: true`. A `NoSchedule` or `NoExecute` taint declines the worker even when `tolerations` names it, so the taint has to go.], [Add it to the `workers` of a group whose devices and interfaces it has. The draft check refuses a name that is not a node (`WorkerNotFound`).],
+  [Leave a disk out], [NVMe mode: `deviceFilter.pcieDenyList` (PCI addresses), `pcieAllowList`, or `pcieModel`. Logical block device mode: `blockDenyList` or `blockAllowList` (`/dev/...` paths). Either mode: `driveSizeRange`, for example `500G-4T`.], [Remove it from the group's `devices.nvme` (PCI addresses) or `devices.block` (paths). The list holds for every worker of the group, so a disk only some workers should leave out needs a group of its own for those workers.],
+  [Take a disk that was refused], [Resolve its reason (rejections, section 4). A leftover partition table alone: `enablePartitionedDevices: true`. An iSCSI disk: name it in `blockAllowList`.], [Add it to the group's devices. `enableDriveFormat` is on in every draft, so the disk is formatted when the cluster takes it, whatever the probe found on it. Add one only when its data is known to be disposable.],
+  [Take the disks of the other NUMA node], [Nothing: the run takes the disks of the NUMA node with the most.], [Add their addresses to the group's devices.],
+  [Use logical block devices instead of NVMe], [`enableLogicalBlockDevices: true`. Disks are then named by `/dev/disk/by-id` path, and partitions can be taken.], [Not by an edit: the device names, the journal, and the checks differ. Run discovery again.],
+)
+
+== Network
+
+#grid((1.3fr, 2.6fr, 2.6fr), ([To], [Before the run], [In the draft]),
+  [Use another management interface], [No setting. The run takes the interface holding the node's internal IP (section 7.2).], [Set the group's `mgmtInterface`. Every group of one cluster has to name the same interface.],
+  [Use other data interfaces], [No setting. The ranking is fixed (section 7.3).], [Set the group's `dataInterfaces`. Every group of one cluster has to name the same interfaces.],
+)
+
+== Topology
+
+#grid((1.3fr, 2.6fr, 2.6fr), ([To], [Before the run], [In the draft]),
+  [Set failure domains], [Label every worker: `topology.kubernetes.io/zone`, or the label `spec.discover.failureDomainLabel` names. Failure domains are enabled only when every worker carries a valid value.], [Set each group's `failureDomain` and `spec.cluster.enableFailureDomains: true`. The domains have to fit the stripe (rejections, section 6).],
+  [Choose which workers form one cluster], [Label them `storage.simplyblock.io/placement-group=<name>`. Each value becomes a node set, and each node set a cluster.], [Move the groups between node sets. A node set becomes a cluster of at most 32 storage nodes, within one region.],
+  [Add workers to an existing cluster], [`spec.discover.clusterRef` names the cluster. The draft then proposes no cluster settings.], [Set `spec.clusterRef`.],
+)
+
+== Cluster settings
+
+These are in the draft only, under `spec.cluster`. A node set whose hardware differs from the rest can carry
+its own `vcpuCount`, `maxSubsystemCount`, `minHugePagesSize`, `socketsToUse`, `nodesPerSocket`, and `stripe`
+under `spec.nodeSets[].cluster`, on a document with more than one node set or one naming `spec.clusterRef`.
+
+#grid((1.3fr, 2.2fr, 3fr), ([Setting], [What the draft holds], [What to know before changing it]),
+  [`vcpuCount`], [The physical cores of the smallest worker's chosen NUMA node, at least 4.], [One value for every storage node of the cluster, which is why the smallest worker sets it.],
+  [`minHugePagesSize`], [The free huge pages of the smallest worker's chosen NUMA node.], [Unset when a worker has less than 1 GiB.],
+  [`maxSubsystemCount`], [30, not a reading.], [How many subsystems a node serves follows from the workload, not from the hardware.],
+  [`enableDriveFormat`], [On.], [With it off, a listed disk that carries anything is not usable.],
+  [`stripe`, `clusterMode`], [Derived from the worker and disk counts (section 10).], [Cannot be changed once the cluster exists. The draft check refuses a stripe the fleet is too small for.],
+  [`enableJournalDevice`], [On when every worker has exactly one disk smaller than all its others.], [`spec.discover.forceJournalDevice` before the run picks one where disks tie. Logical block device mode requires it.],
+  [`enableFailureDomains`], [On when every worker carries a valid failure domain.], [See topology above.],
+  [`enableChecksumValidation`, `enableAtomicity4K`, `socketsToUse`, `nodesPerSocket`], [Not set. Nothing the probe reads decides them.], [`enableChecksumValidation` is applied to each disk when the cluster is created and never afterward, so a cluster created without it cannot have it.],
+  [`tolerations`], [The tolerations the run probed with.], [What the storage-node pods tolerate. Correct it when the run's tolerations are not the fleet's taints.],
+  [`spec.hostOS`], [The workers' distribution, when they all run the same one.], [Set it when os-release was unreadable. One document states one host OS for all its workers, so workers on different distributions go into separate documents.],
+  [`spec.environment`], [The run's `status.environment`.], [Correct it when the platform was misread, for example after `EnvironmentPartiallyRead`.],
+)
+
+#v(4pt)
+#note[Two settings of a group are never derived and can be added in the draft: `spdkSystemMemory`, the memory
+SPDK starts with, and `reservedSystemCPU`, the cores held back from SPDK, as a list such as `0,1`.]
+
