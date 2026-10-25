@@ -344,3 +344,65 @@ func TestACandidateASiblingHoldsIsNotRememberedWhenTheAssignedAddressIsFree(t *t
 		t.Fatalf("rejected = %v, want %v, without the address the peer holds", got, want)
 	}
 }
+
+// The member clusters of a supercluster copy one network block and draw from one
+// pool, so a node of another cluster holds the pool's address as much as a
+// sibling does. Scoped to the cluster, every member chose the pool's first
+// address (Talos lab, 2026-10-25).
+func TestAnAddressANodeOfAnotherClusterHoldsOnThePoolIsNotChosen(t *testing.T) {
+	peer := aPeerOnTheNetwork("other-cluster-node", firstInPool)
+	peer.Spec.ClusterRef = "another-member-cluster"
+	r, _ := aProbeWorld(t, peer)
+
+	if _, _, err := check(t, r); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := assignedOn(t, r); got != nextInPool {
+		t.Fatalf("assigned = %q, want the first address no node of the namespace holds", got)
+	}
+}
+
+// Two clusters may call the network differently and still share its subnet;
+// the clash is on the wire, so an address inside the pool's subnet is held
+// whatever network name the other node recorded it under.
+func TestAnAddressHeldUnderAnotherNetworkNameInTheSubnetIsNotChosen(t *testing.T) {
+	peer := aPeerOnTheNetwork("other-cluster-node", firstInPool)
+	peer.Spec.ClusterRef = "another-member-cluster"
+	peer.Status.Network[0].Network = "fabric"
+	r, _ := aProbeWorld(t, peer)
+
+	if _, _, err := check(t, r); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := assignedOn(t, r); got != nextInPool {
+		t.Fatalf("assigned = %q, want the address held under another name skipped", got)
+	}
+}
+
+func TestHeldOnPoolSeesNamesAndSubnetButNotOtherSubnets(t *testing.T) {
+	node := func(name, network, assigned string) simplyblockv1alpha2.StorageNode {
+		n := simplyblockv1alpha2.StorageNode{}
+		n.Name = name
+		n.Status.Network = []simplyblockv1alpha2.NodeNetworkStatus{{Network: network, Assigned: assigned}}
+		return n
+	}
+	siblings := []simplyblockv1alpha2.StorageNode{
+		node("a", poolNetwork, "10.10.10.101/24"),  // same network name
+		node("b", "fabric", "10.10.10.102/24"),     // other name, same subnet
+		node("c", "fabric", "10.20.0.5/24"),        // other name, other subnet
+		node("me", poolNetwork, "10.10.10.150/24"), // the node itself
+		node("z", poolNetwork, ""),                 // nothing assigned yet
+	}
+	held, earlier := heldOnPool(siblings, "me", poolNetwork, "10.10.10.0/24")
+	if !slices.Equal(held, []string{"10.10.10.101/24", "10.10.10.102/24"}) {
+		t.Fatalf("held = %v", held)
+	}
+	if !slices.Equal(earlier, []string{"10.10.10.101/24", "10.10.10.102/24"}) {
+		t.Fatalf("earlier = %v", earlier)
+	}
+	if held, _ := heldOnPool(siblings, "me", poolNetwork, ""); !slices.Equal(held, []string{"10.10.10.101/24"}) {
+		t.Fatalf("without a subnet only the name matches: %v", held)
+	}
+}
