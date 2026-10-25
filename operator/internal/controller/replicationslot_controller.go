@@ -149,6 +149,20 @@ func (r *ReplicationSlotReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return r.setError(ctx, &slot, fmt.Sprintf("invalid VolumeID %q: expected <cluster>:<pool>:<volume>", slot.Spec.VolumeID))
 	}
 
+	// An attach addresses the volume serving the data now, which a completed
+	// migration has moved away from the PV's handle.
+	if st := simplyblockv1alpha1.ReplicationSlotState(slot.Status.State); st == "" ||
+		st == simplyblockv1alpha1.ReplicationSlotStateError {
+		moved, err := r.followMovedVolume(ctx, &slot, apiClient)
+		if err != nil {
+			log.Error(err, "Cannot resolve the volume's current location; retrying", "slot", slot.Name)
+			return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
+		}
+		if moved {
+			clusterID, poolID, volumeID, _ = splitVolumeHandle(slot.Spec.VolumeID)
+		}
+	}
+
 	switch simplyblockv1alpha1.ReplicationSlotState(slot.Status.State) {
 	case "": // brand-new slot
 		return r.reconcileAttach(ctx, &slot, &policy, apiClient, clusterID, poolID, volumeID)
@@ -169,6 +183,36 @@ func (r *ReplicationSlotReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	default:
 		return r.setError(ctx, &slot, fmt.Sprintf("unknown state %q", slot.Status.State))
 	}
+}
+
+// followMovedVolume points spec.volumeID at the volume serving the data now,
+// before the slot attaches. The watcher creates a slot from the PV's handle,
+// and after a completed migration that names the retired (usually deleted)
+// source: attaching a new policy through it, which is how a migrated volume is
+// migrated again, failed with a 404. Every later step -- status, cutover,
+// preconnect, detach -- addresses spec.volumeID, so it is rewritten once here
+// rather than resolved on each of them. Reports whether it changed.
+func (r *ReplicationSlotReconciler) followMovedVolume(
+	ctx context.Context,
+	slot *simplyblockv1alpha1.ReplicationSlot,
+	apiClient *webapi.Client,
+) (bool, error) {
+	current, err := currentVolumeHandle(ctx, apiClient, slot.Spec.VolumeID)
+	if err != nil {
+		return false, err
+	}
+	if current == slot.Spec.VolumeID {
+		return false, nil
+	}
+	previous := slot.Spec.VolumeID
+	patch := client.MergeFrom(slot.DeepCopy())
+	slot.Spec.VolumeID = current
+	if err := r.Patch(ctx, slot, patch); err != nil {
+		return false, fmt.Errorf("point slot at volume %s: %w", current, err)
+	}
+	r.Recorder.Eventf(slot, nil, corev1.EventTypeNormal, "VolumeMoved", "VolumeMoved",
+		"Volume %s has moved to %s; replication attaches there", previous, current)
+	return true, nil
 }
 
 // reconcileAttach sends PUT /{vol} with replication_policy_id.

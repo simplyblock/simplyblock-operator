@@ -266,13 +266,21 @@ func (cs *Server) DeleteVolume(
 // running on it, and its own deletion arrives through this same path once no
 // pairing supersedes it. A missing ActiveLvolID (backend predating the field)
 // deletes nothing, erring toward leaking a clone over destroying live data.
+// maxChainHops bounds deleteRetiredReplicaChain's walk, as the node's redirect
+// and atlas's WalkChain bound theirs: a guard against a looping record, not an
+// estimate of a chain's length.
+const maxChainHops = 256
+
 func (cs *Server) deleteRetiredReplicaChain(ctx context.Context, volumeID string) error {
 	h, err := csicommon.ParseVolumeHandle(volumeID)
 	if err != nil {
 		return nil // unparsable handles were already tolerated as deleted above
 	}
 	cur := h
-	for range 8 { // one hop per past fail-over; capped far above any real chain
+	// One hop per past move, never compacted: the 8-hop cap the chain walks
+	// lost on 2026-10-03 left the ninth retired copy here. A loop ends at the
+	// hop whose target is the active volume, so the bound is a cycle guard.
+	for range maxChainHops {
 		client, err := clusters.ReplicationClient(ctx, cur.ClusterID)
 		if err != nil {
 			return err
