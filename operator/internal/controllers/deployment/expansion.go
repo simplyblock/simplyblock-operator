@@ -424,6 +424,10 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		// partitioned a journal out of every drive on a deployment reviewed for
 		// a dedicated one.
 		workload.EnableJournalDevice = template.EnableJournalDevice
+		// The network is the cluster's alone and fixed when it is created, so this
+		// is the only place it can be stated. Copied, so the document and the
+		// cluster never share one.
+		workload.Network = template.Network.DeepCopy()
 	}
 
 	// The nodeAgent slot of spec.images. It is read here rather than in
@@ -438,6 +442,10 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 
 	for _, set := range config.Spec.NodeSets {
 		for _, group := range set.Groups {
+			// A network replaces the interfaces, and the cluster refuses both.
+			if workload.Network != nil {
+				continue
+			}
 			if workload.MgmtInterface == "" {
 				workload.MgmtInterface = group.MgmtInterface
 			}
@@ -737,7 +745,7 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 ) *simplyblockv1alpha2.StorageNode {
 	socket, index := decomposeSlot(cluster, slot)
 
-	return &simplyblockv1alpha2.StorageNode{
+	node := &simplyblockv1alpha2.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      nodeName(cluster.Name, worker, slot),
 			Namespace: config.Namespace,
@@ -788,6 +796,7 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 			},
 		},
 	}
+	return node
 }
 
 // The two slots of spec.images a node is built from, as accessors rather than as

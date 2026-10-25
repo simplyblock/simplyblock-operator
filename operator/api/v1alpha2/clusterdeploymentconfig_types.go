@@ -383,6 +383,13 @@ type ClusterTemplate struct {
 	// +kubebuilder:validation:MaxLength=63
 	Name string `json:"name"`
 
+	// Network states the networks the storage nodes' SPDK pods attach to, which
+	// is spec.storageNodes.network of the cluster this document creates. It is
+	// set here and nowhere else, because a cluster's network is fixed when it is
+	// created. Unstated, the nodes run on the host network.
+	// +optional
+	Network *StorageNetworkSpec `json:"network,omitempty"`
+
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
 	// node of this cluster serves. Required, because the StorageCluster's own
 	// field is, and no StorageNode carries a copy of it.
@@ -756,6 +763,7 @@ type DeploymentImages struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval cannot be withdrawn"
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)) || s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group of a node set must name the same device class: all nvme or all block"
 // +kubebuilder:validation:XValidation:rule="size(self.nodeSets) > 1 || has(self.clusterRef) || self.nodeSets.all(s, !has(s.cluster))",message="a node set overrides the cluster template only when the document has more than one node set or names a cluster in clusterRef"
+// +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.network) || self.nodeSets.all(s, s.groups.all(g, !has(g.mgmtInterface) && !has(g.dataInterfaces)))",message="a cluster on a network names no management or data interfaces in its groups, because the network replaces them"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || (!has(self.cluster.enableCpuTopology) && !has(self.cluster.enableKubeletConfiguration)) || (has(self.environment) && self.environment == 'Vanilla')",message="spec.cluster.enableCpuTopology and spec.cluster.enableKubeletConfiguration are stated only when spec.environment is Vanilla: every other environment decides both"
 type ClusterDeploymentConfigSpec struct {

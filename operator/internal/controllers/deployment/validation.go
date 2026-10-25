@@ -153,7 +153,7 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 	if grown != "" {
 		findings = append(findings, finding{reason: MemberTooLarge, message: grown})
 	}
-	if groups := groupsWithoutManagementInterface(config); len(groups) > 0 {
+	if groups := groupsWithoutManagementInterface(config); len(groups) > 0 && !onANetwork(config) {
 		findings = append(findings, finding{
 			reason: NoManagementInterface,
 			message: fmt.Sprintf(

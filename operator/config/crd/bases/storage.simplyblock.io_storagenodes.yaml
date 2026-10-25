@@ -790,6 +790,61 @@ spec:
                     Message is the reason the phase is what it is: one sentence, replaced as the
                     node moves, and never a log.
                   type: string
+                network:
+                  description: |-
+                    Network records, per storage network, what the node's SPDK pod reported
+                    and whether the attachment matches the declaration. A node on the host
+                    network has no entries.
+                  items:
+                    description: NodeNetworkStatus is what a node's SPDK pod reports for one network.
+                    properties:
+                      address:
+                        description: Address is the address the pod reported.
+                        type: string
+                      assigned:
+                        description: |-
+                          Assigned is the address the operator took from the network's pool for this
+                          node, with the prefix length of the pool's subnet. It is chosen once,
+                          before the node is added, and never changes, so the node keeps it across
+                          restarts and reboots. It is empty until the choice is made.
+                        type: string
+                      hostReachable:
+                        description: |-
+                          HostReachable is whether the worker's host network namespace can reach
+                          the address, which a volume attach or an RPC from a host-network pod on
+                          that worker needs. It is unset until the preflight has checked.
+                        type: boolean
+                      interface:
+                        description: Interface is the interface's name inside the pod.
+                        type: string
+                      network:
+                        description: Network is the name of the cluster network.
+                        type: string
+                      phase:
+                        description: Phase is where the attachment stands.
+                        enum:
+                          - Pending
+                          - Attached
+                          - Mismatched
+                          - Unavailable
+                        type: string
+                      rejected:
+                        description: |-
+                          Rejected are the pool addresses another host answered for, which this node
+                          does not try again.
+                        items:
+                          type: string
+                        maxItems: 64
+                        type: array
+                        x-kubernetes-list-type: atomic
+                    required:
+                      - network
+                      - phase
+                    type: object
+                  type: array
+                  x-kubernetes-list-map-keys:
+                    - network
+                  x-kubernetes-list-type: map
                 nodeAddTaskID:
                   description: |-
                     NodeAddTaskID is the control-plane task the last add of this node created. It is how
@@ -987,7 +1042,7 @@ spec:
                   type: object
                   x-kubernetes-validations:
                     - message: unknown step
-                      rule: '!has(self.state) || self.state in [''CheckingHost'',''CheckingConfig'',''AwaitingSlot'',''Posting'',''Resolving'',''Adopting'',''AwaitingWorker'']'
+                      rule: '!has(self.state) || self.state in [''CheckingHost'',''CheckingConfig'',''CheckingNetwork'',''AwaitingSlot'',''Posting'',''Resolving'',''Adopting'',''AwaitingWorker'']'
                 uptime:
                   description: Uptime is the node uptime as the control plane reports it.
                   type: string
