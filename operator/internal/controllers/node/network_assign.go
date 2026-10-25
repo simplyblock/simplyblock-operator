@@ -199,7 +199,7 @@ func (r *StorageNodeReconciler) turnAwayAddress(
 	cluster *simplyblockv1alpha2.StorageCluster, a Attachment, answering []string,
 ) error {
 	recordAttachFailure(cluster.Name, NetworkAddressInUse)
-	foreign, err := r.notHeldBySiblings(ctx, node, a.Network, answering)
+	foreign, err := r.notHeldBySiblings(ctx, node, answering)
 	if err != nil {
 		return err
 	}
@@ -235,7 +235,7 @@ func (r *StorageNodeReconciler) rememberAnswering(
 	remembered := map[string][]string{}
 	for _, a := range attachments {
 		answering := result.AnsweringAddresses(a.Interface)
-		foreign, err := r.notHeldBySiblings(ctx, node, a.Network, answering)
+		foreign, err := r.notHeldBySiblings(ctx, node, answering)
 		if err != nil {
 			return err
 		}
@@ -254,10 +254,11 @@ func (r *StorageNodeReconciler) rememberAnswering(
 	})
 }
 
-// notHeldBySiblings is the addresses that answered and that no other node holds.
+// notHeldBySiblings is the addresses that answered and that no other node holds,
+// on any network: the clash is on the wire, whatever network the holder is on.
 // An answer from a sibling's address is the sibling's probe, not a foreign host.
 func (r *StorageNodeReconciler) notHeldBySiblings(
-	ctx context.Context, node *simplyblockv1alpha2.StorageNode, network string, answering []string,
+	ctx context.Context, node *simplyblockv1alpha2.StorageNode, answering []string,
 ) ([]string, error) {
 	if len(answering) == 0 {
 		return nil, nil
