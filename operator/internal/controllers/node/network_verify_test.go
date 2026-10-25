@@ -157,24 +157,56 @@ func TestNothingDeclaredIsNothingVerified(t *testing.T) {
 
 // U-20
 func TestThePodIsFoundByItsRPCPortAndTwoPodsAreNeverConfused(t *testing.T) {
-	pod := func(name, port string) corev1.Pod {
-		return corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-			Name: name, Labels: map[string]string{"app": "spdk-app-" + port, "role": "simplyblock-storage-node"},
-		}}
+	pod := func(name, port, worker string) corev1.Pod {
+		return corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Labels: map[string]string{"app": "spdk-app-" + port, "role": "simplyblock-storage-node"},
+			},
+			Spec: corev1.PodSpec{NodeName: worker},
+		}
 	}
-	pods := []corev1.Pod{pod("snode-spdk-pod-8080-abc", "8080"), pod("snode-spdk-pod-8081-abc", "8081")}
+	pods := []corev1.Pod{
+		pod("snode-spdk-pod-8080-abc", "8080", "worker-1"),
+		pod("snode-spdk-pod-8081-abc", "8081", "worker-1"),
+	}
 
-	got, found := SPDKPodFor(pods, 8081)
+	got, found := SPDKPodFor(pods, "worker-1", 8081)
 	if !found || got.Name != "snode-spdk-pod-8081-abc" {
 		t.Fatalf("got %v, %v", got, found)
 	}
-	if _, found := SPDKPodFor(pods, 808); found {
+	if _, found := SPDKPodFor(pods, "worker-1", 808); found {
 		t.Fatal("a port that is a prefix of another matched it")
 	}
-	if _, found := SPDKPodFor(pods, 9999); found {
+	if _, found := SPDKPodFor(pods, "worker-1", 9999); found {
 		t.Fatal("a port no pod holds matched a pod")
 	}
-	if _, found := SPDKPodFor(nil, 8080); found {
+	if _, found := SPDKPodFor(nil, "worker-1", 8080); found {
 		t.Fatal("no pods matched a pod")
+	}
+}
+
+// Every worker's first SPDK pod carries the same port. The pod of another worker
+// on that port is another node's, and reading it judged the node's address
+// mismatched against a neighbour's (Talos lab, 2026-10-25).
+func TestThePodOfAnotherWorkerOnTheSamePortIsNotTheNodes(t *testing.T) {
+	pod := func(name, worker string) corev1.Pod {
+		return corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Labels: map[string]string{"app": "spdk-app-4420", "role": "simplyblock-storage-node"},
+			},
+			Spec: corev1.PodSpec{NodeName: worker},
+		}
+	}
+	pods := []corev1.Pod{pod("snode-spdk-pod-4420-w1", "worker-1"), pod("snode-spdk-pod-4420-w2", "worker-2")}
+
+	got, found := SPDKPodFor(pods, "worker-2", 4420)
+	if !found || got.Name != "snode-spdk-pod-4420-w2" {
+		t.Fatalf("got %v, %v, want worker-2's pod and not the first on the port", got, found)
+	}
+	if _, found := SPDKPodFor(pods, "worker-3", 4420); found {
+		t.Fatal("a worker with no pod matched another worker's pod")
+	}
+	if got, found := SPDKPodFor(pods, "", 4420); !found || got.Name != "snode-spdk-pod-4420-w1" {
+		t.Fatalf("an empty worker should match any worker's pod: got %v, %v", got, found)
 	}
 }

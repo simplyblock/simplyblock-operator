@@ -108,7 +108,7 @@ func (r *StorageNodeReconciler) spdkPodNetworkStatus(
 		client.MatchingLabels{"role": spdkPodRole}); err != nil {
 		return "", false, fmt.Errorf("listing the SPDK pods: %w", err)
 	}
-	pod, found := SPDKPodFor(pods.Items, *node.Status.Ports.Rpc)
+	pod, found := SPDKPodFor(pods.Items, node.Spec.WorkerNode, *node.Status.Ports.Rpc)
 	if !found {
 		return "", false, nil
 	}
