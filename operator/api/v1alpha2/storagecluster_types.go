@@ -518,6 +518,8 @@ type OpenShiftSpec struct {
 // What can differ is in StorageNode.spec.config: the two images, the SPDK system
 // memory, and the sizing block, which are per node precisely so that an image
 // rollout and a hardware re-size can walk the fleet one machine at a time.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.network) || (!has(self.mgmtInterface) && !has(self.dataInterfaces))",message="network cannot be combined with mgmtInterface or dataInterfaces"
 type StorageNodesSpec struct {
 	// Image is the storage-node container image. Defaults to the ControlPlane
 	// singleton's spec.image when unset, so a deployment states the version once.
@@ -544,6 +546,17 @@ type StorageNodesSpec struct {
 	// +optional
 	// +k8s:immutable
 	DataInterfaces []string `json:"dataInterfaces,omitempty"`
+
+	// Network states the networks the storage nodes' SPDK pods attach to, as
+	// references to networks rather than interface names. It replaces
+	// mgmtInterface and dataInterfaces, and the two cannot be combined. It is
+	// set when the cluster is created and never added, changed, or removed
+	// afterward: the control plane resolves a node's networks when it adds the
+	// node and does not revisit them, and a cluster created without it keeps its
+	// pods on the host network.
+	// +optional
+	// +k8s:immutable
+	Network *StorageNetworkSpec `json:"network,omitempty"`
 
 	// SocketsToUse restricts deployment to selected NUMA sockets. Empty means
 	// socket 0 alone.
@@ -657,10 +670,12 @@ const (
 // +kubebuilder:validation:XValidation:rule="(has(self.clusterMode) && self.clusterMode == 'Single') == (has(oldSelf.clusterMode) && oldSelf.clusterMode == 'Single')",message="clusterMode cannot be changed to or from Single: the control plane fixes it when the cluster is created"
 // +kubebuilder:validation:XValidation:rule="!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomicity4K requires enableChecksumValidation to be true"
 // +kubebuilder:validation:XValidation:rule="has(self.supercluster) || (has(self.maxSubsystemCount) && has(self.vcpuCount))",message="maxSubsystemCount and vcpuCount are required unless the cluster is a supercluster"
+// +kubebuilder:validation:XValidation:rule="(has(self.storageNodes) && has(self.storageNodes.network)) == (has(oldSelf.storageNodes) && has(oldSelf.storageNodes.network))",message="spec.storageNodes.network is set when the cluster is created and cannot be added or removed afterward"
 // +kubebuilder:validation:XValidation:rule="has(self.supercluster) == has(oldSelf.supercluster)",message="a cluster cannot become a supercluster, or stop being one, after creation"
 // +kubebuilder:validation:XValidation:rule="has(self.superclusterRef) == has(oldSelf.superclusterRef) && (!has(self.superclusterRef) || self.superclusterRef == oldSelf.superclusterRef)",message="superclusterRef is set at creation and never changed"
 // +kubebuilder:validation:XValidation:rule="!(has(self.supercluster) && has(self.superclusterRef))",message="a supercluster cannot be a member of another"
 // +kubebuilder:validation:XValidation:rule="has(self.superclusterRef) || !has(self.disablePlacement)",message="disablePlacement is valid only on a member"
+// +kubebuilder:validation:XValidation:rule="!has(self.storageNodes) || !has(self.storageNodes.network) || !has(self.storageNodes.network.data) || !self.storageNodes.network.data.exists(n, has(n.attachment.networkAttachmentRef)) || !has(self.fabricType) || self.fabricType == 'tcp'",message="a data network attached through a NetworkAttachmentDefinition serves NVMe/TCP only"
 type StorageClusterSpec struct {
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
 	// node. It is the cluster's and no node carries a copy: every node's
@@ -1330,4 +1345,120 @@ type StorageClusterList struct {
 
 func init() {
 	SchemeBuilder.Register(&StorageCluster{}, &StorageClusterList{})
+}
+
+// StorageNetworkSpec is the management network and the data networks of a
+// storage cluster. Its networks are attached the same way: all through
+// NetworkAttachmentDefinitions or all as host interfaces.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.data) || self.data.size() == 0 || (self.data.all(n, has(n.attachment.networkAttachmentRef) == has(self.data[0].attachment.networkAttachmentRef)) && (!has(self.management) || has(self.management.attachment.networkAttachmentRef) == has(self.data[0].attachment.networkAttachmentRef)))",message="all networks must use networkAttachmentRef, or all must use hostInterface"
+type StorageNetworkSpec struct {
+	// Management is the network the control plane reaches the SPDK RPC on.
+	// Unset, the RPC is served on the pod network.
+	// +optional
+	Management *StorageNetwork `json:"management,omitempty"`
+
+	// Data are the networks the storage nodes serve volumes on. Unset, data is
+	// served on the management network.
+	// +kubebuilder:validation:MaxItems=8
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Data []StorageNetwork `json:"data,omitempty"`
+}
+
+// StorageNetwork is one network a storage node's SPDK pod attaches to.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.attachment.networkAttachmentRef) || has(self.addressPool)",message="addressPool is required with networkAttachmentRef"
+// +kubebuilder:validation:XValidation:rule="!has(self.attachment.hostInterface) || !has(self.addressPool)",message="addressPool is not allowed with hostInterface"
+type StorageNetwork struct {
+	// Name identifies the network within the cluster, and is the key the nodes'
+	// addresses and status use.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Attachment is how the pod reaches the network.
+	// +kubebuilder:validation:Required
+	Attachment NetworkAttachment `json:"attachment"`
+
+	// AddressPool is the range the operator takes each node's address on this
+	// network from. It is required for a network attached through a definition,
+	// whose static addressing needs one address per node, and not allowed for a
+	// host interface, which carries the host's own address.
+	// +optional
+	AddressPool *NetworkAddressPool `json:"addressPool,omitempty"`
+}
+
+// NetworkAddressPool is the subnet a network's node addresses are taken from.
+// The operator gives each node of the cluster the first address of the subnet
+// that no other node holds and that no other host answers for, and keeps it for
+// the life of the node. The subnet is the one thing the operator cannot learn:
+// it is the address plan of the fabric. The rest is optional narrowing.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.first) == has(self.last)",message="first and last are set together"
+// +kubebuilder:validation:XValidation:rule="!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first)) && cidr(self.subnet).containsIP(ip(self.last)))",message="first and last must lie inside subnet"
+type NetworkAddressPool struct {
+	// Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
+	// length is the one each node's address carries.
+	// +kubebuilder:validation:MaxLength=18
+	// +kubebuilder:validation:Pattern=`^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$`
+	// +kubebuilder:validation:Required
+	Subnet string `json:"subnet"`
+
+	// First is the lowest address the operator may hand out. Unset, the range
+	// starts at the subnet's first host address. It is set together with Last.
+	// +kubebuilder:validation:MaxLength=15
+	// +kubebuilder:validation:Pattern=`^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$`
+	// +optional
+	First string `json:"first,omitempty"`
+
+	// Last is the highest address the operator may hand out. Unset, the range
+	// ends at the subnet's last host address. It is set together with First.
+	// +kubebuilder:validation:MaxLength=15
+	// +kubebuilder:validation:Pattern=`^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$`
+	// +optional
+	Last string `json:"last,omitempty"`
+
+	// Exclude are addresses the operator never hands out, each an IPv4 address
+	// or an inclusive range written 10.10.10.1-10.10.10.50. They are for
+	// addresses the network cannot show: a gateway, a switch, or a machine that
+	// is powered off, whose address no ARP check would find taken. An entry
+	// outside the subnet has no effect.
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MaxLength=31
+	// +kubebuilder:validation:items:Pattern=`^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(-((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]))?$`
+	// +listType=atomic
+	// +optional
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+// NetworkAttachment names the mechanism that connects a pod to a network.
+// Exactly one field is set.
+// +kubebuilder:validation:XValidation:rule="has(self.networkAttachmentRef) != has(self.hostInterface)",message="exactly one of networkAttachmentRef and hostInterface must be set"
+type NetworkAttachment struct {
+	// NetworkAttachmentRef is a Multus NetworkAttachmentDefinition in the
+	// namespace of the storage cluster. The pod attaches to it and takes the
+	// interface the definition's plugin creates.
+	// +optional
+	NetworkAttachmentRef *NetworkDefinitionReference `json:"networkAttachmentRef,omitempty"`
+
+	// HostInterface is the name of a host interface. The pods run on the host
+	// network and bind it.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	HostInterface string `json:"hostInterface,omitempty"`
+}
+
+// NetworkDefinitionReference names a NetworkAttachmentDefinition in the
+// namespace of the object that holds the reference.
+type NetworkDefinitionReference struct {
+	// Name is the definition's name.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
 }

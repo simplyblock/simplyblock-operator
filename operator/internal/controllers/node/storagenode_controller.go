@@ -84,6 +84,10 @@ type StorageNodeReconciler struct {
 	Recorder events.EventRecorder
 	API      ControlPlane
 
+	// ProbeImage is the image the network probe pods run: the operator's own,
+	// which carries a shell, arping, and ping.
+	ProbeImage string
+
 	// Nodes is the storage-node stream's cache, which steady state is read from
 	// and which adoption matches against. It is optional: a deployment without the
 	// control-plane informer falls back to reading the control plane directly.
@@ -457,7 +461,13 @@ func (r *StorageNodeReconciler) performNodeStep(
 		return r.checkConfig(ctx, node, cluster)
 	case stepAwaitingSlot:
 		return r.awaitSlot(ctx, node, cluster)
+	case stepCheckingNetwork:
+		return r.checkNetwork(ctx, node, cluster)
 	case stepPosting:
+		gone, err := r.probeGone(ctx, node)
+		if err != nil || !gone {
+			return stepPosting, false, err
+		}
 		return stepResolving, true, r.postNode(ctx, node, cluster)
 	case stepResolving:
 		return r.resolve(ctx, node, cluster)
@@ -581,6 +591,9 @@ func (r *StorageNodeReconciler) checkConfig(
 		return stepCheckingConfig, false, blockedf(FailureDomainMissing,
 			"cluster %s requires a fault group and this node declares none; "+
 				"set spec.config.failureDomain", cluster.Name)
+	}
+	if declaresDefinitions(networkOf(cluster)) {
+		return stepCheckingNetwork, true, nil
 	}
 	return stepAwaitingSlot, true, nil
 }
@@ -776,6 +789,11 @@ func (r *StorageNodeReconciler) postNode(
 	cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
 	params := r.addParams(ctx, node, cluster)
+	networks, err := r.networkParams(node, cluster)
+	if err != nil {
+		return fmt.Errorf("add node %s on worker %s: %w", node.Name, node.Spec.WorkerNode, err)
+	}
+	params.Networks = networks
 	taskID, err := r.API.AddNode(ctx, cluster.Status.UUID, params)
 	if err != nil {
 		return fmt.Errorf("add node %s on worker %s: %w",
@@ -1011,6 +1029,10 @@ func (r *StorageNodeReconciler) syncStatus(
 	})
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+
+	if err := r.syncNetwork(ctx, node, cluster); err != nil {
+		return ctrl.Result{RequeueAfter: nodeRetry}, err
 	}
 
 	if !wasOnline && node.Status.Phase == simplyblockv1alpha2.StorageNodePhaseOnline {
@@ -1824,7 +1846,8 @@ func equalNodeStatus(a, b simplyblockv1alpha2.StorageNodeStatus) bool {
 		a.Step.State != b.Step.State || !equalTime(a.Step.Deadline, b.Step.Deadline) {
 		return false
 	}
-	return equalResources(a.Resources, b.Resources) && equalPorts(a.Ports, b.Ports)
+	return equalResources(a.Resources, b.Resources) && equalPorts(a.Ports, b.Ports) &&
+		equalNetworkStatus(a.Network, b.Network)
 }
 
 func equalResources(a, b *simplyblockv1alpha2.StorageNodeResources) bool {

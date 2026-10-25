@@ -86,6 +86,10 @@ type scriptedControlPlane struct {
 	// paths that only a refusing control plane produces.
 	refuse map[string]error
 
+	// adds is the body of every AddNode call, which is what an assertion about
+	// what the add carries reads.
+	adds []utils.StorageNodeSetAddParams
+
 	// calls is every call in order, each spelled as its method, a colon, and its
 	// argument, which is what an assertion about a call being skipped or issued
 	// once reads.
@@ -222,8 +226,9 @@ func (c *scriptedControlPlane) StorageNodes(
 }
 
 func (c *scriptedControlPlane) AddNode(
-	ctx context.Context, clusterID string, _ utils.StorageNodeSetAddParams,
+	ctx context.Context, clusterID string, params utils.StorageNodeSetAddParams,
 ) (string, error) {
+	c.adds = append(c.adds, params)
 	return theAddTask, c.record(ctx, "AddNode", clusterID)
 }
 

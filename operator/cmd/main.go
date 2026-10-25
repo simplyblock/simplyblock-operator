@@ -73,6 +73,7 @@ import (
 	twonodecp "github.com/simplyblock/simplyblock-operator/internal/controllers/twonode/cpadapter"
 	volumecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/volume"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
+	"github.com/simplyblock/simplyblock-operator/internal/ownimage"
 	"github.com/simplyblock/simplyblock-operator/internal/placement"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
@@ -874,6 +875,7 @@ func main() {
 		DeviceScopes: deviceScopes,
 		Capacity:     nodeCapacity,
 		Workload:     storageNodeWorkload,
+		ProbeImage:   os.Getenv(ownimage.Env),
 	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
