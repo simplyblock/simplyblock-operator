@@ -102,11 +102,14 @@ func identifyUnbounded(devicePath string, nsid uint32, cns uint32, length uint32
 		cdw10:     cns, // CNS in the low byte
 		timeoutMs: identifyTimeoutMs,
 	}
-	_, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), nvmeIoctlAdminCmd, uintptr(unsafe.Pointer(&cmd)))
+	ret, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), nvmeIoctlAdminCmd, uintptr(unsafe.Pointer(&cmd)))
 	// Keep buf alive until the kernel has finished writing into it via addr.
 	runtime.KeepAlive(buf)
 	if errno != 0 {
 		return nil, fmt.Errorf("ioctl NVME_ADMIN_CMD %s: %w", devicePath, errno)
+	}
+	if err := adminStatus(ret); err != nil {
+		return nil, fmt.Errorf("ioctl NVME_ADMIN_CMD %s: %w", devicePath, err)
 	}
 	return buf, nil
 }
