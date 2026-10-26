@@ -47,19 +47,40 @@ const (
 func startGateway(t *testing.T) (*s3.Client, client.Client, string) {
 	t.Helper()
 
+	kube := newFakeKube(t)
+	cfg := testConfig(t)
+	startRun(t, cfg, kube)
+	waitForHealth(t, http.DefaultClient, "http://"+cfg.Port+healthPath)
+
+	client := s3.New(s3.Options{
+		Region:       "us-east-1",
+		BaseEndpoint: aws.String("http://" + cfg.Port),
+		Credentials:  awscreds.NewStaticCredentialsProvider(testAccessKeyID, testSecretAccessKey, ""),
+		UsePathStyle: true,
+	})
+	return client, kube, cfg.RootDir
+}
+
+// newFakeKube is a fake Kubernetes client that knows S3Buckets.
+func newFakeKube(t *testing.T) client.Client {
+	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := simplyblockv1alpha2.AddToScheme(scheme); err != nil {
 		t.Fatalf("building the scheme: %v", err)
 	}
-	kube := fake.NewClientBuilder().
+	return fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&simplyblockv1alpha2.S3Bucket{}).
 		Build()
+}
 
-	addr := freeLoopbackAddr(t)
-	cfg := config.Config{
+// testConfig is a Config for a gateway on a free loopback port over a fresh
+// temp directory, serving plain HTTP.
+func testConfig(t *testing.T) config.Config {
+	t.Helper()
+	return config.Config{
 		RootDir:             t.TempDir(),
-		Port:                addr,
+		Port:                freeLoopbackAddr(t),
 		RootAccessKeyID:     testAccessKeyID,
 		RootSecretAccessKey: testSecretAccessKey,
 		BucketLinks:         true,
@@ -70,7 +91,12 @@ func startGateway(t *testing.T) (*s3.Client, client.Client, string) {
 		BucketCapacityBytes: 1 << 30,
 		BucketTimeout:       10 * time.Second,
 	}
+}
 
+// startRun runs the gateway with cfg until the test ends, then cancels it
+// and waits for run's own shutdown.
+func startRun(t *testing.T, cfg config.Config, kube client.Client) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, cfg, kube) }()
@@ -85,16 +111,6 @@ func startGateway(t *testing.T) (*s3.Client, client.Client, string) {
 			t.Error("run did not shut down within 10s of cancellation")
 		}
 	})
-
-	waitForHealth(t, "http://"+addr+healthPath)
-
-	client := s3.New(s3.Options{
-		Region:       "us-east-1",
-		BaseEndpoint: aws.String("http://" + addr),
-		Credentials:  awscreds.NewStaticCredentialsProvider(testAccessKeyID, testSecretAccessKey, ""),
-		UsePathStyle: true,
-	})
-	return client, kube, cfg.RootDir
 }
 
 // deliverWhenCreated plays the operator for one bucket: once its S3Bucket
@@ -142,12 +158,12 @@ func freeLoopbackAddr(t *testing.T) string {
 	return addr
 }
 
-func waitForHealth(t *testing.T, url string) {
+func waitForHealth(t *testing.T, httpClient *http.Client, url string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(url) //nolint:noctx // bounded by the deadline loop itself
+		resp, err := httpClient.Get(url) //nolint:noctx // bounded by the deadline loop itself
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
