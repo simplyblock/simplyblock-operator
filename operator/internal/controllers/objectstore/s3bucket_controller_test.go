@@ -50,7 +50,7 @@ func expectEvent(t *testing.T, recorder *events.FakeRecorder, reason string) {
 func testObjectStoreNamed(name string) *simplyblockv1alpha2.ObjectStore {
 	return &simplyblockv1alpha2.ObjectStore{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec:       simplyblockv1alpha2.ObjectStoreSpec{Image: "quay.io/simplyblock-io/objectstore:latest", Port: 8000},
+		Spec:       simplyblockv1alpha2.ObjectStoreSpec{Image: "quay.io/simplyblock-io/objectstore:latest", Port: 8000, Buckets: testObjectStoreBuckets},
 	}
 }
 
