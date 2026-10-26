@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/simplyblock/atlas/nvme"
 )
 
 // fixture builds a tree under a temporary root from a map of relative path to
@@ -28,7 +30,9 @@ type fixture struct {
 //
 // The address, link, and machine readers all have to be named, because none of
 // their answers is in a tree: the defaults read this process's own network
-// namespace and its own kernel. A test that left them out would assert a
+// namespace and its own kernel. The format reader is named for the same reason:
+// the default sends an Identify to whatever /dev/nvmeN the machine running the
+// test has. A test that left them out would assert a
 // fixture against whatever the machine running it happens to be, and it would
 // do so silently — the fixture's interface names are the ordinary ones, so any
 // host with an `eth0` or a `lo` of its own fills them in.
@@ -40,7 +44,13 @@ func syntheticHost(root string) Config {
 		InterfaceAddresses: func() (map[string][]string, error) { return nil, nil },
 		InterfaceLinks:     func() (map[string]LinkIdentity, error) { return nil, nil },
 		Machine:            staticMachine("x86_64"),
+		NVMeFormats:        noFormats,
 	}
+}
+
+// noFormats answers every Identify Namespace with no formats.
+func noFormats(_ string, nsid nvme.NamespaceID) (nvme.NamespaceFormats, error) {
+	return nvme.NamespaceFormats{NSID: nsid, InUse: -1}, nil
 }
 
 // write materializes the fixture and returns its root.
