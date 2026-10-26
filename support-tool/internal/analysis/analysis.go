@@ -71,6 +71,11 @@ type Worker struct {
 	// facts, whose empty kernel section is no reading at all.
 	KernelReported bool `json:"kernelReported"`
 
+	// NetworkAttachmentsReported is false for a report version that predates
+	// the NetworkAttachmentDefinitions, whose absent reading says nothing about
+	// whether the cluster runs Multus.
+	NetworkAttachmentsReported bool `json:"networkAttachmentsReported"`
+
 	Node   Node              `json:"node"`
 	Report *nodeprobe.Report `json:"report,omitempty"`
 
@@ -280,6 +285,7 @@ func workersOf(b *supportbundle.Bundle) []Worker {
 		w.ReportFile = r.File
 		w.ReportVersion = r.Version
 		w.KernelReported = r.KernelReported()
+		w.NetworkAttachmentsReported = r.NetworkAttachmentsReported()
 		report := r.Report
 		w.Report = &report
 	}

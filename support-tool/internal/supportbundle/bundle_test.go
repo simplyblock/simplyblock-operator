@@ -51,6 +51,39 @@ func TestReadAVersion10Bundle(t *testing.T) {
 	}
 }
 
+// Version 11 adds the network attachments. The earlier versions stay readable,
+// because a support agent reads bundles from clusters on older releases.
+func TestReadAVersion11Bundle(t *testing.T) {
+	b := read(t, bundletest.Archive(t, "../../testdata/bundle-v11", nil))
+
+	if len(b.Reports) != 3 {
+		t.Fatalf("read %d reports, want 3", len(b.Reports))
+	}
+	for _, r := range b.Reports {
+		if r.Err != "" || r.Version != 11 {
+			t.Errorf("report %s: version %d, error %q", r.File, r.Version, r.Err)
+		}
+		if !r.KernelReported() || !r.NetworkAttachmentsReported() {
+			t.Errorf("report %s of version 11 claims no kernel facts or no network attachments", r.File)
+		}
+		attachments := r.Report.NetworkAttachments
+		if attachments == nil || attachments.State != "Served" || len(attachments.Definitions) != 2 {
+			t.Errorf("report %s carries the network attachments %+v", r.File, attachments)
+		}
+	}
+}
+
+// Before version 11 an absent attachment reading is no reading at all, not a
+// cluster without Multus.
+func TestAVersion10ReportCarriesNoNetworkAttachmentReading(t *testing.T) {
+	b := read(t, bundletest.Archive(t, "../../testdata/bundle-v10", nil))
+	for _, r := range b.Reports {
+		if r.NetworkAttachmentsReported() {
+			t.Errorf("report %s of version 10 claims network attachments", r.File)
+		}
+	}
+}
+
 func TestReadAVersion9Bundle(t *testing.T) {
 	b := read(t, bundletest.Archive(t, "../../testdata/bundle-v9", nil))
 

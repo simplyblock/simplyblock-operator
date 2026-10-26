@@ -68,6 +68,25 @@ func TestEveryWorkerIsShownWithItsFacts(t *testing.T) {
 	}
 }
 
+func TestAVersion11WorkerShowsItsNetworkAttachments(t *testing.T) {
+	a := analyze(t, "bundle-v11", nil)
+
+	w := worker(t, a, "worker-01")
+	if !w.InReport || w.ReportVersion != 11 || !w.NetworkAttachmentsReported {
+		t.Fatalf("worker-01 is %+v", w)
+	}
+	if w.Report.NetworkAttachments == nil || len(w.Report.NetworkAttachments.Definitions) != 2 {
+		t.Errorf("worker-01's network attachments are %+v", w.Report.NetworkAttachments)
+	}
+}
+
+func TestAVersion10WorkerShowsNoNetworkAttachmentReading(t *testing.T) {
+	w := worker(t, analyze(t, "bundle-v10", nil), "worker-01")
+	if w.NetworkAttachmentsReported {
+		t.Error("a version-10 report is shown with a network attachment reading")
+	}
+}
+
 func TestAVersion9WorkerShowsNoKernelFacts(t *testing.T) {
 	a := analyze(t, "bundle-v9", nil)
 
