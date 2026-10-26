@@ -43,6 +43,8 @@ flag for at this embedding layer.
 | `VGW_IAM_CACHE_TTL` (seconds)                   | no       | `120`   |
 | `VGW_IAM_CACHE_PRUNE` (seconds)                 | no       | `3600`  |
 | `VGW_IAM_VAULT_ENDPOINT_URL`                    | no       | —       |
+| `GATEWAY_TLS_CERT_FILE`                         | no       | —       |
+| `GATEWAY_TLS_KEY_FILE`                          | no       | —       |
 
 The other `VGW_IAM_VAULT_*` variables are versitygw's own
 (`cmd/versitygw/main.go`) and pass through unchanged: `NAMESPACE`,
@@ -53,6 +55,13 @@ variables hold PEM contents, not paths. Setting any of them without
 `VGW_IAM_VAULT_ENDPOINT_URL` fails startup. Users are managed through
 versitygw's admin API on the S3 port, for example
 `versitygw admin -a <root> -s <secret> -er <url> create-user -a <access> -s <secret> -r user`.
+
+`GATEWAY_TLS_CERT_FILE` and `GATEWAY_TLS_KEY_FILE` are paths to the serving
+certificate and key, set together or not at all. With both set, the S3 API and
+the admin API on the same port serve TLS only. The gateway re-reads both files
+every 30 seconds and serves a changed pair without a restart
+(`internal/certwatch`). The operator sets them to the certificate it mounts at
+`/etc/simplyblock/tls`.
 
 ## Commands
 

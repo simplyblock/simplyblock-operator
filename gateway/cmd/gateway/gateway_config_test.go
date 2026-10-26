@@ -1,5 +1,5 @@
-// Checks that gatewayConfig (main.go) hands embedgw the Vault IAM backend and
-// IAM cache settings config.FromEnv read, without starting a server: the
+// Checks that gatewayConfig (main.go) hands embedgw the Vault IAM backend, IAM
+// cache, and TLS settings config.FromEnv read, without starting a server: the
 // round-trip tests in main_test.go run single-account and would not notice a
 // dropped field.
 
@@ -11,7 +11,7 @@ import (
 	"github.com/simplyblock/gateway/internal/config"
 )
 
-func TestGatewayConfigCarriesTheVaultBackendAndIAMCache(t *testing.T) {
+func TestGatewayConfigCarriesTheVaultBackendIAMCacheAndTLS(t *testing.T) {
 	cfg := config.Config{
 		RootAccessKeyID:     testAccessKeyID,
 		RootSecretAccessKey: testSecretAccessKey,
@@ -33,6 +33,8 @@ func TestGatewayConfigCarriesTheVaultBackendAndIAMCache(t *testing.T) {
 		},
 		IAMCacheTTL:   120,
 		IAMCachePrune: 3600,
+		TLSCertFile:   "/etc/simplyblock/tls/tls.crt",
+		TLSKeyFile:    "/etc/simplyblock/tls/tls.key",
 	}
 
 	got := gatewayConfig(cfg)
@@ -51,6 +53,8 @@ func TestGatewayConfigCarriesTheVaultBackendAndIAMCache(t *testing.T) {
 		{"VaultServerCert", got.VaultServerCert, cfg.Vault.ServerCert},
 		{"VaultClientCert", got.VaultClientCert, cfg.Vault.ClientCert},
 		{"VaultClientCertKey", got.VaultClientCertKey, cfg.Vault.ClientCertKey},
+		{"CertFile", got.CertFile, cfg.TLSCertFile},
+		{"KeyFile", got.KeyFile, cfg.TLSKeyFile},
 	} {
 		if field.got != field.want {
 			t.Errorf("%s = %q, want %q", field.name, field.got, field.want)

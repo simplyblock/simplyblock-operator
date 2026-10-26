@@ -86,6 +86,15 @@ type Config struct {
 	// zero.
 	IAMCacheTTL   int
 	IAMCachePrune int
+
+	// TLSCertFile and TLSKeyFile are the serving certificate and key the S3
+	// API, and with it the admin API on the same port, is served with. The
+	// operator points both at the certificate it mounts from the
+	// ObjectStore's TLS Secret. Neither set serves plain HTTP. One without
+	// the other is an error, since serving plain HTTP where TLS was asked
+	// for would go unnoticed.
+	TLSCertFile string
+	TLSKeyFile  string
 }
 
 // Vault is versitygw's Vault IAM backend configuration, one field per
@@ -129,6 +138,8 @@ const (
 	envIAMCacheTTL         = "VGW_IAM_CACHE_TTL"
 	envIAMCachePrune       = "VGW_IAM_CACHE_PRUNE"
 	envVaultEndpointURL    = "VGW_IAM_VAULT_ENDPOINT_URL"
+	envTLSCertFile         = "GATEWAY_TLS_CERT_FILE"
+	envTLSKeyFile          = "GATEWAY_TLS_KEY_FILE"
 	defaultPort            = ":9000"
 	defaultIAMCacheTTL     = 120
 	defaultIAMCachePrune   = 3600
@@ -171,6 +182,8 @@ func FromEnv() (Config, error) {
 		ObjectStore:         os.Getenv(envObjectStore),
 		Namespace:           os.Getenv(envNamespace),
 		BucketStorageClass:  os.Getenv(envBucketStorageClass),
+		TLSCertFile:         os.Getenv(envTLSCertFile),
+		TLSKeyFile:          os.Getenv(envTLSKeyFile),
 	}
 
 	var missing []string
@@ -219,6 +232,9 @@ func FromEnv() (Config, error) {
 	}
 	if cfg.Vault, err = vaultFromEnv(); err != nil {
 		return Config{}, err
+	}
+	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
+		return Config{}, fmt.Errorf("%s and %s must be set together", envTLSCertFile, envTLSKeyFile)
 	}
 	return cfg, nil
 }

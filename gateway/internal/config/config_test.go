@@ -19,6 +19,7 @@ func clearGatewayEnv(t *testing.T) {
 		envObjectStore, envNamespace,
 		envBucketStorageClass, envBucketCapacityBytes, envBucketTimeout,
 		envIAMCacheTTL, envIAMCachePrune,
+		envTLSCertFile, envTLSKeyFile,
 	}
 	for key := range vaultEnv(&Vault{}) {
 		keys = append(keys, key)
@@ -284,6 +285,48 @@ func TestFromEnvRejectsAnInvalidIAMCacheValue(t *testing.T) {
 
 			if _, err := FromEnv(); err == nil {
 				t.Fatalf("FromEnv with %s=%q succeeded, want an error", tc.key, tc.value)
+			}
+		})
+	}
+}
+
+func TestFromEnvReadsTheTLSCertificateAndKeyPaths(t *testing.T) {
+	clearGatewayEnv(t)
+	setRequiredEnv(t)
+	t.Setenv(envTLSCertFile, "/etc/simplyblock/tls/tls.crt")
+	t.Setenv(envTLSKeyFile, "/etc/simplyblock/tls/tls.key")
+
+	got, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if got.TLSCertFile != "/etc/simplyblock/tls/tls.crt" || got.TLSKeyFile != "/etc/simplyblock/tls/tls.key" {
+		t.Errorf("TLSCertFile/TLSKeyFile = %q/%q, want the paths set", got.TLSCertFile, got.TLSKeyFile)
+	}
+}
+
+func TestFromEnvLeavesTLSOffWhenNeitherPathIsSet(t *testing.T) {
+	clearGatewayEnv(t)
+	setRequiredEnv(t)
+
+	got, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if got.TLSCertFile != "" || got.TLSKeyFile != "" {
+		t.Errorf("TLSCertFile/TLSKeyFile = %q/%q, want both empty", got.TLSCertFile, got.TLSKeyFile)
+	}
+}
+
+func TestFromEnvRejectsOnlyOneOfTheTLSPaths(t *testing.T) {
+	for _, key := range []string{envTLSCertFile, envTLSKeyFile} {
+		t.Run(key, func(t *testing.T) {
+			clearGatewayEnv(t)
+			setRequiredEnv(t)
+			t.Setenv(key, "/etc/simplyblock/tls/file")
+
+			if _, err := FromEnv(); err == nil {
+				t.Fatalf("FromEnv with only %s set succeeded, want an error", key)
 			}
 		})
 	}
