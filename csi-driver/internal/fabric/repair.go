@@ -9,6 +9,7 @@ package fabric
 import (
 	"context"
 	"fmt"
+	"net"
 	"slices"
 	"sort"
 	"strings"
@@ -81,6 +82,26 @@ const (
 	// retries instead of a teardown/reconnect loop at monitor cadence, which
 	// at a 3s tick, is what the difference amounts to.
 	defaultRepairCooldown = 5 * time.Minute
+
+	// defaultConnectGrace is how long a freshly connected controller is exempt
+	// from the not-contributing verdict.
+	//
+	// A controller that has just connected has not attached its namespace to the
+	// head yet, so for a moment it is indistinguishable from one that never
+	// will: measured at 97ms in the 2026-09-12 run, when the monitor still
+	// diagnosed after connecting and so condemned its own work.
+	//
+	// The connection monitor repairs before it connects, which rules that out
+	// within a tick. This covers what ordering cannot: a controller attached by
+	// an earlier tick, by NodeStageVolume, or by anything else on the node that
+	// is still settling when the next diagnosis runs.
+	//
+	// The value has to clear one monitor tick or the skip is a no-op, because
+	// the next diagnosis would arrive after the window closed anyway. The rest
+	// is margin against a node attaching namespaces slowly, which is normal
+	// while it restarts. The cost is bounded: a genuinely broken path is
+	// repaired 5s later, against a ctrl_loss_tmo of 60s.
+	defaultConnectGrace = 5 * time.Second
 )
 
 // autoRepairKinds are the defects healSubsystem repairs unattended.
@@ -136,6 +157,7 @@ type nvmeRepairer struct {
 	detacher nvmeof.ControllerDetacher
 
 	cooldown        time.Duration
+	connectGrace    time.Duration
 	maxScope        nvmeof.Scope
 	allowDisruptive bool
 	kinds           []nvmeof.DefectKind
@@ -171,12 +193,13 @@ func newNVMeRepairer() *nvmeRepairer {
 		// performs. Only the teardown is wanted here, since attaching still goes
 		// through this driver's own connect path, and ControllerDetacher is
 		// exactly that much of a Connector.
-		detacher: nvmeof.NewCLIConnector(subs),
-		cooldown: defaultRepairCooldown,
-		maxScope: nvmeof.ScopeSubsystem,
-		kinds:    slices.Clone(autoRepairKinds),
-		now:      time.Now,
-		last:     make(map[repairCooldownKey]time.Time),
+		detacher:     nvmeof.NewCLIConnector(subs),
+		cooldown:     defaultRepairCooldown,
+		connectGrace: defaultConnectGrace,
+		maxScope:     nvmeof.ScopeSubsystem,
+		kinds:        slices.Clone(autoRepairKinds),
+		now:          time.Now,
+		last:         make(map[repairCooldownKey]time.Time),
 	}
 }
 
@@ -273,6 +296,10 @@ func (r *nvmeRepairer) choose(defects []nvmeof.Defect) (repairAction, bool) {
 
 // barrier returns why policy forbids repairing d, or "" when it does not.
 func (r *nvmeRepairer) barrier(d nvmeof.Defect) string {
+	if left, ok := r.settling(d); ok {
+		return fmt.Sprintf("a controller it would tear down connected %s ago; %s of settle left",
+			(r.connectGrace - left).Truncate(time.Millisecond), left.Truncate(time.Millisecond))
+	}
 	if d.Scope > r.maxScope {
 		return fmt.Sprintf("a %s-scope repair is needed but repairs are capped at %s scope",
 			d.Scope, r.maxScope)
@@ -297,6 +324,37 @@ func (r *nvmeRepairer) barrier(d nvmeof.Defect) string {
 // this only acts.
 func (r *nvmeRepairer) repair(ctx context.Context, d nvmeof.Defect) error {
 	return nvmeof.Repair(ctx, r.detacher, d)
+}
+
+// settling reports whether d names a controller that connected too recently to
+// judge, and how much of the grace is left.
+//
+// The age is the kernel's own: nvme.Controller.CreatedAt is the sysfs
+// directory's mtime, which is when the controller was created and which later
+// activity does not disturb. Nothing here has to be told about a connect, so one
+// this driver did not make (by another code path, by hand, or before a node
+// plugin restart) is judged on the same evidence as one it did.
+//
+// Any one such controller defers the whole defect: a repair tears down its
+// controllers as a set, so a set containing one that is still attaching cannot
+// be acted on without destroying it. The verdict is deferred, not dropped, and
+// the next diagnosis after the grace sees the same state if it is really broken.
+func (r *nvmeRepairer) settling(d nvmeof.Defect) (time.Duration, bool) {
+	if r.connectGrace <= 0 {
+		return 0, false
+	}
+	now := r.now()
+	var longest time.Duration
+	for _, ctrl := range d.Controllers {
+		// An unreadable creation time is not evidence of youth.
+		if ctrl.CreatedAt.IsZero() {
+			continue
+		}
+		if left := r.connectGrace - now.Sub(ctrl.CreatedAt); left > longest {
+			longest = left
+		}
+	}
+	return longest, longest > 0
 }
 
 // cooling reports whether d's repair is still inside its cooldown, and how much
@@ -446,15 +504,36 @@ func RepairAttach(ctx context.Context, subsystemNQN string, nsID nvme.NamespaceI
 // The volume is selected by lvol UUID rather than by namespace id: the monitor
 // already resolved it from `/sys/block/<dev>/uuid`, and on a shared subsystem it
 // is what tells this volume from its co-tenants without deriving anything.
-func HealMonitoredVolume(ctx context.Context, nqn, lvolID string, conns []*controlplane.LvolConnectResp) {
+//
+// It returns the "ip:port" endpoints it tore down, which the caller reconnects
+// in the same tick.
+func HealMonitoredVolume(ctx context.Context, nqn, lvolID string, conns []*controlplane.LvolConnectResp) []string {
+	return defaultRepairer.healMonitoredVolume(ctx, nqn, lvolID, conns)
+}
+
+func (r *nvmeRepairer) healMonitoredVolume(
+	ctx context.Context, nqn, lvolID string, conns []*controlplane.LvolConnectResp,
+) []string {
+	var tornDown []string
 	sel := nvme.DeviceSelector{NQN: nqn, UUID: lvolID}
-	_, actions := defaultRepairer.healSubsystem(ctx, sel, targetsFromConnections(nqn, conns))
+	_, actions := r.healSubsystem(ctx, sel, targetsFromConnections(nqn, conns))
 	for _, a := range actions {
-		if a.repaired {
-			// The next monitor tick reconnects the torn-down path: reconnecting
-			// here would race the reconcile that is about to run anyway.
-			klog.Infof("nvme repair: %s repaired for lvol %s; the next reconcile will reconnect the path",
-				a.defect.Kind, lvolID)
+		if !a.repaired {
+			continue
 		}
+		for _, ctrl := range a.defect.Controllers {
+			if ip, port := ctrl.Address.TrAddr, ctrl.Address.TrSvcID; ip != "" && port != "" {
+				tornDown = append(tornDown, net.JoinHostPort(ip, port))
+			}
+		}
+		// The monitor's reconcile passes run right after this, in the same
+		// tick, and reconnect what was torn down. A teardown whose reconnect is
+		// left to a later tick is a hole in the volume's redundancy for as long
+		// as the monitor takes to come back, and on 2026-09-12 that was 68
+		// minutes, because the namespace head went away and took the per-volume
+		// monitor with it.
+		klog.Infof("nvme repair: %s repaired for lvol %s; this tick's reconcile reconnects the path",
+			a.defect.Kind, lvolID)
 	}
+	return tornDown
 }

@@ -1,5 +1,7 @@
 package nvme
 
+import "time"
+
 // Identifiers for the three sysfs object kinds. Values are the kernel's
 // own names, e.g., `SubsystemID("nvme-subsys0")` and `ControllerID("nvme0")`.
 type (
@@ -42,10 +44,15 @@ type Address struct {
 // /sys/class/nvme/nvmeN. For NVMe-oF the transport/address fields describe
 // the fabric link, and a subsystem with multiple live controllers is multipath.
 type Controller struct {
-	ID         ControllerID // `nvme0`
-	SysfsPath  string       // `/sys/class/nvme/nvme0`
-	DevicePath string       // `/dev/nvme0` (char/admin device)
-	Dev        string       // `dev`, major:minor, e.g., `238:0`
+	ID        ControllerID // `nvme0`
+	SysfsPath string       // `/sys/class/nvme/nvme0`
+	// CreatedAt is when the kernel created this controller, read from the
+	// sysfs directory's mtime, and zero when it could not be stat'd. It is the
+	// closest thing the fabric has to "connected at": there is no such
+	// attribute, and later activity does not disturb the directory's mtime.
+	CreatedAt  time.Time
+	DevicePath string // `/dev/nvme0` (char/admin device)
+	Dev        string // `dev`, major:minor, e.g., `238:0`
 
 	NQN       string  // `subsysnqn`
 	CntlID    uint16  // `cntlid`, the controller id within the subsystem
