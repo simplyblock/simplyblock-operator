@@ -57,7 +57,12 @@ import (
 // that warns about a worker whose native NVMe multipath is not enabled would
 // find nothing to warn about, and pass a worker that cannot mount a volume
 // over more than one path.
-const ReportVersion = 10
+//
+// Version 11 carries the NetworkAttachmentDefinitions the run's namespace
+// holds, and is a bump because a version-10 report decodes with none. A run
+// asked to attach its storage nodes through a definition would read that as a
+// worker in a cluster without Multus and plan it onto host networking.
+const ReportVersion = 11
 
 // Report is one worker's inventory as the probe found it.
 type Report struct {
@@ -121,6 +126,17 @@ type Report struct {
 	// comparing a worker against what it looked like an hour ago is owed the
 	// list.
 	Reclaimed []Controller `json:"reclaimed,omitempty"`
+
+	// NetworkAttachments is the Multus NetworkAttachmentDefinitions the run's
+	// namespace holds, read by this probe through the API.
+	//
+	// It is in a worker's report although the definitions are the cluster's,
+	// because what each one builds on is the worker's: a definition whose master
+	// interface this machine does not have cannot attach a pod on it, and
+	// Interfaces above is the evidence that is checked against. It is absent for
+	// a probe that was given no cluster to ask, which is not a cluster without
+	// the kind.
+	NetworkAttachments *NetworkAttachments `json:"networkAttachments,omitempty"`
 
 	// Unreadable is what the probe could not read, one sentence each. It is
 	// separate from a device's own rejections: this is the machine refusing to
@@ -387,6 +403,65 @@ type VLAN struct {
 type VXLAN struct {
 	// VNI is the VXLAN network identifier, 0 to 16777215.
 	VNI int `json:"vni"`
+}
+
+// NetworkAttachments is what the run's namespace offers.
+type NetworkAttachments struct {
+	// State is `Served`, `NotServed` for a cluster that does not register the
+	// kind, or `Unread` for a reading that failed, in the spelling
+	// inventory.NetworkAttachmentsState uses.
+	State string `json:"state"`
+
+	// Detail is why the reading failed.
+	Detail string `json:"detail,omitempty"`
+
+	// Namespace is the namespace that was listed.
+	Namespace string `json:"namespace,omitempty"`
+
+	// Definitions are the namespace's definitions, ascending by name.
+	Definitions []NetworkAttachment `json:"definitions,omitempty"`
+}
+
+// NetworkAttachment is one NetworkAttachmentDefinition and what its CNI
+// configuration says about the host.
+type NetworkAttachment struct {
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+
+	// Type is the CNI plugin that creates the interface: ipvlan, macvlan,
+	// host-device, bridge, or sriov.
+	Type string `json:"type,omitempty"`
+
+	// HostInterface is the host interface the plugin builds on, and PCIAddress
+	// the slot a host-device names instead. Both are empty for a plugin whose
+	// device comes from ResourceName.
+	HostInterface string `json:"hostInterface,omitempty"`
+	PCIAddress    string `json:"pciAddress,omitempty"`
+
+	// Mode is the ipvlan or macvlan mode, and IPAM the address plugin.
+	Mode string `json:"mode,omitempty"`
+	IPAM string `json:"ipam,omitempty"`
+
+	// ResourceName is the device plugin resource the definition asks the
+	// scheduler for.
+	ResourceName string `json:"resourceName,omitempty"`
+
+	// Problem says why nothing could be read from the configuration.
+	Problem string `json:"problem,omitempty"`
+}
+
+// NetworkAttachment returns the definition of that name, when the report
+// carries one.
+func (r Report) NetworkAttachment(name string) (NetworkAttachment, bool) {
+	if r.NetworkAttachments == nil {
+		return NetworkAttachment{}, false
+	}
+	for _, definition := range r.NetworkAttachments.Definitions {
+		if definition.Name == name {
+			return definition, true
+		}
+	}
+	return NetworkAttachment{}, false
 }
 
 // Device is one block device and whether it may be handed to a storage cluster.
