@@ -45,8 +45,8 @@ build: fmt vet ## Build the gateway binary to ./build/gateway.
 	go build -buildvcs=false -o $(BUILD_DIR)/gateway ./cmd/gateway
 
 .PHONY: docker-build
-docker-build: ## Build the gateway image.
-	$(CONTAINER_TOOL) build -t $(IMG) .
+docker-build: ## Build the gateway image (context: the repository root, for ../operator and ../atlas-lib).
+	$(CONTAINER_TOOL) build -t $(IMG) -f Dockerfile ..
 
 .PHONY: docker-push
 docker-push: ## Push the gateway image.
