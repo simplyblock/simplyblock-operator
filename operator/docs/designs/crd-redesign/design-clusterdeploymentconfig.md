@@ -958,9 +958,11 @@ management attachment, as it flows through the management interface of a group
 that names no data interfaces. Each probe lists the definitions and the report
 carries them (report version 11), because what a definition builds on is the
 worker's: a macvlan, ipvlan, or host-device on a NIC the worker lacks leaves its
-pod unable to start. A worker whose probe could not read the definitions, a name
-the namespace does not hold, and a missing host interface each refuse the worker
-with the reason. A cluster that does not serve the kind has no Multus, and the run
+pod unable to start. A name the namespace does not hold fails the run before any
+worker is probed, naming the definitions the namespace holds: an attachment the
+administrator asked for is never replaced by host networking. A worker whose
+probe could not read the definitions, and a worker missing the host interface,
+are each refused with the reason. A cluster that does not serve the kind has no Multus, and the run
 then drafts host networking and raises `NetworkAttachmentsUnavailable`. The
 document's schema keeps the two apart: a group names its interfaces or its
 attachment, and every group of a document uses the same networking. Building

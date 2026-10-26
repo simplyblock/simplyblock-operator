@@ -305,8 +305,9 @@ discovery:
   #
   # The run checks the names against the cluster. A cluster that does not serve
   # the NetworkAttachmentDefinition kind keeps host networking and says so, a
-  # name the namespace does not hold fails the run with the names it does hold,
-  # and a worker without the host interface a definition builds on is left out.
+  # name the namespace does not hold fails the run before any worker is probed,
+  # naming the definitions it does hold, and a worker without the host
+  # interface a definition builds on is left out.
   #
   #   networkAttachment:
   #     management: storage-mgmt

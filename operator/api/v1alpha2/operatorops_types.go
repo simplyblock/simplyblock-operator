@@ -273,10 +273,10 @@ type DiscoverSpec struct {
 	//
 	// The draft names the definitions in place of interfaces, and a worker
 	// whose host lacks the interface a definition builds on is left out with
-	// the reason. A definition the namespace does not hold leaves out every
-	// worker, and the reason lists the definitions it does hold. A cluster that
-	// does not serve the NetworkAttachmentDefinition kind keeps host networking,
-	// and the run says so with a Warning event.
+	// the reason. A definition the namespace does not hold fails the run before
+	// any worker is probed, naming the definitions the namespace does hold. A
+	// cluster that does not serve the NetworkAttachmentDefinition kind keeps
+	// host networking, and the run says so with a Warning event.
 	// +optional
 	NetworkAttachment *NetworkAttachmentSelection `json:"networkAttachment,omitempty"`
 

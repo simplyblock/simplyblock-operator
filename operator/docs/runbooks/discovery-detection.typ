@@ -307,8 +307,9 @@ host networking as before.
   management attachment.
 - *Cluster without Multus:* when no probe found the kind served and at least one found it not served, the draft
   uses host networking and the run raises the Warning `NetworkAttachmentsUnavailable`.
-- *Definition missing:* a name the namespace does not hold refuses every worker under the rule
-  `network attachment`, naming the definitions the namespace holds.
+- *Definition missing:* a name the namespace does not hold fails the run before any worker is probed, with a
+  Warning naming the missing definition and the definitions the namespace holds. A namespace with no
+  definitions at all fails the same way: a run that asks for an attachment never falls back to host networking.
 - *Host interface missing:* a worker without the `hostInterface` (or without a NIC at the `pciAddress`) of a
   named definition is refused under the same rule. A `bridge` definition and one naming no host interface are
   not checked against the worker.
