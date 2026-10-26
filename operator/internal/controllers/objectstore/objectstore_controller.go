@@ -1,6 +1,7 @@
 // ObjectStoreReconciler drives one S3 gateway's workload from creation to
-// Ready: the Deployment, the ClusterIP Service, and that Service's serving
-// certificate (design-objectstore.md). No finalizer: every owned object is
+// Ready: the Deployment, the ClusterIP Service, that Service's serving
+// certificate (design-objectstore.md), and the gateway's ServiceAccount,
+// Role, and RoleBinding. No finalizer: every owned object is
 // garbage-collected by Kubernetes on delete (§4.2), and nothing outside them
 // needs cleanup.
 
@@ -13,6 +14,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -90,6 +92,8 @@ type ObjectStoreReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
 
 func (r *ObjectStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("objectstore", req.NamespacedName)
@@ -229,11 +233,24 @@ func (r *ObjectStoreReconciler) reconcileReady(ctx context.Context, store *simpl
 	})
 }
 
-// applyOwnedObjects creates or updates the Deployment and the Service, and
-// the cert-manager Certificate where that provider is selected (the
-// OpenShift provider needs no object of its own: its annotation is already
-// on the Service buildService returns).
+// applyOwnedObjects creates or updates the gateway's ServiceAccount, Role,
+// and RoleBinding, the Deployment that runs as that ServiceAccount, the
+// Service, and the cert-manager Certificate where that provider is selected
+// (the OpenShift provider needs no object of its own: its annotation is
+// already on the Service buildService returns).
 func (r *ObjectStoreReconciler) applyOwnedObjects(ctx context.Context, store *simplyblockv1alpha2.ObjectStore) error {
+	for _, owned := range []struct {
+		what string
+		obj  client.Object
+	}{
+		{"the ServiceAccount", buildServiceAccount(store)},
+		{"the Role", buildRole(store)},
+		{"the RoleBinding", buildRoleBinding(store)},
+	} {
+		if err := r.apply(ctx, owned.obj, store); err != nil {
+			return fmt.Errorf("%s: %w", owned.what, err)
+		}
+	}
 	if err := r.apply(ctx, buildDeployment(store), store); err != nil {
 		return fmt.Errorf("the Deployment: %w", err)
 	}
@@ -248,7 +265,8 @@ func (r *ObjectStoreReconciler) applyOwnedObjects(ctx context.Context, store *si
 	return nil
 }
 
-// apply writes the Deployment as a server-side apply under
+// apply writes an owned object (the Deployment, and the gateway's
+// ServiceAccount, Role, and RoleBinding) as a server-side apply under
 // objectStoreFieldOwner, rather than a Get-then-blind-Update of a freshly
 // built object.
 //
@@ -270,7 +288,7 @@ func (r *ObjectStoreReconciler) applyOwnedObjects(ctx context.Context, store *si
 // field this reconciler does not set is never touched, and reapplying the
 // same sparse object is the true no-op idempotency requires.
 func (r *ObjectStoreReconciler) apply(
-	ctx context.Context, desired *appsv1.Deployment, store *simplyblockv1alpha2.ObjectStore,
+	ctx context.Context, desired client.Object, store *simplyblockv1alpha2.ObjectStore,
 ) error {
 	if err := controllerutil.SetControllerReference(store, desired, r.Scheme); err != nil {
 		return err
@@ -535,8 +553,8 @@ func unstructuredConditionTrue(obj *unstructured.Unstructured, condType string) 
 	return false
 }
 
-// SetupWithManager wires the controller. Owns the Deployment and the
-// Service it creates, so a manual edit or delete of either is noticed and
+// SetupWithManager wires the controller. Owns the Deployment, the Service,
+// and the gateway's ServiceAccount, Role, and RoleBinding it creates, so a manual edit or delete of either is noticed and
 // repaired on the ObjectStore's own reconcile. The certificate is
 // unstructured and owned the same way the Deployment and the Service are
 // (an owner reference, set in applyCertificate), but is not watched: this
@@ -548,6 +566,9 @@ func (r *ObjectStoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&simplyblockv1alpha2.ObjectStore{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
+		Owns(&corev1.ServiceAccount{}).
+		Owns(&rbacv1.Role{}).
+		Owns(&rbacv1.RoleBinding{}).
 		WithOptions(objectStoreControllerOptions()).
 		Complete(r)
 }

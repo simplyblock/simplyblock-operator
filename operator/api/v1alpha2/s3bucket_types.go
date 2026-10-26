@@ -14,6 +14,12 @@ import (
 // a mounted export and a volume nothing describes any longer.
 const S3BucketFinalizer = "storage.simplyblock.io/s3bucket"
 
+// S3BucketOwnerAnnotation records the S3 access key of the account whose
+// CreateBucket request created the S3Bucket. The gateway reads it to answer
+// a repeated CreateBucket with BucketAlreadyOwnedByYou rather than
+// BucketAlreadyExists. Absent on an S3Bucket created directly.
+const S3BucketOwnerAnnotation = "storage.simplyblock.io/s3-owner"
+
 // S3BucketPhase is the lifecycle phase of a bucket's provisioning.
 // +kubebuilder:validation:Enum=Pending;Provisioning;Ready;Degraded;Deleting
 type S3BucketPhase string
