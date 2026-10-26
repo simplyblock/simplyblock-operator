@@ -23,16 +23,16 @@ spec:
     family: Debian
   nodeSets:
   - groups:
-    - dataInterfaces:
-      - eth1
-      devices:
+    - devices:
         nvme:
         - 0000:5e:00.0
         - 0000:5f:00.0
         - 0000:af:00.0
         - 0000:b0:00.0
-      mgmtInterface: eth0
       name: group-1-nvme-4x3T
+      networkAttachment:
+        data: storage-data
+        management: storage-mgmt
       workers:
       - worker-01
       - worker-02

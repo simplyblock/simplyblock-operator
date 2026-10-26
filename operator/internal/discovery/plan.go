@@ -539,7 +539,7 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 	}
 
 	plan := Plan{Class: class}
-	attachment, found := networkingOf(run, reports)
+	attachment, found := NetworkingOf(run, reports)
 	plan.Findings = append(plan.Findings, found...)
 
 	ordered := slices.Clone(reports)
@@ -559,7 +559,7 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 		}
 
 		if attachment != nil {
-			if ok, why := admitAttachment(report, attachment); !ok {
+			if ok, why := AdmitAttachment(report, attachment); !ok {
 				plan.Refusals = append(plan.Refusals, Refusal{
 					Worker: report.Node, Rule: NetworkAttachmentRule, Reason: why,
 				})

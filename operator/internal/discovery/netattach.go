@@ -41,14 +41,14 @@ const (
 	attachmentsNotServed = "NotServed"
 )
 
-// networkingOf is the attachment the draft names for every group, or nil for
+// NetworkingOf is the attachment the draft names for every group, or nil for
 // host networking, with the finding a fallback owes the run.
 //
 // The kind is the cluster's, so the fleet's reports are read together: only a
 // fleet where no probe found the kind served and at least one found it not
 // served falls back. A probe that could not read the definitions says nothing
-// about the cluster, and its worker is refused by admitAttachment instead.
-func networkingOf(run *simplyblockv1alpha2.DiscoverSpec, reports []nodeprobe.Report) (*simplyblockv1alpha2.NetworkAttachmentSelection, []Finding) {
+// about the cluster, and its worker is refused by AdmitAttachment instead.
+func NetworkingOf(run *simplyblockv1alpha2.DiscoverSpec, reports []nodeprobe.Report) (*simplyblockv1alpha2.NetworkAttachmentSelection, []Finding) {
 	if run == nil || run.NetworkAttachment == nil {
 		return nil, nil
 	}
@@ -85,9 +85,9 @@ func attachmentNames(selection *simplyblockv1alpha2.NetworkAttachmentSelection) 
 	return names
 }
 
-// admitAttachment reports whether every definition the selection names can
+// AdmitAttachment reports whether every definition the selection names can
 // attach a pod on the worker, and why not.
-func admitAttachment(report nodeprobe.Report, selection *simplyblockv1alpha2.NetworkAttachmentSelection) (bool, string) {
+func AdmitAttachment(report nodeprobe.Report, selection *simplyblockv1alpha2.NetworkAttachmentSelection) (bool, string) {
 	attachments := report.NetworkAttachments
 	switch {
 	case attachments == nil:

@@ -176,6 +176,10 @@ type Group struct {
 	MgmtInterface  string   `json:"mgmtInterface,omitempty"`
 	DataInterfaces []string `json:"dataInterfaces,omitempty"`
 	FailureDomain  string   `json:"failureDomain,omitempty"`
+
+	// NetworkAttachment is what the group attaches its storage nodes through
+	// instead of host interfaces, nil on host networking.
+	NetworkAttachment *simplyblockv1alpha2.NetworkAttachmentSelection `json:"networkAttachment,omitempty"`
 }
 
 // Severity says whether a finding keeps a document from deploying.

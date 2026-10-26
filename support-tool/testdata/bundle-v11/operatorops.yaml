@@ -6,6 +6,10 @@ metadata:
   creationTimestamp: "2026-10-24T09:00:00Z"
 spec:
   action: Discover
+  discover:
+    networkAttachment:
+      management: storage-mgmt
+      data: storage-data
 status:
   environment: K3s
   step: {}
