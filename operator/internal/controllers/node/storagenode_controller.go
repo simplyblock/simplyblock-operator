@@ -720,8 +720,7 @@ func (r *StorageNodeReconciler) awaitSlot(
 		}
 		contenders = append(contenders, sibling.Spec.WorkerNode)
 	}
-	slices.Sort(contenders)
-	contenders = slices.Compact(contenders)
+	contenders = rankContenders(contenders, cluster, slices.Concat(siblings, []simplyblockv1alpha2.StorageNode{*node}), holders)
 
 	if rank := slices.Index(contenders, node.Spec.WorkerNode); int32(rank) >= available {
 		return stepAwaitingSlot, false, blockedf(AwaitingSlot,
