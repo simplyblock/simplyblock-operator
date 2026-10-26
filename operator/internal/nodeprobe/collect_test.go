@@ -19,6 +19,7 @@ import (
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/inventory"
+	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/pci"
 )
 
@@ -211,7 +212,11 @@ func TestFromInventoryCarriesEveryReadingAndNotMostOfThem(t *testing.T) {
 		Interfaces:      []inventory.Interface{{Name: "eth0", SpeedMbps: 25000}},
 		Devices:         []blockdev.Candidate{oneFreeDisk()},
 		NVMeControllers: []pci.Device{{Address: "0000:5e:00.0", Class: "0x010802", Driver: "nvme"}},
-		HostOS:          ubuntuHost(),
+		NVMeFormats: []inventory.NVMeControllerFormats{{
+			Address:    "0000:5e:00.0",
+			Namespaces: []nvme.NamespaceFormats{{NSID: 1, Formats: []nvme.LBAFormat{{DataSize: 4096}}}},
+		}},
+		HostOS: ubuntuHost(),
 	}
 
 	report := FromInventory("worker-3", probedAt, inv, nil)
@@ -223,6 +228,7 @@ func TestFromInventoryCarriesEveryReadingAndNotMostOfThem(t *testing.T) {
 		"interfaces":      len(report.Interfaces) != 0,
 		"devices":         len(report.Devices) != 0,
 		"nvmeControllers": len(report.NVMeControllers) != 0,
+		"lbaFormats":      len(report.NVMeControllers) != 0 && len(report.NVMeControllers[0].LBAFormats) != 0,
 		"hostOS":          report.HostOS.Distro != "",
 	} {
 		if !carried {
@@ -404,4 +410,82 @@ func TestFromInventoryReportsAHostWhoseOSWasNotRead(t *testing.T) {
 	if report.HostOS.Distro != "" {
 		t.Errorf("the report names the distro %q with nothing read", report.HostOS.Distro)
 	}
+}
+
+func TestTheReportCarriesEachControllersLBAFormats(t *testing.T) {
+	// The formats are read per controller and reported on it, by PCI address,
+	// so a reviewer reads them beside the driver that owns the controller.
+	inv := inventory.Inventory{
+		NVMeControllers: []pci.Device{
+			{Address: "0000:06:11.0", Driver: "nvme"},
+			{Address: "0000:06:1b.0", Driver: "nvme"},
+			{Address: "0000:07:00.0", Driver: "vfio-pci"},
+		},
+		NVMeFormats: []inventory.NVMeControllerFormats{
+			{Address: "0000:06:11.0", Controller: "nvme0", Namespaces: []nvme.NamespaceFormats{{
+				NSID: 1,
+				Formats: []nvme.LBAFormat{
+					{Index: 0, DataSize: 512, RelativePerformance: nvme.PerformanceGood},
+					{Index: 1, DataSize: 4096, MetadataSize: 8, RelativePerformance: nvme.PerformanceBest},
+				},
+				InUse:            1,
+				ExtendedMetadata: true,
+			}}},
+			{Address: "0000:06:1b.0", Controller: "nvme1", Namespaces: []nvme.NamespaceFormats{{
+				NSID:    nvme.NSIDAll,
+				Formats: []nvme.LBAFormat{{Index: 0, DataSize: 4096}},
+				InUse:   -1,
+			}}},
+		},
+	}
+
+	encoded, err := Encode(FromInventory(testNode, probedAt, inv, nil))
+	if err != nil {
+		t.Fatalf("encode the report: %v", err)
+	}
+	report, err := Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode the report: %v", err)
+	}
+
+	byAddress := map[string][]NamespaceFormats{}
+	for _, c := range report.NVMeControllers {
+		byAddress[c.Address] = c.LBAFormats
+	}
+
+	one := 1
+	want := []NamespaceFormats{{
+		NSID: 1,
+		Formats: []LBAFormat{
+			{Index: 0, DataSize: 512, RelativePerformance: "good"},
+			{Index: 1, DataSize: 4096, MetadataSize: 8, RelativePerformance: "best"},
+		},
+		Current:          &one,
+		ExtendedMetadata: true,
+	}}
+	if got := byAddress["0000:06:11.0"]; fmt.Sprintf("%+v", deref(got)) != fmt.Sprintf("%+v", deref(want)) {
+		t.Errorf("0000:06:11.0 formats = %+v, want %+v", deref(got), deref(want))
+	}
+
+	common := byAddress["0000:06:1b.0"]
+	if len(common) != 1 || !common[0].Common || common[0].NSID != 0 || common[0].Current != nil {
+		t.Errorf("0000:06:1b.0 formats = %+v, want the common formats with none current", deref(common))
+	}
+	if formats := byAddress["0000:07:00.0"]; len(formats) != 0 {
+		t.Errorf("the controller on vfio-pci reports formats %+v", deref(formats))
+	}
+}
+
+// deref renders Current by value, so two reports compare by what they say.
+func deref(formats []NamespaceFormats) []string {
+	out := make([]string, 0, len(formats))
+	for _, f := range formats {
+		current := "none"
+		if f.Current != nil {
+			current = fmt.Sprint(*f.Current)
+		}
+		out = append(out, fmt.Sprintf("nsid=%d common=%v current=%s ext=%v formats=%+v",
+			f.NSID, f.Common, current, f.ExtendedMetadata, f.Formats))
+	}
+	return out
 }

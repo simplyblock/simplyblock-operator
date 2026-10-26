@@ -335,6 +335,7 @@ function workerDetail(w) {
         inUseOf(c)]))
       : el("p", { class: "note" }, "None."),
     (r.reclaimed || []).length ? [el("h3", {}, "Returned to the kernel by the probe"), pre(r.reclaimed.map((c) => c.address).join("\n"))] : null)));
+  out.push(lbaFormatsCard(r.nvmeControllers || []));
   if ((r.unreadable || []).length) out.push(card("Readings the probe could not take", el("ul", {}, r.unreadable.map((u) => el("li", {}, u)))));
   return el("div", {}, out);
 }
@@ -353,6 +354,32 @@ function inUseOf(c) {
   if (!userspace) return el("span", { class: "muted", title: "not checked: its disks are block devices" }, c.driver ? "kernel driver" : "no driver");
   if (c.inUse === undefined) return badge("could not be checked", "warn");
   return c.inUse ? badge("held", "err") : badge("free", "ok");
+}
+
+// lbaFormatsCard lists the block sizes each kernel-driven controller's
+// namespaces can be formatted with, one row per format, with the format in use
+// marked. A controller on a userspace driver cannot be asked and has no rows.
+function lbaFormatsCard(controllers) {
+  const rows = [];
+  for (const c of controllers) {
+    for (const ns of c.lbaFormats || []) {
+      ns.formats.forEach((f, i) => rows.push([
+        i ? "" : el("code", {}, c.address),
+        i ? "" : (ns.common ? el("span", { class: "muted", title: "no namespace attached: the formats a new namespace could take" }, "common") : `nsid ${ns.nsid}`),
+        String(f.index),
+        bytes(f.dataSize),
+        f.metadataSize ? `${f.metadataSize} B${ns.extendedMetadata && f.index === ns.current ? ", extended" : ""}` : el("span", { class: "muted" }, "none"),
+        badge(f.relativePerformance, { best: "ok", better: "ok", good: "muted", degraded: "warn" }[f.relativePerformance] || "muted"),
+        f.index === ns.current ? badge("in use", "ok") : "",
+      ]));
+    }
+  }
+  const asked = controllers.some((c) => c.driver === "nvme");
+  return card("NVMe LBA formats", rows.length
+    ? table(["Controller", "Namespace", "Format", "Block size", "Metadata", "Performance", ""], rows)
+    : el("p", { class: "note" }, asked
+      ? "The report carries no LBA formats: the probe predates them, or the controllers did not answer (see the readings the probe could not take)."
+      : "No controller on the kernel's NVMe driver, so none could be asked."));
 }
 
 // ─── Cluster ───────────────────────────────────────────────────────────────
