@@ -296,6 +296,29 @@ discovery:
   # fails. The draft notes which disk was taken.
   forceJournalDevice: false
 
+  # Attach the proposed storage nodes through Multus NetworkAttachmentDefinitions
+  # instead of host networking. Both are names of definitions in the run's
+  # namespace. With neither set, the storage nodes stay on host networking. With
+  # management alone, it carries both management and data traffic, as one
+  # network interface does. With both set, the draft names both. The two modes
+  # do not mix: a draft attaches every storage node or none.
+  #
+  # The run checks the names against the cluster. A cluster that does not serve
+  # the NetworkAttachmentDefinition kind keeps host networking and says so, a
+  # name the namespace does not hold fails the run with the names it does hold,
+  # and a worker without the host interface a definition builds on is left out.
+  #
+  #   networkAttachment:
+  #     management: storage-mgmt
+  #     data: storage-data
+  networkAttachment:
+    # -- NetworkAttachmentDefinition, in the discovery namespace, that the storage nodes' management
+    # traffic is attached through. Empty keeps host networking. Alone, it carries data traffic as well.
+    management: ""
+    # -- NetworkAttachmentDefinition, in the discovery namespace, that the storage nodes' data traffic
+    # is attached through. Requires `management`.
+    data: ""
+
   # Which of an inspected worker's devices reach the draft. What is filtered out
   # here never appears in the document, so this is the place to keep a boot disk
   # out of a fifty-worker draft nobody reads line by line.
