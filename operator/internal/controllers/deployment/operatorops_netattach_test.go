@@ -23,8 +23,8 @@ import (
 
 var testNADKind = schema.GroupVersionKind{Group: "k8s.cni.cncf.io", Version: "v1", Kind: "NetworkAttachmentDefinition"}
 
-// aNAD is a definition in the run's namespace.
-func aNAD(name string) *unstructured.Unstructured {
+// namedNAD is a definition in the run's namespace.
+func namedNAD(name string) *unstructured.Unstructured {
 	nad := &unstructured.Unstructured{}
 	nad.SetGroupVersionKind(testNADKind)
 	nad.SetNamespace(opsNamespace)
@@ -85,7 +85,7 @@ func warnings(recorder *events.FakeRecorder) []string {
 }
 
 func TestARunNamingADefinitionTheNamespaceDoesNotHoldFailsBeforeProbing(t *testing.T) {
-	r, recorder := attachedRunner(t, true, aNAD("storage-data"), aNAD("storage-other"))
+	r, recorder := attachedRunner(t, true, namedNAD("storage-data"), namedNAD("storage-other"))
 
 	r.step()
 	_, ops := r.step()
@@ -121,7 +121,7 @@ func TestARunNamingADefinitionInANamespaceWithNoneFailsBeforeProbing(t *testing.
 }
 
 func TestARunNamingADefinitionTheNamespaceHoldsProbes(t *testing.T) {
-	r, _ := attachedRunner(t, true, aNAD("storage-mgmt"))
+	r, _ := attachedRunner(t, true, namedNAD("storage-mgmt"))
 
 	r.step()
 	_, ops := r.step()

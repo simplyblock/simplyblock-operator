@@ -125,7 +125,7 @@ func TestPlanRefusesEveryWorkerWhenTheDefinitionIsMissing(t *testing.T) {
 	if len(plan.NodeSets) != 0 {
 		t.Errorf("drafted %+v for a definition the namespace does not hold", plan.NodeSets)
 	}
-	refused := refusalsBy(plan, NetworkAttachmentRule)
+	refused := attachmentRefusals(plan)
 	if len(refused) != 3 {
 		t.Fatalf("refused %d workers by %q, want 3: %v", len(refused), NetworkAttachmentRule, plan.RefusalLines())
 	}
@@ -146,7 +146,7 @@ func TestPlanRefusesAWorkerWithoutTheHostInterface(t *testing.T) {
 	if strings.Join(group.Workers, ",") != "worker-1,worker-3" {
 		t.Errorf("the group holds %v, want the two workers with eth1", group.Workers)
 	}
-	refused := refusalsBy(plan, NetworkAttachmentRule)
+	refused := attachmentRefusals(plan)
 	if len(refused) != 1 || refused[0].Worker != "worker-2" ||
 		!strings.Contains(refused[0].Reason, "eth1") || !strings.Contains(refused[0].Reason, "storage-data") {
 		t.Errorf("the refusals are %+v, want worker-2 for its missing eth1", refused)
@@ -165,7 +165,7 @@ func TestPlanRefusesAWorkerWhoseAttachmentsWereNotRead(t *testing.T) {
 	if strings.Join(group.Workers, ",") != "worker-1,worker-2" {
 		t.Errorf("the group holds %v", group.Workers)
 	}
-	refused := refusalsBy(plan, NetworkAttachmentRule)
+	refused := attachmentRefusals(plan)
 	if len(refused) != 1 || refused[0].Worker != "worker-3" || !strings.Contains(refused[0].Reason, "forbidden by RBAC") {
 		t.Errorf("the refusals are %+v, want worker-3 with the reason the list failed", refused)
 	}
@@ -194,10 +194,11 @@ func hasFinding(plan Plan, reason string) bool {
 	return false
 }
 
-func refusalsBy(plan Plan, rule string) []Refusal {
+// attachmentRefusals is the refusals of the network attachment rule.
+func attachmentRefusals(plan Plan) []Refusal {
 	var out []Refusal
 	for _, refusal := range plan.Refusals {
-		if refusal.Rule == rule {
+		if refusal.Rule == NetworkAttachmentRule {
 			out = append(out, refusal)
 		}
 	}
@@ -208,7 +209,7 @@ func refusalsBy(plan Plan, rule string) []Refusal {
 func TestPlanSaysTheNamespaceHoldsNoDefinitions(t *testing.T) {
 	plan := Planner{}.Plan(attachedFleet(2), attachedRun("storage-mgmt", ""))
 
-	refused := refusalsBy(plan, NetworkAttachmentRule)
+	refused := attachmentRefusals(plan)
 	if len(refused) != 2 {
 		t.Fatalf("refused %d workers, want 2: %v", len(refused), plan.RefusalLines())
 	}
