@@ -233,6 +233,33 @@ func TestBuildDeploymentPassesTheBucketSettingsToTheGateway(t *testing.T) {
 	}
 }
 
+// The gateway serves the certificate mounted from the TLS Secret, for either
+// provider: cert-manager and OpenShift's service CA both write tls.crt and
+// tls.key, so the paths are the same.
+func TestBuildDeploymentPointsTheGatewayAtTheMountedCertificate(t *testing.T) {
+	for _, provider := range []string{"cert-manager", "OpenShift"} {
+		t.Run(provider, func(t *testing.T) {
+			store := testObjectStoreSpec(func(s *simplyblockv1alpha2.ObjectStore) {
+				s.Spec.TLSProvider = provider
+			})
+			container := buildDeployment(store).Spec.Template.Spec.Containers[0]
+
+			env := map[string]string{}
+			for _, e := range container.Env {
+				env[e.Name] = e.Value
+			}
+			for name, want := range map[string]string{
+				gatewayTLSCertFileEnv: tlsMountPath + "/tls.crt",
+				gatewayTLSKeyFileEnv:  tlsMountPath + "/tls.key",
+			} {
+				if got, ok := env[name]; !ok || got != want {
+					t.Errorf("%s = %q (set: %v), want %q", name, got, ok, want)
+				}
+			}
+		})
+	}
+}
+
 // The gateway's Role grants exactly what CreateBucket and DeleteBucket use,
 // on S3Buckets only, and its RoleBinding binds it to the gateway's
 // ServiceAccount and nothing else.
