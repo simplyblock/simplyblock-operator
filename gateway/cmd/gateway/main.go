@@ -31,6 +31,7 @@ import (
 	kubeconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	"github.com/simplyblock/gateway/internal/buckets"
+	"github.com/simplyblock/gateway/internal/certwatch"
 	"github.com/simplyblock/gateway/internal/config"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -51,6 +52,10 @@ const (
 	// the S3Bucket they wait on.
 	bucketPollInterval = time.Second
 )
+
+// certPollInterval is how often the serving certificate and key are re-read
+// for a rotation. A var only so a test can shorten it.
+var certPollInterval = 30 * time.Second
 
 func main() {
 	cfg, err := config.FromEnv()
@@ -88,7 +93,9 @@ func kubeClient() (client.Client, error) {
 // run builds the posix backend and the embedded gateway from cfg and runs
 // until ctx is done, which is main's own job split out so a test can drive it
 // against a temporary directory, a fake client, and a context it controls,
-// without main's os.Exit-on-error or its tie to process signals.
+// without main's os.Exit-on-error or its tie to process signals. A configured
+// serving certificate is re-read whenever its files change
+// (internal/certwatch), so a rotated certificate is served without a restart.
 func run(ctx context.Context, cfg config.Config, cli client.Client) error {
 	be, err := posix.New(cfg.RootDir, meta.XattrMeta{}, posix.PosixOpts{
 		BucketLinks: cfg.BucketLinks,
@@ -115,7 +122,11 @@ func run(ctx context.Context, cfg config.Config, cli client.Client) error {
 		PollInterval:     bucketPollInterval,
 	})
 
-	if err := embedgw.RunVersityGW(ctx, gateway, gatewayConfig(cfg)); err != nil {
+	gwConfig := gatewayConfig(cfg)
+	if cfg.TLSCertFile != "" {
+		gwConfig.SigHup = certwatch.Changes(ctx, certPollInterval, cfg.TLSCertFile, cfg.TLSKeyFile)
+	}
+	if err := embedgw.RunVersityGW(ctx, gateway, gwConfig); err != nil {
 		return fmt.Errorf("running the gateway: %w", err)
 	}
 	return nil
@@ -148,5 +159,8 @@ func gatewayConfig(cfg config.Config) *embedgw.Config {
 		VaultClientCertKey:          cfg.Vault.ClientCertKey,
 		IAMCacheTTL:                 cfg.IAMCacheTTL,
 		IAMCachePrune:               cfg.IAMCachePrune,
+
+		CertFile: cfg.TLSCertFile,
+		KeyFile:  cfg.TLSKeyFile,
 	}
 }
