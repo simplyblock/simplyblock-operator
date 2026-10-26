@@ -188,11 +188,13 @@ func (r *StorageNodeReconciler) probeChecks(
 	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
 	network *simplyblockv1alpha2.StorageNetworkSpec, attachments []Attachment,
 ) ([]netprobe.InterfaceCheck, error) {
-	var siblings simplyblockv1alpha2.StorageNodeList
-	if err := r.List(ctx, &siblings, client.InNamespace(node.Namespace),
-		client.MatchingFields{clusterRefField: node.Spec.ClusterRef}); err != nil {
-		return nil, fmt.Errorf("listing the cluster's nodes: %w", err)
+	// Every node of the namespace, not only the cluster's: peers of another
+	// member cluster answer on the same pool, and their addresses are held too.
+	siblingNodes, err := r.poolSiblings(ctx, node)
+	if err != nil {
+		return nil, err
 	}
+	siblings := simplyblockv1alpha2.StorageNodeList{Items: siblingNodes}
 
 	checks := make([]netprobe.InterfaceCheck, 0, len(attachments))
 	for _, a := range attachments {

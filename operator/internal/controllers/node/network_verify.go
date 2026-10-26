@@ -24,7 +24,8 @@ const (
 	// spdkPodAppLabel and spdkPodAppPrefix name the label that carries a storage
 	// node's RPC port on its SPDK pod: app=spdk-app-<port>. The control plane
 	// writes it, and the port is what tells the several SPDK pods of one worker
-	// apart.
+	// apart. It does not tell the workers apart: every worker's first SPDK pod
+	// carries the same port, so a lookup pairs it with the worker.
 	spdkPodAppLabel  = "app"
 	spdkPodAppPrefix = "spdk-app-"
 )
@@ -131,15 +132,23 @@ func firstOr(values []string, fallback string) string {
 	return fallback
 }
 
-// SPDKPodFor picks a storage node's SPDK pod out of the pods of its worker by
-// the node's RPC port. A worker runs several SPDK pods behind one agent, and the
-// port is the only thing that tells them apart.
-func SPDKPodFor(pods []corev1.Pod, rpcPort int32) (*corev1.Pod, bool) {
+// SPDKPodFor picks a storage node's SPDK pod by its worker and its RPC port. A
+// worker runs several SPDK pods behind one agent, and the port tells those
+// apart; every worker runs a pod on the same first port, and the worker tells
+// those apart. Matching the port alone read worker-1's pod for worker-2 and
+// worker-3 of a supercluster and judged their addresses mismatched (Talos lab,
+// 2026-10-25). An empty workerNode matches any worker, for a list a caller has
+// already narrowed to one.
+func SPDKPodFor(pods []corev1.Pod, workerNode string, rpcPort int32) (*corev1.Pod, bool) {
 	want := spdkPodAppPrefix + strconv.Itoa(int(rpcPort))
 	for i := range pods {
-		if pods[i].Labels[spdkPodAppLabel] == want {
-			return &pods[i], true
+		if pods[i].Labels[spdkPodAppLabel] != want {
+			continue
 		}
+		if workerNode != "" && pods[i].Spec.NodeName != workerNode {
+			continue
+		}
+		return &pods[i], true
 	}
 	return nil, false
 }

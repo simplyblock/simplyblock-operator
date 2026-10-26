@@ -55,12 +55,15 @@ func onANetwork(
 }
 
 // anSPDKPodHolding is the node's SPDK pod, holding what its network-status says.
+// It runs on the node's worker, which is how the reconciler tells it from the
+// pods of other workers on the same RPC port.
 func anSPDKPodHolding(phase corev1.PodPhase, networkStatus string) *corev1.Pod {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "snode-spdk-pod-8080-abc", Namespace: opsNamespace,
 			Labels: map[string]string{"app": "spdk-app-8080", "role": "simplyblock-storage-node"},
 		},
+		Spec:   corev1.PodSpec{NodeName: opsWorker},
 		Status: corev1.PodStatus{Phase: phase},
 	}
 	if networkStatus != "" {
@@ -187,5 +190,25 @@ func TestAHostInterfaceNodeHasNoNetworkStatus(t *testing.T) {
 	}
 	if got := recordedEvents(r); recordedReason(got, "Network") != 0 {
 		t.Fatalf("a host interface node recorded network events: %v", got)
+	}
+}
+
+// Another worker's SPDK pod on the same RPC port is not this node's: with only
+// that pod present the node has no pod to verify against and stays Pending,
+// rather than being judged by a neighbour's address.
+func TestAnotherWorkersPodOnTheSamePortIsNotVerifiedAsTheNodes(t *testing.T) {
+	other := anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.222"))
+	other.Name = "snode-spdk-pod-8080-other"
+	other.Spec.NodeName = "worker-2"
+	r, apiClient := onANetwork(t, viaDefinition("storage-a"), other)
+
+	settle(t, r)
+
+	got := nodeRead(t, apiClient)
+	if len(got.Status.Network) != 1 || got.Status.Network[0].Phase != simplyblockv1alpha2.NodeNetworkPhasePending {
+		t.Fatalf("status.network = %+v, want Pending: the only pod on the port belongs to another worker", got.Status.Network)
+	}
+	if count := recordedReason(recordedEvents(r), NetworkAddressMismatch); count != 0 {
+		t.Fatalf("NetworkAddressMismatch was recorded %d times against another worker's pod", count)
 	}
 }

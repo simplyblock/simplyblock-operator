@@ -62,10 +62,9 @@ func (r *StorageNodeReconciler) assignAddresses(
 		return nil
 	}
 
-	var siblings simplyblockv1alpha2.StorageNodeList
-	if err := r.List(ctx, &siblings, client.InNamespace(node.Namespace),
-		client.MatchingFields{clusterRefField: node.Spec.ClusterRef}); err != nil {
-		return fmt.Errorf("listing the cluster's nodes: %w", err)
+	siblings, err := r.poolSiblings(ctx, node)
+	if err != nil {
+		return err
 	}
 
 	next := slices.Clone(node.Status.Network)
@@ -79,7 +78,7 @@ func (r *StorageNodeReconciler) assignAddresses(
 		}
 		entry := &next[index]
 
-		held, earlier := heldOnNetwork(siblings.Items, node.Name, n.Name)
+		held, earlier := heldOnPool(siblings, node.Name, n.Name, n.AddressPool.Subnet)
 		if entry.Assigned != "" && entry.Phase == simplyblockv1alpha2.NodeNetworkPhasePending &&
 			slices.ContainsFunc(earlier, func(a string) bool { return sameHostAddress(a, entry.Assigned) }) {
 			entry.Assigned = ""
@@ -112,24 +111,76 @@ func (r *StorageNodeReconciler) assignAddresses(
 	})
 }
 
-// heldOnNetwork is the addresses the other nodes of the cluster hold on a
-// network, and the subset held by nodes whose names sort before name.
-func heldOnNetwork(siblings []simplyblockv1alpha2.StorageNode, name, network string) (held, earlier []string) {
+// poolSiblings is every other storage node that may hold an address of the
+// node's pools: all the nodes of the namespace, not only the node's cluster. The
+// member clusters of a supercluster copy one network block from the document
+// and draw from one pool, and an administrator may point two clusters at one
+// definition. Scoped to the cluster, every member started at the pool's first
+// address and the duplicate-address check caught only the ones already live on
+// the wire (Talos lab, 2026-10-25: workers 2 and 3 both assigned the address
+// worker 1 held, then both the next one).
+func (r *StorageNodeReconciler) poolSiblings(
+	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
+) ([]simplyblockv1alpha2.StorageNode, error) {
+	var siblings simplyblockv1alpha2.StorageNodeList
+	if err := r.List(ctx, &siblings, client.InNamespace(node.Namespace)); err != nil {
+		return nil, fmt.Errorf("listing the storage nodes of the namespace: %w", err)
+	}
+	return siblings.Items, nil
+}
+
+// heldOnPool is the addresses the other nodes hold on a pool, and the subset
+// held by nodes whose names sort before name. A sibling holds an address of the
+// pool when its entry carries the same network name, or when the address lies in
+// the pool's subnet under any network name: the clash is on the wire, whatever
+// the clusters call the network. An empty subnet matches by name only.
+func heldOnPool(siblings []simplyblockv1alpha2.StorageNode, name, network, subnet string) (held, earlier []string) {
+	prefix, err := netip.ParsePrefix(subnet)
+	inPool := func(entry simplyblockv1alpha2.NodeNetworkStatus) bool {
+		if entry.Network == network {
+			return true
+		}
+		if err != nil {
+			return false
+		}
+		host, ok := hostOf(entry.Assigned)
+		return ok && prefix.Contains(host)
+	}
 	for i := range siblings {
 		sibling := &siblings[i]
 		if sibling.Name == name {
 			continue
 		}
-		address := assignedAddresses(sibling.Status.Network)[network]
-		if address == "" {
-			continue
-		}
-		held = append(held, address)
-		if strings.Compare(sibling.Name, name) < 0 {
-			earlier = append(earlier, address)
+		for _, entry := range sibling.Status.Network {
+			if entry.Assigned == "" || !inPool(entry) {
+				continue
+			}
+			held = append(held, entry.Assigned)
+			if strings.Compare(sibling.Name, name) < 0 {
+				earlier = append(earlier, entry.Assigned)
+			}
 		}
 	}
 	return held, earlier
+}
+
+// heldAnywhere is every address the other nodes hold on any network. An answer
+// to the duplicate-address check from one of them is a node of ours, not a
+// foreign host, whichever cluster and network it belongs to.
+func heldAnywhere(siblings []simplyblockv1alpha2.StorageNode, name string) []string {
+	var held []string
+	for i := range siblings {
+		sibling := &siblings[i]
+		if sibling.Name == name {
+			continue
+		}
+		for _, entry := range sibling.Status.Network {
+			if entry.Assigned != "" {
+				held = append(held, entry.Assigned)
+			}
+		}
+	}
+	return held
 }
 
 // sameHostAddress reports whether two addresses are one host address, whatever
@@ -148,7 +199,7 @@ func (r *StorageNodeReconciler) turnAwayAddress(
 	cluster *simplyblockv1alpha2.StorageCluster, a Attachment, answering []string,
 ) error {
 	recordAttachFailure(cluster.Name, NetworkAddressInUse)
-	foreign, err := r.notHeldBySiblings(ctx, node, a.Network, answering)
+	foreign, err := r.notHeldBySiblings(ctx, node, answering)
 	if err != nil {
 		return err
 	}
@@ -184,7 +235,7 @@ func (r *StorageNodeReconciler) rememberAnswering(
 	remembered := map[string][]string{}
 	for _, a := range attachments {
 		answering := result.AnsweringAddresses(a.Interface)
-		foreign, err := r.notHeldBySiblings(ctx, node, a.Network, answering)
+		foreign, err := r.notHeldBySiblings(ctx, node, answering)
 		if err != nil {
 			return err
 		}
@@ -203,20 +254,20 @@ func (r *StorageNodeReconciler) rememberAnswering(
 	})
 }
 
-// notHeldBySiblings is the addresses that answered and that no other node holds.
+// notHeldBySiblings is the addresses that answered and that no other node holds,
+// on any network: the clash is on the wire, whatever network the holder is on.
 // An answer from a sibling's address is the sibling's probe, not a foreign host.
 func (r *StorageNodeReconciler) notHeldBySiblings(
-	ctx context.Context, node *simplyblockv1alpha2.StorageNode, network string, answering []string,
+	ctx context.Context, node *simplyblockv1alpha2.StorageNode, answering []string,
 ) ([]string, error) {
 	if len(answering) == 0 {
 		return nil, nil
 	}
-	var siblings simplyblockv1alpha2.StorageNodeList
-	if err := r.List(ctx, &siblings, client.InNamespace(node.Namespace),
-		client.MatchingFields{clusterRefField: node.Spec.ClusterRef}); err != nil {
-		return nil, fmt.Errorf("listing the cluster's nodes: %w", err)
+	siblings, err := r.poolSiblings(ctx, node)
+	if err != nil {
+		return nil, err
 	}
-	held, _ := heldOnNetwork(siblings.Items, node.Name, network)
+	held := heldAnywhere(siblings, node.Name)
 	foreign := make([]string, 0, len(answering))
 	for _, address := range answering {
 		if !slices.ContainsFunc(held, func(h string) bool { return sameHostAddress(h, address) }) {
@@ -237,7 +288,7 @@ func candidatesAfter(
 	if pool == nil {
 		return nil, nil
 	}
-	held, _ := heldOnNetwork(siblings, node.Name, a.Network)
+	held, _ := heldOnPool(siblings, node.Name, a.Network, pool.Subnet)
 	var rejected []string
 	for _, entry := range node.Status.Network {
 		if entry.Network == a.Network {
