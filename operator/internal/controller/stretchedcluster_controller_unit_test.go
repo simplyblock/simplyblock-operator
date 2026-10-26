@@ -514,3 +514,44 @@ func TestDeletingTheRequestReleasesBothSites(t *testing.T) {
 		t.Errorf("the request kept its finalizer: %v", gone.Finalizers)
 	}
 }
+
+// Regression: 2026-10-26-refused-swap-cannot-be-undone: a site that refused the
+// work the hub re-delivered lost its StorageCluster from the request's status,
+// so the role-swap guard, which reads both sites' StorageClusters, refused the
+// swap back too (live, 12-leader-swap.sh). A refused work still projects what
+// the site runs.
+func TestARefusedWorkStillProjectsTheSitesStorageCluster(t *testing.T) {
+	sc := newStretched(func(s *simplyblockv1alpha2.StretchedCluster) { s.Spec.Approved = true })
+	r, cl, _ := newStretchedReconciler(t, sc)
+	got := reconcileStretched(t, r, cl, 2)
+	for _, site := range got.Spec.Sites {
+		project(t, cl, got, site.Cluster, site.Site, "draft", stretchedDraft(got, true))
+	}
+	got = reconcileStretched(t, r, cl, 1)
+	for _, site := range got.Spec.Sites {
+		project(t, cl, got, site.Cluster, site.Site, "cluster", projectedCluster(simplyblockv1alpha2.StorageClusterPhaseOnline, ""))
+	}
+	got = reconcileStretched(t, r, cl, 1)
+
+	w := siteWork(t, cl, got, strFollowerMC, strFollowerSit)
+	w.Status.ResourceStatus.Manifests = []workv1.ManifestCondition{{
+		ResourceMeta: workv1.ManifestResourceMeta{Kind: "ClusterDeploymentConfig", Name: stretchedDraftName(got)},
+		Conditions: []metav1.Condition{{Type: workv1.ManifestApplied, Status: metav1.ConditionFalse,
+			Reason: "AppliedManifestFailed", Message: "an approved deployment config is immutable"}},
+	}}
+	if err := cl.Status().Update(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	got = reconcileStretched(t, r, cl, 1)
+	for _, s := range got.Status.Sites {
+		if s.Cluster != strFollowerMC {
+			continue
+		}
+		if s.StorageCluster == nil || s.StorageCluster.Phase != string(simplyblockv1alpha2.StorageClusterPhaseOnline) {
+			t.Errorf("status.sites[%s].storageCluster = %+v; want the site's Online StorageCluster still projected", s.Cluster, s.StorageCluster)
+		}
+		if s.Phase != simplyblockv1alpha2.StorageSiteDeploymentPhaseFailed {
+			t.Errorf("status.sites[%s].phase = %q; want Failed with the refusal", s.Cluster, s.Phase)
+		}
+	}
+}

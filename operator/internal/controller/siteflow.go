@@ -199,7 +199,7 @@ func (f siteFlow) read(ctx context.Context, c client.Client, work *workv1.Manife
 	case !draftHasNodes(reading.Draft):
 		return reading.at(simplyblockv1alpha2.StorageSiteDeploymentPhaseDiscovering,
 			"the site's draft names no node yet: discovery is running"), nil
-	case refusal != "":
+	case refusal != "" && !cdc.Spec.Approved:
 		// The draft exists, so the refusal is of what the hub applied onto it.
 		return reading.at(simplyblockv1alpha2.StorageSiteDeploymentPhaseFailed, refusal), nil
 	case cdc.Status.Phase == simplyblockv1alpha2.ClusterDeploymentConfigPhaseFailed:
@@ -242,6 +242,13 @@ func (f siteFlow) read(ctx context.Context, c client.Client, work *workv1.Manife
 		sc.Pool = pool.DefaultPoolName(clusterName)
 	}
 	reading.StorageCluster = sc
+
+	// A site that refused what the hub re-applied onto its approved draft still
+	// runs the cluster it has, and the request keeps projecting it: the role-swap
+	// guard reads it, and a swap that failed has to be possible to swap back.
+	if refusal != "" {
+		return reading.at(simplyblockv1alpha2.StorageSiteDeploymentPhaseFailed, refusal), nil
+	}
 
 	switch {
 	case sc.Phase == string(simplyblockv1alpha2.StorageClusterPhaseOnline) && sc.UUID != "":

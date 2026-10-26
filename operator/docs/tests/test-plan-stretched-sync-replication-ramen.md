@@ -108,13 +108,16 @@ File: `operator/internal/controllers/vrgfollow/vrgfollow_test.go`, `operator/cmd
 
 File: `operator/internal/webhook/stretchedcluster_validator_test.go`, `operator/internal/controller/stretchedcluster_controller_unit_test.go`
 
-| #     | Scenario                                                                                                                            | Type     | Test                                                    |
-|-------|-------------------------------------------------------------------------------------------------------------------------------------|----------|---------------------------------------------------------|
-| U-134 | A swap away from a lost leader whose fence is `done`, to a survivor Online or Degraded, is admitted                                 | Positive | `TestARoleSwapAwayFromAFencedLostLeaderIsAdmitted`      |
-| U-135 | A swap away from a lost leader whose record is `draining`, `down`, or `fencing` is refused with `RoleSwapNotReady` naming the fence | Negative | `TestARoleSwapAwayFromALostLeaderNotYetFencedIsRefused` |
-| U-136 | A swap that makes the recorded lost site the leader is refused                                                                      | Negative | `TestARoleSwapOntoTheLostSiteIsRefused`                 |
-| U-137 | A swap to a survivor whose StorageCluster is still being created is refused                                                         | Negative | `TestARoleSwapToASurvivorStillCreatingIsRefused`        |
-| U-138 | The hub projects the lost site a site's StorageCluster reports into `status.lostSite`, and clears it when the site returns          | Positive | `TestTheLostSiteIsProjectedOnTheRequest`                |
+| #     | Scenario                                                                                                                                                                                                           | Type       | Test                                                                                                                                                              |
+|-------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-134 | A swap away from a lost leader whose fence is `done`, to a survivor Online or Degraded, is admitted                                                                                                                | Positive   | `TestARoleSwapAwayFromAFencedLostLeaderIsAdmitted`                                                                                                                |
+| U-135 | A swap away from a lost leader whose record is `draining`, `down`, or `fencing` is refused with `RoleSwapNotReady` naming the fence                                                                                | Negative   | `TestARoleSwapAwayFromALostLeaderNotYetFencedIsRefused`                                                                                                           |
+| U-136 | A swap that makes the recorded lost site the leader is refused                                                                                                                                                     | Negative   | `TestARoleSwapOntoTheLostSiteIsRefused`                                                                                                                           |
+| U-137 | A swap to a survivor whose StorageCluster is still being created is refused                                                                                                                                        | Negative   | `TestARoleSwapToASurvivorStillCreatingIsRefused`                                                                                                                  |
+| U-138 | The hub projects the lost site a site's StorageCluster reports into `status.lostSite`, and clears it when the site returns                                                                                         | Positive   | `TestTheLostSiteIsProjectedOnTheRequest`                                                                                                                          |
+| U-146 | An approved document's stretched role may change; changing it with anything else is refused. Regression: 2026-10-26-role-swap-never-delivered, the freeze refused the hub's re-delivery and no swap reached a site | Regression | `TestChangingTheStretchedRoleOfAnApprovedDocumentIsAdmitted`, `TestChangingTheRoleWithAnythingElseIsRefused`, `TestTheStretchedRoleOfAnApprovedDocumentCanChange` |
+| U-147 | An expanded document's role is carried onto its StorageCluster, and nothing else of it. Regression: 2026-10-26-role-swap-never-delivered                                                                           | Regression | `TestAnExpandedDocumentsRoleReachesItsCluster`, `TestOnlyTheRoleOfAnExpandedDocumentIsCarried`                                                                    |
+| U-148 | A site that refused a re-delivered work keeps its StorageCluster projected, so the failed swap can be swapped back. Regression: 2026-10-26-refused-swap-cannot-be-undone                                           | Regression | `TestARefusedWorkStillProjectsTheSitesStorageCluster`                                                                                                             |
 
 ### The rolling restart across sites (§11.3)
 
@@ -129,6 +132,7 @@ File: `operator/internal/controllers/cluster/rollingrestart_stretched_test.go`, 
 | U-143 | `RefreshNode` answers `NOT_FOUND` for a node this site does not run, and refuses a request for another backend cluster                                                                                                                                                                                    | Negative   | `TestANodeNotRunOnThisSiteIsNotFound`, `TestARefreshForAnotherClusterIsRefused`                                                       |
 | U-144 | `Describe` reports the site, its role, its cluster, and its own nodes                                                                                                                                                                                                                                     | Positive   | `TestDescribeReportsTheSite`                                                                                                          |
 | U-145 | The site link carries `RefreshNode` to the other site's operator and maps its answer; a link that never started is an error                                                                                                                                                                               | Positive   | `TestARefreshIsAskedOfThePeerSitesOperator`, `TestARefreshBeforeLinkingIsAnError`                                                     |
+| U-149 | The rolling restart's pod refresh deletes only a pod older than the operation and counts a newer one as the refresh; the await never takes the old Ready pod. Regression: 2026-10-26-refresh-deletes-the-replacement, the step deleted every replacement the DaemonSet made until its deadline            | Regression | `TestAPodOlderThanTheWalkIsDeleted`, `TestAReplacementPodIsTheRefreshAndIsNotDeleted`, `TestTheOldPodIsNotTakenForItsReplacement`     |
 
 ### Birth site on `CreateVolume` (§9.5)
 
@@ -343,13 +347,13 @@ The lab of design Appendix D: a hub cluster running OCM, `ramen-hub`, the fleet 
 
 ### Unplanned failover and site return (§8.3, §10)
 
-| #    | Scenario                                                                                                                                                                            | Type     | Test                                       |
-|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------|
-| E-08 | Power off site `a` (the leader): the monitor records `a` down; failover to `b`: `NetworkFence` fences `a`, stages promote forced, hash intact to the last acknowledged write        | Positive | `regression_test/25/10-failover.sh`        |
-| E-09 | Power `a` back on: the site returns by activation, `UnfenceClusterNetwork` succeeds once the record is gone, the DRPC reaches `Unfenced`, relocate back succeeds                    | Positive | `regression_test/25/10-failover.sh`        |
-| E-10 | Failover attempted while `a` is reachable (its nodes healthy): the fence's proof refuses, the DRPC holds, nothing is promoted                                                       | Negative | —                                          |
-| E-11 | Make `b` the leader (planned swap), power `b` off: a swap before its fence is done is refused; once fenced, `a` takes the lead and admits cluster-wide ops; `b` returns as follower | Positive | `regression_test/25/12-leader-swap.sh`     |
-| E-22 | One rolling restart with `refreshSNodeAPI` on the leader replaces every storage-node pod of both sites and leaves every node online                                                 | Positive | `regression_test/25/11-rolling-restart.sh` |
+| #    | Scenario                                                                                                                                                                            | Type     | Test                                                             |
+|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------------------------------------------------------------------|
+| E-08 | Power off site `a` (the leader): the monitor records `a` down; failover to `b`: `NetworkFence` fences `a`, stages promote forced, hash intact to the last acknowledged write        | Positive | `regression_test/25/10-failover.sh`                              |
+| E-09 | Power `a` back on: the site returns by activation, `UnfenceClusterNetwork` succeeds once the record is gone, the DRPC reaches `Unfenced`, relocate back succeeds                    | Positive | `regression_test/25/10-failover.sh`                              |
+| E-10 | Failover attempted while `a` is reachable (its nodes healthy): the fence's proof refuses, the DRPC holds, nothing is promoted                                                       | Negative | —                                                                |
+| E-11 | Make `b` the leader (planned swap), power `b` off: a swap before its fence is done is refused; once fenced, `a` takes the lead and admits cluster-wide ops; `b` returns as follower | Positive | `regression_test/25/12-leader-swap.sh`                           |
+| E-22 | One rolling restart with `refreshSNodeAPI` on the leader replaces every storage-node pod of both sites and leaves every node online                                                 | Positive | `regression_test/25/11-rolling-restart.sh` (run live 2026-10-26) |
 
 ### Birth site (§9.5)
 
@@ -403,12 +407,12 @@ The lab of design Appendix D: a hub cluster running OCM, `ramen-hub`, the fleet 
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 141       | 125     | 16          |
+| Unit        | 145       | 129     | 16          |
 | Integration | 19        | 0       | 19          |
 | E2E         | 22        | 9       | 13          |
 | Manual      | 3         | 0       | 3           |
 
-Unit counts exclude the four rows superseded by the Ramen-driven move (U-27, U-29, U-30, U-113). An E2E row counts as covered when a lab script asserts it. Of the nine, E-04, E-05, E-19, E-20, and E-21 have run. `10-failover.sh` (E-08, E-09), `11-rolling-restart.sh` (E-22), and `12-leader-swap.sh` (E-11) have not run yet.
+Unit counts exclude the four rows superseded by the Ramen-driven move (U-27, U-29, U-30, U-113). An E2E row counts as covered when a lab script asserts it. Of the nine, E-04, E-05, E-19, E-20, E-21, and E-22 have run. `10-failover.sh` (E-08, E-09) and `12-leader-swap.sh` (E-11) have not run yet.
 
 ---
 

@@ -1074,8 +1074,6 @@ spec:
             - nodeSets
             type: object
             x-kubernetes-validations:
-            - message: an approved deployment config is immutable
-              rule: '!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf'
             - message: approval cannot be withdrawn
               rule: '!has(oldSelf.approved) || !oldSelf.approved || self.approved'
             - message: 'every group must name the same device class: all nvme or all

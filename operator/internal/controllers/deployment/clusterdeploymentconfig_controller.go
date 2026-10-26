@@ -92,7 +92,7 @@ type ClusterDeploymentConfigReconciler struct {
 // and no vanilla one. Without it the activate this controller creates is
 // refused outright.
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=clusterdeploymentconfigs/finalizers,verbs=update
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/status,verbs=get;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusterops,verbs=get;list;watch;create
@@ -132,6 +132,9 @@ func (r *ClusterDeploymentConfigReconciler) Reconcile(
 	// deployment action, so re-running it is writing another document rather than
 	// editing this one.
 	if terminalConfig(config.Status.Phase) {
+		if config.Status.Phase == simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanded {
+			return ctrl.Result{}, r.carryStretchedRole(ctx, &config)
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -543,6 +546,36 @@ func (r *ClusterDeploymentConfigReconciler) emitFindings(
 		seen[found.reason] = struct{}{}
 		r.emit(config, corev1.EventTypeWarning, found.reason, found.message)
 	}
+}
+
+// carryStretchedRole sets the role of an expanded stretched document on the
+// cluster it produced. The expansion runs once, and the role is the one field of
+// an approved document that still changes: the hub swaps a stretched cluster's
+// roles by re-delivering each site's document with its new role, and this is
+// where the site takes it up. Nothing else of the document is carried.
+func (r *ClusterDeploymentConfigReconciler) carryStretchedRole(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) error {
+	if config.Spec.Cluster == nil || config.Spec.Cluster.Stretched == nil || config.Status.ClusterRef == "" {
+		return nil
+	}
+	var cluster simplyblockv1alpha2.StorageCluster
+	if err := r.Get(ctx, client.ObjectKey{Namespace: config.Namespace, Name: config.Status.ClusterRef}, &cluster); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	role := config.Spec.Cluster.Stretched.Role
+	if cluster.Spec.Stretched == nil || cluster.Spec.Stretched.Role == role {
+		return nil
+	}
+	patch := client.MergeFrom(cluster.DeepCopy())
+	was := cluster.Spec.Stretched.Role
+	cluster.Spec.Stretched.Role = role
+	if err := r.Patch(ctx, &cluster, patch); err != nil {
+		return fmt.Errorf("carry the stretched role %s onto StorageCluster %s: %w", role, cluster.Name, err)
+	}
+	r.emit(config, corev1.EventTypeNormal, "StretchedRoleCarried",
+		fmt.Sprintf("StorageCluster %s now acts as %s, where it acted as %s", cluster.Name, role, was))
+	return nil
 }
 
 // terminalConfig reports a phase the document can never leave.
