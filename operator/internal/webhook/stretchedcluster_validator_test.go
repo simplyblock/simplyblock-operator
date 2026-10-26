@@ -5,6 +5,7 @@ package webhook
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -12,12 +13,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 func stretchedRequest(leaderPhase, followerPhase simplyblockv1alpha2.StorageClusterPhase) *simplyblockv1alpha2.StretchedCluster {
 	sc := &simplyblockv1alpha2.StretchedCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: "simplyblock"},
+		Status:     simplyblockv1alpha2.StretchedClusterStatus{ClusterUUID: "cluster-1"},
 		Spec: simplyblockv1alpha2.StretchedClusterSpec{
 			ClusterName: "production",
 			Sites: []simplyblockv1alpha2.StretchedSite{
@@ -56,7 +61,7 @@ func updateOf(t *testing.T, oldObj, newObj any) admission.Request {
 // mid-creation or mid-recovery.
 func TestARoleSwapIsRefusedUntilBothSitesAreOnline(t *testing.T) {
 	online := simplyblockv1alpha2.StorageClusterPhaseOnline
-	v := &StretchedClusterValidator{}
+	v := validatorOver(allOnline())
 	for name, old := range map[string]*simplyblockv1alpha2.StretchedCluster{
 		"leader still creating":  stretchedRequest(simplyblockv1alpha2.StorageClusterPhaseCreating, online),
 		"follower not projected": stretchedRequest(online, ""),
@@ -78,7 +83,7 @@ func TestARoleSwapIsRefusedUntilBothSitesAreOnline(t *testing.T) {
 func TestARoleSwapOnAReadyPairIsAdmitted(t *testing.T) {
 	online := simplyblockv1alpha2.StorageClusterPhaseOnline
 	old := stretchedRequest(online, online)
-	if resp := (&StretchedClusterValidator{}).Handle(context.Background(), updateOf(t, old, swapped(old))); !resp.Allowed {
+	if resp := validatorOver(allOnline()).Handle(context.Background(), updateOf(t, old, swapped(old))); !resp.Allowed {
 		t.Fatalf("a swap on two Online sites was refused: %s", resp.Result.Message)
 	}
 }
@@ -88,7 +93,7 @@ func TestAnUpdateThatSwapsNothingIsNotThisGuardsBusiness(t *testing.T) {
 	old := stretchedRequest(simplyblockv1alpha2.StorageClusterPhaseCreating, "")
 	changed := old.DeepCopy()
 	changed.Spec.Approved = true
-	if resp := (&StretchedClusterValidator{}).Handle(context.Background(), updateOf(t, old, changed)); !resp.Allowed {
+	if resp := validatorOver(allOnline()).Handle(context.Background(), updateOf(t, old, changed)); !resp.Allowed {
 		t.Fatalf("an approval was refused by the role-swap guard: %s", resp.Result.Message)
 	}
 }
@@ -103,12 +108,24 @@ func lostLeader(state string) *simplyblockv1alpha2.StretchedCluster {
 	return sc
 }
 
+// lostSiteBackend is a control plane recording site lost at state, its nodes offline.
+func lostSiteBackend(site, state string) *fakeSwapBackend {
+	b := allOnline()
+	b.cluster.LostSite, b.cluster.LostSiteState = site, state
+	for i := range b.nodes {
+		if b.nodes[i].Site == site {
+			b.nodes[i].Status = "offline"
+		}
+	}
+	return b
+}
+
 // §11.1: when the leader's site is lost for long, the hub promotes the follower.
 // A swap away from a lost leader whose fence is done is the one swap admitted
 // with a site down.
 func TestARoleSwapAwayFromAFencedLostLeaderIsAdmitted(t *testing.T) {
 	old := lostLeader("done")
-	if resp := (&StretchedClusterValidator{}).Handle(context.Background(), updateOf(t, old, swapped(old))); !resp.Allowed {
+	if resp := validatorOver(lostSiteBackend("a", "done")).Handle(context.Background(), updateOf(t, old, swapped(old))); !resp.Allowed {
 		t.Fatalf("a swap away from a fenced lost leader was refused: %s", resp.Result.Message)
 	}
 }
@@ -119,7 +136,7 @@ func TestARoleSwapAwayFromALostLeaderNotYetFencedIsRefused(t *testing.T) {
 	for _, state := range []string{"draining", "down", "fencing"} {
 		t.Run(state, func(t *testing.T) {
 			old := lostLeader(state)
-			resp := (&StretchedClusterValidator{}).Handle(context.Background(), updateOf(t, old, swapped(old)))
+			resp := validatorOver(lostSiteBackend("a", state)).Handle(context.Background(), updateOf(t, old, swapped(old)))
 			if resp.Allowed {
 				t.Fatal("a swap was admitted before the lost leader's fence was done")
 			}
@@ -136,7 +153,7 @@ func TestARoleSwapOntoTheLostSiteIsRefused(t *testing.T) {
 	old := stretchedRequest(simplyblockv1alpha2.StorageClusterPhaseDegraded, "")
 	old.Status.LostSite = "b"
 	old.Status.Sites[0].SiteRecord = "done"
-	if resp := (&StretchedClusterValidator{}).Handle(context.Background(), updateOf(t, old, swapped(old))); resp.Allowed {
+	if resp := validatorOver(lostSiteBackend("b", "done")).Handle(context.Background(), updateOf(t, old, swapped(old))); resp.Allowed {
 		t.Fatal("a swap that makes the lost site leader was admitted")
 	}
 }
@@ -145,7 +162,81 @@ func TestARoleSwapOntoTheLostSiteIsRefused(t *testing.T) {
 func TestARoleSwapToASurvivorStillCreatingIsRefused(t *testing.T) {
 	old := lostLeader("done")
 	old.Status.Sites[1].StorageCluster.Phase = string(simplyblockv1alpha2.StorageClusterPhaseCreating)
-	if resp := (&StretchedClusterValidator{}).Handle(context.Background(), updateOf(t, old, swapped(old))); resp.Allowed {
+	if resp := validatorOver(lostSiteBackend("a", "done")).Handle(context.Background(), updateOf(t, old, swapped(old))); resp.Allowed {
 		t.Fatal("a swap to a survivor still being created was admitted")
+	}
+}
+
+// fakeSwapBackend is the control plane as the guard reads it.
+type fakeSwapBackend struct {
+	cluster webapi.ClusterResponse
+	nodes   []utils.NodeStatusResponse
+	err     error
+}
+
+func (f *fakeSwapBackend) Cluster(context.Context, string) (webapi.ClusterResponse, error) {
+	return f.cluster, f.err
+}
+
+func (f *fakeSwapBackend) StorageNodes(context.Context, string) ([]utils.NodeStatusResponse, error) {
+	return f.nodes, f.err
+}
+
+// allOnline is a control plane with no site recorded lost and every node of
+// both sites online.
+func allOnline() *fakeSwapBackend {
+	return &fakeSwapBackend{
+		cluster: webapi.ClusterResponse{UUID: "cluster-1", SyncReplication: true},
+		nodes: []utils.NodeStatusResponse{
+			{UUID: "a1", Site: "a", Status: "online"}, {UUID: "a2", Site: "a", Status: "online"},
+			{UUID: "b1", Site: "b", Status: "online"}, {UUID: "b2", Site: "b", Status: "online"},
+		},
+	}
+}
+
+func validatorOver(b *fakeSwapBackend) *StretchedClusterValidator {
+	return &StretchedClusterValidator{Backend: b}
+}
+
+// Regression: 2026-10-26-swap-on-stale-projection: the leader site's nodes went
+// offline and the hub's projections still showed both sites Online, so the
+// guard admitted a swap before the control plane had fenced the leader, the
+// two-leader case it exists to prevent (live, 12-leader-swap.sh). The guard
+// reads the control plane: with a node of either site not online and no site
+// recorded lost, a swap is refused.
+func TestASwapWhileANodeIsDownAndNoSiteIsRecordedLostIsRefused(t *testing.T) {
+	online := simplyblockv1alpha2.StorageClusterPhaseOnline
+	old := stretchedRequest(online, online)
+	backend := allOnline()
+	backend.nodes[0].Status = "offline"
+	resp := validatorOver(backend).Handle(context.Background(), updateOf(t, old, swapped(old)))
+	if resp.Allowed {
+		t.Fatal("a swap was admitted with a node offline and no site recorded lost")
+	}
+	if !strings.Contains(resp.Result.Message, "a1") {
+		t.Errorf("the refusal does not name the node: %s", resp.Result.Message)
+	}
+}
+
+// The control plane recording the leader lost but not fenced refuses the swap,
+// whatever the request's projections still say.
+func TestASwapIsRefusedOnTheControlPlanesRecordNotTheProjections(t *testing.T) {
+	online := simplyblockv1alpha2.StorageClusterPhaseOnline
+	old := stretchedRequest(online, online) // stale: no lost site projected
+	resp := validatorOver(lostSiteBackend("a", "down")).Handle(context.Background(), updateOf(t, old, swapped(old)))
+	if resp.Allowed || !strings.Contains(resp.Result.Message, "fence") {
+		t.Fatalf("allowed=%v %s; want refused until the fence is done", resp.Allowed, resp.Result.Message)
+	}
+}
+
+// A control plane the guard cannot read refuses the swap rather than guessing.
+func TestASwapIsRefusedWhenTheControlPlaneCannotBeRead(t *testing.T) {
+	online := simplyblockv1alpha2.StorageClusterPhaseOnline
+	old := stretchedRequest(online, online)
+	old.Status.ClusterUUID = "cluster-1"
+	backend := allOnline()
+	backend.err = errors.New("connection refused")
+	if resp := validatorOver(backend).Handle(context.Background(), updateOf(t, old, swapped(old))); resp.Allowed {
+		t.Fatal("a swap was admitted with the control plane unreadable")
 	}
 }

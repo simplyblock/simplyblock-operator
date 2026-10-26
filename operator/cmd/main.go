@@ -1273,7 +1273,11 @@ func main() {
 		setupLog.Info("registered storagenodeops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-stretchedcluster",
-			&webhook.Admission{Handler: &internalwebhook.StretchedClusterValidator{}})
+			// The role-swap guard reads the control plane the hub runs, which is
+			// the current record of a lost site and its fence.
+			&webhook.Admission{Handler: &internalwebhook.StretchedClusterValidator{
+				Backend: clustercontroller.NewControlPlane(controlPlaneEndpoint, controlPlaneCredential),
+			}})
 		setupLog.Info("registered stretchedcluster validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagedeviceops",

@@ -14,11 +14,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-stretchedcluster,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=stretchedclusters,verbs=update,versions=v1alpha2,name=vstretchedcluster.simplyblock.io,admissionReviewVersions=v1
@@ -27,9 +30,19 @@ import (
 //
 // It holds no client: whether both sites are Online is what the request's own
 // status projects, read from the object being updated.
-type StretchedClusterValidator struct{}
+type StretchedClusterValidator struct {
+	// Backend is the control plane, read for the lost site, its fence, and the
+	// nodes' status.
+	Backend SwapBackend
+}
 
-func (v *StretchedClusterValidator) Handle(_ context.Context, req admission.Request) admission.Response {
+// SwapBackend is the control plane as the guard reads it.
+type SwapBackend interface {
+	Cluster(ctx context.Context, clusterID string) (webapi.ClusterResponse, error)
+	StorageNodes(ctx context.Context, clusterID string) ([]utils.NodeStatusResponse, error)
+}
+
+func (v *StretchedClusterValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
 	if req.Operation != admissionv1.Update {
 		return admission.Allowed("")
 	}
@@ -43,8 +56,17 @@ func (v *StretchedClusterValidator) Handle(_ context.Context, req admission.Requ
 	if !rolesSwapped(&oldObj, &newObj) {
 		return admission.Allowed("")
 	}
-	if lost := oldObj.Status.LostSite; lost != "" {
-		return swapWithALostSite(&oldObj, lost)
+	// The control plane decides, not the request's projections: those are read
+	// through the sites' views on their own schedule and lag a site going down by
+	// minutes, which is the window a swap must not land in before the fence.
+	if uuid := oldObj.Status.ClusterUUID; uuid != "" {
+		lost, record, refusal := v.backendRefusal(ctx, &oldObj, uuid)
+		if refusal != nil {
+			return *refusal
+		}
+		if lost != "" {
+			return swapWithALostSite(&oldObj, lost, record)
+		}
 	}
 	for _, site := range oldObj.Spec.Sites {
 		phase := projectedClusterPhase(&oldObj, site.Cluster)
@@ -59,13 +81,55 @@ func (v *StretchedClusterValidator) Handle(_ context.Context, req admission.Requ
 	return admission.Allowed("")
 }
 
+// backendRefusal reads the control plane's lost site and nodes, and refuses a
+// swap while any node is not online with no site recorded lost: that is a site
+// going down whose fence has not started. A control plane that cannot be read
+// refuses rather than guesses. It returns the site the control plane records as
+// lost and how far its fence got, for the caller to decide on.
+func (v *StretchedClusterValidator) backendRefusal(
+	ctx context.Context, sc *simplyblockv1alpha2.StretchedCluster, uuid string,
+) (lost, record string, refusal *admission.Response) {
+	deny := func(format string, args ...any) (string, string, *admission.Response) {
+		r := admission.Denied("RoleSwapNotReady: " + fmt.Sprintf(format, args...))
+		return "", "", &r
+	}
+	if v.Backend == nil {
+		return deny("the roles of stretched cluster %s cannot be checked against the control plane, which this "+
+			"operator does not reach", sc.Name)
+	}
+	cluster, err := v.Backend.Cluster(ctx, uuid)
+	if err != nil {
+		return deny("the control plane of stretched cluster %s cannot be read (%v); a swap is admitted only on "+
+			"its current record of the sites", sc.Name, err)
+	}
+	if cluster.LostSite != "" {
+		return cluster.LostSite, cluster.LostSiteState, nil
+	}
+	nodes, err := v.Backend.StorageNodes(ctx, uuid)
+	if err != nil {
+		return deny("the nodes of stretched cluster %s cannot be read from the control plane (%v)", sc.Name, err)
+	}
+	var down []string
+	for _, n := range nodes {
+		if n.Status != utils.NodeStatusOnline && n.Status != utils.NodeStatusRemoved {
+			down = append(down, fmt.Sprintf("%s (site %s, %s)", n.UUID, n.Site, n.Status))
+		}
+	}
+	if len(down) > 0 {
+		return deny("node(s) %s of stretched cluster %s are not online, and the control plane records no site "+
+			"as lost yet; a planned swap needs every node online, and a lost leader is handed over once the "+
+			"control plane has fenced its site", strings.Join(down, ", "), sc.Name)
+	}
+	return "", "", nil
+}
+
 // fenceDone is the control plane's record of a lost site whose fence finished.
 const fenceDone = "done"
 
 // swapWithALostSite admits a swap away from a lost leader whose fence is done,
 // to a survivor whose StorageCluster works, and nothing else while a site is
 // recorded lost.
-func swapWithALostSite(sc *simplyblockv1alpha2.StretchedCluster, lost string) admission.Response {
+func swapWithALostSite(sc *simplyblockv1alpha2.StretchedCluster, lost, record string) admission.Response {
 	var leader, survivor *simplyblockv1alpha2.StretchedSite
 	for i := range sc.Spec.Sites {
 		switch {
@@ -82,7 +146,6 @@ func swapWithALostSite(sc *simplyblockv1alpha2.StretchedCluster, lost string) ad
 			"RoleSwapNotReady: the control plane records site %s of stretched cluster %s as lost, "+
 				"and a lost site cannot lead; the roles can be swapped only away from a lost leader", lost, sc.Name))
 	}
-	record := siteRecordOf(sc, survivor.Cluster)
 	if record != fenceDone {
 		return admission.Denied(fmt.Sprintf(
 			"RoleSwapNotReady: the leader site %s of stretched cluster %s is recorded lost, but its fence is %s, "+
@@ -98,17 +161,6 @@ func swapWithALostSite(sc *simplyblockv1alpha2.StretchedCluster, lost string) ad
 				"it can take the lead from the lost site %s only once it is Online or Degraded",
 			survivor.Site, survivor.Cluster, sc.Name, orNotReported(phase), lost))
 	}
-}
-
-// siteRecordOf is the control plane's record of the lost site as the given
-// site's StorageCluster reports it.
-func siteRecordOf(sc *simplyblockv1alpha2.StretchedCluster, cluster string) string {
-	for _, s := range sc.Status.Sites {
-		if s.Cluster == cluster {
-			return s.SiteRecord
-		}
-	}
-	return ""
 }
 
 // rolesSwapped reports whether any site's role changed.
