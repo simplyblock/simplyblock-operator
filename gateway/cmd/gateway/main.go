@@ -1,8 +1,9 @@
 // The gateway binary's entry point: loads Config from the environment, builds
-// versitygw's own posix backend from it, and runs the embedded VersityGW
-// server until SIGINT/SIGTERM.
+// versitygw's own posix backend from it, wraps it so CreateBucket and
+// DeleteBucket drive S3Buckets (internal/buckets), and runs the embedded
+// VersityGW server until SIGINT/SIGTERM.
 //
-// No backend.Backend or auth.IAMService of this project's own:
+// No backend or auth.IAMService of this project's own beyond that wrapper:
 // backend/posix.New already does bucket-per-volume POSIX storage with
 // --bucketlinks and --fsync (docs/adr/0002-bucket-per-volume-via-
 // bucketlinks.md, notes/versitygw-put-durability.md), and
@@ -21,12 +22,18 @@ import (
 	"log"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/versity/versitygw/backend/meta"
 	"github.com/versity/versitygw/backend/posix"
 	"github.com/versity/versitygw/embedgw"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	kubeconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
 
+	"github.com/simplyblock/gateway/internal/buckets"
 	"github.com/simplyblock/gateway/internal/config"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 // versitygw has no tagged release that matches cmd/versitygw/main.go's own
@@ -40,6 +47,10 @@ const (
 	multipartMaxParts = 10000
 
 	healthPath = "/healthz"
+
+	// bucketPollInterval is how often CreateBucket and DeleteBucket re-read
+	// the S3Bucket they wait on.
+	bucketPollInterval = time.Second
 )
 
 func main() {
@@ -48,19 +59,38 @@ func main() {
 		log.Fatalf("loading configuration: %v", err)
 	}
 
+	cli, err := kubeClient()
+	if err != nil {
+		log.Fatalf("building the Kubernetes client: %v", err)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, cfg); err != nil {
+	if err := run(ctx, cfg, cli); err != nil {
 		log.Fatal(err)
 	}
 }
 
+// kubeClient is a client for S3Buckets, authenticated as the pod's
+// ServiceAccount in cluster.
+func kubeClient() (client.Client, error) {
+	restConfig, err := kubeconfig.GetConfig()
+	if err != nil {
+		return nil, err
+	}
+	scheme := runtime.NewScheme()
+	if err := simplyblockv1alpha2.AddToScheme(scheme); err != nil {
+		return nil, err
+	}
+	return client.New(restConfig, client.Options{Scheme: scheme})
+}
+
 // run builds the posix backend and the embedded gateway from cfg and runs
 // until ctx is done, which is main's own job split out so a test can drive it
-// against a temporary directory and a context it controls, without main's
-// os.Exit-on-error or its tie to process signals.
-func run(ctx context.Context, cfg config.Config) error {
+// against a temporary directory, a fake client, and a context it controls,
+// without main's os.Exit-on-error or its tie to process signals.
+func run(ctx context.Context, cfg config.Config, cli client.Client) error {
 	be, err := posix.New(cfg.RootDir, meta.XattrMeta{}, posix.PosixOpts{
 		BucketLinks: cfg.BucketLinks,
 		Fsync:       cfg.Fsync,
@@ -86,7 +116,17 @@ func run(ctx context.Context, cfg config.Config) error {
 		MultipartMaxParts: multipartMaxParts,
 	}
 
-	if err := embedgw.RunVersityGW(ctx, be, gwCfg); err != nil {
+	gateway := buckets.New(be, cli, buckets.Settings{
+		RootDir:          cfg.RootDir,
+		Namespace:        cfg.Namespace,
+		ObjectStore:      cfg.ObjectStore,
+		StorageClassName: cfg.BucketStorageClass,
+		CapacityBytes:    cfg.BucketCapacityBytes,
+		Timeout:          cfg.BucketTimeout,
+		PollInterval:     bucketPollInterval,
+	})
+
+	if err := embedgw.RunVersityGW(ctx, gateway, gwCfg); err != nil {
 		return fmt.Errorf("running the gateway: %w", err)
 	}
 	return nil
