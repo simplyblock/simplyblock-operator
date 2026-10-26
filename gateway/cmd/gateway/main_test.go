@@ -1,6 +1,8 @@
 // Proves run (main.go) actually serves S3 over the wire: a real aws-sdk-go-v2
 // client, talking HTTP to a gateway run has started against a temporary
-// directory, round-trips an object byte-for-byte, and separately proves
+// directory and a fake Kubernetes client, creates a bucket through the
+// S3Bucket it provisions and round-trips an object byte-for-byte, and
+// separately proves
 // --bucketlinks (docs/adr/0002-bucket-per-volume-via-bucketlinks.md) — the
 // shape this project's buckets actually take, a volume symlinked in rather
 // than created through CreateBucket — by symlinking a directory in and
@@ -23,21 +25,36 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscreds "github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/simplyblock/gateway/internal/config"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 const (
 	testAccessKeyID     = "test-access-key"
 	testSecretAccessKey = "test-secret-key"
+	testNamespace       = "simplyblock"
 )
 
-// startGateway runs the gateway against a fresh temp directory on a free
-// loopback port, waits for its health endpoint to answer, and returns an S3
-// client pointed at it. The gateway is stopped, and run's own shutdown
+// startGateway runs the gateway against a fresh temp directory and a fake
+// Kubernetes client on a free loopback port, waits for its health endpoint
+// to answer, and returns an S3 client pointed at it, the fake client, and
+// the root directory. The gateway is stopped, and run's own shutdown
 // awaited, when the test ends.
-func startGateway(t *testing.T) (*s3.Client, string) {
+func startGateway(t *testing.T) (*s3.Client, client.Client, string) {
 	t.Helper()
+
+	scheme := runtime.NewScheme()
+	if err := simplyblockv1alpha2.AddToScheme(scheme); err != nil {
+		t.Fatalf("building the scheme: %v", err)
+	}
+	kube := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&simplyblockv1alpha2.S3Bucket{}).
+		Build()
 
 	addr := freeLoopbackAddr(t)
 	cfg := config.Config{
@@ -47,11 +64,16 @@ func startGateway(t *testing.T) (*s3.Client, string) {
 		RootSecretAccessKey: testSecretAccessKey,
 		BucketLinks:         true,
 		Fsync:               true,
+		ObjectStore:         "test-store",
+		Namespace:           testNamespace,
+		BucketStorageClass:  "simplyblock-pnfs",
+		BucketCapacityBytes: 1 << 30,
+		BucketTimeout:       10 * time.Second,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- run(ctx, cfg) }()
+	go func() { done <- run(ctx, cfg, kube) }()
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -72,7 +94,35 @@ func startGateway(t *testing.T) (*s3.Client, string) {
 		Credentials:  awscreds.NewStaticCredentialsProvider(testAccessKeyID, testSecretAccessKey, ""),
 		UsePathStyle: true,
 	})
-	return client, cfg.RootDir
+	return client, kube, cfg.RootDir
+}
+
+// deliverWhenCreated plays the operator for one bucket: once its S3Bucket
+// exists, it creates the bucket's directory under root, as DeliverBucket's
+// mount would, and marks the S3Bucket Ready.
+func deliverWhenCreated(t *testing.T, kube client.Client, root, bucket string) {
+	t.Helper()
+	go func() {
+		key := client.ObjectKey{Namespace: testNamespace, Name: bucket}
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			var obj simplyblockv1alpha2.S3Bucket
+			if err := kube.Get(context.Background(), key, &obj); err != nil {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+			if err := os.Mkdir(filepath.Join(root, bucket), 0o755); err != nil {
+				t.Errorf("creating the bucket's directory: %v", err)
+				return
+			}
+			obj.Status.Phase = simplyblockv1alpha2.S3BucketPhaseReady
+			if err := kube.Status().Update(context.Background(), &obj); err != nil {
+				t.Errorf("marking the S3Bucket Ready: %v", err)
+			}
+			return
+		}
+		t.Errorf("S3Bucket %s was never created", bucket)
+	}()
 }
 
 // freeLoopbackAddr finds a currently unused loopback port by binding to :0
@@ -113,13 +163,15 @@ func waitForHealth(t *testing.T, url string) {
 }
 
 // TestRunServesAPutGetRoundTrip proves the composition in run (posix backend
-// + embedgw) actually serves S3 end to end: a bucket created through the API,
-// an object PUT, and the same bytes GET back.
+// + internal/buckets + embedgw) actually serves S3 end to end: a bucket
+// created through the API and its S3Bucket, an object PUT, and the same bytes
+// GET back.
 func TestRunServesAPutGetRoundTrip(t *testing.T) {
-	client, _ := startGateway(t)
+	client, kube, rootDir := startGateway(t)
 	ctx := context.Background()
 
 	const bucket = "roundtrip-bucket"
+	deliverWhenCreated(t, kube, rootDir, bucket)
 	if _, err := client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
 		t.Fatalf("CreateBucket: %v", err)
 	}
@@ -156,7 +208,7 @@ func TestRunServesAPutGetRoundTrip(t *testing.T) {
 // (design-bucket-provisioning.md §5), is listed back as a bucket, though
 // nothing ever called CreateBucket for it.
 func TestRunRecognizesABucketlinksSymlink(t *testing.T) {
-	client, rootDir := startGateway(t)
+	client, _, rootDir := startGateway(t)
 	ctx := context.Background()
 
 	volumeDir := filepath.Join(t.TempDir(), "team-a-reports-volume")

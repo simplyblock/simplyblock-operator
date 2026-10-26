@@ -5,6 +5,8 @@ on:
     branches: ['**']
     paths:
       - "gateway/**"
+      - "operator/api/**"
+      - "atlas-lib/**"
       - ".github/workflows/gateway_test.yaml"
   workflow_dispatch:
 
