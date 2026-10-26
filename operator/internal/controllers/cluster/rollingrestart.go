@@ -302,10 +302,23 @@ func (r *StorageClusterOpsReconciler) refreshPod(
 		// Already going. Waiting for it to finish is this step's whole job.
 		return false, nil
 	}
+	// The DaemonSet replaces a deleted pod at once, so the step never sees the
+	// node without one. A pod created after the walk started is that
+	// replacement, and deleting it too would replace the pod again on every
+	// pass until the step's deadline.
+	if refreshedSince(pod, ops) {
+		return true, nil
+	}
 	if err := r.Delete(ctx, pod); err != nil {
 		return false, client.IgnoreNotFound(err)
 	}
 	return false, nil
+}
+
+// refreshedSince reports whether pod was created after the operation started,
+// which is what makes it the replacement rather than the pod to replace.
+func refreshedSince(pod *corev1.Pod, ops *simplyblockv1alpha2.StorageClusterOps) bool {
+	return !pod.CreationTimestamp.Time.Before(ops.CreationTimestamp.Time)
 }
 
 // awaitPod waits for the replacement pod to be Ready. It performs no side
@@ -327,7 +340,7 @@ func (r *StorageClusterOpsReconciler) awaitPod(
 	if err != nil {
 		return false, err
 	}
-	if pod == nil || !pod.DeletionTimestamp.IsZero() {
+	if pod == nil || !pod.DeletionTimestamp.IsZero() || !refreshedSince(pod, ops) {
 		return false, nil
 	}
 	for _, condition := range pod.Status.Conditions {
