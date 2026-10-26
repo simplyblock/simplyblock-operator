@@ -228,8 +228,34 @@ type DeviceSelection struct {
 	Block []string `json:"block,omitempty"`
 }
 
+// NetworkAttachmentSelection names the Multus NetworkAttachmentDefinitions a
+// storage node is attached through instead of the host's network. The names
+// are definitions in the namespace the storage nodes run in.
+//
+// Management is required. With Data left out, data traffic flows through the
+// management attachment, as it flows through the management interface of a
+// host-networked node that names no data interfaces.
+type NetworkAttachmentSelection struct {
+	// Management is the definition the storage node's management traffic is
+	// attached through.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
+	// +kubebuilder:validation:Required
+	Management string `json:"management"`
+
+	// Data is the definition the storage node's data traffic is attached
+	// through. Absent sends data through the management attachment.
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
+	// +optional
+	Data string `json:"data,omitempty"`
+}
+
 // NodeGroup is a set of workers that share one configuration, which is what
 // makes ten identical machines one entry rather than ten.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.networkAttachment) || (!has(self.mgmtInterface) && !has(self.dataInterfaces))",message="a group names its network interfaces or its network attachments, not both"
 type NodeGroup struct {
 	// Name identifies the group within its node set, for a reader and for the
 	// events a validation failure emits.
@@ -255,6 +281,13 @@ type NodeGroup struct {
 	// +kubebuilder:validation:MaxItems=32
 	// +optional
 	DataInterfaces []string `json:"dataInterfaces,omitempty"`
+
+	// NetworkAttachment attaches the storage nodes through Multus
+	// NetworkAttachmentDefinitions instead of host networking. A group names
+	// this or its interfaces, and every group of a document uses the same
+	// networking.
+	// +optional
+	NetworkAttachment *NetworkAttachmentSelection `json:"networkAttachment,omitempty"`
 
 	// Devices selects the storage devices every worker in the group uses.
 	// +optional
@@ -755,6 +788,7 @@ type DeploymentImages struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval cannot be withdrawn"
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)) || s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group of a node set must name the same device class: all nvme or all block"
+// +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, has(g.networkAttachment))) || self.nodeSets.all(s, s.groups.all(g, !has(g.networkAttachment)))",message="every group must use the same networking: all host networking or all network attachments"
 // +kubebuilder:validation:XValidation:rule="size(self.nodeSets) > 1 || has(self.clusterRef) || self.nodeSets.all(s, !has(s.cluster))",message="a node set overrides the cluster template only when the document has more than one node set or names a cluster in clusterRef"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || (!has(self.cluster.enableCpuTopology) && !has(self.cluster.enableKubeletConfiguration)) || (has(self.environment) && self.environment == 'Vanilla')",message="spec.cluster.enableCpuTopology and spec.cluster.enableKubeletConfiguration are stated only when spec.environment is Vanilla: every other environment decides both"
