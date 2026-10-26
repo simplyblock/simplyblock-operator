@@ -72,6 +72,11 @@ const (
 	gatewayNamespaceEnv           = "GATEWAY_NAMESPACE"
 	gatewayBucketStorageClassEnv  = "GATEWAY_BUCKET_STORAGE_CLASS"
 	gatewayBucketCapacityBytesEnv = "GATEWAY_BUCKET_CAPACITY_BYTES"
+
+	// The env vars naming the serving certificate and key the gateway
+	// serves, and re-reads when the TLS Secret is rotated.
+	gatewayTLSCertFileEnv = "GATEWAY_TLS_CERT_FILE"
+	gatewayTLSKeyFileEnv  = "GATEWAY_TLS_KEY_FILE"
 )
 
 // defaultReplicas is spec.replicas' own +kubebuilder:default, read here too:
@@ -127,6 +132,8 @@ func buildDeployment(store *simplyblockv1alpha2.ObjectStore) *appsv1.Deployment 
 									Name:  gatewayBucketCapacityBytesEnv,
 									Value: strconv.FormatInt(store.Spec.Buckets.CapacityBytes, 10),
 								},
+								{Name: gatewayTLSCertFileEnv, Value: tlsMountPath + "/tls.crt"},
+								{Name: gatewayTLSKeyFileEnv, Value: tlsMountPath + "/tls.key"},
 							},
 							EnvFrom:   store.Spec.EnvFrom,
 							Resources: store.Spec.Resources,
