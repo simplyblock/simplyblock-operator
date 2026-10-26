@@ -6,14 +6,13 @@
 // No backend or auth.IAMService of this project's own beyond that wrapper:
 // backend/posix.New already does bucket-per-volume POSIX storage with
 // --bucketlinks and --fsync (docs/adr/0002-bucket-per-volume-via-
-// bucketlinks.md, notes/versitygw-put-durability.md), and
-// embedgw.RunVersityGW already falls back to a single-account IAM service
-// when no IAM backend is configured (auth.NewIAMServiceSingle, selected by
-// auth.New when every IAM option is empty), which is exactly the stub this
-// project needs until a real FDB- or Vault-backed IAM design is decided
-// (notes/versitygw-iam-fdb-secret-storage.md). Writing either a backend or
-// an IAM service again here would be the second copy the new-files skill's
-// search-before-writing rule exists to catch.
+// bucketlinks.md, notes/versitygw-put-durability.md), and IAM is
+// versitygw's own Vault backend, selected by embedgw.Config's Vault fields
+// (docs/adr/0007-gateway-iam-is-versitygw-vault-backend.md). Without
+// VGW_IAM_VAULT_ENDPOINT_URL, embedgw.RunVersityGW falls back to a
+// single-account IAM service holding only the root account. Writing either a
+// backend or an IAM service again here would be the second copy the
+// new-files skill's search-before-writing rule exists to catch.
 package main
 
 import (
@@ -106,16 +105,6 @@ func run(ctx context.Context, cfg config.Config, cli client.Client) error {
 		return fmt.Errorf("starting the posix backend at %s: %w", cfg.RootDir, err)
 	}
 
-	gwCfg := &embedgw.Config{
-		RootUserAccess:    cfg.RootAccessKeyID,
-		RootUserSecret:    cfg.RootSecretAccessKey,
-		Ports:             []string{cfg.Port},
-		HealthPath:        healthPath,
-		MaxConnections:    maxConnections,
-		MaxRequests:       maxRequests,
-		MultipartMaxParts: multipartMaxParts,
-	}
-
 	gateway := buckets.New(be, cli, buckets.Settings{
 		RootDir:          cfg.RootDir,
 		Namespace:        cfg.Namespace,
@@ -126,8 +115,38 @@ func run(ctx context.Context, cfg config.Config, cli client.Client) error {
 		PollInterval:     bucketPollInterval,
 	})
 
-	if err := embedgw.RunVersityGW(ctx, gateway, gwCfg); err != nil {
+	if err := embedgw.RunVersityGW(ctx, gateway, gatewayConfig(cfg)); err != nil {
 		return fmt.Errorf("running the gateway: %w", err)
 	}
 	return nil
+}
+
+// gatewayConfig is the embedgw.Config cfg describes, split out of run so a
+// test can check what reaches embedgw without starting a server.
+func gatewayConfig(cfg config.Config) *embedgw.Config {
+	return &embedgw.Config{
+		RootUserAccess:    cfg.RootAccessKeyID,
+		RootUserSecret:    cfg.RootSecretAccessKey,
+		Ports:             []string{cfg.Port},
+		HealthPath:        healthPath,
+		MaxConnections:    maxConnections,
+		MaxRequests:       maxRequests,
+		MultipartMaxParts: multipartMaxParts,
+
+		VaultEndpointURL:            cfg.Vault.EndpointURL,
+		VaultNamespace:              cfg.Vault.Namespace,
+		VaultSecretStoragePath:      cfg.Vault.SecretStoragePath,
+		VaultSecretStorageNamespace: cfg.Vault.SecretStorageNamespace,
+		VaultAuthMethod:             cfg.Vault.AuthMethod,
+		VaultAuthNamespace:          cfg.Vault.AuthNamespace,
+		VaultMountPath:              cfg.Vault.MountPath,
+		VaultRootToken:              cfg.Vault.RootToken,
+		VaultRoleID:                 cfg.Vault.RoleID,
+		VaultRoleSecret:             cfg.Vault.RoleSecret,
+		VaultServerCert:             cfg.Vault.ServerCert,
+		VaultClientCert:             cfg.Vault.ClientCert,
+		VaultClientCertKey:          cfg.Vault.ClientCertKey,
+		IAMCacheTTL:                 cfg.IAMCacheTTL,
+		IAMCachePrune:               cfg.IAMCachePrune,
+	}
 }
