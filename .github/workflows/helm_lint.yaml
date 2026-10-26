@@ -76,3 +76,4 @@ jobs:
           make -C operator yq
           cp -R helm-charts/charts/simplyblock-operator "$RUNNER_TEMP/chart"
           helm-charts/scripts/stamp-release-version.sh "$RUNNER_TEMP/chart" v0.0.0-lint
+          helm-charts/scripts/test-stamp-release-version.sh
