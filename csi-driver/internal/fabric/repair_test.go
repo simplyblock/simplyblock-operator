@@ -289,7 +289,7 @@ func TestRepair_TearsDownInOrderAndContinuesPastFailure(t *testing.T) {
 		testCtrl("nvme1", "10.0.0.2"),
 		testCtrl("nvme0", "10.0.0.1"),
 	})
-	err := r.repair(context.Background(), d)
+	_, err := r.repair(context.Background(), d)
 	if err == nil {
 		t.Error("err = nil, want the teardown failure reported")
 	}
@@ -300,7 +300,7 @@ func TestRepair_TearsDownInOrderAndContinuesPastFailure(t *testing.T) {
 
 func TestRepair_RefusesADefectWithNoRemedy(t *testing.T) {
 	r, torn := recordingRepairer(t)
-	if err := r.repair(context.Background(), defect(nvmeof.DefectAmbiguousHead, nvmeof.ScopeNone, nil)); err == nil {
+	if _, err := r.repair(context.Background(), defect(nvmeof.DefectAmbiguousHead, nvmeof.ScopeNone, nil)); err == nil {
 		t.Error("err = nil, want a refusal")
 	}
 	if len(*torn) != 0 {
@@ -519,5 +519,32 @@ func TestHealMonitoredVolume_ReportsTheEndpointsItTearsDown(t *testing.T) {
 	got := r.healMonitoredVolume(context.Background(), repairTestNQN, volA, orphanConns())
 	if want := []string{"10.0.0.2:4420"}; !slices.Equal(got, want) {
 		t.Errorf("torn-down endpoints = %v, want %v", got, want)
+	}
+}
+
+// A repair whose teardown fails on one controller still removed the others, and
+// those have to be reported: the caller takes them out of its path snapshot so
+// the same tick reconnects them. Reporting nothing because the repair as a whole
+// failed leaves them counted as attached, and the volume a path short.
+func TestHealMonitoredVolume_ReportsWhatAPartialRepairTearsDown(t *testing.T) {
+	// A subsystem exporting no namespace is repaired by tearing down every
+	// controller it has, which is a repair over more than one controller.
+	sub := nvme.Subsystem{
+		ID: "nvme-subsys0", NQN: repairTestNQN,
+		Controllers: []nvme.Controller{testCtrl("nvme0", "10.0.0.1"), testCtrl("nvme1", "10.0.0.2")},
+	}
+	r, _ := recordingRepairer(t)
+	r.subs = fakeSubs{sub: sub}
+	r.devs = fakeDevs{}
+	r.detacher = detacherFunc(func(_ context.Context, ctrl nvme.Controller) error {
+		if ctrl.ID == "nvme0" {
+			return errors.New("nvme disconnect: device busy")
+		}
+		return nil
+	})
+
+	got := r.healMonitoredVolume(context.Background(), repairTestNQN, volA, orphanConns())
+	if want := []string{"10.0.0.2:4420"}; !slices.Equal(got, want) {
+		t.Errorf("torn-down endpoints = %v, want %v: nvme1 was disconnected although nvme0 failed", got, want)
 	}
 }

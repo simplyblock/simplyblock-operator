@@ -127,6 +127,11 @@ type repairAction struct {
 	repaired bool
 	skipped  string
 	err      error
+
+	// tornDown is the controllers the teardown released. It is set whether or
+	// not the repair as a whole succeeded: a teardown that fails on one
+	// controller still releases the ones behind it, and those paths are gone.
+	tornDown []nvme.Controller
 }
 
 func (a repairAction) String() string {
@@ -249,7 +254,9 @@ func (r *nvmeRepairer) healSubsystem(
 	r.mark(action.defect)
 	klog.Warningf("nvme repair: repairing %s by tearing down %s",
 		action.defect, strings.Join(controllerNames(action.defect), ", "))
-	if err := r.repair(ctx, action.defect); err != nil {
+	tornDown, err := r.repair(ctx, action.defect)
+	action.tornDown = tornDown
+	if err != nil {
 		action.err = err
 		klog.Errorf("nvme repair: %s", action)
 	} else {
@@ -322,8 +329,29 @@ func (r *nvmeRepairer) barrier(d nvmeof.Defect) string {
 // Reconnecting is the caller's: `nvme connect` is what the caller was doing
 // anyway, and a repair only has to clear the way for it. Policy is choose's job,
 // this only acts.
-func (r *nvmeRepairer) repair(ctx context.Context, d nvmeof.Defect) error {
-	return nvmeof.Repair(ctx, r.detacher, d)
+//
+// It returns the controllers that were released alongside the error, because
+// nvmeof.Repair goes on past a controller that fails and reports only the first
+// failure, and the caller has to reconnect what did go.
+func (r *nvmeRepairer) repair(ctx context.Context, d nvmeof.Defect) ([]nvme.Controller, error) {
+	recorder := &releaseRecorder{detacher: r.detacher}
+	err := nvmeof.Repair(ctx, recorder, d)
+	return recorder.released, err
+}
+
+// releaseRecorder is a ControllerDetacher that remembers which controllers it
+// released.
+type releaseRecorder struct {
+	detacher nvmeof.ControllerDetacher
+	released []nvme.Controller
+}
+
+func (rr *releaseRecorder) DisconnectController(ctx context.Context, ctrl nvme.Controller) error {
+	if err := rr.detacher.DisconnectController(ctx, ctrl); err != nil {
+		return err
+	}
+	rr.released = append(rr.released, ctrl)
+	return nil
 }
 
 // settling reports whether d names a controller that connected too recently to
@@ -518,13 +546,13 @@ func (r *nvmeRepairer) healMonitoredVolume(
 	sel := nvme.DeviceSelector{NQN: nqn, UUID: lvolID}
 	_, actions := r.healSubsystem(ctx, sel, targetsFromConnections(nqn, conns))
 	for _, a := range actions {
-		if !a.repaired {
-			continue
-		}
-		for _, ctrl := range a.defect.Controllers {
+		for _, ctrl := range a.tornDown {
 			if ip, port := ctrl.Address.TrAddr, ctrl.Address.TrSvcID; ip != "" && port != "" {
 				tornDown = append(tornDown, net.JoinHostPort(ip, port))
 			}
+		}
+		if !a.repaired {
+			continue
 		}
 		// The monitor's reconcile passes run right after this, in the same
 		// tick, and reconnect what was torn down. A teardown whose reconnect is
