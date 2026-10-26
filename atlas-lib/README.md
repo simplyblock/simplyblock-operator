@@ -30,7 +30,8 @@ atlas/
 │   ├── sysfs_scan.go       sysfs tree walk + attribute parsing
 │   ├── siblings.go         Siblings (same volume, other paths) + CoTenants (other volumes, same subsystem)
 │   ├── multinamespace.go   IsMultiNamespace / Controller.MaxNamespaces (MNAN)
-│   └── identify*.go        Identify Controller ioctl (Linux) + field decoding
+│   ├── identify*.go        Identify Controller and Identify Namespace ioctls (Linux) + MNAN decoding
+│   └── lbaformat.go        LBAFormat, ReadNamespaceFormats, ControllerNamespaceIDs, NSIDAll
 ├── nvmeof/                 NVMe-oF fabric connect/disconnect (TCP)
 │   ├── connector.go        Connector iface; Target, Targets + TargetOptions
 │   ├── fabrics.go          local impl: NewFabricsConnector (/dev/nvme-fabrics)
@@ -67,6 +68,7 @@ atlas/
 │   ├── hugepages.go        HugePages: per size and per NUMA node, allocated and free
 │   ├── netiface.go         Interface: link speed, state, driver, PCI slot, NUMA node
 │   │                       (Inventory.NVMeControllers comes from pci/, see below)
+│   ├── nvmeformats.go      ReadNVMeFormats: the LBA formats of every kernel-driven NVMe controller
 │   ├── hostos.go           ReadHostOS: the worker's distro, family, version, and architecture
 │   └── environment.go      DetectEnvironment: OpenShift / Talos / K3s / Rancher / Vanilla, with the evidence
 ├── lvm/                    Linux LVM commands + content-based identity

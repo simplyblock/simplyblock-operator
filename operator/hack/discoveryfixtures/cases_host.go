@@ -33,6 +33,7 @@ import (
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/inventory"
 	"github.com/simplyblock/atlas/inventory/transcript"
+	atlasnvme "github.com/simplyblock/atlas/nvme"
 
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
@@ -152,6 +153,13 @@ func capturedHost(path, name, address string, memory statedMemory) nodeprobe.Rep
 		// have no VLAN or VXLAN, so the answer is stated as none rather than
 		// read from whatever machine regenerates the fixtures.
 		InterfaceLinks: func() (map[string]inventory.LinkIdentity, error) { return nil, nil },
+		// The LBA formats come from an Identify admin command, which a
+		// transcript does not capture and which is Linux-only, so they are
+		// stated as none rather than read from the machine generating the
+		// fixtures. A namespace with no formats is left out of the report.
+		NVMeFormats: func(_ string, nsid atlasnvme.NamespaceID) (atlasnvme.NamespaceFormats, error) {
+			return atlasnvme.NamespaceFormats{NSID: nsid, InUse: -1}, nil
+		},
 	})
 	// The paths a device is at on the machine, rather than inside the temporary
 	// tree this transcript was replayed in: both are built from DevRoot, and a

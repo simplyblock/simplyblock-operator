@@ -509,6 +509,53 @@ type Controller struct {
 	// Held and Free, which are the two questions a reader has and neither of
 	// which is the negation of the other.
 	InUse *bool `json:"inUse,omitempty"`
+
+	// LBAFormats is the block sizes each of the controller's namespaces can be
+	// formatted with, and the one each is formatted with. It is empty for a
+	// controller the kernel does not drive, which cannot be asked, and for one
+	// that did not answer, whose failure is in Unreadable.
+	//
+	// It is additive within version 10: no reader acts on it, so a report that
+	// lacks it is one that says nothing about formats, not one that says
+	// something wrong.
+	LBAFormats []NamespaceFormats `json:"lbaFormats,omitempty"`
+}
+
+// NamespaceFormats is the LBA formats one namespace of a controller supports.
+type NamespaceFormats struct {
+	// NSID is the namespace the formats were read from. It is absent when
+	// Common is set.
+	NSID uint32 `json:"nsid,omitempty"`
+
+	// Common reports that the controller had no namespace attached and these
+	// are the formats a namespace created on it could take.
+	Common bool `json:"common,omitempty"`
+
+	// Formats is every format the controller supports, ascending by index.
+	Formats []LBAFormat `json:"formats"`
+
+	// Current is the index of the format the namespace is formatted with, and
+	// is absent for Common.
+	Current *int `json:"current,omitempty"`
+
+	// ExtendedMetadata reports that the metadata is transferred at the end of
+	// each block rather than in a separate buffer.
+	ExtendedMetadata bool `json:"extendedMetadata,omitempty"`
+}
+
+// LBAFormat is one block size and metadata size combination.
+type LBAFormat struct {
+	// Index is the number a Format NVM command takes.
+	Index int `json:"index"`
+
+	// DataSize is one logical block, in bytes, and MetadataSize the metadata
+	// carried with it.
+	DataSize     uint32 `json:"dataSize"`
+	MetadataSize uint16 `json:"metadataSize"`
+
+	// RelativePerformance is the controller's ranking: best, better, good, or
+	// degraded.
+	RelativePerformance string `json:"relativePerformance"`
 }
 
 // Held reports whether something is known to hold the controller open.
