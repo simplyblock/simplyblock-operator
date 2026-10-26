@@ -13,6 +13,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/events"
@@ -26,8 +27,9 @@ func testObjectStoreFixture(name string, mutate ...func(*simplyblockv1alpha2.Obj
 	store := &simplyblockv1alpha2.ObjectStore{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec: simplyblockv1alpha2.ObjectStoreSpec{
-			Image: "docker.io/simplyblock/gateway:main",
-			Port:  9000,
+			Image:   "docker.io/simplyblock/gateway:main",
+			Port:    9000,
+			Buckets: testObjectStoreBuckets,
 		},
 	}
 	for _, m := range mutate {
@@ -105,7 +107,8 @@ func markCertificateReady(t *testing.T, cli client.Client, key client.ObjectKey,
 }
 
 // I-01: an ObjectStore created with the cert-manager provider gets a
-// Deployment, a Service, and a Certificate, each owned via ownerReferences.
+// Deployment, a Service, a Certificate, and the gateway's ServiceAccount,
+// Role, and RoleBinding, each owned via ownerReferences.
 func TestObjectStoreCreatesItsOwnedObjects(t *testing.T) {
 	cli := apiServer(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -130,6 +133,9 @@ func TestObjectStoreCreatesItsOwnedObjects(t *testing.T) {
 	}{
 		{"Deployment", &appsv1.Deployment{}},
 		{"Service", &corev1.Service{}},
+		{"ServiceAccount", &corev1.ServiceAccount{}},
+		{"Role", &rbacv1.Role{}},
+		{"RoleBinding", &rbacv1.RoleBinding{}},
 	} {
 		if err := cli.Get(ctx, key, check.obj); err != nil {
 			t.Fatalf("no %s was created: %v", check.name, err)

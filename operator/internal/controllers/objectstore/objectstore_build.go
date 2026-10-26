@@ -1,7 +1,8 @@
 // Pure construction of an ObjectStore's owned objects: the gateway
-// Deployment, its ClusterIP Service, and the TLS volume that wires the
-// Service's serving certificate into the gateway container
-// (design-objectstore.md §4, §5). No client.Client here: every function
+// Deployment, its ClusterIP Service, the TLS volume that wires the Service's
+// serving certificate into the gateway container (design-objectstore.md §4,
+// §5), and the ServiceAccount, Role, and RoleBinding the gateway creates and
+// deletes S3Buckets under. No client.Client here: every function
 // takes the ObjectStore and returns the object, so the controller tests
 // (objectstore_build_unit_test.go) assert what a pass would create without a
 // cluster.
@@ -9,8 +10,11 @@
 package objectstore
 
 import (
+	"strconv"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
@@ -60,6 +64,14 @@ const (
 	// own Vault integration would supply (design §4.1's own boundary for
 	// what envFrom carries).
 	gatewayRootDirEnv = "GATEWAY_ROOT_DIR"
+
+	// The env vars the gateway binary fills every S3Bucket it creates from
+	// (kubernetes/gateway/internal/config): which ObjectStore it is, the
+	// namespace its S3Buckets live in, and spec.buckets.
+	gatewayObjectStoreEnv         = "GATEWAY_OBJECTSTORE"
+	gatewayNamespaceEnv           = "GATEWAY_NAMESPACE"
+	gatewayBucketStorageClassEnv  = "GATEWAY_BUCKET_STORAGE_CLASS"
+	gatewayBucketCapacityBytesEnv = "GATEWAY_BUCKET_CAPACITY_BYTES"
 )
 
 // defaultReplicas is spec.replicas' own +kubebuilder:default, read here too:
@@ -95,8 +107,9 @@ func buildDeployment(store *simplyblockv1alpha2.ObjectStore) *appsv1.Deployment 
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
-					NodeSelector: store.Spec.NodeSelector,
-					Tolerations:  store.Spec.Tolerations,
+					ServiceAccountName: gatewayServiceAccountName(store.Name),
+					NodeSelector:       store.Spec.NodeSelector,
+					Tolerations:        store.Spec.Tolerations,
 					Containers: []corev1.Container{
 						{
 							Name:            gatewayContainerName,
@@ -105,7 +118,16 @@ func buildDeployment(store *simplyblockv1alpha2.ObjectStore) *appsv1.Deployment 
 							Ports: []corev1.ContainerPort{
 								{Name: "s3", ContainerPort: store.Spec.Port},
 							},
-							Env:       []corev1.EnvVar{{Name: gatewayRootDirEnv, Value: bucketMountPath}},
+							Env: []corev1.EnvVar{
+								{Name: gatewayRootDirEnv, Value: bucketMountPath},
+								{Name: gatewayObjectStoreEnv, Value: store.Name},
+								{Name: gatewayNamespaceEnv, Value: store.Namespace},
+								{Name: gatewayBucketStorageClassEnv, Value: store.Spec.Buckets.StorageClassName},
+								{
+									Name:  gatewayBucketCapacityBytesEnv,
+									Value: strconv.FormatInt(store.Spec.Buckets.CapacityBytes, 10),
+								},
+							},
 							EnvFrom:   store.Spec.EnvFrom,
 							Resources: store.Spec.Resources,
 							VolumeMounts: []corev1.VolumeMount{
@@ -200,5 +222,42 @@ func buildService(store *simplyblockv1alpha2.ObjectStore) *corev1.Service {
 				{Name: "s3", Port: store.Spec.Port, TargetPort: intstr.FromInt32(store.Spec.Port)},
 			},
 		},
+	}
+}
+
+// gatewayServiceAccountName names the gateway's ServiceAccount, Role, and
+// RoleBinding after the ObjectStore, like the Deployment and the Service.
+func gatewayServiceAccountName(name string) string {
+	return name
+}
+
+// buildServiceAccount is the identity every gateway pod runs as.
+func buildServiceAccount(store *simplyblockv1alpha2.ObjectStore) *corev1.ServiceAccount {
+	return &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{Name: gatewayServiceAccountName(store.Name), Namespace: store.Namespace},
+	}
+}
+
+// buildRole grants what the gateway's CreateBucket and DeleteBucket do with
+// S3Buckets in its own namespace: create one, read its status until it is
+// Ready or gone, and delete it. Nothing else.
+func buildRole(store *simplyblockv1alpha2.ObjectStore) *rbacv1.Role {
+	return &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: gatewayServiceAccountName(store.Name), Namespace: store.Namespace},
+		Rules: []rbacv1.PolicyRule{{
+			APIGroups: []string{simplyblockv1alpha2.GroupVersion.Group},
+			Resources: []string{"s3buckets"},
+			Verbs:     []string{"get", "create", "delete"},
+		}},
+	}
+}
+
+// buildRoleBinding binds buildRole to the gateway's ServiceAccount.
+func buildRoleBinding(store *simplyblockv1alpha2.ObjectStore) *rbacv1.RoleBinding {
+	name := gatewayServiceAccountName(store.Name)
+	return &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: store.Namespace},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: name},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: name, Namespace: store.Namespace}},
 	}
 }

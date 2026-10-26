@@ -86,6 +86,27 @@ type ObjectStoreSpec struct {
 	// +kubebuilder:default=OpenShift
 	// +optional
 	TLSProvider string `json:"tlsProvider,omitempty"`
+
+	// Buckets is what every S3Bucket the gateway creates for an S3
+	// CreateBucket request is provisioned with: the request itself carries
+	// no size or storage class.
+	// +kubebuilder:validation:Required
+	Buckets ObjectStoreBuckets `json:"buckets"`
+}
+
+// ObjectStoreBuckets is the backing-volume shape of a bucket created through
+// the gateway's S3 API.
+type ObjectStoreBuckets struct {
+	// StorageClassName becomes each S3Bucket's spec.storageClassName. It
+	// must select the pnfs fstype, the same requirement S3Bucket states.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	StorageClassName string `json:"storageClassName"`
+
+	// CapacityBytes becomes each S3Bucket's spec.capacityBytes.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=1
+	CapacityBytes int64 `json:"capacityBytes"`
 }
 
 // ObjectStoreStatus is what the gateway's provisioning currently is.

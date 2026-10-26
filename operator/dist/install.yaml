@@ -3507,6 +3507,27 @@ spec:
             description: ObjectStoreSpec is the desired state of one S3 gateway's
               workload.
             properties:
+              buckets:
+                description: |-
+                  Buckets is what every S3Bucket the gateway creates for an S3
+                  CreateBucket request is provisioned with: the request itself carries
+                  no size or storage class.
+                properties:
+                  capacityBytes:
+                    description: CapacityBytes becomes each S3Bucket's spec.capacityBytes.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  storageClassName:
+                    description: |-
+                      StorageClassName becomes each S3Bucket's spec.storageClassName. It
+                      must select the pnfs fstype, the same requirement S3Bucket states.
+                    minLength: 1
+                    type: string
+                required:
+                - capacityBytes
+                - storageClassName
+                type: object
               envFrom:
                 description: |-
                   EnvFrom is injected into the gateway container's environment
@@ -3709,6 +3730,7 @@ spec:
                   type: object
                 type: array
             required:
+            - buckets
             - image
             - port
             type: object

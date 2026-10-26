@@ -5,6 +5,7 @@
 package objectstore
 
 import (
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -19,13 +20,19 @@ const (
 	testObjectStoreOnlyName  = "team-a-store"
 )
 
+var testObjectStoreBuckets = simplyblockv1alpha2.ObjectStoreBuckets{
+	StorageClassName: "simplyblock-pnfs",
+	CapacityBytes:    10 << 30,
+}
+
 func testObjectStoreSpec(mutate ...func(*simplyblockv1alpha2.ObjectStore)) *simplyblockv1alpha2.ObjectStore {
 	store := &simplyblockv1alpha2.ObjectStore{}
 	store.Name = testObjectStoreOnlyName
 	store.Namespace = testObjectStoreNamespace
 	store.Spec = simplyblockv1alpha2.ObjectStoreSpec{
-		Image: "docker.io/simplyblock/gateway:main",
-		Port:  9000,
+		Image:   "docker.io/simplyblock/gateway:main",
+		Port:    9000,
+		Buckets: testObjectStoreBuckets,
 	}
 	for _, m := range mutate {
 		m(store)
@@ -189,5 +196,71 @@ func TestCertManagerTLSProviderBuildsACertificateAndNoAnnotation(t *testing.T) {
 	cert := utils.BuildServiceServingCertificate(store.Namespace, store.Name, tlsSecretName(store.Name))
 	if cert.GetName() != store.Name || cert.GetNamespace() != store.Namespace {
 		t.Errorf("Certificate = %s/%s, want %s/%s", cert.GetNamespace(), cert.GetName(), store.Namespace, store.Name)
+	}
+}
+
+// The gateway creates and deletes S3Buckets for CreateBucket and DeleteBucket
+// under its own identity, so every gateway pod runs as the ServiceAccount
+// buildServiceAccount names.
+func TestBuildDeploymentRunsAsTheGatewayServiceAccount(t *testing.T) {
+	store := testObjectStoreSpec()
+	deployment := buildDeployment(store)
+
+	if got, want := deployment.Spec.Template.Spec.ServiceAccountName, buildServiceAccount(store).Name; got != want {
+		t.Errorf("serviceAccountName = %q, want %q", got, want)
+	}
+}
+
+// The gateway fills every S3Bucket it creates from these: which ObjectStore
+// it serves, the namespace to create in, and spec.buckets.
+func TestBuildDeploymentPassesTheBucketSettingsToTheGateway(t *testing.T) {
+	store := testObjectStoreSpec()
+	container := buildDeployment(store).Spec.Template.Spec.Containers[0]
+
+	env := map[string]string{}
+	for _, e := range container.Env {
+		env[e.Name] = e.Value
+	}
+	for name, want := range map[string]string{
+		gatewayObjectStoreEnv:         store.Name,
+		gatewayNamespaceEnv:           store.Namespace,
+		gatewayBucketStorageClassEnv:  "simplyblock-pnfs",
+		gatewayBucketCapacityBytesEnv: "10737418240",
+	} {
+		if got, ok := env[name]; !ok || got != want {
+			t.Errorf("%s = %q (set: %v), want %q", name, got, ok, want)
+		}
+	}
+}
+
+// The gateway's Role grants exactly what CreateBucket and DeleteBucket use,
+// on S3Buckets only, and its RoleBinding binds it to the gateway's
+// ServiceAccount and nothing else.
+func TestBuildGatewayRBACGrantsOnlyTheBucketLifecycle(t *testing.T) {
+	store := testObjectStoreSpec()
+	sa := buildServiceAccount(store)
+	role := buildRole(store)
+	binding := buildRoleBinding(store)
+
+	if sa.Namespace != store.Namespace || role.Namespace != store.Namespace || binding.Namespace != store.Namespace {
+		t.Errorf("namespaces = %q/%q/%q, want all %q", sa.Namespace, role.Namespace, binding.Namespace, store.Namespace)
+	}
+
+	if len(role.Rules) != 1 {
+		t.Fatalf("rules = %+v, want exactly one", role.Rules)
+	}
+	rule := role.Rules[0]
+	if !slices.Equal(rule.APIGroups, []string{simplyblockv1alpha2.GroupVersion.Group}) ||
+		!slices.Equal(rule.Resources, []string{"s3buckets"}) ||
+		!slices.Equal(rule.Verbs, []string{"get", "create", "delete"}) {
+		t.Errorf("rule = %+v, want get/create/delete on %s s3buckets", rule, simplyblockv1alpha2.GroupVersion.Group)
+	}
+
+	if binding.RoleRef.Kind != "Role" || binding.RoleRef.Name != role.Name {
+		t.Errorf("roleRef = %+v, want Role/%s", binding.RoleRef, role.Name)
+	}
+	if len(binding.Subjects) != 1 || binding.Subjects[0].Kind != "ServiceAccount" ||
+		binding.Subjects[0].Name != sa.Name || binding.Subjects[0].Namespace != sa.Namespace {
+		t.Errorf("subjects = %+v, want only ServiceAccount %s/%s", binding.Subjects, sa.Namespace, sa.Name)
 	}
 }
