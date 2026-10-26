@@ -100,8 +100,13 @@ func AdmitAttachment(report nodeprobe.Report, selection *simplyblockv1alpha2.Net
 	for _, name := range attachmentNames(selection) {
 		definition, found := report.NetworkAttachment(name)
 		if !found {
+			namespace := orNone(attachments.Namespace, "of the run")
+			if len(attachments.Definitions) == 0 {
+				return false, fmt.Sprintf("the namespace %s holds no NetworkAttachmentDefinition %s, and holds none at all",
+					namespace, name)
+			}
 			return false, fmt.Sprintf("the namespace %s holds no NetworkAttachmentDefinition %s, only %s",
-				orNone(attachments.Namespace, "of the run"), name, heldDefinitions(attachments))
+				namespace, name, heldDefinitions(attachments))
 		}
 		if ok, why := hostCarries(report, definition); !ok {
 			return false, why
@@ -138,9 +143,6 @@ func heldDefinitions(attachments *nodeprobe.NetworkAttachments) string {
 	names := make([]string, 0, len(attachments.Definitions))
 	for _, definition := range attachments.Definitions {
 		names = append(names, definition.Name)
-	}
-	if len(names) == 0 {
-		return "none"
 	}
 	slices.Sort(names)
 	return strings.Join(names, ", ")

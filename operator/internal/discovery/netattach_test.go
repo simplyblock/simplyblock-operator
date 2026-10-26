@@ -203,3 +203,18 @@ func refusalsBy(plan Plan, rule string) []Refusal {
 	}
 	return out
 }
+
+// A namespace with no definitions at all says so, rather than listing none.
+func TestPlanSaysTheNamespaceHoldsNoDefinitions(t *testing.T) {
+	plan := Planner{}.Plan(attachedFleet(2), attachedRun("storage-mgmt", ""))
+
+	refused := refusalsBy(plan, NetworkAttachmentRule)
+	if len(refused) != 2 {
+		t.Fatalf("refused %d workers, want 2: %v", len(refused), plan.RefusalLines())
+	}
+	for _, refusal := range refused {
+		if strings.Contains(refusal.Reason, "only none") || !strings.Contains(refusal.Reason, "holds none") {
+			t.Errorf("the reason %q does not say the namespace holds no definitions", refusal.Reason)
+		}
+	}
+}
