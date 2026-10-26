@@ -14,14 +14,13 @@ component is standalone, buildable and testable on its own, until that lands.
 `github.com/versity/versitygw/backend/posix` already implements
 `backend.Backend` as a complete POSIX filesystem backend, bucket-per-volume
 symlinks and durable `PutObject` included (`--bucketlinks`, `--fsync`:
-`docs/adr/0002-…`, `notes/versitygw-put-durability.md`). `embedgw.Config`
-already falls back to a single-account `auth.IAMService`
-(`auth.NewIAMServiceSingle`) when no IAM backend is configured — exactly the
-stub this project needs until a real FDB- or Vault-backed IAM design is
-decided (`notes/versitygw-iam-fdb-secret-storage.md`; `embedgw.Config` already
-carries `VaultEndpointURL` and the rest of a Vault-backed IAM's config surface
-for when that lands). `cmd/gateway` is composition: load `Config` from the
-environment, construct both, run `embedgw.RunVersityGW`.
+`docs/adr/0002-…`, `notes/versitygw-put-durability.md`). IAM is versitygw's
+built-in Vault backend, used as-is (`docs/adr/0007-gateway-iam-is-versitygw-vault-backend.md`),
+configured through versitygw's own `VGW_IAM_VAULT_*` variables. Without
+`VGW_IAM_VAULT_ENDPOINT_URL`, `embedgw` falls back to a single-account
+`auth.IAMService` (`auth.NewIAMServiceSingle`) holding only the root account.
+`cmd/gateway` is composition: load `Config` from the environment, construct
+both, run `embedgw.RunVersityGW`.
 
 ## Configuration
 
@@ -41,6 +40,19 @@ flag for at this embedding layer.
 | `VGW_PORT`                                      | no       | `:9000` |
 | `GATEWAY_BUCKET_LINKS`                          | no       | `true`  |
 | `GATEWAY_FSYNC`                                 | no       | `true`  |
+| `VGW_IAM_CACHE_TTL` (seconds)                   | no       | `120`   |
+| `VGW_IAM_CACHE_PRUNE` (seconds)                 | no       | `3600`  |
+| `VGW_IAM_VAULT_ENDPOINT_URL`                    | no       | —       |
+
+The other `VGW_IAM_VAULT_*` variables are versitygw's own
+(`cmd/versitygw/main.go`) and pass through unchanged: `NAMESPACE`,
+`SECRET_STORAGE_PATH`, `SECRET_STORAGE_NAMESPACE`, `AUTH_METHOD`,
+`AUTH_NAMESPACE`, `MOUNT_PATH`, `ROOT_TOKEN`, `ROLE_ID`, `ROLE_SECRET`,
+`SERVER_CERT`, `CLIENT_CERT`, and `CLIENT_CERT_KEY`. The three certificate
+variables hold PEM contents, not paths. Setting any of them without
+`VGW_IAM_VAULT_ENDPOINT_URL` fails startup. Users are managed through
+versitygw's admin API on the S3 port, for example
+`versitygw admin -a <root> -s <secret> -er <url> create-user -a <access> -s <secret> -r user`.
 
 ## Commands
 
