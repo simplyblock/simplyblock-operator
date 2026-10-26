@@ -652,7 +652,7 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 	}
 
 	// Find the node running a pod that has this volume mounted.
-	node, err := findConsumerNode(ctx, r.apiReader, volumeID)
+	node, err := findSlotConsumerNode(ctx, r.apiReader, slot.Namespace, slot.Spec.PVCRef, volumeID)
 	if err != nil {
 		log.Error(err, "Cannot resolve consuming node for preconnect", "slot", slot.Name)
 		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
@@ -799,7 +799,7 @@ func (r *ReplicationSlotReconciler) reconcilePreconnect(
 		return
 	}
 	conns := lvolConnRespToVmigConns(rawConns)
-	node, err := findConsumerNode(ctx, r.apiReader, volumeID)
+	node, err := findSlotConsumerNode(ctx, r.apiReader, slot.Namespace, slot.Spec.PVCRef, volumeID)
 	if err != nil || node == "" {
 		return // no active consumer; nothing to connect
 	}
