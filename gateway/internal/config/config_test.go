@@ -11,14 +11,19 @@ import (
 // not leak into the next.
 func clearGatewayEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{
+	keys := []string{
 		envRootDir, envPort,
 		envRootAccessKeyID, envRootAccessKeyIDAlt,
 		envRootSecretKey, envRootSecretKeyAlt,
 		envBucketLinks, envFsync,
 		envObjectStore, envNamespace,
 		envBucketStorageClass, envBucketCapacityBytes, envBucketTimeout,
-	} {
+		envIAMCacheTTL, envIAMCachePrune,
+	}
+	for key := range vaultEnv(&Vault{}) {
+		keys = append(keys, key)
+	}
+	for _, key := range keys {
 		previous, had := os.LookupEnv(key)
 		if err := os.Unsetenv(key); err != nil {
 			t.Fatalf("unsetting %s: %v", key, err)
@@ -156,6 +161,121 @@ func TestFromEnvRejectsAnInvalidBucketCapacityOrTimeout(t *testing.T) {
 		{envBucketCapacityBytes, "0"},
 		{envBucketTimeout, "soon"},
 		{envBucketTimeout, "0s"},
+	} {
+		t.Run(tc.key+"="+tc.value, func(t *testing.T) {
+			clearGatewayEnv(t)
+			setRequiredEnv(t)
+			t.Setenv(tc.key, tc.value)
+
+			if _, err := FromEnv(); err == nil {
+				t.Fatalf("FromEnv with %s=%q succeeded, want an error", tc.key, tc.value)
+			}
+		})
+	}
+}
+
+func TestFromEnvReadsVersitygwsVaultEnvNames(t *testing.T) {
+	clearGatewayEnv(t)
+	setRequiredEnv(t)
+	want := Vault{
+		EndpointURL:            "https://vault.example:8200",
+		Namespace:              "ns",
+		SecretStoragePath:      "s3/accounts",
+		SecretStorageNamespace: "storage-ns",
+		AuthMethod:             "approle",
+		AuthNamespace:          "auth-ns",
+		MountPath:              "kv-v2",
+		RootToken:              "root-token",
+		RoleID:                 "role-id",
+		RoleSecret:             "role-secret",
+		ServerCert:             "-----BEGIN CERTIFICATE-----server",
+		ClientCert:             "-----BEGIN CERTIFICATE-----client",
+		ClientCertKey:          "-----BEGIN PRIVATE KEY-----client",
+	}
+	for _, kv := range []struct{ key, value string }{
+		{"VGW_IAM_VAULT_ENDPOINT_URL", want.EndpointURL},
+		{"VGW_IAM_VAULT_NAMESPACE", want.Namespace},
+		{"VGW_IAM_VAULT_SECRET_STORAGE_PATH", want.SecretStoragePath},
+		{"VGW_IAM_VAULT_SECRET_STORAGE_NAMESPACE", want.SecretStorageNamespace},
+		{"VGW_IAM_VAULT_AUTH_METHOD", want.AuthMethod},
+		{"VGW_IAM_VAULT_AUTH_NAMESPACE", want.AuthNamespace},
+		{"VGW_IAM_VAULT_MOUNT_PATH", want.MountPath},
+		{"VGW_IAM_VAULT_ROOT_TOKEN", want.RootToken},
+		{"VGW_IAM_VAULT_ROLE_ID", want.RoleID},
+		{"VGW_IAM_VAULT_ROLE_SECRET", want.RoleSecret},
+		{"VGW_IAM_VAULT_SERVER_CERT", want.ServerCert},
+		{"VGW_IAM_VAULT_CLIENT_CERT", want.ClientCert},
+		{"VGW_IAM_VAULT_CLIENT_CERT_KEY", want.ClientCertKey},
+	} {
+		t.Setenv(kv.key, kv.value)
+	}
+
+	got, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if got.Vault != want {
+		t.Errorf("Vault = %+v, want %+v", got.Vault, want)
+	}
+}
+
+func TestFromEnvLeavesVaultEmptyWhenUnset(t *testing.T) {
+	clearGatewayEnv(t)
+	setRequiredEnv(t)
+
+	got, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if got.Vault != (Vault{}) {
+		t.Errorf("Vault = %+v, want the zero value: single-account mode", got.Vault)
+	}
+}
+
+func TestFromEnvRejectsVaultSettingsWithoutAnEndpoint(t *testing.T) {
+	clearGatewayEnv(t)
+	setRequiredEnv(t)
+	t.Setenv("VGW_IAM_VAULT_ROLE_ID", "role-id")
+
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("FromEnv with VGW_IAM_VAULT_ROLE_ID but no endpoint succeeded, " +
+			"want an error rather than silently running single-account")
+	}
+}
+
+func TestFromEnvDefaultsTheIAMCacheToVersitygwsCLIDefaults(t *testing.T) {
+	clearGatewayEnv(t)
+	setRequiredEnv(t)
+
+	got, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if got.IAMCacheTTL != 120 || got.IAMCachePrune != 3600 {
+		t.Errorf("IAMCacheTTL/IAMCachePrune = %d/%d, want 120/3600", got.IAMCacheTTL, got.IAMCachePrune)
+	}
+}
+
+func TestFromEnvHonorsAnExplicitIAMCache(t *testing.T) {
+	clearGatewayEnv(t)
+	setRequiredEnv(t)
+	t.Setenv(envIAMCacheTTL, "30")
+	t.Setenv(envIAMCachePrune, "600")
+
+	got, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if got.IAMCacheTTL != 30 || got.IAMCachePrune != 600 {
+		t.Errorf("IAMCacheTTL/IAMCachePrune = %d/%d, want 30/600", got.IAMCacheTTL, got.IAMCachePrune)
+	}
+}
+
+func TestFromEnvRejectsAnInvalidIAMCacheValue(t *testing.T) {
+	for _, tc := range []struct{ key, value string }{
+		{envIAMCacheTTL, "two-minutes"},
+		{envIAMCacheTTL, "0"},
+		{envIAMCachePrune, "-1"},
 	} {
 		t.Run(tc.key+"="+tc.value, func(t *testing.T) {
 			clearGatewayEnv(t)

@@ -9,6 +9,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -71,6 +72,41 @@ type Config struct {
 	// become Ready, and DeleteBucket for one to be gone. A CreateBucket that
 	// runs out of it deletes the S3Bucket again.
 	BucketTimeout time.Duration
+
+	// Vault configures versitygw's built-in HashiCorp Vault IAM backend
+	// (docs/adr/0007-gateway-iam-is-versitygw-vault-backend.md). An empty
+	// Vault.EndpointURL leaves the gateway in single-account mode, holding
+	// only the root account.
+	Vault Vault
+
+	// IAMCacheTTL and IAMCachePrune are, in seconds, how long a gateway
+	// replica caches an IAM account and how often it drops expired entries.
+	// embedgw passes zero values straight to versitygw's cache, so both
+	// default to versitygw's own CLI defaults (120 and 3600) rather than to
+	// zero.
+	IAMCacheTTL   int
+	IAMCachePrune int
+}
+
+// Vault is versitygw's Vault IAM backend configuration, one field per
+// embedgw.Config Vault field and read from the same VGW_IAM_VAULT_* names
+// versitygw's own CLI uses (cmd/versitygw/main.go). ServerCert, ClientCert,
+// and ClientCertKey are PEM contents, not paths: auth/iam_vault.go loads them
+// from bytes, whatever embedgw.Config's doc comments say.
+type Vault struct {
+	EndpointURL            string
+	Namespace              string
+	SecretStoragePath      string
+	SecretStorageNamespace string
+	AuthMethod             string
+	AuthNamespace          string
+	MountPath              string
+	RootToken              string
+	RoleID                 string
+	RoleSecret             string
+	ServerCert             string
+	ClientCert             string
+	ClientCertKey          string
 }
 
 // Environment variable names. The three with two names accept either:
@@ -90,11 +126,36 @@ const (
 	envBucketStorageClass  = "GATEWAY_BUCKET_STORAGE_CLASS"
 	envBucketCapacityBytes = "GATEWAY_BUCKET_CAPACITY_BYTES"
 	envBucketTimeout       = "GATEWAY_BUCKET_TIMEOUT"
+	envIAMCacheTTL         = "VGW_IAM_CACHE_TTL"
+	envIAMCachePrune       = "VGW_IAM_CACHE_PRUNE"
+	envVaultEndpointURL    = "VGW_IAM_VAULT_ENDPOINT_URL"
 	defaultPort            = ":9000"
+	defaultIAMCacheTTL     = 120
+	defaultIAMCachePrune   = 3600
 	defaultBucketLinks     = true
 	defaultFsync           = true
 	defaultBucketTimeout   = 5 * time.Minute
 )
+
+// vaultEnv names the environment variable for each Vault field, in
+// versitygw's own spelling.
+func vaultEnv(v *Vault) map[string]*string {
+	return map[string]*string{
+		envVaultEndpointURL:                      &v.EndpointURL,
+		"VGW_IAM_VAULT_NAMESPACE":                &v.Namespace,
+		"VGW_IAM_VAULT_SECRET_STORAGE_PATH":      &v.SecretStoragePath,
+		"VGW_IAM_VAULT_SECRET_STORAGE_NAMESPACE": &v.SecretStorageNamespace,
+		"VGW_IAM_VAULT_AUTH_METHOD":              &v.AuthMethod,
+		"VGW_IAM_VAULT_AUTH_NAMESPACE":           &v.AuthNamespace,
+		"VGW_IAM_VAULT_MOUNT_PATH":               &v.MountPath,
+		"VGW_IAM_VAULT_ROOT_TOKEN":               &v.RootToken,
+		"VGW_IAM_VAULT_ROLE_ID":                  &v.RoleID,
+		"VGW_IAM_VAULT_ROLE_SECRET":              &v.RoleSecret,
+		"VGW_IAM_VAULT_SERVER_CERT":              &v.ServerCert,
+		"VGW_IAM_VAULT_CLIENT_CERT":              &v.ClientCert,
+		"VGW_IAM_VAULT_CLIENT_CERT_KEY":          &v.ClientCertKey,
+	}
+}
 
 // FromEnv reads a Config from the process environment. RootDir, the root
 // credentials, and the bucket settings the operator sets have no safe
@@ -150,7 +211,36 @@ func FromEnv() (Config, error) {
 	if cfg.BucketTimeout, err = getenvDuration(envBucketTimeout, defaultBucketTimeout); err != nil {
 		return Config{}, err
 	}
+	if cfg.IAMCacheTTL, err = getenvSeconds(envIAMCacheTTL, defaultIAMCacheTTL); err != nil {
+		return Config{}, err
+	}
+	if cfg.IAMCachePrune, err = getenvSeconds(envIAMCachePrune, defaultIAMCachePrune); err != nil {
+		return Config{}, err
+	}
+	if cfg.Vault, err = vaultFromEnv(); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+// vaultFromEnv reads the Vault IAM backend's settings. Any of them set
+// without VGW_IAM_VAULT_ENDPOINT_URL is an error: versitygw would ignore them
+// and run single-account, so every account but root would fail to
+// authenticate.
+func vaultFromEnv() (Vault, error) {
+	var v Vault
+	var orphaned []string
+	for key, field := range vaultEnv(&v) {
+		*field = os.Getenv(key)
+		if *field != "" && key != envVaultEndpointURL {
+			orphaned = append(orphaned, key)
+		}
+	}
+	if v.EndpointURL == "" && len(orphaned) > 0 {
+		sort.Strings(orphaned)
+		return Vault{}, fmt.Errorf("%v set without %s", orphaned, envVaultEndpointURL)
+	}
+	return v, nil
 }
 
 func firstNonEmpty(values ...string) string {
@@ -189,6 +279,18 @@ func getenvDuration(key string, fallback time.Duration) (time.Duration, error) {
 	parsed, err := time.ParseDuration(v)
 	if err != nil || parsed <= 0 {
 		return 0, fmt.Errorf("%s=%q is not a positive duration", key, v)
+	}
+	return parsed, nil
+}
+
+func getenvSeconds(key string, fallback int) (int, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(v)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s=%q is not a positive number of seconds", key, v)
 	}
 	return parsed, nil
 }
