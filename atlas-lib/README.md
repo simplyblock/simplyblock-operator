@@ -68,7 +68,9 @@ atlas/
 │   ├── netiface.go         Interface: link speed, state, driver, PCI slot, NUMA node
 │   │                       (Inventory.NVMeControllers comes from pci/, see below)
 │   ├── hostos.go           ReadHostOS: the worker's distro, family, version, and architecture
-│   └── environment.go      DetectEnvironment: OpenShift / Talos / K3s / Rancher / Vanilla, with the evidence
+│   ├── environment.go      DetectEnvironment: OpenShift / Talos / K3s / Rancher / Vanilla, with the evidence
+│   └── netattach.go        CollectNetworkAttachments: whether Multus's kind is served, a namespace's
+│                           definitions, and the host interface each CNI configuration builds on
 ├── lvm/                    Linux LVM commands + content-based identity
 │   ├── doc.go              Why identity is read from content, and how scoping is decided
 │   ├── lvm.go              Manager, Run (the escape hatch)
@@ -663,6 +665,13 @@ inv, err := inventory.Collect(ctx, inventory.Config{
     Kubernetes: inventory.KubernetesSources{
         Discovery: clientset.Discovery(),
         Nodes:     nodes.Items,
+        // The Multus definitions one namespace holds. Independent of the two
+        // above: giving it does not conclude the environment.
+        NetworkAttachments: inventory.NetworkAttachmentSource{
+            Discovery: clientset.Discovery(),
+            Dynamic:   dynamicClient,
+            Namespace: "simplyblock",
+        },
     },
 })
 if err != nil {
@@ -680,6 +689,8 @@ inv.HostOS.Family               // Debian / RedHat / SUSE / Alpine / Arch; which
 inv.HostOS.Architecture         // uname's machine: x86_64, aarch64
 inv.Environment.Distribution    // OpenShift / Talos / K3s / Rancher / Vanilla
 inv.Environment.Evidence        // what it rested on, for the reviewer who corrects it
+inv.NetworkAttachments.State    // Served / NotServed (no Multus) / Unread; empty when not asked
+inv.NetworkAttachments.Definitions // .Name, .Config.Type, .Config.HostInterface, .ResourceName
 
 // Every block device is returned, refused ones included, so that an
 // administrator can be told why the disk they expected is not a candidate.
