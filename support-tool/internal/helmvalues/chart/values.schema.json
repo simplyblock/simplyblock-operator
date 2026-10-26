@@ -356,8 +356,68 @@
                       ]
                     }
                   }
+                },
+                "pullPolicy": {
+                  "enum": [
+                    "Always",
+                    "IfNotPresent",
+                    "Never"
+                  ]
                 }
               }
+            },
+            "logParser": {
+              "enum": [
+                "cri",
+                "docker"
+              ]
+            },
+            "graylog": {
+              "type": "object",
+              "properties": {
+                "pullPolicy": {
+                  "enum": [
+                    "Always",
+                    "IfNotPresent",
+                    "Never"
+                  ]
+                }
+              }
+            },
+            "thanos": {
+              "type": "object",
+              "properties": {
+                "pullPolicy": {
+                  "enum": [
+                    "Always",
+                    "IfNotPresent",
+                    "Never"
+                  ]
+                }
+              }
+            },
+            "fluentbit": {
+              "type": "object",
+              "properties": {
+                "pullPolicy": {
+                  "enum": [
+                    "Always",
+                    "IfNotPresent",
+                    "Never"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "foundationdb": {
+          "type": "object",
+          "properties": {
+            "redundancyMode": {
+              "enum": [
+                "double",
+                "triple"
+              ]
             }
           }
         }
@@ -659,6 +719,146 @@
                   ]
                 }
               }
+            }
+          }
+        }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "enum": [
+            "standalone",
+            "managed",
+            "empty"
+          ]
+        }
+      }
+    },
+    "controlCenter": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": [
+            "full",
+            "dr"
+          ]
+        },
+        "authMode": {
+          "enum": [
+            "serviceaccount",
+            "passthrough"
+          ]
+        },
+        "image": {
+          "type": "object",
+          "properties": {
+            "pullPolicy": {
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
+          }
+        },
+        "mock": {
+          "type": "object",
+          "properties": {
+            "image": {
+              "type": "object",
+              "properties": {
+                "pullPolicy": {
+                  "enum": [
+                    "Always",
+                    "IfNotPresent",
+                    "Never"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "csiSnapshotterController": {
+          "type": "object",
+          "properties": {
+            "pullPolicy": {
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
+          }
+        },
+        "csiAddonsController": {
+          "type": "object",
+          "properties": {
+            "pullPolicy": {
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
+          }
+        },
+        "simplyblock": {
+          "type": "object",
+          "properties": {
+            "pullPolicy": {
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
+          }
+        },
+        "operator": {
+          "type": "object",
+          "properties": {
+            "pullPolicy": {
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
+          }
+        },
+        "numaResource": {
+          "type": "object",
+          "properties": {
+            "pullPolicy": {
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "ramen": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "pullPolicy": {
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
             }
           }
         }
