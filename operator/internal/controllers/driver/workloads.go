@@ -89,8 +89,12 @@ func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *apps
 					ServiceAccountName: n.nodeServiceAccount,
 					NodeSelector:       d.Spec.NodeSelector,
 					Tolerations:        d.Spec.Tolerations,
-					HostNetwork:        true,
-					DNSPolicy:          corev1.DNSClusterFirstWithHostNet,
+					// An NVMe connect opens its sockets in the caller's network
+					// namespace, but a reconnect runs from a kernel thread in the
+					// host's, so a pod that connects is moved to the host on the
+					// first reset. The plugin also reads the host's interfaces.
+					HostNetwork: true,
+					DNSPolicy:   corev1.DNSClusterFirstWithHostNet,
 					Containers: []corev1.Container{
 						nodeRegistrarContainer(d, s, driver),
 						nodePluginContainer(d, image),
@@ -309,8 +313,6 @@ func controllerStatefulSet(d *simplyblockv1alpha2.SimplyblockDriver, image strin
 					ServiceAccountName: n.controllerServiceAccount,
 					NodeSelector:       d.Spec.ControllerNodeSelector,
 					Tolerations:        d.Spec.ControllerTolerations,
-					HostNetwork:        true,
-					DNSPolicy:          corev1.DNSClusterFirstWithHostNet,
 					Containers:         containers,
 					Volumes:            volumes,
 				},

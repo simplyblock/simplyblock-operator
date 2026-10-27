@@ -98,7 +98,9 @@ func BuildJob(p JobParams) *batchv1.Job {
 					RestartPolicy: corev1.RestartPolicyNever,
 					NodeSelector:  map[string]string{"kubernetes.io/hostname": p.Hostname},
 					Tolerations:   p.Tolerations,
-					HostNetwork:   true,
+					// NVMe connections are made here, and a reconnect leaves a pod's
+					// network namespace for the host's.
+					HostNetwork: true,
 					Volumes: []corev1.Volume{
 						{
 							Name: "host-dev",

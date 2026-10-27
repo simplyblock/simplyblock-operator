@@ -361,6 +361,8 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 					// from its taints, and a fleet with a dedicated storage
 					// plane taints every machine this can run on.
 					Tolerations: storageNodeTolerations(snode),
+					// The measurement connects over NVMe/TCP, which a reconnect
+					// moves to the host's network namespace.
 					HostNetwork: true,
 					Volumes: []corev1.Volume{
 						{
