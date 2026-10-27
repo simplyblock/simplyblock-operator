@@ -8,10 +8,11 @@
 // carrying the worker's name as its hostname -- the Service on its own resolves
 // nothing.
 //
-// It is only that name under TLS. simplyblock_core/models/storage_node.py dials
-// mgmt_ip directly while tls_connect is "disabled", so a plaintext deployment
-// never asks DNS for any of this and a deployment that serves TLS cannot add a
-// single node without it. The reconcile that published these slices belonged to
+// The control plane dials that name under TLS and for every node on attached
+// networks. simplyblock_core/models/storage_node.py dials mgmt_ip directly for a
+// host-network node while tls_connect is "disabled", so a plaintext deployment
+// without networks never asks DNS for any of this and a deployment that serves
+// TLS cannot add a single node without it. The reconcile that published these slices belonged to
 // StorageNodeSet and went out with that kind; nothing used the names until TLS
 // became the default, and then every node add stalled in the control plane's
 // resolver retry loop.

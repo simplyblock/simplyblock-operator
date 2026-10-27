@@ -186,7 +186,7 @@ Run against a live cluster with a real control plane. Anything touching the data
 | E-03 | The SPDK pod restarted by the control plane keeps the same address, and the volume's I/O resumes without error | Positive   |
 | E-04 | Two storage nodes on one worker each hold their own assigned address on the same definition                    | Positive   |
 | E-05 | A cluster on `hostInterface` is unchanged by an upgrade to the build that adds this feature                    | Regression |
-| E-06 | The control plane dials the SPDK pod's attached management address and completes node-add                      | Positive   |
+| E-06 | The control plane dials the SPDK proxy by its Service name and completes node-add                              | Positive   |
 | E-07 | A volume attached from the storage worker itself passes fio verify with the host-side macvlan child in place   | Positive   |
 | E-08 | The same attach without the host-side child fails, and the preflight had reported `DataNetworkHostUnreachable` | Negative   |
 | E-09 | Per-interface `container_network_*` metrics for `data0` increase with the fio workload                         | Positive   |
