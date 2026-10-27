@@ -19,13 +19,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // lagged is a reconciler for the operation behind a client that can answer from
@@ -182,7 +182,7 @@ func TestAPassReadingTheStepBeforeAWaitedOnCallDoesNotCallAgain(t *testing.T) {
 		{"CancelTask", simplyblockv1alpha2.StorageClusterOpsActionCancelTask, cancelTask,
 			func() *fakeControlPlane {
 				return &fakeControlPlane{
-					cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+					cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 					tasks:   stillRunning,
 				}
 			},

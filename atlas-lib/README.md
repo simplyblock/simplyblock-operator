@@ -30,7 +30,8 @@ atlas/
 │   ├── sysfs_scan.go       sysfs tree walk + attribute parsing
 │   ├── siblings.go         Siblings (same volume, other paths) + CoTenants (other volumes, same subsystem)
 │   ├── multinamespace.go   IsMultiNamespace / Controller.MaxNamespaces (MNAN)
-│   └── identify*.go        Identify Controller ioctl (Linux) + field decoding
+│   ├── identify*.go        Identify Controller and Identify Namespace ioctls (Linux) + MNAN decoding
+│   └── lbaformat.go        LBAFormat, ReadNamespaceFormats, ControllerNamespaceIDs, NSIDAll
 ├── nvmeof/                 NVMe-oF fabric connect/disconnect (TCP)
 │   ├── connector.go        Connector iface; Target, Targets + TargetOptions
 │   ├── fabrics.go          local impl: NewFabricsConnector (/dev/nvme-fabrics)
@@ -40,6 +41,7 @@ atlas/
 │   ├── detach.go           DetachDevice: disconnect unless the subsystem is shared
 │   └── multipath.go        the halves: ConnectPaths (ordered per-path connect) + PathResult
 ├── nqn/                    Build & parse simplyblock lvol NQNs
+│   └── default_host.go     DefaultHost: the node's nvme-cli default host NQN; NVMeHost
 ├── fiemap/                 What a byte range of a file is made of: data, unwritten, delalloc, or hole
 ├── nfsclient/              The kernel NFS client's own view of its mounts
 │   └── mountstats.go       Mount, ParseMountstats, ReadMountstats: op counts, layout types, reconnects
@@ -66,6 +68,7 @@ atlas/
 │   ├── hugepages.go        HugePages: per size and per NUMA node, allocated and free
 │   ├── netiface.go         Interface: link speed, state, driver, PCI slot, NUMA node
 │   │                       (Inventory.NVMeControllers comes from pci/, see below)
+│   ├── nvmeformats.go      ReadNVMeFormats: the LBA formats of every kernel-driven NVMe controller
 │   ├── hostos.go           ReadHostOS: the worker's distro, family, version, and architecture
 │   └── environment.go      DetectEnvironment: OpenShift / Talos / K3s / Rancher / Vanilla, with the evidence
 ├── lvm/                    Linux LVM commands + content-based identity
@@ -118,7 +121,11 @@ atlas/
 │   ├── volumes.go          create / clone / list / resize / delete / connection
 │   ├── pools.go            storage pools (incl. by-name lookup)
 │   ├── storagenodes.go     storage nodes + their data NICs
-│   └── migrations.go       subsystem migrations: create / get / list / continue / cancel, of a volume or a whole subsystem
+│   ├── consistencygroups.go consistency groups: by members, by name, member handles
+│   ├── migrations.go       subsystem migrations: create / get / list / continue / cancel, of a volume or a whole subsystem
+│   ├── volumemove.go       moving a volume to another cluster: start / stop / commit / release the cutover
+│   ├── chain.go            WalkChain: from a handle to the volume serving it, across relationships
+│   └── tasks.go            control-plane tasks: read one, as a caller waiting on queued work
 ├── link/                   gRPC operator ↔ CSI, over connections the CSI driver opens
 │   ├── doc.go              why the connection runs backwards, and how gRPC still works on it
 │   ├── session.go          Session: yamux-multiplexed link, gRPC server + client on both ends
@@ -126,10 +133,12 @@ atlas/
 │   ├── agent.go            Agent: the CSI side; dials, identifies, serves, reconnects
 │   ├── registry.go         Registry: who is linked right now (ErrNoSession when not)
 │   ├── peer.go             PeerKind/PeerID/Claim/Identity/Peer
+│   ├── peercontext.go      hub services: refused before Hello, PeerFromContext names the caller
 │   ├── auth.go             Authenticator iface, bearer-token plumbing, TokenSource
 │   ├── kubeauth.go         KubeAuthenticator: TokenReview → the pod's node, not the peer's word
-│   ├── dial.go             TLSDialer / InsecureDialer
-│   ├── remote.go           RemotePeer ("site/<site>/<kind>[/<name>]"), SitePeer, PeerFromContext
+│   ├── dial.go             TLSFileDialer / TLSDialer / InsecureDialer
+│   ├── peercontext.go      PeerFromContext; the hub refuses calls before Hello
+│   ├── remote.go           RemotePeer ("site/<site>/<kind>[/<name>]"), SitePeer
 │   ├── relay.go            the site link: Relay (hub), Forwarder (a site), Acceptor + OpenRemote/RemoteConn (a peer)
 │   ├── linkv1/             the Hello handshake protocol (buf-generated, committed)
 │   └── sitev1/             RelayService: the site link's one stream (buf-generated, committed)
@@ -147,6 +156,10 @@ atlas/
 │   └── conntrackrpc/       FlowService: served by the CSI node plugin, called by the operator
 │       ├── conntrackrpc.go NewServer(conntrack.Forget), Remote(conn).Forget
 │       └── conntrackv1/    the FlowService protocol (buf-generated, committed)
+├── placement/
+│   └── placementrpc/       PlacementService: served by the operator, called by the CSI controller
+│       ├── placementrpc.go NewServer(Placer), Remote(conn).Place; controllers only
+│       └── placementv1/    the PlacementService protocol (buf-generated, committed)
 ├── prometheus/             The telemetry simplyblock exports about itself (PromQL)
 │   ├── doc.go              Why this is not part of controlplane, and how fresh a value is
 │   ├── client.go           Provider, New, NewWithAPI (the test seam), query helpers
@@ -1074,6 +1087,10 @@ A host NQN is the same story from the other end. `nqn.Host(nodeUID)` composes
 the identity an access-controlled pool authorizes, and `nqn.HostUUID` reads it
 back out — which is what a `--hostid` has to be derived from, since the kernel
 pairs hostid with hostnqn by comparison.
+`nqn.DefaultHost` reads the node's other host identity, the one nvme-cli
+presents on a connect that names none: `/etc/nvme/hostnqn`, or the persisted
+hostid in `/var/lib/nvme/hostid` composed with `nqn.NVMeHost` while that file
+is not written yet.
 
 _Today:_ the CSI driver builds every host NQN with `nqn.Host` (its node service
 and its reconnect loop), derives the DHCHAP `--hostid` with `nqn.HostUUID`
@@ -1081,6 +1098,9 @@ and its reconnect loop), derives the DHCHAP `--hostid` with `nqn.HostUUID`
 subsystem NQN with `nqn.Parse` (`internal/controlplane`, `internal/initiator`,
 `internal/reconnect`). It kept its own copies of the last two until the
 `internal/csi/common` split, when they were adopted and deleted.
+The CSI node plugin publishes `nqn.DefaultHost` on its Node
+(`internal/csi/node/host_nqn.go`), so the operator can name both identities
+when a two-node fence revokes them.
 
 #### Assemble an LVM stack on a device
 
@@ -1348,8 +1368,16 @@ go hub.Serve(ctx)
 CSI side, one call for the whole lifecycle — dial, identify, serve, reconnect:
 
 ```go
+// The files are read on every attempt: they are mounted from Secrets that can
+// be populated after the pod starts, and rotated in place later. A missing
+// file fails the attempt and never downgrades it to plaintext.
+dial, err := link.TLSFileDialer("simplyblock-csi-link.simplyblock.svc:9500", link.TLSFiles{
+    CAFile:   "/etc/simplyblock/tls/ca.crt",
+    CertFile: "/etc/simplyblock/tls/tls.crt", // mutual TLS only
+    KeyFile:  "/etc/simplyblock/tls/tls.key",
+})
 agent, err := link.NewAgent(link.AgentConfig{
-    Dial:        link.TLSDialer("simplyblock-operator-link:9443", clientTLS),
+    Dial:        dial,
     ID:          link.NodePeer(os.Getenv("NODE_NAME")),   // downward API
     InstanceUID: os.Getenv("POD_UID"),                    // supersedes a stale session
     Token:       link.TokenFile("/var/run/secrets/atlas/link/token"),

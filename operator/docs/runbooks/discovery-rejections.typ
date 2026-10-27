@@ -11,6 +11,9 @@
 // (filters, network, NUMA, journal), operator/internal/controllers/deployment
 // (the run and document checks), and operator/internal/webhook (admission).
 // The document is written for support staff, so it names no code locations.
+//
+// discovery-symptoms.typ cites this document by section number: renumbering a
+// section here means updating its Read column.
 
 #import "@preview/fletcher:0.5.8" as fletcher: diagram, node, edge
 
@@ -76,7 +79,13 @@ and *writes* the draft. The rejections are grouped by the stage that produces th
   [Discovery filters], [Disks the run was told not to take, workers left with no disks, workers off the shared networks], [OperatorOps events `DeviceDeclined`, `WorkerDeclined`, `ConfigRefused`], [5],
   [Draft document checks], [A draft or approved CDC that cannot be deployed], [CDC `status.message`, phase `Draft` or `Failed`, Warning events], [6],
   [Approval and admission], [Changes to a CDC or OperatorOps that are not allowed], [The `kubectl apply` or `kubectl edit` is denied with the message], [7],
+  [Warnings], [Nothing. The draft is written, and parts of it need a decision before approval], [Warning events on the OperatorOps and on the CDC], [8],
 )
+
+#v(4pt)
+#note[`curl -s -L https://install.simplyblock.io/scripts/discovery-bundler | bash` collects all of the following
+into one archive. The symptom index shows how to name the namespace and the run, and what to do without the
+script.]
 
 #v(4pt)
 #grid((1.5fr, 3fr), ([What to collect], [Command]),
@@ -180,10 +189,10 @@ The run itself fails and no draft is written. The OperatorOps shows phase `Faile
   [The counts name the dominant reason. Look it up in sections 4 and 5. The two most common: the disks are virtio, SCSI, or SATA and the run is in the default NVMe mode (section 5, "Not NVMe"), or the disks carry old data (section 4).],
   [All probes failed], [`no worker reported: every one of the <count> probe Jobs failed`],
   [The probe Job failed three times on every worker.],
-  [Collect the probe pod logs. Usual causes: the image cannot be pulled (private registry, air gap), the probe is not allowed to run privileged (OpenShift SCC, Pod Security admission), or a taint keeps it off the nodes.],
+  [Collect the probe pod logs. Usual causes: the image cannot be pulled (private registry, air gap), the probe is not allowed to run privileged (OpenShift SCC, Pod Security admission), or a taint added to the worker after the run selected it.],
   [Probes timed out], [`the probes did not all finish within 15m; ...`],
   [A probe pod did not finish within 15 minutes.],
-  [Find the pod that is still `Pending` or `Running` and ask for its `kubectl describe` output. Usually, it is an image pull or a taint without a matching `spec.discover.tolerations` entry.],
+  [Find the pod that is still `Pending` or `Running` and ask for its `kubectl describe` output. Usually, it is an image pull, or a taint the worker received after the run selected it.],
   [Cluster not readable], [`the cluster could not be read within 5m` or `the draft could not be written within 5m`],
   [The Kubernetes API did not answer in time.],
   [Check API server health and the operator logs, then run discovery again.],
@@ -207,9 +216,9 @@ Before anything is inspected, workers that cannot host storage are left out. The
 rest. Each one is reported as a `WorkerDeclined` event.
 
 #grid(cols, head,
-  [Cordoned or tainted], [`<worker> is not used: it is cordoned`, `... it carries the taint <key>=<value>:<effect>`, or `... it is not schedulable`],
-  [The node is cordoned, or it has a `NoSchedule` or `NoExecute` taint.],
-  [Ask whether the node is meant for storage. If so, `kubectl uncordon <node>` or remove the taint. Adding tolerations to the run is not enough: a tainted node is still skipped.],
+  [Cordoned or tainted], [`<worker> is not used: it is cordoned`, `... it carries the taint <key>=<value>:<effect>, which spec.discover.tolerations does not tolerate`, or `... it is not schedulable`],
+  [The node is cordoned, or it has a `NoSchedule` or `NoExecute` taint the run does not tolerate.],
+  [Ask whether the node is meant for storage. If so, `kubectl uncordon <node>`. For a taint that dedicates the node to storage, add a matching entry to `spec.discover.tolerations` and run discovery again: the draft carries it to the storage nodes. Any other taint has to be removed.],
   [Control-plane node], [`<worker> is not used: it is <role>; set spec.discover.enableControlPlaneNodes to include it`],
   [The node is a control-plane node. Infrastructure nodes are used without this setting.],
   [Ask whether storage is meant to run there (typical for three-node compact clusters). If so, set `spec.discover.enableControlPlaneNodes: true`.],
@@ -356,27 +365,30 @@ In logical block device mode every worker needs one disk set aside for the journ
 
 The draft CDC is checked continuously. While a problem exists, the CDC stays in phase `Draft` with the
 first problem in its status message; an approved CDC moves to `Failed`. Every problem is also a Warning
-event on the CDC. A valid draft reports `the document is valid and is waiting for spec.approved`.
+event on the CDC, under the reason shown below each rejection's name. One reason can stand for several
+problems, so read the message as well. A valid draft reports `the document is valid and is waiting for
+spec.approved`.
 
 #grid((1.2fr, 2.6fr, 2.2fr), ([Rejection], [What the customer sees], [How to resolve]),
-  [Unknown worker], [`<worker> is not a node of this Kubernetes cluster`], [A worker was renamed or removed after discovery, or the draft was edited. Fix the worker names, or run discovery again.],
-  [Worker listed twice], [`<worker> appears in more than one group ...`], [Each worker may appear in one group only.],
-  [Different network interfaces], [`the groups name different management interfaces (<names>) ...` (or data interfaces)], [All workers of one cluster must use the same interface names. Rename the interfaces on the hosts, or split the workers into separate clusters.],
-  [No management interface], [`group(s) <names> name no management interface ...`], [Set the management interface in the group.],
-  [Group without disks], [`group <name> names no devices ...`], [Add disks or remove the group.],
-  [Failure domain missing], [`the cluster has failure domains enabled and group <name> declares none ...`], [Label the workers with their failure domain, or set it in the group.],
-  [Too many failure domains], [`the document would bring the cluster to <n> failure domains, and a cluster maps at most <max>`], [Merge failure domains.],
-  [Mixed disk types], [`the groups name <class> devices and cluster <name> is built out of <class> ...`], [When adding to an existing cluster, use the same mode (NVMe or logical block devices) the cluster was built with.],
-  [Journal required], [`the groups name logical block devices, and the control plane runs those only with the journal on a device of its own ...`], [Set `spec.cluster.enableJournalDevice: true`.],
-  [Cluster too large], [`node set <name> makes <n> storage nodes, and a cluster holds at most <max> ...` or `the document adds <n> storage nodes to cluster <name> ...`], [Split the workers into several node sets (each becomes its own cluster), or add fewer nodes.],
-  [Name too long], [`node set <name> makes a member named like <name>, which a StorageCluster cannot be named ...`], [Shorten the cluster or node set name.],
-  [Sizing missing], [`spec.clusterRef names supercluster <name>, and the members the document adds have no sizing ...`], [Add the cluster settings (`spec.cluster`).],
-  [Spans regions], [`node set <name> lists workers in regions <names>, and a member stays within one region`], [Group the workers by region.],
-  [Uneven failure domains], [`node set <name> holds no worker in failure domain <name>, which another node set of its region holds ...`], [Rebalance the workers so each node set covers every failure domain of its region.],
-  [Unsupported erasure coding], [`<field> is <scheme>, which is not a scheme simplyblock supports ...`], [Pick a supported scheme.],
-  [Too few nodes, workers, or disks for the erasure coding], [`<field> is <scheme>, which needs at least <n> storage node(s) ...` (or workers, or devices)], [Add nodes, workers, or disks, or choose a smaller scheme.],
-  [Single-node mode], [`the cluster is a single-node cluster (clusterMode Single), which runs exactly one storage node ...`], [Use exactly one worker, or a different cluster mode.],
-  [Cluster exists or is missing (after approval)], [The CDC moves to `Failed` because the cluster to create already exists, or the cluster to extend does not.], [To extend an existing cluster, name it in `spec.clusterRef`. Check the name otherwise.],
+  [Unknown worker \ `WorkerNotFound`], [`<worker> is not a node of this Kubernetes cluster`], [A worker was renamed or removed after discovery, or the draft was edited. Fix the worker names, or run discovery again.],
+  [Worker listed twice \ `WorkerNotFound`], [`<worker> appears in more than one group ...`], [Each worker may appear in one group only.],
+  [Different network interfaces \ `WorkerNotFound`], [`the groups name different management interfaces (<names>) ...` (or data interfaces)], [All workers of one cluster must use the same interface names. Rename the interfaces on the hosts, or split the workers into separate clusters.],
+  [No management interface \ `NoManagementInterface`], [`group(s) <names> name no management interface ...`], [Set the management interface in the group.],
+  [Group without disks \ `DeviceNotFound`], [`group <name> names no devices ...`], [Add disks or remove the group.],
+  [Failure domain missing \ `DeviceNotFound`], [`the cluster has failure domains enabled and group <name> declares none ...`], [Label the workers with their failure domain, or set it in the group.],
+  [Too many failure domains \ `TooManyFailureDomains`], [`the document would bring the cluster to <n> failure domains, and a cluster maps at most <max>`], [Merge failure domains.],
+  [Failure domains do not fit the stripe \ `FailureDomainLayout`], [`failure-domain mode with <scheme> needs at least <n> distinct failure domains (the stripe's parity plus two), and the workers are in <n> (...)` or `failure-domain mode needs an equal number of workers in every failure domain when the cluster is activated, and the domains hold <domain>: <n>, ...`], [Add workers in further failure domains, move workers so every domain holds the same number, choose a stripe with less parity, or set `spec.cluster.enableFailureDomains: false`.],
+  [Mixed disk types \ `DeviceClassMismatch`], [`the groups name <class> devices and cluster <name> is built out of <class> ...`], [When adding to an existing cluster, use the same mode (NVMe or logical block devices) the cluster was built with.],
+  [Journal required \ `JournalDeviceRequired`], [`the groups name logical block devices, and the control plane runs those only with the journal on a device of its own ...`], [Set `spec.cluster.enableJournalDevice: true`.],
+  [Cluster too large \ `MemberTooLarge`], [`node set <name> makes <n> storage nodes, and a cluster holds at most <max> ...` or `the document adds <n> storage nodes to cluster <name> ...`], [Split the workers into several node sets (each becomes its own cluster), or add fewer nodes.],
+  [Name too long \ `MemberNameInvalid`], [`node set <name> makes a member named like <name>, which a StorageCluster cannot be named ...`], [Shorten the cluster or node set name.],
+  [Sizing missing \ `MemberSizingUnstated`], [`spec.clusterRef names supercluster <name>, and the members the document adds have no sizing ...`], [Add the cluster settings (`spec.cluster`).],
+  [Spans regions \ `MemberSpansRegions`], [`node set <name> lists workers in regions <names>, and a member stays within one region`], [Group the workers by region.],
+  [Uneven failure domains \ `MemberMissingFailureDomain`], [`node set <name> holds no worker in failure domain <name>, which another node set of its region holds ...`], [Rebalance the workers so each node set covers every failure domain of its region.],
+  [Unsupported erasure coding \ `StripeUnsupported`], [`<field> is <scheme>, which is not a scheme simplyblock supports ...`], [Pick a supported scheme.],
+  [Too few nodes, workers, or disks for the erasure coding \ `StripeBelowMinimumNodes`, `StripeBelowMinimumWorkers`, `StripeBelowMinimumDevices`], [`<field> is <scheme>, which needs at least <n> storage node(s) ...` (or workers, or devices)], [Add nodes, workers, or disks, or choose a smaller scheme.],
+  [Single-node mode \ `StripeSingleNodeCount`], [`the cluster is a single-node cluster (clusterMode Single), which runs exactly one storage node ...`], [Use exactly one worker, or a different cluster mode.],
+  [Cluster exists or is missing (after approval) \ `ClusterExists`, `ClusterNotFound`], [The CDC moves to `Failed` because the cluster to create already exists, or the cluster to extend does not.], [To extend an existing cluster, name it in `spec.clusterRef`. Check the name otherwise.],
 )
 
 = Approval and admission
@@ -394,6 +406,65 @@ These are refused immediately: the `kubectl apply` or `kubectl edit` fails with 
   [Use the filters that match the chosen mode, and either `workers` or `nodeSelector`, not both.],
 )
 
+= Warnings
+
+A warning leaves the run or the document going. The draft is written, or the approved CDC keeps working,
+but part of it is not what the customer probably intended. Each one is a Warning event on the object named
+in the first column. Collect them with `kubectl get events -n <ns> --field-selector type=Warning`, or with
+`kubectl describe` on the OperatorOps and the CDC.
+
+== On the discovery run
+
+These are raised when the draft is written. The run still succeeds. Read them before approving, because
+the draft is what gets deployed and a later fix means a new CDC.
+
+#grid((1.25fr, 2.2fr, 1.7fr, 2.4fr), ([Warning], [What the customer sees], [What it changes in the draft], [How to resolve]),
+  [`TopologyIncomplete`], [`<workers> carry no <label> label while other workers do, so the draft gives them no failure domain and does not enable failure domains: label them and run discovery again`],
+  [The listed workers have no failure domain, and `enableFailureDomains` is off for the whole cluster. The labeled workers keep their value, which then has no effect.],
+  [Label the listed workers with the label named in the message (`topology.kubernetes.io/zone` unless the run sets `spec.discover.failureDomainLabel`): `kubectl label node <worker> <label>=<domain>`. Then run discovery again. A cluster without failure domains is valid; if that is intended, nothing needs doing.],
+  [`FailureDomainInvalid`], [`worker <worker> carries <label>="<value>", which is not a failure domain (at most 63 letters, digits, '-', '_', or '.', starting and ending with a letter or digit), so it has none in the draft`],
+  [The worker has no failure domain, so failure domains are not enabled for the cluster.],
+  [Relabel the worker with a value of that form, or point `spec.discover.failureDomainLabel` at a label that carries one. Then run discovery again.],
+  [`PlacementGroupLabelIncomplete`], [`<workers> carry no storage.simplyblock.io/placement-group label while other workers on the same network do, so they are split by size: label them to choose their member`],
+  [The labeled workers form node sets named after their value. The unlabeled ones are distributed by size into additional node sets, each of which becomes a cluster of its own.],
+  [Ask which cluster each listed worker belongs to and label it: `kubectl label node <worker> storage.simplyblock.io/placement-group=<name>`. Run discovery again.],
+  [`PlacementGroupInvalid`], [`<workers> carry storage.simplyblock.io/placement-group="<value>", which is not a node set name (a DNS label of at most 23 characters), so they are drafted as unlabeled workers are`],
+  [The workers are treated as if they had no label.],
+  [Relabel them with a lowercase name of letters, digits, and `-`, at most 23 characters, and run discovery again.],
+  [`PlacementGroupInvalid`], [`storage.simplyblock.io/placement-group=<value> is carried by workers in different regions or on different networks, which cannot share a member, so its workers are drafted into <n> node sets`],
+  [One placement group becomes several node sets, so several clusters, numbered after the value.],
+  [A cluster stays within one region and one network. Give the workers of each region or network their own value, or move them onto one network. If the split is acceptable, nothing needs doing.],
+  [`NVMeMultipathUnavailable`], [`<worker> boots kernel <release>, which is built without CONFIG_NVME_MULTIPATH (<evidence>): it hosts a storage node, and it cannot mount a volume over more than one path ...` or `<worker> boots kernel <release> with native NVMe multipath switched off (<evidence>): ... only after a reboot without nvme_core.multipath=N`],
+  [Nothing. The worker hosts a storage node. Volumes mounted on it get one disk per path and no failover, which is the default kernel of Amazon Linux 2023 EKS node images.],
+  [Ask whether workloads with volumes will run on the worker. If so: built without it, move the worker to a kernel that has it (for EKS, the Ubuntu 24.04 node image). Switched off, remove `nvme_core.multipath=N` from the kernel command line and reboot. The probe report's `hostOS.kernel.nvmeMultipath` names the evidence.],
+  [`ControlPlaneNodeIncluded`], [`<worker> is <role> and is in the draft because spec.discover.enableControlPlaneNodes is set`],
+  [The control-plane node hosts a storage node.],
+  [Confirm with the customer that storage on control-plane nodes is intended. That is typical for three-node compact clusters. Otherwise, remove the setting and run discovery again.],
+  [`EnvironmentPartiallyRead`], [`the API groups could not be listed, so the distribution was concluded from the nodes alone: <error>`],
+  [`status.environment` (OpenShift, Talos, EKS, and so on) may be wrong, and with it the settings the draft derives from it.],
+  [Check `status.environment` of the OperatorOps against the actual platform. If it is wrong, set `spec.environment` in the draft CDC before approving it. Look into the error, usually RBAC or an API server problem.],
+  [`ReportUnreadable`], [`<ns>/<configmap>: the probe report is version <n> and this operator reads version <m>, so the probe has to be re-run`, `parse the probe report: ...`, or `the ConfigMap <ns>/<configmap> carries no report.json, so the probe did not finish writing it`],
+  [That worker is left out of the draft.],
+  [A version mismatch means the operator was upgraded while the run was in progress: run discovery again. Any other message: collect the ConfigMap and the probe pod's logs.],
+)
+
+#note[`DeviceInspectionFailed` (the probe on a worker failed) and `WorkerDeclined` for a name that does not exist
+are Warning events too. They leave a worker out, so they are listed under worker selection in section 3.]
+
+== On the CDC after approval
+
+#grid((1.25fr, 2.2fr, 1.7fr, 2.4fr), ([Event], [What the customer sees], [What it means], [How to resolve]),
+  [`ControlPlaneNotReady` (Warning)], [`ControlPlane <name> is <phase>, so it is not answering yet` or `ControlPlane <name> cannot be read: ...`. The CDC stays in phase `Expanding`.],
+  [The CDC is approved and valid, and waits for the simplyblock control plane before it creates the cluster. It retries on its own.],
+  [Check `kubectl get controlplane -n <ns>` and the control-plane pods. The CDC continues once the control plane is ready.],
+  [`AwaitingNodes` (Normal)], [`StorageNode <name> is <phase> rather than Online`, or, for a document with several clusters, `StorageNode <name> of member <cluster> is not Online yet, so the next member's nodes are not created`],
+  [The CDC waits for its storage nodes to come online before activating the cluster, or before creating the next cluster's nodes.],
+  [Expected for several minutes. If it stays, look at the named StorageNode: `kubectl describe storagenode <name> -n <ns>` and the storage-node pods on that worker.],
+  [`StepDeadlineExceeded` (Warning)], [`Step <step> outlived its deadline`. The CDC moves to `Failed`.],
+  [A deployment step did not finish in its time limit. The CDC does not continue.],
+  [Find out why the step stalled from the StorageNode and StorageCluster events. A `Failed` CDC cannot be resumed. Fix the cause and create a new CDC for what is missing, naming the cluster in `spec.clusterRef` if it was created.],
+)
+
 = Discovery settings reference
 
 All under `spec.discover` of the OperatorOps.
@@ -404,7 +475,7 @@ All under `spec.discover` of the OperatorOps.
   [`forceJournalDevice`], [Logical block device mode: picks a journal disk when several disks tie for the smallest size.],
   [`enableControlPlaneNodes`], [Includes control-plane nodes. Infrastructure nodes are always included.],
   [`workers` or `nodeSelector`], [Which workers to inspect; use one or the other.],
-  [`tolerations`], [Lets the probe run on tainted nodes and carries over to the deployment. Does not make a tainted node usable.],
+  [`tolerations`], [Includes workers whose `NoSchedule` and `NoExecute` taints these tolerate, lets the probe run there, and carries over to the deployment.],
   [`failureDomainLabel`], [The node label that names each worker's failure domain.],
   [`deviceFilter.pcieAllowList`, `pcieDenyList`, `pcieModel`], [NVMe mode disk filters, by PCI address and model.],
   [`deviceFilter.blockAllowList`, `blockDenyList`], [Logical block device mode disk filters, by `/dev/...` path.],
@@ -412,3 +483,53 @@ All under `spec.discover` of the OperatorOps.
   [`clusterRef`], [The draft adds workers to an existing cluster.],
   [`configName`], [Name of the draft CDC.],
 )
+
+#pagebreak(weak: true)
+= Running discovery again
+
+A run reads the fleet once. Its draft describes the fleet as it was then and is never updated, and a finished
+run never runs again: editing its OperatorOps changes nothing. Whatever changed since needs a new run.
+
+== When a new run is needed
+
+#grid((1.6fr, 2.4fr, 2.6fr), ([After], [Why the existing draft is wrong], [What to do]),
+  [Resolving a rejection: a wiped disk, an uncordoned worker, a label, a taint toleration, a filter, the device mode], [The draft was written from what the run saw, and leaves out what it refused.], [A new run. For a small change, editing the draft instead is often quicker (detection document, section 12).],
+  [Adding workers to the Kubernetes cluster], [The draft does not name them.], [A new run. To add them to a cluster that is already deployed, set `spec.discover.clusterRef` to that cluster.],
+  [Removing or renaming a worker], [The draft check reports `WorkerNotFound` and holds the draft.], [Remove the worker from the draft, or run again.],
+  [A disk changing after the run: data written to it, mounted, replaced, or removed], [Nothing notices. The draft checks look at the nodes, not at the disks.], [Run again before approving. `enableDriveFormat` is on in every draft unless it was edited, so approving formats every listed disk, including one that received data after the run.],
+  [Upgrading the operator while a run is in progress], [When the new operator reads another report version, reports written by the previous probe image are refused with `ReportUnreadable`, and their workers are left out.], [A new run. A run that finished before the upgrade is unaffected, and so is its draft.],
+  [A failed or aborted run], [It wrote no draft, or a partial one, and never resumes.], [Fix the cause from its message, then start a new run.],
+  [`helm upgrade` with changed `discovery` values], [The chart's run keeps its name, and a finished run is not run again, so an upgrade does not discover again.], [Write the OperatorOps by hand.],
+)
+
+== Starting one
+
+A new run is a new OperatorOps with a name not used before. Its draft is called `discovered-<run>` unless
+`spec.discover.configName` names it, and a run whose draft name is taken leaves the existing draft as it is
+(event `ConfigExists`) instead of overwriting a document someone may have reviewed.
+
+```yaml
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: discovery-2
+  namespace: <ns>
+spec:
+  action: Discover
+  discover: {}        # the settings of section 9, as the earlier run had them plus the change
+```
+
+A worker that already runs a storage node is never inspected again. A worker named in another draft is, and
+nothing refuses approving two documents that name the same worker, so delete a draft that will not be used.
+
+== What a run leaves behind, and for how long
+
+#grid((1.6fr, 2.4fr, 2.6fr), ([Object], [Lifetime], [Notes]),
+  [OperatorOps], [Until deleted.], [The run's record: its phase, status message, and environment. Deleting a running one aborts it first. `spec.abort: true` stops it without deleting it.],
+  [Probe report ConfigMaps (label `storage.simplyblock.io/nodeprobe-run=<run>`)], [As long as the OperatorOps exists.], [Deleted with the run. Collect them first if the case is open.],
+  [Probe Jobs and pods], [One hour after they finish.], [Their logs go with them. A failed probe is retried twice.],
+  [Events on the OperatorOps], [About one hour, the Kubernetes default.], [The status message and the probe reports keep the essentials after the events are gone.],
+  [The draft ClusterDeploymentConfig], [Until deleted. Deleting the run does not delete it.], [It carries the run's name in the label `storage.simplyblock.io/nodeprobe-run`.],
+  [NVMe controllers a probe returned to the kernel driver], [Permanently.], [Listed under `reclaimed` in that worker's report.],
+)
+

@@ -226,6 +226,7 @@ func TestAnUnstatedJournalShareIsTheDefaultAndTheCountIsNot(t *testing.T) {
 func TestAFaultGroupIsSentAsTheIndexTheClusterMapsItTo(t *testing.T) {
 	r, _ := aSteadyNode(t, aControlPlane())
 	cluster := anOpsCluster()
+	cluster.Spec.EnableFailureDomains = ptr.To(true)
 	cluster.Status.FailureDomains = []simplyblockv1alpha2.FailureDomainIndex{
 		{Name: "rack-1", Index: 3},
 		{Name: "2", Index: 5},
@@ -258,6 +259,28 @@ func TestAFaultGroupIsSentAsTheIndexTheClusterMapsItTo(t *testing.T) {
 
 	if index := r.addParams(context.Background(), anUnprovisionedNode(stepPosting), cluster).FailureDomain; index != nil {
 		t.Errorf("failureDomain = %v, want none for a node that declares no group", index)
+	}
+}
+
+// Regression: 2026-10-24-node-add-failure-domain-on-a-cluster-without — discovery
+// gives every worker the failure domain its zone label names, and leaves
+// enableFailureDomains off when the layout cannot activate with it. The node add
+// still sent the mapped index, the control plane refuses a failure domain on a
+// cluster created without the feature, and no node of the cluster ever came
+// online (GCP lblk e2e run 40065167557).
+func TestAFaultGroupIsNotSentToAClusterWithoutFailureDomains(t *testing.T) {
+	r, _ := aSteadyNode(t, aControlPlane())
+	cluster := anOpsCluster()
+	cluster.Spec.EnableFailureDomains = ptr.To(false)
+	cluster.Status.FailureDomains = []simplyblockv1alpha2.FailureDomainIndex{{Name: "default", Index: 0}}
+
+	for _, label := range []string{"default", "3"} {
+		node := anUnprovisionedNode(stepPosting)
+		node.Spec.Config.FailureDomain = label
+		if index := r.addParams(context.Background(), node, cluster).FailureDomain; index != nil {
+			t.Errorf("failureDomain for %q = %d, want none on a cluster without failure domains",
+				label, *index)
+		}
 	}
 }
 

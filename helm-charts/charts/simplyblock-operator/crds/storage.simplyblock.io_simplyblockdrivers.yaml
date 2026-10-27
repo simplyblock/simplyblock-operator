@@ -699,6 +699,7 @@ spec:
                 enum:
                 - Detected
                 - Installed
+                - Missing
                 type: string
               version:
                 description: |-

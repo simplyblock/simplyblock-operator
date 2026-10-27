@@ -18,14 +18,15 @@ CPAPI_GEN := internal/cpapi/cpapi.gen.go internal/cpapi/validation.gen.go
 # the rules take `buf` as an order-only prerequisite: it installs the toolchain
 # when absent without a phony target forcing a regeneration on every make run.
 PROTO_DIRS := link/linkv1 link/sitev1 storage/storagerpc/storagev1 nfsexport/nfsexportrpc/nfsexportv1 \
-	conntrack/conntrackrpc/conntrackv1
+	conntrack/conntrackrpc/conntrackv1 placement/placementrpc/placementv1
 PROTO_GEN := link/linkv1/link.pb.go link/linkv1/link_grpc.pb.go \
 	link/sitev1/relay.pb.go link/sitev1/relay_grpc.pb.go \
 	link/sitev1/switchover.pb.go link/sitev1/switchover_grpc.pb.go \
 	link/sitev1/site.pb.go link/sitev1/site_grpc.pb.go \
 	storage/storagerpc/storagev1/nvme.pb.go storage/storagerpc/storagev1/nvme_grpc.pb.go \
 	nfsexport/nfsexportrpc/nfsexportv1/export.pb.go nfsexport/nfsexportrpc/nfsexportv1/export_grpc.pb.go \
-	conntrack/conntrackrpc/conntrackv1/flow.pb.go conntrack/conntrackrpc/conntrackv1/flow_grpc.pb.go
+	conntrack/conntrackrpc/conntrackv1/flow.pb.go conntrack/conntrackrpc/conntrackv1/flow_grpc.pb.go \
+	placement/placementrpc/placementv1/placement.pb.go placement/placementrpc/placementv1/placement_grpc.pb.go
 
 GENERATED := $(CPAPI_GEN) $(PROTO_GEN)
 
@@ -44,7 +45,7 @@ internal/cpapi/validation.gen.go: internal/cpapi/cpapi.gen.go internal/cpapi/val
 		internal/cpapi/gen/main.go
 	cd internal/cpapi && go run ./gen
 
-# Both files of a pair come out of one buf invocation; the grpc half is
+# Both files of a pair come out of one buf invocation; the gRPC half is
 # expressed as depending on the other so a single recipe runs, portably across
 # make versions (grouped targets would need GNU make 4.3+).
 link/linkv1/link.pb.go: link/linkv1/link.proto link/linkv1/buf.gen.yaml link/linkv1/buf.yaml | buf
@@ -81,6 +82,11 @@ conntrack/conntrackrpc/conntrackv1/flow.pb.go: conntrack/conntrackrpc/conntrackv
 	cd conntrack/conntrackrpc/conntrackv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
 
 conntrack/conntrackrpc/conntrackv1/flow_grpc.pb.go: conntrack/conntrackrpc/conntrackv1/flow.pb.go
+
+placement/placementrpc/placementv1/placement.pb.go: placement/placementrpc/placementv1/placement.proto placement/placementrpc/placementv1/buf.gen.yaml placement/placementrpc/placementv1/buf.yaml | buf
+	cd placement/placementrpc/placementv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
+
+placement/placementrpc/placementv1/placement_grpc.pb.go: placement/placementrpc/placementv1/placement.pb.go
 
 build: $(GENERATED) ## Build all packages.
 	go build ./...

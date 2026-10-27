@@ -1,5 +1,5 @@
 // csi-link on the two plugin pods: the arguments that dial the operator, the
-// downward-API identity it verifies, and the two volumes behind them.
+// downward-API identity it verifies, and the token volume behind them.
 //
 // The direction reads backward. The plugin dials the operator and holds the
 // connection open; the operator calls back down it. Nothing listens on a
@@ -11,11 +11,13 @@
 // unconditionally and both plugins dial it, so there is nothing to configure
 // and nothing that can disagree.
 //
-// TLS is not required, and is decided by whether the material is there. The CA
-// ConfigMap is mounted optional: present, the plugin verifies the operator;
-// absent, it dials plaintext, which is what the operator serves when no
-// certificate was provisioned for it either. The token authenticates the plugin
-// either way, so plaintext publishes it to anything on the path.
+// TLS follows spec.tls, the way the plugins' connection to the control plane
+// does, and reuses what that already mounts: the CA bundle in the TLS volume
+// verifies the operator, and under mutual TLS the plugin's client certificate
+// in the same volume is presented to it. With TLS off the plugin dials
+// plaintext, which is what the operator serves on such an install. The token
+// authenticates the plugin either way, so plaintext publishes it to anything on
+// the path.
 
 package driver
 
@@ -32,12 +34,6 @@ const (
 	// it would mean passing the flag too.
 	linkTokenVolumeName = "csi-link-token"
 	linkTokenMountPath  = "/var/run/secrets/simplyblock.io/link"
-
-	// The bundle signing the operator's certificate, when there is one.
-	linkCAVolumeName = "csi-link-ca"
-	linkCAMountPath  = "/etc/simplyblock/csi-link-ca"
-	linkCAConfigMap  = "simplyblock-csi-link-ca"
-	linkCAKey        = "ca.crt"
 
 	// How long a projected token lives. The kubelet rotates it and the agent
 	// re-reads it, so this bounds replay, not the link.
@@ -58,15 +54,25 @@ func linkServerName(d *simplyblockv1alpha2.SimplyblockDriver) string {
 	return linkServiceName + "." + d.Namespace + ".svc"
 }
 
-// linkArgs are the four arguments every plugin dials with.
+// linkArgs are the arguments every plugin dials with: the operator's address,
+// and the files in the TLS volume that secure the link when spec.tls asks for
+// it.
 func linkArgs(d *simplyblockv1alpha2.SimplyblockDriver) []string {
 	name := linkServerName(d)
-	return []string{
+	args := []string{
 		"--link",
 		"--link-hub-address=" + name + ":" + strconv.Itoa(linkPort),
 		"--link-server-name=" + name,
-		"--link-ca-file=" + linkCAMountPath + "/" + linkCAKey,
 	}
+	if tlsEnabled(d) {
+		args = append(args, "--link-ca-file="+tlsMountPath+"/ca.crt")
+	}
+	if mutualTLSEnabled(d) {
+		args = append(args,
+			"--link-cert-file="+tlsMountPath+"/tls.crt",
+			"--link-key-file="+tlsMountPath+"/tls.key")
+	}
+	return args
 }
 
 // linkEnv is the identity the operator checks against the pod's token. Both
@@ -79,12 +85,10 @@ func linkEnv() []corev1.EnvVar {
 	}
 }
 
-// linkVolumes are the projected token and the CA bundle. The ConfigMap is
-// optional, which is what makes TLS optional: no ConfigMap, no file, and the
-// plugin dials plaintext.
+// linkVolumes is the projected token. The TLS material comes from the TLS
+// volume, which tls.go puts on the pod.
 func linkVolumes() []corev1.Volume {
 	expiry := int64(linkTokenExpirySeconds)
-	optional := true
 	return []corev1.Volume{
 		{
 			Name: linkTokenVolumeName,
@@ -100,23 +104,13 @@ func linkVolumes() []corev1.Volume {
 				},
 			},
 		},
-		{
-			Name: linkCAVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{Name: linkCAConfigMap},
-					Optional:             &optional,
-				},
-			},
-		},
 	}
 }
 
-// linkVolumeMounts puts both on a plugin container and on no sidecar: a sidecar
-// holding the token could open a link as this node.
+// linkVolumeMounts puts the token on a plugin container and on no sidecar: a
+// sidecar holding it could open a link as this node.
 func linkVolumeMounts() []corev1.VolumeMount {
 	return []corev1.VolumeMount{
 		{Name: linkTokenVolumeName, MountPath: linkTokenMountPath, ReadOnly: true},
-		{Name: linkCAVolumeName, MountPath: linkCAMountPath, ReadOnly: true},
 	}
 }

@@ -993,6 +993,13 @@ that data first. The controller therefore raises a `StorageNodeOps` with
 `action: Remove`, owned by the `StorageNode` through a controller reference, and
 holds the finalizer until `status.activeOpsRef` is clear.
 
+A node whose `StorageCluster` no longer exists is released without an operation
+and without a call to the control plane. A cluster's finalizer is released only
+after the control plane deleted the backend cluster with force, which shut down
+and deleted every node of it (design-storagecluster.md §4.5), so such a node has
+no backend node left, and a removal raised against it would wait for good on a
+cluster that is not there.
+
 **The entity owns the operation it raised for itself.** That is the one direction
 ownership runs between the two categories
 ([`design-crd-model.md`](design-crd-model.md) §3): an operation never owns its

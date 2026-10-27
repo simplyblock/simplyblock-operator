@@ -28,7 +28,7 @@ func validatingOnOneHost(t *testing.T) (*PersistentVolumeOpsReconciler, simplybl
 	r := testReconciler(t, idleSubsystem(),
 		testOperation(), testClusterObject(), testNodeObject(),
 		claimedVolume(testPVName, "data-0"),
-		runningPodOn("worker-1", "app", "data-0"))
+		runningPodOn("worker-1", "data-0"))
 	for range 3 {
 		runPass(t, r)
 	}

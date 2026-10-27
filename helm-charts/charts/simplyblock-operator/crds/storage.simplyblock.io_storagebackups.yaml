@@ -198,6 +198,14 @@ spec:
           name: BackupID
           priority: 1
           type: string
+        - jsonPath: .status.source.group.consistencyGroupName
+          name: Group
+          priority: 1
+          type: string
+        - jsonPath: .status.source.group.generation
+          name: Generation
+          priority: 1
+          type: integer
         - jsonPath: .status.backup.completedAt
           name: Completed
           type: date
@@ -377,6 +385,33 @@ spec:
                         FSType is the filesystem the volume was formatted with, which a restore
                         needs in order to produce a mountable claim.
                       type: string
+                    group:
+                      description: |-
+                        Group is the group backup this copy belongs to, when it is a member of a
+                        consistency-group backup. Absent for a standalone single-volume backup.
+                      properties:
+                        consistencyGroupName:
+                          description: ConsistencyGroupName is the consistency group the generation was taken from.
+                          type: string
+                        generation:
+                          description: |-
+                            Generation is the group sequence this backup's generation was stamped with,
+                            so copies of the same generation can be recognized as one point in time.
+                          format: int64
+                          type: integer
+                        groupBackupID:
+                          description: |-
+                            GroupBackupID is the control-plane group backup this member belongs to.
+                            Every member copy of one generation shares it, which is also carried as the
+                            storage.simplyblock.io/group-backup-id label so the members are a selector.
+                          type: string
+                        memberCount:
+                          description: |-
+                            MemberCount is how many members the generation has, so a reader can tell a
+                            complete group backup from a partial one without listing every member.
+                          format: int32
+                          type: integer
+                      type: object
                     lvolID:
                       description: LvolID and LvolName identify the logical volume that was copied.
                       type: string

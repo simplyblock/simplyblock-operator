@@ -54,7 +54,7 @@ spec:
             - --csi-link
             - --csi-link-bind-address=:{{ .Values.csiLink.port }}
             - --csi-link-audience={{ .Values.csiLink.audience }}
-            {{- if .Values.csiLink.certSecret }}
+            {{- if include "simplyblock.csiLinkCertSecret" . }}
             - --csi-link-cert-path=/etc/simplyblock/csi-link-certs
             {{- end }}
             {{- if .Values.siteLink.enabled }}
@@ -64,6 +64,11 @@ spec:
             - --site-link
             - --site-link-address={{ .Values.siteLink.address }}
             - --site-link-namespace={{ .Values.siteLink.agentNamespace }}
+            {{- end }}
+            {{- if and .Values.tls.enabled .Values.tls.mutual_enabled }}
+            # The CA in the operator's own TLS volume is the one that issued
+            # the CSI plugins' client certificates.
+            - --csi-link-client-ca-file=/etc/simplyblock/tls/ca.crt
             {{- end }}
             {{- if .Values.volumeMigration.legacy }}
             # An upgrade turns this on so the migrations already raised against
@@ -98,8 +103,15 @@ spec:
                 fieldRef:
                   fieldPath: metadata.uid
             {{- end }}
+            {{- with .Values.image.rebalancer }}
+            {{- if or .repository .tag }}
+            # A pinned rebalancer. Without one the operator derives the image from
+            # SB_OPERATOR_IMAGE below: its own registry and tag, under the
+            # rebalancer's repository.
             - name: SIMPLYBLOCK_REBALANCER_IMAGE
-              value: "{{ .Values.image.rebalancer.repository }}:{{ .Values.image.rebalancer.tag | default .Values.image.operator.tag }}"
+              value: "{{ .repository | default (printf "%s/simplyblock-rebalancer" (dir $.Values.image.operator.repository)) }}:{{ .tag | default $.Values.image.operator.tag }}"
+            {{- end }}
+            {{- end }}
             # The worker probe a discovery run creates as a Job per worker. It is
             # this same image: the probe binary ships in it beside the manager, so
             # a Job cannot be a version out of step with the operator that created
@@ -141,7 +153,7 @@ spec:
             # (including /tmp) is read-only, so this must be a writable volume.
             - mountPath: /tmp/k8s-webhook-server/serving-certs
               name: webhook-certs
-            {{- if .Values.csiLink.certSecret }}
+            {{- if include "simplyblock.csiLinkCertSecret" . }}
             - mountPath: /etc/simplyblock/csi-link-certs
               name: csi-link-certs
               readOnly: true
@@ -208,14 +220,14 @@ spec:
                   audience: simplyblock-site-link
                   expirationSeconds: 3600
         {{- end }}
-        {{- if .Values.csiLink.certSecret }}
-        # Optional. Set csiLink.certSecret to serve the link over TLS; the
-        # Secret is the deployer's (a cert-manager Certificate, say) and its
-        # SANs must cover .Values.csiLink.serviceName. Unset serves plaintext,
-        # and the CSI pods dial plaintext to match.
+        {{- if include "simplyblock.csiLinkCertSecret" . }}
+        # The link's serving certificate. optional:true lets the pod start
+        # before cert-manager or the service-CA operator has issued it; the
+        # operator serves TLS only, and handshakes fail until it lands.
         - name: csi-link-certs
           secret:
-            secretName: {{ .Values.csiLink.certSecret }}
+            secretName: {{ include "simplyblock.csiLinkCertSecret" . }}
+            optional: true
         {{- end }}
         - name: webhook-certs
           {{- if and .Values.tls.enabled (eq .Values.tls.provider "cert-manager") }}

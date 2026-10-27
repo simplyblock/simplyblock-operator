@@ -138,6 +138,11 @@ type Config struct {
 	// wants.
 	ReclaimSettle time.Duration
 
+	// NVMeFormats reads the LBA formats of one namespace. A nil reader is
+	// nvme.ReadNamespaceFormats, an Identify Namespace admin command against
+	// the controller's character device under DevRoot.
+	NVMeFormats FormatReader
+
 	// Kubernetes is the cluster half of a collection's sources. The zero value
 	// collects no environment, which is what a caller inspecting a machine
 	// outside a cluster has.
@@ -264,6 +269,11 @@ type Inventory struct {
 	// at all. This is what says the disks are there and something else has
 	// them.
 	NVMeControllers []pci.Device
+
+	// NVMeFormats is the LBA formats each kernel-driven NVMe controller
+	// offers, by PCI address. A controller on a userspace driver has no entry:
+	// the kernel cannot ask it, and the collection does not take it to ask.
+	NVMeFormats []NVMeControllerFormats
 
 	// Reclaimed is the controllers this collection handed back to the kernel,
 	// as they were before it did.
@@ -489,6 +499,10 @@ func Collect(ctx context.Context, cfg Config) (Inventory, error) {
 	if err != nil {
 		errs = append(errs, fmt.Errorf("read the host OS: %w", err))
 	}
+	hostOS.Kernel, err = ReadKernel(cfg)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("read the kernel: %w", err))
+	}
 	inv.HostOS = hostOS
 
 	ifaces, err := ReadInterfaces(cfg)
@@ -542,6 +556,13 @@ func Collect(ctx context.Context, cfg Config) (Inventory, error) {
 		}
 	}
 	inv.NVMeControllers = checked
+
+	// After the reclaim, so a controller handed back is asked too.
+	formats, err := ReadNVMeFormats(cfg, checked)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("read the NVMe LBA formats: %w", err))
+	}
+	inv.NVMeFormats = formats
 
 	devices, err := cfg.inspector().Candidates(ctx)
 	if err != nil {

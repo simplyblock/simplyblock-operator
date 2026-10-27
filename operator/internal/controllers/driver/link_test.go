@@ -13,6 +13,9 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 func volumeNamed(volumes []corev1.Volume, name string) *corev1.Volume {
@@ -102,24 +105,74 @@ func TestLinkTokenIsAudienceBound(t *testing.T) {
 	}
 }
 
-// TLS is optional, and the optional mount is what makes it so: no ConfigMap,
-// no file, and the agent dials plaintext to match an operator serving it.
-func TestLinkCAVolumeIsOptional(t *testing.T) {
-	d := testDriver("simplyblock")
-	v := volumeNamed(nodeDaemonSet(d, testImage).Spec.Template.Spec.Volumes, linkCAVolumeName)
-	if v == nil || v.ConfigMap == nil {
-		t.Fatal("the node plugin carries no CA volume")
-	}
-	if v.ConfigMap.Optional == nil || !*v.ConfigMap.Optional {
-		t.Error("the CA ConfigMap is required, so a cluster without one cannot start its plugins")
-	}
-	if v.ConfigMap.Name != linkCAConfigMap {
-		t.Errorf("CA ConfigMap = %q, want %q", v.ConfigMap.Name, linkCAConfigMap)
+// linkedContainers are the three containers that dial the operator: both
+// plugins and the metadata server's runner.
+func linkedContainers(t *testing.T, d *simplyblockv1alpha2.SimplyblockDriver) []*corev1.Container {
+	t.Helper()
+	d = withMDS(d)
+	_, sts := mdsObjects(t, d)
+	return []*corev1.Container{
+		containerNamed(nodeDaemonSet(d, testImage).Spec.Template.Spec.Containers, "csi-node"),
+		containerNamed(controllerStatefulSet(d, testImage).Spec.Template.Spec.Containers, "csi-controller"),
+		runnerContainer(t, sts),
 	}
 }
 
-// Neither volume reaches a sidecar: one holding the token could open a link as
-// this node.
+// With TLS on, every linked container verifies the operator with the CA bundle
+// the TLS volume already mounts, and that volume is on the container, so the
+// file the argument names is one the pod has.
+func TestLinkVerifiesTheOperatorWithTheMountedCABundle(t *testing.T) {
+	d := testDriver("simplyblock")
+	d.Spec.TLS = simplyblockv1alpha2.DriverTLS{EnableTLS: ptr.To(true)}
+
+	for _, c := range linkedContainers(t, d) {
+		if got, _ := argValue(c, "--link-ca-file"); got != tlsMountPath+"/ca.crt" {
+			t.Errorf("%s verifies the operator with %q, want %q", c.Name, got, tlsMountPath+"/ca.crt")
+		}
+		if m := mountNamed(c.VolumeMounts, tlsVolumeName); m == nil || m.MountPath != tlsMountPath {
+			t.Errorf("%s names a CA bundle under %s without mounting it there", c.Name, tlsMountPath)
+		}
+		for _, flag := range []string{"--link-cert-file", "--link-key-file"} {
+			if _, ok := argValue(c, flag); ok {
+				t.Errorf("%s carries %s without mutual TLS", c.Name, flag)
+			}
+		}
+	}
+}
+
+// Under mutual TLS every linked container also presents the client certificate
+// the TLS volume carries for it.
+func TestLinkPresentsTheClientCertificateUnderMutualTLS(t *testing.T) {
+	d := testDriver("simplyblock")
+	d.Spec.TLS = simplyblockv1alpha2.DriverTLS{EnableTLS: ptr.To(true), EnableMutualTLS: ptr.To(true)}
+
+	for _, c := range linkedContainers(t, d) {
+		for flag, want := range map[string]string{
+			"--link-ca-file":   tlsMountPath + "/ca.crt",
+			"--link-cert-file": tlsMountPath + "/tls.crt",
+			"--link-key-file":  tlsMountPath + "/tls.key",
+		} {
+			if got, _ := argValue(c, flag); got != want {
+				t.Errorf("%s: %s = %q, want %q", c.Name, flag, got, want)
+			}
+		}
+	}
+}
+
+// With TLS off nothing is mounted to verify the operator with, and the
+// containers dial plaintext, matching an operator that serves it.
+func TestLinkDialsPlaintextWithTLSOff(t *testing.T) {
+	for _, c := range linkedContainers(t, testDriver("simplyblock")) {
+		for _, flag := range []string{"--link-ca-file", "--link-cert-file", "--link-key-file"} {
+			if _, ok := argValue(c, flag); ok {
+				t.Errorf("%s carries %s with TLS off", c.Name, flag)
+			}
+		}
+	}
+}
+
+// The token reaches no sidecar: one holding it could open a link as this
+// node.
 func TestLinkVolumesReachOnlyThePluginContainers(t *testing.T) {
 	d := testDriver("simplyblock")
 
@@ -129,7 +182,7 @@ func TestLinkVolumesReachOnlyThePluginContainers(t *testing.T) {
 	} {
 		for _, c := range pod.Containers {
 			plugin := c.Name == "csi-node" || c.Name == controllerPluginName
-			for _, name := range []string{linkTokenVolumeName, linkCAVolumeName} {
+			for _, name := range []string{linkTokenVolumeName} {
 				m := mountNamed(c.VolumeMounts, name)
 				switch {
 				case plugin && m == nil:

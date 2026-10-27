@@ -484,6 +484,17 @@ spec:
                                   maximum: 4500
                                   minimum: 500
                                   type: integer
+                                hostFencing:
+                                  description: |-
+                                    HostFencing lets Kubernetes follow the arbiter's fence of a node whose
+                                    state is unknown. The control plane revokes the node's NVMe host
+                                    identities on its peer, the operator sets the StorageFenced condition on
+                                    its Kubernetes node, and a NodeHealthCheck with a
+                                    StorageFenceRemediationTemplate applies the out-of-service taint, so its
+                                    pods and VMs restart on the peer within seconds. A partition then has a
+                                    winner instead of stopping I/O on both nodes. Requires the NodeHealthCheck
+                                    operator.
+                                  type: boolean
                                 leaseTtlMs:
                                   description: |-
                                     LeaseTtlMs is how long a lease from the arbiter stays valid. It only
@@ -684,6 +695,14 @@ spec:
                                 nobody can turn it on for. A deployment that wants its data checked has to
                                 say so here or not at all.
                               type: boolean
+                            enableCpuTopology:
+                              description: |-
+                                EnableCpuTopology turns on topology-aware CPU assignment on the storage
+                                nodes. It is valid only when spec.environment is Vanilla, whose workers
+                                the environment does not describe. Every other environment decides it:
+                                OpenShift turns it on, and the rest leave it off. Unset on a Vanilla
+                                document leaves it off.
+                              type: boolean
                             enableDriveFormat:
                               description: |-
                                 EnableDriveFormat formats every device the document names before a storage
@@ -717,6 +736,17 @@ spec:
                                 built with is not one a later document can vary. It also costs a drive of
                                 capacity per node, which is a trade a reviewer approves rather than one a
                                 default makes for them.
+                              type: boolean
+                            enableKubeletConfiguration:
+                              description: |-
+                                EnableKubeletConfiguration lets the storage nodes rewrite the kubelet
+                                configuration of their workers and restart the kubelet. It is valid only
+                                when spec.environment is Vanilla, for a fleet whose workers keep the
+                                configuration where the storage node cannot write it. Every other
+                                environment decides it: on for OpenShift, Rancher, and K3s, and off for
+                                Talos, EKS, GKE, AKS, and OKE, whose kubelet configuration is not
+                                writable or is rebuilt with every node. Unset on a Vanilla document
+                                turns it on.
                               type: boolean
                             enableNodeAffinity:
                               description: |-
@@ -1124,7 +1154,7 @@ spec:
                         message:
                           description: |-
                             Message is what the site says about the draft: validation findings while
-                            it is a draft, the expansion's step afterwards.
+                            it is a draft, the expansion's step afterward.
                           type: string
                         name:
                           description: Name is the ClusterDeploymentConfig on the
@@ -1138,14 +1168,90 @@ spec:
                           type: array
                           x-kubernetes-list-type: set
                         nodeSets:
-                          description: NodeSets are the nodes and devices the discovery
-                            found, for review.
+                          description: |-
+                            NodeSets are the nodes and devices the discovery found, for review. At
+                            most 64, as on the deployment config the draft is.
                           items:
                             description: |-
                               NodeSet is the organizational grouping of a deployment, usually a rack: the
                               workers a document adds or grows together. It carries no sizing, because sizing
                               is uniform across a cluster and is stated once in ClusterTemplate.
                             properties:
+                              cluster:
+                                description: |-
+                                  Cluster overrides the document's cluster template for the member cluster
+                                  this node set becomes, for a node set whose hardware differs from the
+                                  rest. A field left unset takes the template's value. Valid on a document
+                                  with more than one node set, or one naming a cluster in clusterRef.
+                                properties:
+                                  maxSubsystemCount:
+                                    description: |-
+                                      MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
+                                      node of this member serves.
+                                    format: int32
+                                    maximum: 75
+                                    minimum: 10
+                                    type: integer
+                                  minHugePagesSize:
+                                    description: |-
+                                      MinHugePagesSize is the smallest huge-page allocation each storage node of
+                                      this member makes: 100G or 1T, where a bare number is gigabytes.
+                                    maxLength: 32
+                                    type: string
+                                  nodesPerSocket:
+                                    description: |-
+                                      NodesPerSocket is how many storage nodes run per NUMA socket on this
+                                      member's workers.
+                                    format: int32
+                                    maximum: 8
+                                    minimum: 1
+                                    type: integer
+                                  socketsToUse:
+                                    description: |-
+                                      SocketsToUse are the NUMA sockets that run storage nodes on this member's
+                                      workers. With NodesPerSocket it decides how many storage nodes each worker
+                                      runs.
+                                    items:
+                                      maxLength: 16
+                                      type: string
+                                    maxItems: 16
+                                    type: array
+                                    x-kubernetes-list-type: set
+                                  stripe:
+                                    description: Stripe is this member's erasure-coding
+                                      layout.
+                                    properties:
+                                      dataChunks:
+                                        description: DataChunks is the number of data
+                                          chunks per stripe (ndcs).
+                                        format: int32
+                                        minimum: 1
+                                        type: integer
+                                      parityChunks:
+                                        description: |-
+                                          ParityChunks is the number of parity chunks per stripe (npcs), and
+                                          therefore how many chunk losses a stripe survives.
+                                        format: int32
+                                        minimum: 0
+                                        type: integer
+                                    type: object
+                                    x-kubernetes-validations:
+                                    - message: the erasure-coding scheme must be one
+                                        of 1+0, 1+1, 2+1, 4+1, 1+2, 2+2, or 4+2, written
+                                        as dataChunks+parityChunks, and an unstated
+                                        half is 1
+                                      rule: '[has(self.dataChunks) ? self.dataChunks
+                                        : 1, has(self.parityChunks) ? self.parityChunks
+                                        : 1] in [[1, 0], [1, 1], [2, 1], [4, 1], [1,
+                                        2], [2, 2], [4, 2]]'
+                                  vcpuCount:
+                                    description: |-
+                                      VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
+                                      this member.
+                                    format: int32
+                                    minimum: 4
+                                    type: integer
+                                type: object
                               groups:
                                 description: Groups are the sets of workers sharing
                                   one configuration.
@@ -1298,6 +1404,7 @@ spec:
                             - groups
                             - name
                             type: object
+                          maxItems: 64
                           type: array
                         phase:
                           description: |-

@@ -188,3 +188,112 @@ func TestPersistentVolumeOpsCELRejectsAnUndeclaredStep(t *testing.T) {
 		})
 	}
 }
+
+// relocateOperation is a well-formed Relocate.
+func relocateOperation() *simplyblockv1alpha2.PersistentVolumeOps {
+	return &simplyblockv1alpha2.PersistentVolumeOps{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "cel-"},
+		Spec: simplyblockv1alpha2.PersistentVolumeOpsSpec{
+			PersistentVolumeName: "pvc-0001",
+			Action:               simplyblockv1alpha2.PersistentVolumeOpsActionRelocate,
+			Relocate:             &simplyblockv1alpha2.RelocateVolumeSpec{TargetClusterRef: "prod-w2-nrh"},
+		},
+	}
+}
+
+// U-73 and its pair: Relocate requires spec.relocate, and the blocks of the
+// two actions are not interchangeable.
+func TestPersistentVolumeOpsCELPairsRelocateWithItsBlock(t *testing.T) {
+	apiClient := apiServer(t)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name string
+		edit func(*simplyblockv1alpha2.PersistentVolumeOps)
+		want string
+	}{
+		{name: "Relocate with its block is accepted"},
+		{
+			name: "Relocate without its block is rejected",
+			edit: func(ops *simplyblockv1alpha2.PersistentVolumeOps) { ops.Spec.Relocate = nil },
+			want: "relocate is required for action Relocate",
+		},
+		{
+			name: "Relocate carrying a migrate block is rejected",
+			edit: func(ops *simplyblockv1alpha2.PersistentVolumeOps) {
+				ops.Spec.Migrate = migrateOperation().Spec.Migrate
+			},
+			want: "migrate is required for action Migrate and must be absent otherwise",
+		},
+		{
+			name: "Migrate carrying a relocate block is rejected",
+			edit: func(ops *simplyblockv1alpha2.PersistentVolumeOps) {
+				ops.Spec.Action = simplyblockv1alpha2.PersistentVolumeOpsActionMigrate
+				ops.Spec.Migrate = migrateOperation().Spec.Migrate
+			},
+			want: "relocate is required for action Relocate and must be absent otherwise",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ops := relocateOperation()
+			if tc.edit != nil {
+				tc.edit(ops)
+			}
+			err := apiClient.Create(ctx, ops)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("a well-formed Relocate was rejected: %v", err)
+				}
+				t.Cleanup(func() { _ = apiClient.Delete(ctx, ops) })
+				return
+			}
+			if err == nil {
+				_ = apiClient.Delete(ctx, ops)
+				t.Fatal("the apiserver accepted it")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("rejected for the wrong reason: %v", err)
+			}
+		})
+	}
+}
+
+// U-72: the target member is frozen with the rest of the request.
+func TestPersistentVolumeOpsCELFreezesTheTargetMember(t *testing.T) {
+	apiClient := apiServer(t)
+	ctx := context.Background()
+	ops := relocateOperation()
+	if err := apiClient.Create(ctx, ops); err != nil {
+		t.Fatalf("creating the operation: %v", err)
+	}
+	t.Cleanup(func() { _ = apiClient.Delete(ctx, ops) })
+
+	ops.Spec.Relocate.TargetClusterRef = "prod-w3-ols"
+	err := apiClient.Update(ctx, ops)
+	if err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Fatalf("Update = %v, want the target member refused as immutable", err)
+	}
+}
+
+// The Relocate steps are declared on the status, as Migrate's are.
+func TestPersistentVolumeOpsCELAcceptsTheRelocateSteps(t *testing.T) {
+	apiClient := apiServer(t)
+	ctx := context.Background()
+	ops := relocateOperation()
+	if err := apiClient.Create(ctx, ops); err != nil {
+		t.Fatalf("creating the operation: %v", err)
+	}
+	t.Cleanup(func() { _ = apiClient.Delete(ctx, ops) })
+
+	for _, step := range []string{"Replicating", "Committing", "AttachingPaths", "Proceeding"} {
+		fresh := &simplyblockv1alpha2.PersistentVolumeOps{}
+		if err := apiClient.Get(ctx, types.NamespacedName{Name: ops.Name}, fresh); err != nil {
+			t.Fatalf("reading the operation back: %v", err)
+		}
+		base := fresh.DeepCopy()
+		fresh.Status.Step.State = step
+		if err := apiClient.Status().Patch(ctx, fresh, client.MergeFrom(base)); err != nil {
+			t.Errorf("the apiserver rejected declared step %q: %v", step, err)
+		}
+	}
+}

@@ -19,9 +19,9 @@ import (
 	admissionv1 "k8s.io/api/admission/v1"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-stretchedcluster,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=stretchedclusters,verbs=update,versions=v1alpha2,name=vstretchedcluster.simplyblock.io,admissionReviewVersions=v1
@@ -38,7 +38,7 @@ type StretchedClusterValidator struct {
 
 // SwapBackend is the control plane as the guard reads it.
 type SwapBackend interface {
-	Cluster(ctx context.Context, clusterID string) (webapi.ClusterResponse, error)
+	Cluster(ctx context.Context, clusterID string) (atlascp.Cluster, error)
 	StorageNodes(ctx context.Context, clusterID string) ([]utils.NodeStatusResponse, error)
 }
 

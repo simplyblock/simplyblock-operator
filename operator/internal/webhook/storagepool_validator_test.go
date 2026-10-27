@@ -185,3 +185,26 @@ func TestStoragePoolValidatorFallsBackToTheRequestNamespace(t *testing.T) {
 		t.Errorf("the pool was refused: %s", response.Result.Message)
 	}
 }
+
+// U-196 is superseded: a pool on a supercluster is one backend pool per member
+// (design-superclusters.md §7.1), so a pool naming a supercluster is admitted
+// like one naming a cluster.
+func TestAPoolOnASuperclusterIsAdmitted(t *testing.T) {
+	scheme := newPoolScheme(t)
+	supercluster := testStorageCluster("sb", "0d6f1b2e-1f0a-4c71-9a0e-5b7d2c3e4f50")
+	supercluster.Spec.Supercluster = &simplyblockv1alpha2.SuperclusterSpec{}
+	v := &StoragePoolValidator{
+		Client:  fake.NewClientBuilder().WithScheme(scheme).WithObjects(supercluster).Build(),
+		Decoder: admission.NewDecoder(scheme),
+	}
+
+	resp := v.Handle(context.Background(), admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Operation: admissionv1.Create,
+		Namespace: "sb",
+		Object:    poolRaw(t, testStoragePool("sb")),
+	}})
+
+	if !resp.Allowed {
+		t.Fatalf("a pool naming a supercluster was refused: %s", resp.Result.Message)
+	}
+}

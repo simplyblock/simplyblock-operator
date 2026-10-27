@@ -2,6 +2,7 @@ package nvme
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -29,5 +30,26 @@ func TestMNANFromIdentify(t *testing.T) {
 
 	if got := mnanFromIdentify(make([]byte, 100)); got != 0 {
 		t.Errorf("mnanFromIdentify(short) = %d, want 0", got)
+	}
+}
+
+// A controller that rejects an Identify, such as one asked for the broadcast
+// namespace without namespace management, completes it with a status and no
+// errno. That is a failure, not an answer of zeros.
+func TestARejectedAdminCommandIsAnError(t *testing.T) {
+	if err := adminStatus(0); err != nil {
+		t.Errorf("adminStatus(0) = %v, want nil", err)
+	}
+	// SCT 0 (generic), SC 0x0B: Invalid Namespace or Format.
+	err := adminStatus(0x000B)
+	if err == nil {
+		t.Fatal("adminStatus(0x0B) = nil, want the controller's rejection")
+	}
+	if !strings.Contains(err.Error(), "0xb") {
+		t.Errorf("adminStatus(0x0B) = %q, want the status code in it", err)
+	}
+	// SCT 1 (command specific), SC 0x02.
+	if err := adminStatus(0x0102); err == nil || !strings.Contains(err.Error(), "type 1") {
+		t.Errorf("adminStatus(0x0102) = %v, want status code type 1 named", err)
 	}
 }

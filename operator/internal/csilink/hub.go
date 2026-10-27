@@ -13,15 +13,18 @@ package csilink
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
+	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -34,16 +37,26 @@ type Config struct {
 	// BindAddress is where peers dial, for example, ":9500."
 	BindAddress string
 
-	// CertFile and KeyFile are the hub's serving certificate. Both optional:
-	// present, the hub serves TLS and the peers verify it; absent, it serves
-	// plaintext and the peers dial plaintext, which is what a cluster with no
-	// certificate provisioned for the link gets.
+	// CertFile and KeyFile are the hub's serving certificate. Set, the hub
+	// serves TLS and nothing else, waiting for the files to appear if they are
+	// not there yet. Unset, it serves plaintext, which is what a deployment
+	// with TLS off configures.
 	//
 	// Peers authenticate with bearer tokens either way, so plaintext publishes
-	// them to anything on the path. Provide a certificate on a cluster where
-	// that matters.
+	// them to anything on the path.
 	CertFile string
 	KeyFile  string
+
+	// ClientCAFile, when set, turns on mutual TLS: a peer must present a client
+	// certificate this bundle verifies, or the handshake fails before its token
+	// is read. It needs CertFile and KeyFile.
+	ClientCAFile string
+
+	// ClientNames are the common names a client certificate may carry. The CA
+	// behind the link issues certificates to other components too, and only
+	// the CSI identities have any business on it. Empty admits any name the CA
+	// signed.
+	ClientNames []string
 
 	// Namespace is the operator's namespace, used to qualify the CSI
 	// ServiceAccounts allowed to link.
@@ -62,6 +75,12 @@ type Config struct {
 	// MDSServiceAccount names the pNFS metadata server pod's ServiceAccount,
 	// unqualified. Empty closes the MDS kind to every peer.
 	MDSServiceAccount string
+
+	// Register adds the services the operator serves to its peers, and
+	// Capabilities names them in the handshake. The placement service is one
+	// (design-superclusters.md §7.2). Nil serves none.
+	Register     func(grpc.ServiceRegistrar)
+	Capabilities []string
 }
 
 // The hub needs to verify peer tokens, and — on clusters whose API server does
@@ -120,7 +139,9 @@ func Setup(mgr ctrl.Manager, cfg Config) (*link.Registry, error) {
 				return false
 			}
 		},
-		Logger: slog.New(logr.ToSlogHandler(mgr.GetLogger().WithName("csi-link"))),
+		Register:     cfg.Register,
+		Capabilities: cfg.Capabilities,
+		Logger:       slog.New(logr.ToSlogHandler(mgr.GetLogger().WithName("csi-link"))),
 	})
 	if err != nil {
 		_ = listener.Close()
@@ -154,15 +175,19 @@ func (r *hubRunnable) Start(ctx context.Context) error {
 	return err
 }
 
-// listen serves TLS when a certificate is configured and readable, and
-// plaintext when none is.
+// listen serves TLS when a certificate is configured, and plaintext when none
+// is.
 //
-// A configured certificate that cannot be read is an error rather than a
-// fallback: somebody provisioned one and it is broken, and quietly serving
-// plaintext instead would hand every peer's token to the network without
-// anyone having asked for that.
+// A configured certificate that cannot be read yet is not a reason to fail or
+// to fall back. It is issued in the cluster and mounted from an optional
+// Secret, so the operator normally starts before it exists. The listener
+// serves TLS from the start, and handshakes fail until the files land. Serving
+// plaintext in that window would hand every peer's token to the network.
 func listen(cfg Config) (net.Listener, error) {
 	if cfg.CertFile == "" || cfg.KeyFile == "" {
+		if cfg.ClientCAFile != "" {
+			return nil, errors.New("csi link: mutual TLS needs a serving certificate")
+		}
 		logf.Log.WithName("csi-link").Info(
 			"serving the CSI link without TLS: no certificate is configured, "+
 				"so peers' ServiceAccount tokens travel in the clear",
@@ -176,16 +201,64 @@ func listen(cfg Config) (net.Listener, error) {
 
 	certs := &certReloader{certFile: cfg.CertFile, keyFile: cfg.KeyFile}
 	if _, err := certs.load(); err != nil {
-		return nil, fmt.Errorf("csi link: serving certificate: %w", err)
+		logf.Log.WithName("csi-link").Info(
+			"the CSI link serving certificate is not readable yet; handshakes fail until it is",
+			"certFile", cfg.CertFile, "error", err.Error())
 	}
-	listener, err := tls.Listen("tcp", cfg.BindAddress, &tls.Config{
-		GetCertificate: certs.get,
-		MinVersion:     tls.VersionTLS13,
-	})
+	serving := &tls.Config{GetCertificate: certs.get, MinVersion: tls.VersionTLS13}
+	if cfg.ClientCAFile != "" {
+		// Built per handshake so that a rotated CA bundle is picked up the
+		// same way a rotated serving certificate is. Links are long-lived,
+		// so handshakes are rare and reading a small file on each is cheap.
+		serving.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			return mutualConfig(cfg, certs)
+		}
+	}
+	listener, err := tls.Listen("tcp", cfg.BindAddress, serving)
 	if err != nil {
 		return nil, fmt.Errorf("csi link: listen on %s: %w", cfg.BindAddress, err)
 	}
 	return listener, nil
+}
+
+// mutualConfig is the serving configuration for one handshake under mutual
+// TLS: the client certificate is required, verified against ClientCAFile, and
+// must carry one of ClientNames.
+func mutualConfig(cfg Config, certs *certReloader) (*tls.Config, error) {
+	bundle, err := os.ReadFile(cfg.ClientCAFile)
+	if err != nil {
+		return nil, fmt.Errorf("csi link: reading client CA bundle: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(bundle) {
+		return nil, fmt.Errorf("csi link: client CA bundle %s has no usable certificates", cfg.ClientCAFile)
+	}
+	return &tls.Config{
+		GetCertificate:   certs.get,
+		MinVersion:       tls.VersionTLS13,
+		ClientCAs:        pool,
+		ClientAuth:       tls.RequireAndVerifyClientCert,
+		VerifyConnection: clientNameIn(cfg.ClientNames),
+	}, nil
+}
+
+// clientNameIn refuses a verified client certificate whose common name is not
+// one of names. It runs after chain verification, so the name it reads is one
+// the CA vouched for.
+func clientNameIn(names []string) func(tls.ConnectionState) error {
+	return func(state tls.ConnectionState) error {
+		if len(names) == 0 {
+			return nil
+		}
+		if len(state.PeerCertificates) == 0 {
+			return errors.New("csi link: no client certificate")
+		}
+		name := state.PeerCertificates[0].Subject.CommonName
+		if !slices.Contains(names, name) {
+			return fmt.Errorf("csi link: client certificate %q is not issued to a CSI component", name)
+		}
+		return nil
+	}
 }
 
 // certReloader serves the hub's certificate, re-reading it when it changes on

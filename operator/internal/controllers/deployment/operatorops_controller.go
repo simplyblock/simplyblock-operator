@@ -40,6 +40,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -57,7 +58,6 @@ import (
 	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 
-	"github.com/simplyblock/simplyblock-operator/internal/bootstrap"
 	discoverypkg "github.com/simplyblock/simplyblock-operator/internal/discovery"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
@@ -148,12 +148,6 @@ type OperatorOpsReconciler struct {
 	// the probe binary ships in it beside the manager, so a Job cannot be a
 	// version out of step with the operator that created it.
 	ProbeImage string
-
-	// Namespace is the operator's own, which is where the installation's
-	// bootstrap ConfigMap lives. A run may be anywhere -- a cluster managing this
-	// one raises runs in the namespace it chooses -- so the configuration is not
-	// looked for beside the run.
-	Namespace string
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=operatorops,verbs=get;list;watch;create;update;patch;delete
@@ -405,9 +399,9 @@ func (r *OperatorOpsReconciler) inspect(
 		// infrastructure ones, so an infra node passes every check the run had
 		// before this one and its being the storage tier went unnoticed.
 		role := discoverypkg.RoleOf(node)
-		if !UsableWorker(node, useControlPlane) {
+		if !usableWorker(node, useControlPlane, spec.Tolerations) {
 			r.event(ops, corev1.EventTypeNormal, WorkerDeclined,
-				fmt.Sprintf("%s is not used: %s", node.Name, declinedBecause(node, role)))
+				fmt.Sprintf("%s is not used: %s", node.Name, declinedBecause(node, role, spec.Tolerations)))
 			continue
 		}
 		if !role.HoldsStorageNodes() {
@@ -630,28 +624,7 @@ func (r *OperatorOpsReconciler) write(
 			plan.ExplainWithin(maxEventMessage-len(refusalPreamble)))
 	}
 
-	// Read here rather than at startup: the draft half of the configuration is
-	// spent minutes after the operator came up, and an installation that corrected
-	// a number between the install and this step meant the correction. A document
-	// that cannot be read is reported once and then treated as absent, which
-	// leaves every number to what this run found.
-	//
-	// A configuration that could not be read is not the same as one that is not
-	// there, and this step cannot proceed through it. The document it is about to
-	// write is the one the next reconcile finds already present and leaves alone,
-	// so a draft written without the installation's seed keeps the numbers this
-	// run found for good: the API recovering afterward restores nothing. The
-	// error requeues instead, which is what the read being transient asks for.
-	installation, err := bootstrap.Load(ctx, r.Client, r.Namespace)
-	switch {
-	case errors.Is(err, bootstrap.ErrUnreadable):
-		return false, err
-	case err != nil:
-		logf.FromContext(ctx).Error(err, "the installation's bootstrap configuration "+
-			"could not be parsed; the draft states what this run found")
-	}
-
-	config, notes, err := r.draftFor(ctx, ops, spec, plan, installation)
+	config, notes, err := r.draftFor(ctx, ops, spec, plan)
 	if err != nil {
 		// A fleet the run read and cannot draft a document for. The reason names
 		// the worker and the shape of its disks, and the run's own message is one
@@ -679,6 +652,11 @@ func (r *OperatorOpsReconciler) write(
 		fmt.Sprintf("wrote %s in Draft: %s", config.Name, plan.Summary()))
 	for _, refusal := range plan.RefusalLines() {
 		r.event(ops, corev1.EventTypeNormal, DeviceDeclined, refusal)
+	}
+	// What the draft leaves for a reviewer to correct, such as topology only
+	// some workers carry, under the reason the generator found it under.
+	for _, found := range plan.Findings {
+		r.event(ops, corev1.EventTypeWarning, found.Reason, found.Message)
 	}
 
 	ops.Status.ConfigRef = config.Name
@@ -719,7 +697,7 @@ func refuseUnreadableFilter(spec *simplyblockv1alpha2.DiscoverSpec) error {
 // clusterDisambiguator is a short, stable-per-Kubernetes-cluster suffix for the
 // cluster name a discovery run proposes.
 //
-// InitialDiscoveryName is deliberately identical on every install, which is
+// The chart names the initial discovery run the same on every install, which is
 // fine for the OperatorOps and the ClusterDeploymentConfig it writes -- both
 // live in this Kubernetes cluster's own API server, where the name collides
 // with nothing else. The StorageCluster the document proposes does not stay
@@ -763,24 +741,10 @@ func (r *OperatorOpsReconciler) draftFor(
 	ops *simplyblockv1alpha2.OperatorOps,
 	spec *simplyblockv1alpha2.DiscoverSpec,
 	plan discoverypkg.Plan,
-	installation *bootstrap.Config,
 ) (*simplyblockv1alpha2.ClusterDeploymentConfig, []string, error) {
 	name := spec.ConfigName
 	if name == "" {
 		name = configNamePrefix + ops.Name
-	}
-
-	// The installation's stated layout applies to the run the operator raised for
-	// it and to no other. A run somebody wrote months later describes whatever the
-	// fleet has become, and re-applying an install-time decision over it would be
-	// a correction nobody made and nothing records.
-	seed := (*simplyblockv1alpha2.ClusterTemplate)(nil)
-	var images *simplyblockv1alpha2.DeploymentImages
-	var edge *bool
-	if ops.Labels[InitialDiscoveryLabel] == "true" {
-		seed = installation.Seed()
-		images = installation.DraftImages()
-		edge = installation.Draft.EdgeCluster
 	}
 
 	config := &simplyblockv1alpha2.ClusterDeploymentConfig{
@@ -800,8 +764,6 @@ func (r *OperatorOpsReconciler) draftFor(
 			// worst behavior available.
 			Approved:    false,
 			Environment: ops.Status.Environment,
-			EdgeCluster: edge,
-			Images:      images,
 			NodeSets:    plan.NodeSets,
 		},
 	}
@@ -840,13 +802,9 @@ func (r *OperatorOpsReconciler) draftFor(
 			}
 			clusterName = base + "-" + disambiguator + clusterNameSuffix
 		}
-		if seed != nil && seed.Name != "" {
-			clusterName = seed.Name
-		}
 
 		template, err := discoverypkg.ClusterTemplateFor(clusterName, plan,
 			discoverypkg.TemplateOptions{
-				Seed:               seed,
 				ForceJournalDevice: ptr.BoolFromOrFalse(spec.ForceJournalDevice),
 			})
 		if err != nil {
@@ -1061,61 +1019,67 @@ func (r *OperatorOpsReconciler) event(
 	r.Recorder.Eventf(ops, nil, eventType, reason, action, "%s", boundEventMessage(message))
 }
 
-// schedulable reports whether a node is one work can be placed on.
-//
-// A cordoned node and a node carrying a NoSchedule taint are both excluded: a
-// probe Job is pinned with spec.nodeName and would run on either, and a worker
-// the cluster is not scheduling to is not one to hand to a storage cluster.
-// UsableWorker reports whether a discovery run would inspect this machine.
-//
-// It is exported so that the one thing deciding whether a run is worth raising at
-// all reads the same predicate the run itself applies. A bootstrap that raised a
-// run against a cluster with nothing to inspect would create an object whose only
-// outcome is to fail, and on a namespace delete that object holds a finalizer the
-// operator may no longer be alive to clear.
-func UsableWorker(node corev1.Node, useControlPlane bool) bool {
-	if !schedulable(node) {
+// usableWorker reports whether a discovery run would inspect this machine.
+func usableWorker(node corev1.Node, useControlPlane bool, tolerations []corev1.Toleration) bool {
+	if !schedulable(node, tolerations) {
 		return false
 	}
 	role := discoverypkg.RoleOf(node)
 	return role.HoldsStorageNodes() || useControlPlane
 }
 
-// declinedBecause says why UsableWorker refused the machine, so the event a
+// declinedBecause says why usableWorker refused the machine, so the event a
 // reviewer reads names the condition rather than only the outcome.
-func declinedBecause(node corev1.Node, role discoverypkg.NodeRole) string {
-	if !schedulable(node) {
-		return unschedulableReason(node)
+func declinedBecause(node corev1.Node, role discoverypkg.NodeRole, tolerations []corev1.Toleration) string {
+	if !schedulable(node, tolerations) {
+		return unschedulableReason(node, tolerations)
 	}
 	return fmt.Sprintf("it is %s; set spec.discover.enableControlPlaneNodes to include it",
 		role.Describe())
 }
 
 // unschedulableReason says which of the two conditions excluded the node, so an
-// administrator reads "it is cordoned" rather than a bare refusal.
-func unschedulableReason(node corev1.Node) string {
+// administrator reads "it is cordoned" rather than a bare refusal, and the
+// taint named is one the run does not tolerate.
+func unschedulableReason(node corev1.Node, tolerations []corev1.Toleration) string {
 	if node.Spec.Unschedulable {
 		return "it is cordoned"
 	}
-	for _, taint := range node.Spec.Taints {
-		if taint.Effect == corev1.TaintEffectNoSchedule || taint.Effect == corev1.TaintEffectNoExecute {
-			return fmt.Sprintf("it carries the taint %s=%s:%s",
-				taint.Key, taint.Value, taint.Effect)
-		}
+	if taint := untoleratedTaint(node, tolerations); taint != nil {
+		return fmt.Sprintf("it carries the taint %s=%s:%s, which spec.discover.tolerations does not tolerate",
+			taint.Key, taint.Value, taint.Effect)
 	}
 	return "it is not schedulable"
 }
 
-func schedulable(node corev1.Node) bool {
-	if node.Spec.Unschedulable {
-		return false
-	}
-	for _, taint := range node.Spec.Taints {
-		if taint.Effect == corev1.TaintEffectNoSchedule || taint.Effect == corev1.TaintEffectNoExecute {
-			return false
+// schedulable reports whether the run's work can be placed on a node.
+//
+// A cordoned node is excluded, and so is a node carrying a NoSchedule or
+// NoExecute taint the run does not tolerate. A probe Job is pinned with
+// spec.nodeName and would run on either, but a worker the cluster is not
+// scheduling to is not one to hand to a storage cluster. A taint the run
+// tolerates is the opposite case: it is how a fleet dedicates machines to
+// storage, and the draft carries the same tolerations to the storage nodes.
+func schedulable(node corev1.Node, tolerations []corev1.Toleration) bool {
+	return !node.Spec.Unschedulable && untoleratedTaint(node, tolerations) == nil
+}
+
+// untoleratedTaint is the node's first NoSchedule or NoExecute taint that none
+// of the tolerations tolerates, or nil.
+func untoleratedTaint(node corev1.Node, tolerations []corev1.Toleration) *corev1.Taint {
+	for i := range node.Spec.Taints {
+		taint := &node.Spec.Taints[i]
+		if taint.Effect != corev1.TaintEffectNoSchedule && taint.Effect != corev1.TaintEffectNoExecute {
+			continue
+		}
+		// Nothing here is worth logging, and the Gt and Lt operators are an alpha
+		// feature the probe Job does not rely on either.
+		tolerates := func(t corev1.Toleration) bool { return t.ToleratesTaint(logr.Discard(), taint, false) }
+		if !slices.ContainsFunc(tolerations, tolerates) {
+			return taint
 		}
 	}
-	return true
+	return nil
 }
 
 // jobExhausted reports whether a Job has used up its retries.

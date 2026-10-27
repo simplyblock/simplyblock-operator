@@ -10,7 +10,9 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/csi-driver/internal/clusters"
+	"github.com/simplyblock/csi-driver/internal/controlplane"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
@@ -43,7 +45,10 @@ func (cs *Server) ControllerExpandVolume(
 		return nil, err
 	}
 
-	err = sbclient.ResizeVolume(ctx, spdkVol.VolumeID, capacityBytes)
+	err = cs.onActiveVolume(ctx, volumeID, spdkVol, sbclient,
+		func(h *lvol.Handle, c *controlplane.ClusterClient) error {
+			return c.ResizeVolume(ctx, h.VolumeID, capacityBytes)
+		})
 	if err != nil {
 		klog.Errorf("failed to resize lvol, LVolID: %s err: %v", spdkVol.VolumeID, err)
 		return nil, classifyControllerExpandVolumeError(err)

@@ -35,6 +35,10 @@ const (
 	// not that cluster's site: its nodes would join the other site's half of the
 	// cluster while running on this one.
 	SiteMismatch = "SiteMismatch"
+	// FailureDomainLayout is a document creating a cluster in failure-domain
+	// mode whose domains the control plane refuses to activate: fewer than the
+	// stripe's parity plus two, or holding unequal numbers of workers.
+	FailureDomainLayout = "FailureDomainLayout"
 
 	// What the document says about erasure coding, which is the one part of a
 	// deployment nothing below the operator checks: the control plane validates
@@ -79,6 +83,27 @@ const (
 	// failure with a reason rather than a merge somebody has to unpick.
 	ClusterExists   = "ClusterExists"
 	ClusterNotFound = "ClusterNotFound"
+
+	// The limits a member cluster is held to (design-superclusters.md §5.2,
+	// §5.3): at most 32 storage nodes, and a name that is a DNS label. Both
+	// hold for a node set whether or not the document makes a supercluster.
+	MemberTooLarge    = "MemberTooLarge"
+	MemberNameInvalid = "MemberNameInvalid"
+
+	// MemberSizingUnstated refuses a document that adds members to a
+	// supercluster without stating their sizing in spec.cluster
+	// (design-superclusters.md §5.6).
+	MemberSizingUnstated = "MemberSizingUnstated"
+
+	// The topology rules every document is held to (design-superclusters.md
+	// §5.7): a member stays in one region, and with failure domains enabled
+	// every member of a region holds every domain the region has.
+	MemberSpansRegions         = "MemberSpansRegions"
+	MemberMissingFailureDomain = "MemberMissingFailureDomain"
+
+	// JournalDeviceRequired reports logical block devices without a dedicated
+	// journal device, which the control plane refuses at every node add.
+	JournalDeviceRequired = "JournalDeviceRequired"
 
 	// What the expansion produced.
 	ClusterCreated = "ClusterCreated"

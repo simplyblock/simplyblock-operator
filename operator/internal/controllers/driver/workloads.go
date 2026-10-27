@@ -20,6 +20,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -183,11 +184,14 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string)
 // no left no trace of having run: the node plugin does it instead, in the same
 // privileged container, where what it finds lands in the pod's log
 // (csi-driver/internal/csi/node/capability.go).
-const nodePostStartScript = `modprobe nvme-tcp || echo failed to modprobe nvme-tcp && ` +
+//
+// The NQN it writes is the one the node plugin reads back with nqn.DefaultHost,
+// so the paths and the format come from that package.
+var nodePostStartScript = `modprobe nvme-tcp || echo failed to modprobe nvme-tcp && ` +
 	`modprobe nvme-rdma || echo failed to modprobe nvme-rdma && ` +
-	`if [ ! -f /var/lib/nvme/hostid ]; then uuidgen > /var/lib/nvme/hostid; fi && ` +
-	`cp /var/lib/nvme/hostid /etc/nvme/hostid && ` +
-	`echo "nqn.2014-08.org.nvmexpress:uuid:$(cat /etc/nvme/hostid)" > /etc/nvme/hostnqn`
+	`if [ ! -f ` + nqn.PersistedHostIDFile + ` ]; then uuidgen > ` + nqn.PersistedHostIDFile + `; fi && ` +
+	`cp ` + nqn.PersistedHostIDFile + ` /etc/nvme/hostid && ` +
+	`echo "` + nqn.NVMeHost("$(cat /etc/nvme/hostid)") + `" > ` + nqn.DefaultHostNQNFile
 
 func nodeVolumes(n objectNames, driver string) []corev1.Volume {
 	dirOrCreate := corev1.HostPathDirectoryOrCreate

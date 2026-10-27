@@ -72,17 +72,6 @@ func ParseRemote(s string) (RemotePeer, error) {
 	return r, nil
 }
 
-// peerContextKey carries the verified identity of the peer a call arrived from.
-type peerContextKey struct{}
-
-// PeerFromContext is the verified identity of the peer whose session a call
-// arrived on, for a service a [Hub] serves to its peers. It is false before the
-// session's Hello has succeeded, and on a call that did not arrive through a hub.
-func PeerFromContext(ctx context.Context) (PeerID, bool) {
-	id, ok := ctx.Value(peerContextKey{}).(PeerID)
-	return id, ok
-}
-
 // SiteAuthenticator is the relay's authenticator. A site's forwarder links with
 // a token for the site link's ServiceAccount in that site's namespace on the
 // hub, which the forwarder requests with the credentials the hub's add-on

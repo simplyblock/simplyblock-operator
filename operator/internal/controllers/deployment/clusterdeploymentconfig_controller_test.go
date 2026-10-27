@@ -476,6 +476,31 @@ func TestANonOpenShiftEnvironmentStatesNoBlock(t *testing.T) {
 	}
 }
 
+// A managed service owns its nodes' kubelet configuration and rebuilds it with
+// every node it replaces, so a document naming one states that the storage node
+// leaves it alone, as Talos does.
+func TestAManagedServiceLeavesTheKubeletConfigurationAlone(t *testing.T) {
+	for _, environment := range []simplyblockv1alpha2.KubernetesEnvironment{
+		simplyblockv1alpha2.KubernetesEnvironmentEKS,
+		simplyblockv1alpha2.KubernetesEnvironmentGKE,
+		simplyblockv1alpha2.KubernetesEnvironmentAKS,
+		simplyblockv1alpha2.KubernetesEnvironmentOKE,
+	} {
+		config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+			c.Spec.Environment = environment
+		})
+
+		workload := reconcilerFor(t).buildWorkload(config)
+		if workload.EnableKubeletConfiguration == nil || *workload.EnableKubeletConfiguration {
+			t.Errorf("%s left enableKubeletConfiguration %v, want it stated false",
+				environment, workload.EnableKubeletConfiguration)
+		}
+		if workload.OpenShift != nil {
+			t.Errorf("%s produced the OpenShift block %+v", environment, workload.OpenShift)
+		}
+	}
+}
+
 // Every node of one document gets a name of its own, because the name is derived
 // from the cluster, the worker, and the slot.
 func TestEveryNodeGetsADistinctName(t *testing.T) {

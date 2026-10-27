@@ -11,9 +11,10 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 const foreignNodeUUID = "f0e1d2c3-0000-0000-0000-00000000000f"
@@ -26,7 +27,7 @@ const foreignNodeUUID = "f0e1d2c3-0000-0000-0000-00000000000f"
 func TestAFollowerHandedANonSyncClusterHoldsBeforeAdopting(t *testing.T) {
 	api := &fakeControlPlane{
 		ready:   func() error { return nil },
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	rec := &recorder{}
 	r := newClusterReconciler(t, api, rec,
@@ -54,7 +55,7 @@ func TestAFollowerHandedANonSyncClusterHoldsBeforeAdopting(t *testing.T) {
 func TestAFollowerWhoseSiteHasAnotherInstallationsNodeHolds(t *testing.T) {
 	api := &fakeControlPlane{
 		ready:   func() error { return nil },
-		cluster: func(string) (webapi.ClusterResponse, error) { return syncCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return syncCluster(), nil },
 		storageNodes: func(string) ([]utils.NodeStatusResponse, error) {
 			return []utils.NodeStatusResponse{
 				{UUID: "a0000000-0000-0000-0000-00000000000a", Status: "online", Site: peerSite},
@@ -88,7 +89,7 @@ func TestAFollowerWhoseSiteHasAnotherInstallationsNodeHolds(t *testing.T) {
 func TestAFollowerAdoptsOverItsOwnSitesNodes(t *testing.T) {
 	api := &fakeControlPlane{
 		ready:   func() error { return nil },
-		cluster: func(string) (webapi.ClusterResponse, error) { return syncCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return syncCluster(), nil },
 		storageNodes: func(string) ([]utils.NodeStatusResponse, error) {
 			return []utils.NodeStatusResponse{{UUID: foreignNodeUUID, Status: "online", Site: thisSite}}, nil
 		},

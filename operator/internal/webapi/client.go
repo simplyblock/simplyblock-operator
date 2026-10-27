@@ -26,37 +26,48 @@ type Client struct {
 }
 
 var (
-	tlsClientOnce    sync.Once
 	tlsClientCacheMu sync.Mutex
 	tlsClient        *http.Client
-	tlsClientErr     error
 )
 
-// resetTLSClientOnce wipes the sync.Once guard. Test-only.
-func resetTLSClientOnce() {
-	tlsClientOnce = sync.Once{}
+// cachedTLSClient is the verified client every TLS request shares.
+//
+// Only a success is remembered. The CA bundle and the client certificate arrive
+// with the pod's volumes, and a failure cached for the life of the process would
+// leave an operator that asked early unable to reach a control plane that has
+// been answering for hours.
+func cachedTLSClient() (*http.Client, error) {
+	tlsClientCacheMu.Lock()
+	defer tlsClientCacheMu.Unlock()
+	if tlsClient != nil {
+		return tlsClient, nil
+	}
+
+	ns, err := tlsutil.DetectOperatorNamespace()
+	if err != nil {
+		return nil, err
+	}
+	// The pair is presented where the pod mounts one. Whether callers present a
+	// certificate is the ControlPlane's decision, and the chart mounts the pair
+	// exactly when the ControlPlane asks for it, so the files are the evidence.
+	certPath, keyPath := tlsutil.ServiceClientCertificatePath, tlsutil.ServiceClientKeyPath
+	if !fileExists(certPath) || !fileExists(keyPath) {
+		certPath, keyPath = "", ""
+	}
+	client, err := tlsutil.BuildWebAPIClient(ns, tlsutil.ServiceCABundlePath, certPath, keyPath)
+	if err != nil {
+		return nil, err
+	}
+	// Both transports wait as long, so a step's claim lease measured
+	// against RequestTimeout covers a call made over either.
+	client.Timeout = RequestTimeout
+	tlsClient = client
+	return tlsClient, nil
 }
 
-func cachedTLSClient() (*http.Client, error) {
-	tlsClientOnce.Do(func() {
-		ns, err := tlsutil.DetectOperatorNamespace()
-		if err != nil {
-			tlsClientErr = err
-			return
-		}
-		certPath, keyPath := "", ""
-		if os.Getenv("SB_TLS_CONNECT") == "authenticated" {
-			certPath = tlsutil.ServiceClientCertificatePath
-			keyPath = tlsutil.ServiceClientKeyPath
-		}
-		tlsClient, tlsClientErr = tlsutil.BuildWebAPIClient(ns, tlsutil.ServiceCABundlePath, certPath, keyPath)
-		if tlsClientErr == nil {
-			// Both transports wait as long, so a step's claim lease measured
-			// against RequestTimeout covers a call made over either.
-			tlsClient.Timeout = RequestTimeout
-		}
-	})
-	return tlsClient, tlsClientErr
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 // RequestTimeout bounds one request to the control plane. A claim's lease on a
@@ -65,27 +76,28 @@ func cachedTLSClient() (*http.Client, error) {
 const RequestTimeout = 30 * time.Second
 
 func NewClient(baseURL ...string) *Client {
-	tlsEnabled := os.Getenv("SB_TLS_SERVE") == "1"
+	const defaultURL = "http://" + defaultHost
 
-	defaultURL := "http://simplyblock-webappapi:5000"
+	url, explicit := defaultURL, false
+	if envURL := os.Getenv("SIMPLYBLOCK_WEBAPI_BASE_URL"); envURL != "" {
+		url, explicit = envURL, true
+	}
+	if len(baseURL) > 0 {
+		url, explicit = baseURL[0], true
+	}
+
 	httpClient := &http.Client{Timeout: RequestTimeout}
 	var initErr error
-
-	if tlsEnabled {
-		defaultURL = "https://simplyblock-webappapi:5000"
+	switch {
+	case !explicit:
+		// The default address, whose scheme the ControlPlane decides per request.
+		httpClient.Transport = &adaptiveTransport{plain: http.DefaultTransport, secure: secureTransport}
+	case strings.HasPrefix(url, "https://"):
 		if c, err := cachedTLSClient(); err != nil {
 			initErr = err
 		} else {
 			httpClient = c
 		}
-	}
-
-	url := defaultURL
-	if envURL := os.Getenv("SIMPLYBLOCK_WEBAPI_BASE_URL"); envURL != "" {
-		url = envURL
-	}
-	if len(baseURL) > 0 {
-		url = baseURL[0]
 	}
 
 	c := &Client{

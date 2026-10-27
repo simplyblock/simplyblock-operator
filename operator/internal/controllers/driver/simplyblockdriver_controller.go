@@ -65,6 +65,7 @@ const (
 	// The same reasons the export reconciler records for the same update.
 	reasonMDSUpdated          = "MDSUpdated"
 	reasonMDSResourcesInvalid = "MDSResourcesInvalid"
+	reasonSnapshotsMissing    = "SnapshotSupportMissing"
 )
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=get;list;watch;create;update;patch;delete
@@ -535,12 +536,10 @@ func (r *SimplyblockDriverReconciler) recordOrigin(
 }
 
 // recordSnapshotSupport writes status.snapshotSupport, and emits §6.1's event
-// the first time it becomes known.
+// when it changes.
 //
-// It is written once and not maintained. The field records what happened when
-// this deployment came up, which is what an administrator reading it wants to
-// know, and a cluster that later loses the snapshot API has a problem this
-// field is not the place to report.
+// Missing is revised to Detected once the cluster serves the API, so the field
+// tells an administrator that the fix worked.
 func (r *SimplyblockDriverReconciler) recordSnapshotSupport(
 	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
 ) error {
@@ -552,9 +551,15 @@ func (r *SimplyblockDriverReconciler) recordSnapshotSupport(
 		return nil
 	}
 
-	r.event(d, corev1.EventTypeNormal, reasonSnapshotsEnabled,
-		fmt.Sprintf("volume snapshots are available through %s, on a cluster that %s",
-			names(d).snapshotClass, snapshotOriginPhrase(origin)))
+	if origin == simplyblockv1alpha2.SnapshotSupportOriginMissing {
+		r.event(d, corev1.EventTypeWarning, reasonSnapshotsMissing,
+			"the cluster serves no snapshot API, so VolumeSnapshots cannot work: install the "+
+				"external-snapshotter CRDs and snapshot-controller")
+	} else {
+		r.event(d, corev1.EventTypeNormal, reasonSnapshotsEnabled,
+			fmt.Sprintf("volume snapshots are available through %s, on a cluster that %s",
+				names(d).snapshotClass, snapshotOriginPhrase(origin)))
+	}
 	return r.writeStatus(ctx, d, func(status *simplyblockv1alpha2.SimplyblockDriverStatus) {
 		status.SnapshotSupport = origin
 	})

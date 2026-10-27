@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
@@ -31,7 +32,6 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 const (
@@ -74,8 +74,10 @@ func newClient(t *testing.T, objects ...client.Object) client.Client {
 		WithStatusSubresource(
 			&simplyblockv1alpha2.StorageCluster{},
 			&simplyblockv1alpha2.StorageClusterOps{},
+			&simplyblockv1alpha2.StoragePool{},
 		).
 		WithObjects(objects...).
+		WithIndex(&simplyblockv1alpha2.StorageCluster{}, superclusterRefIndex, superclusterRefOf).
 		Build()
 }
 
@@ -209,11 +211,18 @@ type fakeControlPlane struct {
 	// clusterID.
 	clusterCtx func(context.Context)
 
+	// forgetsNames makes the fake a control plane without sbcli#1512, which
+	// drops the workload names from the create body. Without it the fake
+	// keeps the names it was sent and returns them on create and in its list,
+	// as a control plane that records them does.
+	forgetsNames bool
+	keptNames    atlascp.ClusterWorkloadNames
+
 	ready        func() error
-	create       func(utils.ClusterAddParams) (webapi.ClusterResponse, error)
-	cluster      func(string) (webapi.ClusterResponse, error)
-	byName       func(string) (utils.ClusterListEntry, bool, error)
-	clusters     func() ([]utils.ClusterListEntry, error)
+	create       func(atlascp.CreateClusterParams) (atlascp.Cluster, error)
+	cluster      func(string) (atlascp.Cluster, error)
+	byName       func(string) (atlascp.Cluster, bool, error)
+	clusters     func() ([]atlascp.Cluster, error)
 	deleteCall   func(string) error
 	activate     func(string) error
 	expand       func(string) error
@@ -271,18 +280,25 @@ func (f *fakeControlPlane) Ready(context.Context) error {
 }
 
 func (f *fakeControlPlane) CreateCluster(
-	_ context.Context, params utils.ClusterAddParams,
-) (webapi.ClusterResponse, error) {
+	_ context.Context, params atlascp.CreateClusterParams,
+) (atlascp.Cluster, error) {
 	f.createCalls++
 	if f.create == nil {
 		f.t.Fatal("the control plane was asked to create a cluster and the test did not script it")
 	}
-	return f.create(params)
+	if !f.forgetsNames {
+		f.keptNames = params.WorkloadNames
+	}
+	response, err := f.create(params)
+	if err == nil && response.WorkloadNames == (atlascp.ClusterWorkloadNames{}) {
+		response.WorkloadNames = f.keptNames
+	}
+	return response, err
 }
 
 func (f *fakeControlPlane) Cluster(
 	ctx context.Context, clusterID string,
-) (webapi.ClusterResponse, error) {
+) (atlascp.Cluster, error) {
 	if f.clusterCtx != nil {
 		f.clusterCtx(ctx)
 	}
@@ -294,14 +310,18 @@ func (f *fakeControlPlane) Cluster(
 
 func (f *fakeControlPlane) ClusterByName(
 	_ context.Context, name string,
-) (utils.ClusterListEntry, bool, error) {
+) (atlascp.Cluster, bool, error) {
 	if f.byName == nil {
-		return utils.ClusterListEntry{}, false, nil
+		return atlascp.Cluster{}, false, nil
 	}
-	return f.byName(name)
+	entry, found, err := f.byName(name)
+	if found && entry.WorkloadNames == (atlascp.ClusterWorkloadNames{}) {
+		entry.WorkloadNames = f.keptNames
+	}
+	return entry, found, err
 }
 
-func (f *fakeControlPlane) Clusters(context.Context) ([]utils.ClusterListEntry, error) {
+func (f *fakeControlPlane) Clusters(context.Context) ([]atlascp.Cluster, error) {
 	if f.clusters == nil {
 		return nil, nil
 	}
@@ -467,9 +487,9 @@ var _ TaskCache = (*fakeTaskCache)(nil)
 
 // activeCluster is the control plane's answer for a cluster that is up and not
 // rebalancing, which is the steady state most tests start from.
-func activeCluster() webapi.ClusterResponse {
-	return webapi.ClusterResponse{
-		UUID:              testClusterUUID,
+func activeCluster() atlascp.Cluster {
+	return atlascp.Cluster{
+		ID:                testClusterUUID,
 		NQN:               "nqn.2023-02.io.simplyblock:4f2c8a11",
 		Status:            utils.ClusterStatusActive,
 		NDCS:              2,

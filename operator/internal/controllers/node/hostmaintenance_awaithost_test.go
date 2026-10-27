@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	atlaskube "github.com/simplyblock/atlas/kube"
 )
 
 // Regression: 2026-10-13-maintenance-does-not-wait-for-the-uncordon -- a cordoned,
@@ -34,7 +36,7 @@ func TestAWindowWaitsForTheWorkerToBeUncordoned(t *testing.T) {
 				objects = append(objects, worker)
 			}
 			r, _ := anOpsWorld(t, aControlPlane(), objects...)
-			r.Workload.Probe = func(context.Context, string, string, bool, bool) error {
+			r.Workload.Probe = func(context.Context, string, string, atlaskube.WorkloadNames, bool, bool) error {
 				if tc.answers {
 					return nil
 				}

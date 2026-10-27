@@ -561,3 +561,18 @@ func TestTheClusterOwnsItsPools(t *testing.T) {
 		t.Error("the pool has no finalizer, so a cluster deletion would take it silently")
 	}
 }
+
+// The capacity limit the control plane enforces is reported beside its
+// ceilings, read from the pool's max_size, so the limit applied can be read
+// back rather than assumed from the spec.
+func TestTheEnforcedCapacityIsReported(t *testing.T) {
+	cp, rec := newControlPlane(t), &recorder{}
+	cp.pool.MaxSize = 10_000_000_000
+	r := newReconciler(t, cp, rec, newCluster(testClusterUUID), newPool("tenant-a"))
+
+	p, _ := reconcileSettled(t, r, "tenant-a")
+
+	if p.Status.Limits == nil || p.Status.Limits.Capacity != "10G" {
+		t.Errorf("status.limits = %+v, want capacity 10G", p.Status.Limits)
+	}
+}

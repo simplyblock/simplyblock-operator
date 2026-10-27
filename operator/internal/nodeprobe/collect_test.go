@@ -19,6 +19,7 @@ import (
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/inventory"
+	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/pci"
 )
 
@@ -211,7 +212,11 @@ func TestFromInventoryCarriesEveryReadingAndNotMostOfThem(t *testing.T) {
 		Interfaces:      []inventory.Interface{{Name: "eth0", SpeedMbps: 25000}},
 		Devices:         []blockdev.Candidate{oneFreeDisk()},
 		NVMeControllers: []pci.Device{{Address: "0000:5e:00.0", Class: "0x010802", Driver: "nvme"}},
-		HostOS:          ubuntuHost(),
+		NVMeFormats: []inventory.NVMeControllerFormats{{
+			Address:    "0000:5e:00.0",
+			Namespaces: []nvme.NamespaceFormats{{NSID: 1, Formats: []nvme.LBAFormat{{DataSize: 4096}}}},
+		}},
+		HostOS: ubuntuHost(),
 	}
 
 	report := FromInventory("worker-3", probedAt, inv, nil)
@@ -223,6 +228,7 @@ func TestFromInventoryCarriesEveryReadingAndNotMostOfThem(t *testing.T) {
 		"interfaces":      len(report.Interfaces) != 0,
 		"devices":         len(report.Devices) != 0,
 		"nvmeControllers": len(report.NVMeControllers) != 0,
+		"lbaFormats":      len(report.NVMeControllers) != 0 && len(report.NVMeControllers[0].LBAFormats) != 0,
 		"hostOS":          report.HostOS.Distro != "",
 	} {
 		if !carried {
@@ -338,6 +344,63 @@ func TestFromInventoryCarriesTheDistroFamilyVersionAndArchitecture(t *testing.T)
 	}
 }
 
+func TestFromInventoryCarriesTheKernelFacts(t *testing.T) {
+	// The kernel decides what a worker can do beside hosting a storage node:
+	// mount a volume over several paths, run virtual machines, and read a pNFS
+	// volume directly. Each conclusion travels with its evidence, which is what
+	// a reviewer checks on the host.
+	host := ubuntuHost()
+	host.Kernel = inventory.KernelFacts{
+		Release: "6.1.155-176.282.amzn2023.x86_64",
+		Version: inventory.KernelVersion{Major: 6, Minor: 1, Patch: 155},
+		NVMeMultipath: inventory.Multipath{State: inventory.MultipathNotBuilt,
+			Detail: "nvme_core is loaded and has no multipath parameter"},
+		KVM:       inventory.Capability{State: inventory.CapabilityAbsent, Detail: "no vmx or svm"},
+		TUN:       inventory.Capability{State: inventory.CapabilityLoadable, Detail: "tun is a module"},
+		PNFSBlock: inventory.Capability{State: inventory.CapabilityAvailable, Detail: "blocklayoutdriver is loaded"},
+	}
+	report := FromInventory(testNode, probedAt, inventory.Inventory{HostOS: host}, nil)
+
+	kernel := report.HostOS.Kernel
+	if kernel.Release != "6.1.155-176.282.amzn2023.x86_64" {
+		t.Errorf("the report names the kernel release %q", kernel.Release)
+	}
+	if want := (KernelVersion{Major: 6, Minor: 1, Patch: 155}); kernel.Version == nil || *kernel.Version != want {
+		t.Errorf("the report names the kernel version %+v, want %+v", kernel.Version, want)
+	}
+	for name, got := range map[string]Fact{
+		"NVMe multipath": kernel.NVMeMultipath, "KVM": kernel.KVM, "TUN": kernel.TUN, "pNFS block": kernel.PNFSBlock,
+	} {
+		if got.State == "" || got.Detail == "" {
+			t.Errorf("the report carries %s as %+v, without its state or its evidence", name, got)
+		}
+	}
+	if kernel.NVMeMultipath.State != string(inventory.MultipathNotBuilt) {
+		t.Errorf("the report names NVMe multipath %q, want %q", kernel.NVMeMultipath.State, inventory.MultipathNotBuilt)
+	}
+}
+
+func TestFromInventoryOmitsAKernelVersionThatWasNotRead(t *testing.T) {
+	// A release the parser does not recognize leaves the version unset, and the
+	// report says nothing rather than claiming kernel 0.0.0.
+	host := ubuntuHost()
+	host.Kernel = inventory.KernelFacts{Release: "talos"}
+	report := FromInventory(testNode, probedAt, inventory.Inventory{HostOS: host}, nil)
+
+	if report.HostOS.Kernel.Version != nil {
+		t.Errorf("the report names the kernel version %+v for an unparsed release", *report.HostOS.Kernel.Version)
+	}
+}
+
+func TestTheReportVersionMarksTheKernelFacts(t *testing.T) {
+	// A version-9 report decodes with every kernel fact empty, and a reader
+	// would take that as nothing known where the probe never asked. Refusing it
+	// re-runs the probe.
+	if ReportVersion < 10 {
+		t.Errorf("the report is version %d, and the kernel facts arrived at version 10", ReportVersion)
+	}
+}
+
 func TestFromInventoryReportsAHostWhoseOSWasNotRead(t *testing.T) {
 	// A probe that was not given the host's root filesystem reports an empty
 	// distro beside the failure that says why, rather than a plausible one read
@@ -347,4 +410,82 @@ func TestFromInventoryReportsAHostWhoseOSWasNotRead(t *testing.T) {
 	if report.HostOS.Distro != "" {
 		t.Errorf("the report names the distro %q with nothing read", report.HostOS.Distro)
 	}
+}
+
+func TestTheReportCarriesEachControllersLBAFormats(t *testing.T) {
+	// The formats are read per controller and reported on it, by PCI address,
+	// so a reviewer reads them beside the driver that owns the controller.
+	inv := inventory.Inventory{
+		NVMeControllers: []pci.Device{
+			{Address: "0000:06:11.0", Driver: "nvme"},
+			{Address: "0000:06:1b.0", Driver: "nvme"},
+			{Address: "0000:07:00.0", Driver: "vfio-pci"},
+		},
+		NVMeFormats: []inventory.NVMeControllerFormats{
+			{Address: "0000:06:11.0", Controller: "nvme0", Namespaces: []nvme.NamespaceFormats{{
+				NSID: 1,
+				Formats: []nvme.LBAFormat{
+					{Index: 0, DataSize: 512, RelativePerformance: nvme.PerformanceGood},
+					{Index: 1, DataSize: 4096, MetadataSize: 8, RelativePerformance: nvme.PerformanceBest},
+				},
+				InUse:            1,
+				ExtendedMetadata: true,
+			}}},
+			{Address: "0000:06:1b.0", Controller: "nvme1", Namespaces: []nvme.NamespaceFormats{{
+				NSID:    nvme.NSIDAll,
+				Formats: []nvme.LBAFormat{{Index: 0, DataSize: 4096}},
+				InUse:   -1,
+			}}},
+		},
+	}
+
+	encoded, err := Encode(FromInventory(testNode, probedAt, inv, nil))
+	if err != nil {
+		t.Fatalf("encode the report: %v", err)
+	}
+	report, err := Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode the report: %v", err)
+	}
+
+	byAddress := map[string][]NamespaceFormats{}
+	for _, c := range report.NVMeControllers {
+		byAddress[c.Address] = c.LBAFormats
+	}
+
+	one := 1
+	want := []NamespaceFormats{{
+		NSID: 1,
+		Formats: []LBAFormat{
+			{Index: 0, DataSize: 512, RelativePerformance: "good"},
+			{Index: 1, DataSize: 4096, MetadataSize: 8, RelativePerformance: "best"},
+		},
+		Current:          &one,
+		ExtendedMetadata: true,
+	}}
+	if got := byAddress["0000:06:11.0"]; fmt.Sprintf("%+v", deref(got)) != fmt.Sprintf("%+v", deref(want)) {
+		t.Errorf("0000:06:11.0 formats = %+v, want %+v", deref(got), deref(want))
+	}
+
+	common := byAddress["0000:06:1b.0"]
+	if len(common) != 1 || !common[0].Common || common[0].NSID != 0 || common[0].Current != nil {
+		t.Errorf("0000:06:1b.0 formats = %+v, want the common formats with none current", deref(common))
+	}
+	if formats := byAddress["0000:07:00.0"]; len(formats) != 0 {
+		t.Errorf("the controller on vfio-pci reports formats %+v", deref(formats))
+	}
+}
+
+// deref renders Current by value, so two reports compare by what they say.
+func deref(formats []NamespaceFormats) []string {
+	out := make([]string, 0, len(formats))
+	for _, f := range formats {
+		current := "none"
+		if f.Current != nil {
+			current = fmt.Sprint(*f.Current)
+		}
+		out = append(out, fmt.Sprintf("nsid=%d common=%v current=%s ext=%v formats=%+v",
+			f.NSID, f.Common, current, f.ExtendedMetadata, f.Formats))
+	}
+	return out
 }

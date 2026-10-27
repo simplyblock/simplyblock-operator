@@ -33,6 +33,8 @@ import (
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -159,6 +161,84 @@ func slotHolders(slots []simplyblockv1alpha2.ProvisioningSlot) []string {
 	}
 	slices.Sort(workers)
 	return workers
+}
+
+// rankContenders orders the workers waiting for a slot, which is the order they
+// take the free ones in.
+//
+// Without failure domains it is the workers' names. With them, the waiting
+// workers are dealt into the domains with the fewest hosts first, so each add
+// keeps the per-domain host counts within one of each other. The control plane
+// refuses an expansion add that breaks that rule, and it refuses it inside the
+// add task, after the POST was accepted: a worker sent from the domain that is
+// ahead is retried there while it keeps the slot, and the worker that would have
+// restored the balance waits behind it until the refused node's step runs out.
+//
+// A host is counted once the control plane has its node or an add for it is
+// under way, the same hosts the control plane counts. A worker whose domain
+// label is empty is ranked after every labeled one, because a cluster with
+// failure domains refuses its add anyway.
+func rankContenders(
+	contenders []string,
+	cluster *simplyblockv1alpha2.StorageCluster,
+	nodes []simplyblockv1alpha2.StorageNode,
+	holders []string,
+) []string {
+	slices.Sort(contenders)
+	contenders = slices.Compact(contenders)
+	if !ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains) {
+		return contenders
+	}
+
+	domainOf := make(map[string]string, len(nodes))
+	hosts := map[string]map[string]bool{}
+	count := func(worker string) {
+		domain := domainOf[worker]
+		if hosts[domain] == nil {
+			hosts[domain] = map[string]bool{}
+		}
+		hosts[domain][worker] = true
+	}
+	for i := range nodes {
+		domainOf[nodes[i].Spec.WorkerNode] = nodes[i].Spec.Config.FailureDomain
+	}
+	for i := range nodes {
+		if nodes[i].Status.UUID != "" || claimedWorker(&nodes[i]) {
+			count(nodes[i].Spec.WorkerNode)
+		}
+	}
+	for _, worker := range holders {
+		count(worker)
+	}
+
+	ranked := make([]string, 0, len(contenders))
+	remaining := slices.Clone(contenders)
+	for len(remaining) > 0 {
+		pick := 0
+		for i := 1; i < len(remaining); i++ {
+			if fewerHosts(domainOf[remaining[i]], domainOf[remaining[pick]], hosts) {
+				pick = i
+			}
+		}
+		worker := remaining[pick]
+		ranked = append(ranked, worker)
+		remaining = slices.Delete(remaining, pick, pick+1)
+		count(worker)
+	}
+	return ranked
+}
+
+// fewerHosts reports whether domain a should be dealt a worker before domain b:
+// a labeled domain before an unlabeled one, then the one with fewer hosts, then
+// the name.
+func fewerHosts(a, b string, hosts map[string]map[string]bool) bool {
+	if (a == "") != (b == "") {
+		return b == ""
+	}
+	if len(hosts[a]) != len(hosts[b]) {
+		return len(hosts[a]) < len(hosts[b])
+	}
+	return a < b
 }
 
 // describeSlots renders the holders for the event that reports a node waiting,

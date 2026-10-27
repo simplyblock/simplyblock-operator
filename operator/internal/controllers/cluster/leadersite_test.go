@@ -11,22 +11,22 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
-	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // The leader's create names its own site as the cluster's leader.
 func TestALeadersCreateNamesItsSiteTheLeader(t *testing.T) {
-	var posted utils.ClusterAddParams
+	var posted atlascp.CreateClusterParams
 	api := &fakeControlPlane{
-		create: func(p utils.ClusterAddParams) (webapi.ClusterResponse, error) {
+		create: func(p atlascp.CreateClusterParams) (atlascp.Cluster, error) {
 			posted = p
 			reading := syncCluster()
 			reading.Secret = testClusterSecret
 			return reading, nil
 		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return syncCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return syncCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{}, newUncreatedCluster(asSite(simplyblockv1alpha2.StretchedRoleLeader)))
 	reconcileCluster(t, r, 6)
@@ -42,7 +42,7 @@ func TestAFollowerRefusesAClusterThatNamesItsSiteTheLeader(t *testing.T) {
 	reading.LeaderSite = thisSite
 	api := &fakeControlPlane{
 		ready:   func() error { return nil },
-		cluster: func(string) (webapi.ClusterResponse, error) { return reading, nil },
+		cluster: func(string) (atlascp.Cluster, error) { return reading, nil },
 	}
 	rec := &recorder{}
 	r := newClusterReconciler(t, api, rec,
@@ -77,7 +77,7 @@ func TestTheLeaderKeepsTheClusterRecordNamingItsSite(t *testing.T) {
 			reading.LeaderSite, reading.LostSite = tc.leaderSite, tc.lost
 			var wrote []string
 			api := &fakeControlPlane{
-				cluster:       func(string) (webapi.ClusterResponse, error) { return reading, nil },
+				cluster:       func(string) (atlascp.Cluster, error) { return reading, nil },
 				setLeaderSite: func(_, site string) error { wrote = append(wrote, site); return nil },
 			}
 			rec := &recorder{}
@@ -119,7 +119,7 @@ func TestAFollowerHoldsWhileAWorkerIsUnreachable(t *testing.T) {
 	var probed []string
 	api := &fakeControlPlane{
 		ready:   func() error { return nil },
-		cluster: func(string) (webapi.ClusterResponse, error) { return syncCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return syncCluster(), nil },
 		reachability: func(_ string, addrs []string) ([]WorkerReachability, error) {
 			probed = addrs
 			return []WorkerReachability{{"192.0.2.12", true}, {"192.0.2.13", false}}, nil
@@ -142,7 +142,7 @@ func TestAFollowerHoldsWhileAWorkerIsUnreachable(t *testing.T) {
 func TestAFollowerWhoseWorkersAreReachableAdopts(t *testing.T) {
 	api := &fakeControlPlane{
 		ready:   func() error { return nil },
-		cluster: func(string) (webapi.ClusterResponse, error) { return syncCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return syncCluster(), nil },
 		reachability: func(_ string, addrs []string) ([]WorkerReachability, error) {
 			out := make([]WorkerReachability, 0, len(addrs))
 			for _, a := range addrs {
@@ -161,7 +161,7 @@ func TestAFollowerWhoseWorkersAreReachableAdopts(t *testing.T) {
 func TestAControlPlaneWithoutTheProbeDoesNotHoldTheFollower(t *testing.T) {
 	api := &fakeControlPlane{
 		ready:   func() error { return nil },
-		cluster: func(string) (webapi.ClusterResponse, error) { return syncCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return syncCluster(), nil },
 		reachability: func(string, []string) ([]WorkerReachability, error) {
 			return nil, ErrReachabilityUnsupported
 		},

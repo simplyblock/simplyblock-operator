@@ -75,11 +75,10 @@ type Workload struct {
 	// no cache to be stale.
 	Uncached client.Reader
 
-	// TLSEnabled and TLSMutualEnabled decide how the worker's storage-node API is
-	// probed, because a deployment serving TLS refuses a plaintext request and a
-	// refused request is not the same answer as an unreachable host.
-	TLSEnabled       bool
-	TLSMutualEnabled bool
+	// TLS decides how the worker's storage-node API is probed, because a
+	// deployment serving TLS refuses a plaintext request and a refused request is
+	// not the same answer as an unreachable host. Nil is plaintext.
+	TLS controlplane.TLSResolver
 
 	// ManagerNode is the Kubernetes node the operator itself runs on, which the
 	// chart sets from spec.nodeName. It decides one question and no other:
@@ -90,7 +89,7 @@ type Workload struct {
 	ManagerNode string
 
 	// Probe replaces the storage-node API probe in unit tests; nil means the real one.
-	Probe func(ctx context.Context, worker, namespace string, tls, mutualTLS bool) error
+	Probe func(ctx context.Context, worker, namespace string, names atlaskube.WorkloadNames, tls, mutualTLS bool) error
 }
 
 // NodeAddress is what the control plane is given as node_address when a node
@@ -108,11 +107,23 @@ type Workload struct {
 // Reading the worker Node's own reported address is what keeps this additive:
 // a deployment with no managed control plane takes exactly the path it always
 // did.
-func (w *Workload) NodeAddress(ctx context.Context, worker, namespace string) string {
+func (w *Workload) NodeAddress(ctx context.Context, namespace, cluster, worker string) string {
 	if address, ok := w.managedNodeAddress(ctx, worker, namespace); ok {
 		return address
 	}
-	return utils.StorageNodeSetAPIAddress(worker, namespace)
+	return utils.StorageNodeSetAPIAddress(worker, namespace, w.workloadNames(ctx, namespace, cluster))
+}
+
+// workloadNames are the named cluster's recorded workload names. A cluster that
+// cannot be read, or has none recorded, is reached by the constant names, which
+// is what every cluster was reached by before the names were recorded.
+func (w *Workload) workloadNames(ctx context.Context, namespace, cluster string) atlaskube.WorkloadNames {
+	var object simplyblockv1alpha2.StorageCluster
+	if err := w.Get(ctx, client.ObjectKey{Namespace: namespace, Name: cluster}, &object); err != nil {
+		return atlaskube.ConstantWorkloadNames()
+	}
+	names, _ := utils.WorkloadNamesOf(&object)
+	return names
 }
 
 // managedNodeAddress answers the worker's real address when the singleton
@@ -443,7 +454,7 @@ func (w *Workload) PublishedInDNS(
 		return false, fmt.Errorf("read the storage-node API EndpointSlice: %w", err)
 	}
 
-	wanted := utils.NodeHostnameLabel(worker)
+	wanted := w.workloadNames(ctx, namespace, cluster).Hostname(worker)
 	for i := range slice.Endpoints {
 		endpoint := &slice.Endpoints[i]
 		if endpoint.Hostname != nil && *endpoint.Hostname == wanted &&
@@ -471,13 +482,14 @@ func (w *Workload) PublishedInDNS(
 // HostAnswers reports whether the worker's storage-node API is reachable, which is
 // the one read in this package with no streamed counterpart: it is a Kubernetes-
 // side check against a pod rather than a control-plane object (§4.4).
-func (w *Workload) HostAnswers(ctx context.Context, namespace, worker string) (bool, error) {
+func (w *Workload) HostAnswers(ctx context.Context, namespace, cluster, worker string) (bool, error) {
 	probe := utils.StorageNodeAPIReachable
 	if w.Probe != nil {
 		probe = w.Probe
 	}
+	tls := w.TLS.Settings(ctx)
 	if err := probe(
-		ctx, worker, namespace, w.TLSEnabled, w.TLSMutualEnabled,
+		ctx, worker, namespace, w.workloadNames(ctx, namespace, cluster), tls.Enabled, tls.Mutual,
 	); err != nil {
 		logf.FromContext(ctx).V(1).Info("the worker's storage-node API does not answer yet",
 			"worker", worker, "err", err.Error())

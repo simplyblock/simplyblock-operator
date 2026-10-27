@@ -907,6 +907,15 @@ spec:
                         out of service. Unset until the first report succeeds; a failed report
                         leaves it unchanged, so the next reconcile retries.
                       type: boolean
+                    reportedHostNQNs:
+                      description: |-
+                        ReportedHostNQNs are the NVMe host NQNs of the Kubernetes node the
+                        control plane last accepted for this storage node: the kernel default the
+                        CSI node plugin publishes, and the simplyblock form derived from the node's
+                        UID. A host fence revokes all of them on the peer.
+                      items:
+                        type: string
+                      type: array
                     storageFencedEpoch:
                       description: |-
                         StorageFencedEpoch is the epoch in the storage-fenced taint the operator

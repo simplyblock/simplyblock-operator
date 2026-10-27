@@ -23,6 +23,40 @@ type ClusterArbitration struct {
 	TaintRequests []string `json:"taint_requests"`
 	// Enabled is the cluster's two_node_arbitration flag.
 	Enabled bool `json:"enabled"`
+	// HostFencing is the cluster's two_node_host_fencing flag
+	// (sbcli docs/design/two-node-kubernetes-fencing.md §3.1).
+	HostFencing bool `json:"host_fencing"`
+	// HostFences are the control plane's host fences, by the fenced node's id.
+	HostFences map[string]HostFence `json:"host_fences"`
+	// ClientHosts are the host NQNs the control plane holds per node id.
+	ClientHosts map[string][]string `json:"client_hosts"`
+}
+
+// HostFence is one host fence (§3.2): the fenced node's host NQNs are revoked
+// on the winner ("on") while State is revoked, releasable or restoring.
+type HostFence struct {
+	State    string   `json:"state"`
+	On       string   `json:"on"`
+	HostNQNs []string `json:"host_nqns"`
+	Epoch    int64    `json:"epoch"`
+	// Since is when the fence was armed (ms since the epoch).
+	Since int64  `json:"since"`
+	Error string `json:"error"`
+}
+
+// Host fence states.
+const (
+	HostFenceRevoking    = "revoking"
+	HostFenceRevoked     = "revoked"
+	HostFenceReleasable  = "releasable"
+	HostFenceRestoring   = "restoring"
+	HostFenceUnavailable = "unavailable"
+)
+
+// Effective reports whether the fenced node's host is cut off from the winner:
+// revoked, and kept so until the release has run.
+func (f HostFence) Effective() bool {
+	return f.State == HostFenceRevoked || f.State == HostFenceReleasable || f.State == HostFenceRestoring
 }
 
 // ArbitrationLVS is the arbiter's state of one logical volume store.
@@ -63,7 +97,7 @@ func (a *ClusterArbitration) FencedNodes() []string {
 }
 
 // GetClusterArbitration reads the arbiter's record for a cluster. A 404 means
-// the control plane has no record (arbitration off or not yet initialised) and
+// the control plane has no record (arbitration off or not yet initialized) and
 // returns nil without error.
 func (c *Client) GetClusterArbitration(ctx context.Context, clusterUUID string) (*ClusterArbitration, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/arbitration", clusterUUID)
@@ -96,6 +130,54 @@ func (c *Client) ReportArbitrationRemediation(ctx context.Context, clusterUUID, 
 	}
 	if status >= 300 {
 		return fmt.Errorf("report remediation for cluster %s: status %d: %s", clusterUUID, status, string(body))
+	}
+	return nil
+}
+
+// SetArbitrationClientHosts reports the NVMe host NQNs of the Kubernetes node a
+// storage node runs on (PUT .../arbitration/client-host); a host fence revokes
+// all of them on the peer.
+func (c *Client) SetArbitrationClientHosts(ctx context.Context, clusterUUID, nodeUUID string, hostNQNs []string) error {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/arbitration/client-host", clusterUUID)
+	if hostNQNs == nil {
+		hostNQNs = []string{}
+	}
+	body, status, err := c.Do(ctx, http.MethodPut, endpoint, map[string]any{"node_id": nodeUUID, "host_nqns": hostNQNs})
+	if err != nil {
+		return fmt.Errorf("report client hosts for cluster %s: %w", clusterUUID, err)
+	}
+	if status >= 300 {
+		return fmt.Errorf("report client hosts for cluster %s: status %d: %s", clusterUUID, status, string(body))
+	}
+	return nil
+}
+
+// ReleaseHostFence asks the control plane to give a fenced node's host access
+// back (POST .../arbitration/host-fence/release). It answers 409 until the fence
+// is releasable; that is returned as an error and retried later.
+func (c *Client) ReleaseHostFence(ctx context.Context, clusterUUID, nodeUUID string) error {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/arbitration/host-fence/release", clusterUUID)
+	body, status, err := c.Do(ctx, http.MethodPost, endpoint, map[string]any{"node_id": nodeUUID})
+	if err != nil {
+		return fmt.Errorf("release host fence for cluster %s: %w", clusterUUID, err)
+	}
+	if status >= 300 {
+		return fmt.Errorf("release host fence for cluster %s: status %d: %s", clusterUUID, status, string(body))
+	}
+	return nil
+}
+
+// SetTwoNodeSettings writes the cluster's two-node settings (PUT
+// /api/v2/clusters/{id}): two_node_arbitration and two_node_host_fencing.
+func (c *Client) SetTwoNodeSettings(ctx context.Context, clusterUUID string, arbitration, hostFencing bool) error {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/", clusterUUID)
+	body, status, err := c.Do(ctx, http.MethodPut, endpoint, map[string]any{
+		"two_node_arbitration": arbitration, "two_node_host_fencing": hostFencing})
+	if err != nil {
+		return fmt.Errorf("set two-node settings for cluster %s: %w", clusterUUID, err)
+	}
+	if status >= 300 {
+		return fmt.Errorf("set two-node settings for cluster %s: status %d: %s", clusterUUID, status, string(body))
 	}
 	return nil
 }

@@ -169,7 +169,9 @@ type DiscoverSpec struct {
 	// onto it, which bypasses the scheduler and not the taints: a NoSchedule
 	// taint still keeps the pod off, and a NoExecute taint evicts one that
 	// landed. A fleet that dedicates machines to storage taints them, so a run
-	// against one that tolerates nothing inspects nothing.
+	// against one that tolerates nothing inspects nothing. A worker carrying a
+	// NoSchedule or NoExecute taint that none of these tolerates is not
+	// inspected, and its WorkerDeclined event names that taint.
 	//
 	// They reach the draft as well, because the taints a run was allowed to
 	// probe through are the taints the cluster it proposes has to live with.
@@ -196,6 +198,16 @@ type DiscoverSpec struct {
 	// proposes them ahead of the workers rather than leaving them out.
 	// +optional
 	EnableControlPlaneNodes *bool `json:"enableControlPlaneNodes,omitempty"`
+
+	// FailureDomainLabel is the Node label whose value becomes each worker's
+	// failure domain in the draft, for fleets that label racks or power feeds.
+	// Defaults to topology.kubernetes.io/zone. A worker without the label gets
+	// no failure domain, and the run reports it. A value that is not a valid
+	// failure domain is reported as well, naming the worker, and not used.
+	// +kubebuilder:validation:MaxLength=317
+	// +kubebuilder:default="topology.kubernetes.io/zone"
+	// +optional
+	FailureDomainLabel string `json:"failureDomainLabel,omitempty"`
 
 	// EnableLogicalBlockDevices scans a worker's available logical block devices
 	// instead of its available NVMe devices. It selects the class rather than

@@ -18,10 +18,20 @@
 package v1alpha1
 
 import (
+	"encoding/json"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/conversion"
 
 	"github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
+
+// AnnotationControlPlaneTLS records the installation's TLS on a v1alpha1
+// ControlPlane, as the JSON of a v1alpha2 ControlPlaneTLS. A v1alpha1 object has
+// no TLS field, so this is how the setting crosses the version boundary in both
+// directions.
+const AnnotationControlPlaneTLS = "storage.simplyblock.io/v1alpha1-tls"
 
 // controlPlanePhaseToHub maps this version's two readiness phases onto the hub's.
 // Both are mapped: neither v1alpha1 spelling is a value v1alpha2's Enum admits,
@@ -78,14 +88,19 @@ func mapOrPassThrough(table map[string]string, v string) string {
 func (src *ControlPlane) ConvertTo(dstRaw conversion.Hub) error {
 	dst := dstRaw.(*v1alpha2.ControlPlane)
 
-	dst.ObjectMeta = src.ObjectMeta
+	// Deep-copied because taking the TLS record out of the annotations mutates
+	// them, and the object this was given is not this conversion's to change.
+	dst.ObjectMeta = *src.ObjectMeta.DeepCopy()
 
 	// Every v1alpha1 ControlPlane is one the chart installed, so the local member
 	// is the one it converts into, and it is set even when the image is empty.
 	// The hub requires exactly one member (design-controlplane.md §3.2), and the
 	// reconciler classifies an object by which member is set.
 	dst.Spec.Source = v1alpha2.ControlPlaneSource{
-		Local: &v1alpha2.LocalControlPlane{Image: src.Spec.Image},
+		Local: &v1alpha2.LocalControlPlane{
+			Image: src.Spec.Image,
+			TLS:   unstashControlPlaneTLS(&dst.ObjectMeta),
+		},
 	}
 
 	dst.Status.Phase = v1alpha2.ControlPlanePhase(
@@ -96,11 +111,44 @@ func (src *ControlPlane) ConvertTo(dstRaw conversion.Hub) error {
 	return nil
 }
 
+// unstashControlPlaneTLS takes the installation's TLS out of the annotation that
+// records it.
+//
+// This version has no TLS field, so what the hub holds for one is whatever this
+// returns, and the hub's own defaults must not be left to decide for an object
+// that never recorded anything: they are on, and spec.source.local.tls is
+// immutable, so an installation that was plaintext would become TLS on the first
+// write after an upgrade and stay that way. Such an object is the plaintext the
+// releases that wrote it installed by default, stated outright.
+//
+// A record that exists is returned as written, including any field it leaves
+// unset, because a hub object that left a field unset is one whose defaults were
+// meant to apply, and the record is how it survives a trip through this version.
+// A record that cannot be read costs the setting, as every stash does, and falls
+// back to the same plaintext.
+func unstashControlPlaneTLS(meta *metav1.ObjectMeta) v1alpha2.ControlPlaneTLS {
+	raw, recorded := meta.Annotations[AnnotationControlPlaneTLS]
+	delete(meta.Annotations, AnnotationControlPlaneTLS)
+	if len(meta.Annotations) == 0 {
+		meta.Annotations = nil
+	}
+
+	var tls v1alpha2.ControlPlaneTLS
+	if recorded && json.Unmarshal([]byte(raw), &tls) == nil {
+		return tls
+	}
+	return v1alpha2.ControlPlaneTLS{
+		EnableTLS:       ptr.To(false),
+		EnableMutualTLS: ptr.To(false),
+		Provider:        v1alpha2.ControlPlaneTLSCertManager,
+	}
+}
+
 // ConvertFrom converts the v1alpha2 hub into this ControlPlane.
 func (dst *ControlPlane) ConvertFrom(srcRaw conversion.Hub) error {
 	src := srcRaw.(*v1alpha2.ControlPlane)
 
-	dst.ObjectMeta = src.ObjectMeta
+	dst.ObjectMeta = *src.ObjectMeta.DeepCopy()
 
 	// A remote control plane has no image, which is what this version's only
 	// spec field holds. It converts down to an empty one rather than to an
@@ -109,6 +157,23 @@ func (dst *ControlPlane) ConvertFrom(srcRaw conversion.Hub) error {
 	dst.Spec.Image = ""
 	if managed := src.Spec.Source.Local; managed != nil {
 		dst.Spec.Image = managed.Image
+
+		// This version cannot hold the TLS, and a reader of it that writes the
+		// object back, as the previous operator does for the length of an
+		// upgrade, converts it up again. Without the record that write would
+		// reset a field that is immutable.
+		//
+		// It is written even for a block that states nothing, which is a block
+		// whose defaults are to apply: no record means plaintext, and the two
+		// are different answers.
+		encoded, err := json.Marshal(managed.TLS)
+		if err != nil {
+			return err
+		}
+		if dst.Annotations == nil {
+			dst.Annotations = map[string]string{}
+		}
+		dst.Annotations[AnnotationControlPlaneTLS] = string(encoded)
 	}
 
 	dst.Status.Phase = mapOrPassThrough(controlPlanePhaseFromHub, string(src.Status.Phase))

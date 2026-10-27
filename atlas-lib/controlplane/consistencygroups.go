@@ -1,13 +1,16 @@
-// Consistency-group reads the csi-addons VolumeGroup service needs: resolving the
-// backend consistency group a set of member volumes already belongs to (design
-// design-csi-addons-replication.md §14.3). A group is formed at provisioning by
-// the storage.simplyblock.io/consistency-group label; this only reads it back.
+// Consistency-group reads: the backend consistency group a set of member
+// volumes already belongs to, which the csi-addons VolumeGroup service needs
+// (design-csi-addons-replication.md §14.3), and the group formed under a label,
+// which placement across a supercluster's members needs
+// (design-superclusters.md §7.2). A group is formed at provisioning by the
+// storage.simplyblock.io/consistency-group label; this only reads it back.
 package controlplane
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -59,6 +62,37 @@ func (c *Client) ConsistencyGroupForLvols(ctx context.Context, clusterID string,
 	}
 	return "", fmt.Errorf("no consistency group in cluster %s has exactly the %d requested member(s)",
 		clusterID, len(lvolIDs))
+}
+
+// ConsistencyGroupByName returns the composite id of the consistency group named
+// `name` in clusterID, the id a backup-policy attachment addresses the group by.
+//
+// A group's name is unique per cluster, so the name and the cluster identify it.
+// Returns an error wrapping ErrNotFound when the cluster has no group by that
+// name, which the caller reconciles by waiting rather than failing: a group is
+// born from its first labeled member, so a policy can name one before it exists.
+func (c *Client) ConsistencyGroupByName(ctx context.Context, clusterID, name string) (string, error) {
+	cluster, err := parseUUID("cluster id", clusterID)
+	if err != nil {
+		return "", err
+	}
+	listResp, err := c.api.ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGetWithResponse(
+		ctx, cluster, &cpapi.ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGetParams{Name: &name})
+	if err != nil {
+		return "", fmt.Errorf("list consistency groups in cluster %s: %w", clusterID, err)
+	}
+	groups, err := payload("consistency groups in cluster "+clusterID,
+		listResp.JSON200, listResp.StatusCode(), listResp.Body)
+	if err != nil {
+		return "", err
+	}
+	for _, g := range *groups {
+		if g.Name == name {
+			return g.ClusterId.String() + "/" + g.Id.String(), nil
+		}
+	}
+	return "", fmt.Errorf("no consistency group named %q in cluster %s: %w",
+		name, clusterID, errs.ErrNotFound)
 }
 
 // consistencyGroupMembers returns a group's current open-epoch member lvol ids.
@@ -149,4 +183,121 @@ func (c *Client) ConsistencyGroupMemberHandles(
 		out = append(out, lvol.Handle{ClusterID: gh.ClusterID, PoolRef: poolID, VolumeID: m}.Handle())
 	}
 	return out, nil
+}
+
+// groupUUID is the UUID a consistency-group endpoint keys on. Callers carry the
+// group as a bare UUID or as the "<cluster>/<UUID>" composite ConsistencyGroupByName
+// returns, so the last path segment is what is parsed.
+func groupUUID(groupID string) (uuid.UUID, error) {
+	if i := strings.LastIndex(groupID, "/"); i >= 0 {
+		groupID = groupID[i+1:]
+	}
+	return parseUUID("consistency group id", groupID)
+}
+
+// TakeGroupSnapshot takes one crash-consistent generation across every current
+// member of a consistency group and returns its sequence, the number a group
+// backup of that generation is asked for by (CreateGroupBackup).
+//
+// requestID makes the take idempotent: the control plane stamps it on the
+// generation, and a retry with the same id is answered with that generation
+// instead of a new one. A caller that may lose the answer passes an id it can
+// derive again, such as its own object's UID. Empty takes a new generation
+// every time.
+func (c *Client) TakeGroupSnapshot(ctx context.Context, clusterID, groupID, requestID string) (int, error) {
+	cluster, err := parseUUID("cluster id", clusterID)
+	if err != nil {
+		return 0, err
+	}
+	group, err := groupUUID(groupID)
+	if err != nil {
+		return 0, err
+	}
+	what := "take a generation of consistency group " + groupID
+	body := cpapi.UnderscoreGenerationTakeParams{}
+	if requestID != "" {
+		body.RequestId = &requestID
+	}
+	resp, err := c.api.ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithResponse(
+		ctx, cluster, group, body)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", what, err)
+	}
+	generation, err := payload(what, resp.JSON200, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return 0, err
+	}
+	return generation.GroupSeq, nil
+}
+
+// CreatedGroupBackup is a group backup the control plane accepted: its id, and
+// how many member backups it fanned out, which is how many must complete before
+// the group commits.
+type CreatedGroupBackup struct {
+	ID          string
+	MemberCount int
+}
+
+// CreateGroupBackup backs up one existing generation of a consistency group to
+// the cluster's store as one all-or-nothing unit. The generation is always
+// named: taking it is TakeGroupSnapshot's, so a caller that records the sequence
+// between the two calls never takes a second generation on a retry.
+//
+// The call returns once every member's upload is accepted. The group commits
+// when every member completes, which the backup stream reports per member.
+func (c *Client) CreateGroupBackup(ctx context.Context, clusterID, groupID string, groupSeq int) (CreatedGroupBackup, error) {
+	cluster, err := parseUUID("cluster id", clusterID)
+	if err != nil {
+		return CreatedGroupBackup{}, err
+	}
+	group, err := groupUUID(groupID)
+	if err != nil {
+		return CreatedGroupBackup{}, err
+	}
+	what := fmt.Sprintf("back up generation %d of consistency group %s", groupSeq, groupID)
+	resp, err := c.api.ClustersBackupsGroupsCreateApiV2ClustersClusterIdBackupsGroupsPostWithResponse(
+		ctx, cluster, cpapi.UnderscoreGroupBackupCreateParams{ConsistencyGroupId: group, GroupSeq: &groupSeq})
+	if err != nil {
+		return CreatedGroupBackup{}, fmt.Errorf("%s: %w", what, err)
+	}
+	created, err := payload(what, resp.JSON201, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return CreatedGroupBackup{}, err
+	}
+	return CreatedGroupBackup{ID: created.Id.String(), MemberCount: len(created.MemberBackupIds)}, nil
+}
+
+// ConsistencyGroup is a backend consistency group as the cluster lists it.
+type ConsistencyGroup struct {
+	ID   string
+	Name string
+	// MemberCount is the number of volumes in the group now.
+	MemberCount int
+}
+
+// ConsistencyGroupNamed resolves the group formed under a claim label in
+// clusterID, with its member count, and whether there is one. It is how a placement across the
+// members of a supercluster finds the member that already holds a group.
+func (c *Client) ConsistencyGroupNamed(
+	ctx context.Context, clusterID, name string,
+) (ConsistencyGroup, bool, error) {
+	cluster, err := parseUUID("cluster id", clusterID)
+	if err != nil {
+		return ConsistencyGroup{}, false, err
+	}
+	resp, err := c.api.ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGetWithResponse(
+		ctx, cluster, &cpapi.ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGetParams{Name: &name})
+	if err != nil {
+		return ConsistencyGroup{}, false, fmt.Errorf("find consistency group %q in cluster %s: %w", name, clusterID, err)
+	}
+	groups, err := payload("consistency groups in cluster "+clusterID, resp.JSON200, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return ConsistencyGroup{}, false, err
+	}
+	for _, g := range *groups {
+		if g.Name == name {
+			return ConsistencyGroup{ID: g.Id.String(), Name: g.Name, MemberCount: g.MemberCount}, true, nil
+		}
+	}
+	return ConsistencyGroup{}, false, nil
 }

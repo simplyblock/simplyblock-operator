@@ -20,6 +20,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/statemachine"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -113,5 +115,30 @@ func TestTheActivationIsAskedForOnce(t *testing.T) {
 	}
 	if len(ops.Items) != 1 {
 		t.Errorf("three passes raised %d operations", len(ops.Items))
+	}
+}
+
+// The step is the expansion's position within Expanding, so a document that
+// reaches Expanded carries none: a finished document read off `kubectl get`
+// shows no step it is still on.
+func TestAnExpandedDocumentCarriesNoStep(t *testing.T) {
+	config, r := anExpandedDocument(t, simplyblockv1alpha2.StorageNodePhaseOnline)
+	config.Spec.Approved = true
+	config.Status.Phase = simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanding
+	config.Status.Step = statemachine.KubeSnapshot{State: string(stepActivating)}
+	if err := r.Status().Update(context.Background(), config); err != nil {
+		t.Fatalf("record the step: %v", err)
+	}
+
+	if _, err := r.expand(context.Background(), config); err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+
+	stored := readDocument(t, r)
+	if stored.Status.Phase != simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanded {
+		t.Fatalf("phase = %q, want Expanded", stored.Status.Phase)
+	}
+	if stored.Status.Step.State != "" || stored.Status.Step.Deadline != nil {
+		t.Errorf("step = %+v, want none", stored.Status.Step)
 	}
 }

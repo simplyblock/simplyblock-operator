@@ -1,0 +1,48 @@
+# The one discovery run a fresh standalone install performs.
+#
+# This chart is the only thing that creates it: the operator raises no run of its
+# own. A managed or empty install, and `discovery.enabled=false`, render none. The
+# `draft` values are accepted and unused.
+{{- $d := .Values.discovery }}
+{{- if and (eq .Values.deployment.profile "standalone") $d.enabled }}
+{{- $name := $d.name | default "initial-discovery" }}
+{{- /* The draft is "discovered-<name>" and its cluster "<draft>-cluster", which the control plane accepts at 37 characters. */}}
+{{- if gt (len (printf "discovered-%s-cluster" $name)) 37 }}
+{{- fail (printf "discovery.name %q would make the draft's StorageCluster %d characters, and the control plane accepts at most 37. Use a name of at most 18 characters." $name (len (printf "discovered-%s-cluster" $name))) }}
+{{- end }}
+---
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: {{ $name }}
+  namespace: {{ $d.namespace | default .Release.Namespace }}
+spec:
+  action: Discover
+  discover:
+    # The partition waiver is on unless stated, because a machine that held data
+    # before carries a table on every disk. The rest are left out of the spec when
+    # they are at their default, which keeps an empty PCI filter from reaching a
+    # logical-block-device run that refuses one.
+    enablePartitionedDevices: {{ if hasKey $d "enablePartitionedDevices" }}{{ $d.enablePartitionedDevices }}{{ else }}true{{ end }}
+    {{- with $d.nodeSelector }}
+    nodeSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with $d.tolerations }}
+    tolerations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- range $field := list "enableControlPlaneNodes" "enableLogicalBlockDevices" "forceJournalDevice" }}
+    {{- if index $d $field }}
+    {{ $field }}: true
+    {{- end }}
+    {{- end }}
+    {{- $filter := dict }}
+    {{- range $key, $value := $d.deviceFilter }}
+    {{- if $value }}{{ $_ := set $filter $key $value }}{{ end }}
+    {{- end }}
+    {{- with $filter }}
+    deviceFilter:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+{{- end }}

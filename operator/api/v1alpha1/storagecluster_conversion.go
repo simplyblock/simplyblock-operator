@@ -109,6 +109,21 @@ const (
 	// then alarm at, which is worse than an absent one.
 	annoClusterWarnThreshold     = "storage.simplyblock.io/conversion-spec.warningThreshold"
 	annoClusterCriticalThreshold = "storage.simplyblock.io/conversion-spec.criticalThreshold"
+
+	// A supercluster and its members have no v1alpha1 shape at all. Losing
+	// spec.superclusterRef would turn a member into a standalone cluster, and
+	// losing spec.supercluster would leave a cluster with no sizing.
+	annoClusterSupercluster      = "storage.simplyblock.io/conversion-spec.supercluster"
+	annoClusterSuperclusterRef   = "storage.simplyblock.io/conversion-spec.superclusterRef"
+	annoClusterDisablePlacement  = "storage.simplyblock.io/conversion-spec.disablePlacement"
+	annoClusterStatusRole        = "storage.simplyblock.io/conversion-status.role"
+	annoClusterStatusMembers     = "storage.simplyblock.io/conversion-status.members"
+	annoClusterStatusMemberCount = "storage.simplyblock.io/conversion-status.memberCount"
+	annoClusterStatusCapacity    = "storage.simplyblock.io/conversion-status.capacity"
+
+	// Losing the workload names would re-derive them, and every node's
+	// hostname is built from them.
+	annoClusterStatusWorkloadNames = "storage.simplyblock.io/conversion-status.workloadNames"
 )
 
 // creationStepToHub maps this version's creation sub-phase onto the hub's
@@ -419,6 +434,14 @@ func stashClusterHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageCluster) 
 		{annoClusterStatusFailureDomains, src.Status.FailureDomains},
 		{annoClusterStatusMessage, src.Status.Message},
 		{annoClusterStatusObserved, src.Status.ObservedGeneration},
+		{annoClusterSupercluster, src.Spec.Supercluster},
+		{annoClusterSuperclusterRef, src.Spec.SuperclusterRef},
+		{annoClusterDisablePlacement, src.Spec.DisablePlacement},
+		{annoClusterStatusRole, string(src.Status.Role)},
+		{annoClusterStatusMembers, src.Status.Members},
+		{annoClusterStatusMemberCount, src.Status.MemberCount},
+		{annoClusterStatusCapacity, src.Status.Capacity},
+		{annoClusterStatusWorkloadNames, src.Status.WorkloadNames},
 	} {
 		if err := stash(meta, field.key, field.value); err != nil {
 			return err
@@ -496,6 +519,14 @@ func restoreClusterHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageCluster
 		{annoClusterStatusFailureDomains, &dst.Status.FailureDomains},
 		{annoClusterStatusMessage, &dst.Status.Message},
 		{annoClusterStatusObserved, &dst.Status.ObservedGeneration},
+		{annoClusterSupercluster, &dst.Spec.Supercluster},
+		{annoClusterSuperclusterRef, &dst.Spec.SuperclusterRef},
+		{annoClusterDisablePlacement, &dst.Spec.DisablePlacement},
+		{annoClusterStatusRole, &dst.Status.Role},
+		{annoClusterStatusMembers, &dst.Status.Members},
+		{annoClusterStatusMemberCount, &dst.Status.MemberCount},
+		{annoClusterStatusCapacity, &dst.Status.Capacity},
+		{annoClusterStatusWorkloadNames, &dst.Status.WorkloadNames},
 	} {
 		if err := unstash(meta, field.key, field.target); err != nil {
 			return err

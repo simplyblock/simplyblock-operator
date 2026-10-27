@@ -124,6 +124,15 @@ type LvolConnectResp struct {
 	// volume has been failed over. The CSI driver uses it for device lookup
 	// instead of the original source lvol UUID.
 	TargetLvolID string `json:"target-lvol-id,omitempty"`
+	// KeepAliveTmo, FastIOFailTmo and TwoNode: on a two-node arbitrated
+	// cluster (TwoNode) the host must connect with the control plane's
+	// keep-alive, fast_io_fail and ctrl-loss values, or a frozen node's path is
+	// detected late and a fenced path dropped (sbcli
+	// docs/design/two-node-arbitration.md §9.1). Every other cluster keeps the
+	// driver's own connect settings.
+	KeepAliveTmo  int  `json:"keep-alive-tmo,omitempty"`
+	FastIOFailTmo int  `json:"fast-io-fail-tmo,omitempty"`
+	TwoNode       bool `json:"two-node,omitempty"`
 }
 
 type connectionInfo struct {

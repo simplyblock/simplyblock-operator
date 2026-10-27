@@ -20,9 +20,10 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/atlas/statemachine"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 const (
@@ -37,7 +38,7 @@ func asSite(role simplyblockv1alpha2.StretchedRole) func(*simplyblockv1alpha2.St
 	}
 }
 
-func syncCluster() webapi.ClusterResponse {
+func syncCluster() atlascp.Cluster {
 	reading := activeCluster()
 	reading.SyncReplication = true
 	return reading
@@ -65,15 +66,15 @@ func clusterSecretOf() *corev1.Secret {
 
 // U-01: the leader runs the ordinary creation path, as a sync cluster.
 func TestALeaderCreatesASyncReplicationCluster(t *testing.T) {
-	var posted utils.ClusterAddParams
+	var posted atlascp.CreateClusterParams
 	api := &fakeControlPlane{
-		create: func(p utils.ClusterAddParams) (webapi.ClusterResponse, error) {
+		create: func(p atlascp.CreateClusterParams) (atlascp.Cluster, error) {
 			posted = p
 			reading := syncCluster()
 			reading.Secret = testClusterSecret
 			return reading, nil
 		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return syncCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return syncCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{},
 		newUncreatedCluster(asSite(simplyblockv1alpha2.StretchedRoleLeader)))
@@ -95,7 +96,7 @@ func TestALeaderCreatesASyncReplicationCluster(t *testing.T) {
 func TestAFollowerWaitsForItsLeaderInsteadOfCreating(t *testing.T) {
 	api := &fakeControlPlane{
 		ready:  func() error { return nil },
-		byName: func(string) (utils.ClusterListEntry, bool, error) { return utils.ClusterListEntry{}, false, nil },
+		byName: func(string) (atlascp.Cluster, bool, error) { return atlascp.Cluster{}, false, nil },
 	}
 	rec := &recorder{}
 	r := newClusterReconciler(t, api, rec,
@@ -122,8 +123,8 @@ func TestAFollowerWaitsForItsLeaderInsteadOfCreating(t *testing.T) {
 func TestAFollowerWaitsForItsCredentialsWhenTheClusterExists(t *testing.T) {
 	api := &fakeControlPlane{
 		ready: func() error { return nil },
-		byName: func(string) (utils.ClusterListEntry, bool, error) {
-			return utils.ClusterListEntry{UUID: testClusterUUID, Name: testClusterName}, true, nil
+		byName: func(string) (atlascp.Cluster, bool, error) {
+			return atlascp.Cluster{ID: testClusterUUID, Name: testClusterName}, true, nil
 		},
 	}
 	rec := &recorder{}
@@ -147,7 +148,7 @@ func TestAFollowerWaitsForItsCredentialsWhenTheClusterExists(t *testing.T) {
 func TestAFollowerAdoptsThroughTheDeliveredCredentials(t *testing.T) {
 	api := &fakeControlPlane{
 		ready:   func() error { return nil },
-		cluster: func(string) (webapi.ClusterResponse, error) { return syncCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return syncCluster(), nil },
 	}
 	rec := &recorder{}
 	r := newClusterReconciler(t, api, rec,
@@ -171,7 +172,7 @@ func TestAFollowerAdoptsThroughTheDeliveredCredentials(t *testing.T) {
 func TestAFollowerRefusesAClusterThatIsNotASyncCluster(t *testing.T) {
 	api := &fakeControlPlane{
 		ready:   func() error { return nil },
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	rec := &recorder{}
 	r := newClusterReconciler(t, api, rec,
@@ -218,7 +219,7 @@ func TestTheSiteRecordIsProjectedAndAnnouncedOnce(t *testing.T) {
 	reading.LostSite = peerSite
 	reading.LostSiteState = "fencing"
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return reading, nil },
+		cluster: func(string) (atlascp.Cluster, error) { return reading, nil },
 	}
 	rec := &recorder{}
 	r := newClusterReconciler(t, api, rec,
@@ -244,7 +245,7 @@ func TestTheSiteRecordIsProjectedAndAnnouncedOnce(t *testing.T) {
 // the control plane's node list for the other site.
 func TestPeerNodesAreCountedFromTheRemoteNodes(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return syncCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return syncCluster(), nil },
 	}
 	remote := func(name, status string) *simplyblockv1alpha2.StorageNode {
 		return &simplyblockv1alpha2.StorageNode{
@@ -279,7 +280,7 @@ func TestPeerNodesAreCountedFromTheRemoteNodes(t *testing.T) {
 // on the next pass and announced.
 func TestARoleSwapIsRecordedAndAnnounced(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return syncCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return syncCluster(), nil },
 	}
 	rec := &recorder{}
 	swapped := newTestCluster(asSite(simplyblockv1alpha2.StretchedRoleFollower),
@@ -300,7 +301,7 @@ func TestARoleSwapIsRecordedAndAnnounced(t *testing.T) {
 // U-17 (status half): a standalone cluster gains no stretched status.
 func TestAStandaloneClusterHasNoStretchedStatus(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{}, newTestCluster(), clusterSecretOf())
 	if got := reconcileCluster(t, r, 1).Status.Stretched; got != nil {
@@ -312,7 +313,7 @@ func TestAStandaloneClusterHasNoStretchedStatus(t *testing.T) {
 // cluster and which site it is on.
 func TestTheCSIEntryCarriesSyncAndSite(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return syncCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return syncCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{},
 		newTestCluster(asSite(simplyblockv1alpha2.StretchedRoleFollower)), clusterSecretOf())
@@ -326,7 +327,7 @@ func TestTheCSIEntryCarriesSyncAndSite(t *testing.T) {
 
 func TestAStandaloneClustersCSIEntryCarriesNoSite(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{}, newTestCluster(), clusterSecretOf())
 	reconcileCluster(t, r, 1)
@@ -393,7 +394,7 @@ func TestARoleSwapEndsAStoppableClusterWideOperation(t *testing.T) {
 // failing the record would not stop the work, it would only stop accounting
 // for it.
 func TestARoleSwapLeavesAnUnstoppableOperationRunning(t *testing.T) {
-	api := &fakeControlPlane{cluster: func(string) (webapi.ClusterResponse, error) {
+	api := &fakeControlPlane{cluster: func(string) (atlascp.Cluster, error) {
 		return activeCluster(), nil
 	}}
 	ops := newTestOps(simplyblockv1alpha2.StorageClusterOpsActionShutdown,
@@ -457,7 +458,7 @@ func TestTheSiteLinkToThePeerSiteIsReported(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := &fakeControlPlane{
-				cluster: func(string) (webapi.ClusterResponse, error) { return syncCluster(), nil },
+				cluster: func(string) (atlascp.Cluster, error) { return syncCluster(), nil },
 			}
 			link := &fakeSiteLink{err: tc.err}
 			cluster := newTestCluster(asSite(simplyblockv1alpha2.StretchedRoleLeader))
@@ -479,7 +480,7 @@ func TestTheSiteLinkToThePeerSiteIsReported(t *testing.T) {
 // A cluster whose site link is not configured reports nothing about it.
 func TestNoSiteLinkReportsNothing(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return syncCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return syncCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{},
 		newTestCluster(asSite(simplyblockv1alpha2.StretchedRoleLeader)), clusterSecretOf())

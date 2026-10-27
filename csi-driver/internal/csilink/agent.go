@@ -13,11 +13,7 @@ package csilink
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
-	"errors"
 	"fmt"
-	"os"
 
 	"google.golang.org/grpc"
 	"k8s.io/klog"
@@ -31,15 +27,20 @@ type Config struct {
 	// HubAddress is the operator's link endpoint, `host:port`.
 	HubAddress string
 
-	// CAFile is the bundle that signs the operator's serving certificate.
-	// Empty, or naming a file that is not there, dials plaintext -- which is
-	// what a cluster with no certificate provisioned for the link gets, and is
-	// why the CA is mounted from an optional ConfigMap.
+	// CAFile is the bundle that signs the operator's serving certificate. It
+	// is re-read on every attempt, so a bundle that is not there yet fails the
+	// attempt and the agent retries. Empty dials plaintext, which is what a
+	// deployment with TLS off configures.
 	CAFile string
 
 	// ServerName overrides the name verified against that certificate. Needed
 	// when the address dialed is not the name the certificate carries.
 	ServerName string
+
+	// CertFile and KeyFile are the client keypair presented to an operator
+	// that requires mutual TLS. Both or neither, and only with CAFile.
+	CertFile string
+	KeyFile  string
 
 	// TokenFile is the projected ServiceAccount token presented to the
 	// operator. It is re-read on every attempt, because kubelet rewrites it
@@ -102,34 +103,28 @@ func Start(ctx context.Context, cfg Config) (*link.Agent, error) {
 	return agent, nil
 }
 
-// dialer verifies the operator when a CA bundle is there, and dials plaintext
-// when there is none.
+// dialer dials plaintext when no CA bundle is configured, and TLS otherwise.
 //
-// Absent is the ordinary case rather than an error: the bundle comes from a
-// ConfigMap mounted optional, so a cluster that provisioned no certificate for
-// the link has no file here and the operator is serving plaintext to match. A
-// bundle that exists and cannot be parsed is an error, because somebody
-// provisioned one and it is broken.
+// The choice is made from the configuration alone, never from whether a file
+// is on disk: the bundle is mounted from a Secret that can be populated after
+// the plugin starts, and a dialer that fell back to plaintext in that window
+// would send the token in the clear to an operator that is about to serve TLS.
 func dialer(cfg Config) (link.Dialer, error) {
 	if cfg.CAFile == "" {
+		if cfg.CertFile != "" || cfg.KeyFile != "" {
+			return nil, fmt.Errorf("csi link: a client certificate needs a CA bundle to verify the operator with")
+		}
+		klog.Infof("CSI link: no CA bundle configured, dialing %s without TLS", cfg.HubAddress)
 		return link.InsecureDialer(cfg.HubAddress), nil
 	}
-	pem, err := os.ReadFile(cfg.CAFile)
-	if errors.Is(err, os.ErrNotExist) {
-		klog.Infof("CSI link: no CA bundle at %s, dialing %s without TLS", cfg.CAFile, cfg.HubAddress)
-		return link.InsecureDialer(cfg.HubAddress), nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("csi link: reading CA bundle %s: %w", cfg.CAFile, err)
-	}
-
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pem) {
-		return nil, fmt.Errorf("csi link: CA bundle %s has no usable certificates", cfg.CAFile)
-	}
-	return link.TLSDialer(cfg.HubAddress, &tls.Config{
-		MinVersion: tls.VersionTLS13,
+	dial, err := link.TLSFileDialer(cfg.HubAddress, link.TLSFiles{
+		CAFile:     cfg.CAFile,
+		CertFile:   cfg.CertFile,
+		KeyFile:    cfg.KeyFile,
 		ServerName: cfg.ServerName,
-		RootCAs:    pool,
-	}), nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("csi link: %w", err)
+	}
+	return dial, nil
 }

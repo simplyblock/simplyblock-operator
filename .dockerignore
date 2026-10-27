@@ -16,6 +16,11 @@
 # Re-include bundle directory
 !**/bundle/
 
+# Re-include the CRDs the operator embeds: the upgrade tool compares the
+# cluster's CRDs against them, and the StorageCluster webhook reads the
+# schema defaults out of them (internal/upgrade/crds).
+!operator/internal/upgrade/crds/manifests/*.yaml
+
 # Re-include LICENSE file
 !LICENSE
 

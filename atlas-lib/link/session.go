@@ -19,7 +19,7 @@ import (
 //
 // Both ends hold the same thing. Each runs a grpc.Server over the streams the
 // other opens and a grpc.ClientConn over the streams it opens itself, so which
-// end dialled stops mattering the moment the session exists. That symmetry is
+// end dialed stops mattering the moment the session exists. That symmetry is
 // the whole reason for the multiplexer: it is what lets the CSI driver dial out
 // and still be the one answering calls.
 type Session struct {
@@ -42,8 +42,9 @@ type sessionConfig struct {
 	register func(grpc.ServiceRegistrar)
 	// yamux tunes the multiplexer; nil means DefaultYamuxConfig.
 	yamux *yamux.Config
-	// serverOptions configure the session's server, which is how a hub
-	// tells its services which verified peer a call came from.
+	// serverOptions configure the session's server: the hub's gate on
+	// unidentified callers, which also tells its services which verified
+	// peer a call came from.
 	serverOptions []grpc.ServerOption
 }
 
@@ -164,7 +165,7 @@ func (s *Session) dial(ctx context.Context, _ string) (net.Conn, error) {
 		return nil, ErrNoSession
 	}
 
-	// yamux's Open takes no context, so honour the caller's deadline here
+	// yamux's Open takes no context, so honor the caller's deadline here
 	// instead of inheriting the multiplexer's stream-open timeout.
 	type opened struct {
 		conn net.Conn

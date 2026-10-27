@@ -78,19 +78,22 @@ func (r *PersistentVolumeOpsReconciler) resolve(
 		return nil, err
 	}
 
-	target, err := r.targetNode(ctx, ops, cluster)
-	if err != nil {
-		return nil, err
-	}
-
-	return &subject{
+	resolved := &subject{
 		pv:          &pv,
 		handle:      handle,
 		cluster:     cluster,
 		clusterUUID: handle.ClusterID,
-		targetRef:   ops.Spec.Migrate.TargetNodeRef,
-		targetUUID:  target,
-	}, nil
+	}
+	if ops.Spec.Migrate == nil {
+		return resolved, nil
+	}
+	target, err := r.targetNode(ctx, ops, cluster)
+	if err != nil {
+		return nil, err
+	}
+	resolved.targetRef = ops.Spec.Migrate.TargetNodeRef
+	resolved.targetUUID = target
+	return resolved, nil
 }
 
 // addressOf reads the cluster, pool, and volume out of the volume's CSI handle.

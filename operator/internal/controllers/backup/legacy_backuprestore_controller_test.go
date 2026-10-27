@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -136,6 +138,10 @@ func TestBackupRestoreEnsurePVIncludesCSIAttributes(t *testing.T) {
 	wantStorageClass := "restore-target-class"
 	if pv.Spec.StorageClassName != wantStorageClass {
 		t.Fatalf("storageClassName = %q, want %q", pv.Spec.StorageClassName, wantStorageClass)
+	}
+	if got := pv.Annotations[ProvisionedByAnnotation]; got != utils.CSIProvisioner {
+		t.Fatalf("%s = %q, want %q so the external provisioner deletes the PV with its claim",
+			ProvisionedByAnnotation, got, utils.CSIProvisioner)
 	}
 
 	wantVolumeHandle := "cluster-uuid:pool-uuid:lvol-uuid"

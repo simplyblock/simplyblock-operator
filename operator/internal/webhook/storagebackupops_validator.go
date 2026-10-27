@@ -119,25 +119,39 @@ func (v *StorageBackupOpsValidator) admitCreate(
 		return *denied
 	}
 
-	var backup simplyblockv1alpha2.StorageBackup
-	err := v.Client.Get(ctx,
-		backupKey(&ops), &backup)
-	if apierrors.IsNotFound(err) {
-		return admission.Denied(fmt.Sprintf(
-			"spec.backupRef %q does not name a StorageBackup in namespace %q",
-			ops.Spec.BackupRef.Name, backupKey(&ops).Namespace))
-	}
-	if err != nil {
-		return admission.Errored(http.StatusInternalServerError, err)
-	}
-	// Refusing a Failed backup is a reference check rather than a state check. A
-	// backup whose phase is Failed has no copy behind it, so a restore naming it
-	// is naming a record of something that does not exist, and that is decided
-	// once and stays decided: a backup does not recover from Failed, it is
-	// replaced by another backup.
-	if backup.Status.Phase == simplyblockv1alpha2.StorageBackupPhaseFailed {
-		return admission.Denied(fmt.Sprintf(
-			"StorageBackup %q failed and has no copy to restore", ops.Spec.BackupRef.Name))
+	// A group restore names a group backup by the StorageGroupBackup that
+	// produced it, or by id, rather than one StorageBackup. The CEL rule on the spec guarantees
+	// exactly one of the three targets is set.
+	switch {
+	case ops.Spec.GroupBackupRef.Name != "":
+		if denied := v.groupBackupMustBeRestorableByRef(ctx, &ops); denied != nil {
+			return *denied
+		}
+	case ops.Spec.GroupBackupID != "":
+		if denied := v.groupBackupMustBeRestorable(ctx, &ops); denied != nil {
+			return *denied
+		}
+	default:
+		var backup simplyblockv1alpha2.StorageBackup
+		err := v.Client.Get(ctx,
+			backupKey(&ops), &backup)
+		if apierrors.IsNotFound(err) {
+			return admission.Denied(fmt.Sprintf(
+				"spec.backupRef %q does not name a StorageBackup in namespace %q",
+				ops.Spec.BackupRef.Name, backupKey(&ops).Namespace))
+		}
+		if err != nil {
+			return admission.Errored(http.StatusInternalServerError, err)
+		}
+		// Refusing a Failed backup is a reference check rather than a state check. A
+		// backup whose phase is Failed has no copy behind it, so a restore naming it
+		// is naming a record of something that does not exist, and that is decided
+		// once and stays decided: a backup does not recover from Failed, it is
+		// replaced by another backup.
+		if backup.Status.Phase == simplyblockv1alpha2.StorageBackupPhaseFailed {
+			return admission.Denied(fmt.Sprintf(
+				"StorageBackup %q failed and has no copy to restore", ops.Spec.BackupRef.Name))
+		}
 	}
 
 	if ops.Spec.Restore == nil {
@@ -163,6 +177,67 @@ func backupKey(ops *simplyblockv1alpha2.StorageBackupOps) types.NamespacedName {
 	return ops.Spec.BackupRef.In(ops.Namespace)
 }
 
+// groupBackupMustBeRestorable resolves a group restore's spec.groupBackupID to
+// its member StorageBackups and refuses one that names no member, or whose group
+// has a failed member. The members are the StorageBackups carrying the
+// group-backup-id label in the CLUSTER's namespace, where the mirror records
+// them, the same selector a group restore addresses. The id is immutable, so this is decided once at creation.
+func (v *StorageBackupOpsValidator) groupBackupMustBeRestorable(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
+) *admission.Response {
+	var members simplyblockv1alpha2.StorageBackupList
+	if err := v.Client.List(ctx, &members,
+		client.InNamespace(ops.BackupsNamespace()),
+		client.MatchingLabels{simplyblockv1alpha2.BackupLabelGroupBackupID: simplyblockv1alpha2.GroupBackupLabelValue(ops.Spec.GroupBackupID)},
+	); err != nil {
+		errored := admission.Errored(http.StatusInternalServerError, err)
+		return &errored
+	}
+	if len(members.Items) == 0 {
+		denied := admission.Denied(fmt.Sprintf(
+			"spec.groupBackupID %q names no StorageBackup in namespace %q (the cluster's)",
+			ops.Spec.GroupBackupID, ops.BackupsNamespace()))
+		return &denied
+	}
+	for i := range members.Items {
+		if members.Items[i].Status.Phase == simplyblockv1alpha2.StorageBackupPhaseFailed {
+			denied := admission.Denied(fmt.Sprintf(
+				"group backup %q has a failed member %q and cannot be restored as a unit",
+				ops.Spec.GroupBackupID, members.Items[i].Name))
+			return &denied
+		}
+	}
+	return nil
+}
+
+// groupBackupMustBeRestorableByRef resolves spec.groupBackupRef to a
+// StorageGroupBackup and refuses one that is missing or failed: neither will
+// ever name a group backup. One still being taken is admitted, and the restore
+// waits for it. The members are not listed here: a group backup in progress has
+// none yet, and the restore's Validating step checks them once it is Available.
+func (v *StorageBackupOpsValidator) groupBackupMustBeRestorableByRef(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
+) *admission.Response {
+	key := ops.GroupBackupKey()
+	var sgb simplyblockv1alpha2.StorageGroupBackup
+	err := v.Client.Get(ctx, key, &sgb)
+	if apierrors.IsNotFound(err) {
+		denied := admission.Denied(fmt.Sprintf(
+			"spec.groupBackupRef %q does not name a StorageGroupBackup in namespace %q", key.Name, key.Namespace))
+		return &denied
+	}
+	if err != nil {
+		errored := admission.Errored(http.StatusInternalServerError, err)
+		return &errored
+	}
+	if sgb.Status.Phase == simplyblockv1alpha2.StorageGroupBackupPhaseFailed {
+		denied := admission.Denied(fmt.Sprintf(
+			"spec.groupBackupRef %q failed and has no group backup to restore", key.Name))
+		return &denied
+	}
+	return nil
+}
+
 // requesterMayReach refuses a restore whose references leave its namespace unless
 // the requester may do there what the restore will do for them: read the backup,
 // the cluster, and its pool. It runs before anything is resolved, so a
@@ -172,13 +247,28 @@ func (v *StorageBackupOpsValidator) requesterMayReach(
 ) *admission.Response {
 	type need struct{ verb, resource, namespace, name string }
 	var needs []need
-	if ns := backupKey(ops).Namespace; ns != ops.Namespace {
-		needs = append(needs, need{"get", "storagebackups", ns, ops.Spec.BackupRef.Name})
+	if ops.Spec.BackupRef.Name != "" {
+		if ns := backupKey(ops).Namespace; ns != ops.Namespace {
+			needs = append(needs, need{"get", "storagebackups", ns, ops.Spec.BackupRef.Name})
+		}
+	}
+	if ops.Spec.GroupBackupRef.Name != "" {
+		// The StorageGroupBackup names the group backup, and its members are
+		// recorded beside it, so reading it is the whole of what the requester
+		// needs.
+		if key := ops.GroupBackupKey(); key.Namespace != ops.Namespace {
+			needs = append(needs, need{"get", "storagegroupbackups", key.Namespace, key.Name})
+		}
 	}
 	if ns := clusterKey(ops).Namespace; ns != ops.Namespace {
 		needs = append(needs, need{"get", "storageclusters", ns, ops.Spec.ClusterRef.Name})
 		if ops.Spec.Restore != nil {
 			needs = append(needs, need{"get", "storagepools", ns, ops.Spec.Restore.TargetPool})
+		}
+		if ops.Spec.GroupBackupID != "" {
+			// A group restore resolves its members by label beside the cluster,
+			// which is a list there, not a get of one named backup.
+			needs = append(needs, need{"list", "storagebackups", ns, ""})
 		}
 	}
 

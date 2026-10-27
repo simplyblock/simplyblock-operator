@@ -64,7 +64,10 @@ type HubConfig struct {
 
 	// Register adds the services the hub serves *back* to its peers, for peers
 	// that call the operator as well as answer it. Nil registers none, and the
-	// link still works in the direction that matters.
+	// link still works in the direction that matters. A call to one of them
+	// from a session that has not completed Hello is refused with
+	// Unauthenticated, and an admitted call carries the caller's verified
+	// identity, read with [PeerFromContext].
 	Register func(grpc.ServiceRegistrar)
 
 	// Capabilities names those services in the Hello answer.
@@ -198,7 +201,7 @@ func (h *Hub) handle(raw net.Conn) {
 	sess, err := newSession(raw, false, sessionConfig{
 		name:          remote.String(),
 		yamux:         h.cfg.Yamux,
-		serverOptions: hs.serverOptions(),
+		serverOptions: identifiedOnly(hs.identity),
 		register: func(srv grpc.ServiceRegistrar) {
 			linkv1.RegisterLinkServiceServer(srv, hs)
 			if h.cfg.Register != nil {
@@ -388,33 +391,3 @@ func (hs *handshake) identity() (PeerID, bool) {
 	defer hs.mu.Unlock()
 	return hs.id.ID, hs.identified
 }
-
-// serverOptions put the session's verified identity in the context of every
-// call the session's server runs, so a service the hub serves to its peers can
-// tell which peer is calling ([PeerFromContext]). Calls before Hello carry none.
-func (hs *handshake) serverOptions() []grpc.ServerOption {
-	withPeer := func(ctx context.Context) context.Context {
-		if id, ok := hs.identity(); ok {
-			return context.WithValue(ctx, peerContextKey{}, id)
-		}
-		return ctx
-	}
-	return []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo,
-			handler grpc.UnaryHandler) (any, error) {
-			return handler(withPeer(ctx), req)
-		}),
-		grpc.ChainStreamInterceptor(func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo,
-			handler grpc.StreamHandler) error {
-			return handler(srv, &peerStream{ServerStream: ss, ctx: withPeer(ss.Context())})
-		}),
-	}
-}
-
-// peerStream is a server stream whose context carries the calling peer.
-type peerStream struct {
-	grpc.ServerStream
-	ctx context.Context
-}
-
-func (s *peerStream) Context() context.Context { return s.ctx }

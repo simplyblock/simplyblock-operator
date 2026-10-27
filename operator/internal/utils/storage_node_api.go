@@ -17,6 +17,8 @@ import (
 	"net/http"
 	"time"
 
+	atlaskube "github.com/simplyblock/atlas/kube"
+
 	"github.com/simplyblock/simplyblock-operator/internal/tlsutil"
 )
 
@@ -32,7 +34,8 @@ const storageNodeAPIProbeTimeout = 3 * time.Second
 // deployment serving TLS refuses a plaintext request, and a refused request is not
 // the same answer as an unreachable host.
 func StorageNodeAPIReachable(
-	ctx context.Context, worker, namespace string, tlsEnabled, tlsMutualEnabled bool,
+	ctx context.Context, worker, namespace string, names atlaskube.WorkloadNames,
+	tlsEnabled, tlsMutualEnabled bool,
 ) error {
 	scheme := "http"
 	httpClient := &http.Client{Timeout: storageNodeAPIProbeTimeout}
@@ -43,7 +46,7 @@ func StorageNodeAPIReachable(
 			certPath = tlsutil.ServiceClientCertificatePath
 			keyPath = tlsutil.ServiceClientKeyPath
 		}
-		built, err := tlsutil.BuildStorageNodeSetAPIClient(
+		built, err := tlsutil.BuildStorageNodeSetAPIClient(names.NodeAPIService,
 			namespace, tlsutil.ServiceCABundlePath, certPath, keyPath)
 		if err != nil {
 			return fmt.Errorf("build the storage-node TLS client: %w", err)
@@ -51,7 +54,7 @@ func StorageNodeAPIReachable(
 		httpClient = built
 	}
 
-	url := fmt.Sprintf("%s://%s/snode/info", scheme, StorageNodeSetAPIAddress(worker, namespace))
+	url := fmt.Sprintf("%s://%s/snode/info", scheme, StorageNodeSetAPIAddress(worker, namespace, names))
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err

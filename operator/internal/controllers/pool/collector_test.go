@@ -224,3 +224,38 @@ func TestOnePassQueriesEachClusterOnce(t *testing.T) {
 		t.Errorf("the metrics endpoint was queried %d times for one cluster, want 1", capacity.calls)
 	}
 }
+
+// A pool of a supercluster is reported as one pool: what its backend pools in
+// every member hold, summed, under the pool's own name.
+func TestASuperclusterPoolIsReportedAsTheSumOfItsMembers(t *testing.T) {
+	p := aSuperclusterPool("tenant-a", func(p *simplyblockv1alpha2.StoragePool) {
+		p.Status.Phase = simplyblockv1alpha2.StoragePoolPhaseReady
+		p.Status.Members = []simplyblockv1alpha2.PoolMemberStatus{
+			{Cluster: memberA, UUID: "pool-a"},
+			{Cluster: memberB, UUID: "pool-b"},
+		}
+	})
+	capacity := &fakeCapacity{byCluster: map[string]map[string]atlasprom.Capacity{
+		memberAUUID: {"pool-a": {Used: 1000, Provisioned: 3000}},
+		memberBUUID: {"pool-b": {Used: 500, Provisioned: 1000}},
+	}}
+	c := &Collector{
+		Client: newClient(t, aSupercluster(), p,
+			aMember(memberA, memberAUUID, simplyblockv1alpha2.StorageClusterPhaseOnline),
+			aMember(memberB, memberBUUID, simplyblockv1alpha2.StorageClusterPhaseOnline)),
+		Capacity: capacity,
+		Volumes:  fakeVolumes{"pool-a": 2, "pool-b": 3},
+	}
+
+	collectOnce(t, c)
+
+	if got := gaugeValue(t, poolUsedBytes, theSupercluster, "tenant-a"); got != 1500 {
+		t.Errorf("used_bytes = %v, want 1500", got)
+	}
+	if got := gaugeValue(t, poolProvisionedBytes, theSupercluster, "tenant-a"); got != 4000 {
+		t.Errorf("provisioned_bytes = %v, want 4000", got)
+	}
+	if got := gaugeValue(t, poolVolumesCount, theSupercluster, "tenant-a"); got != 5 {
+		t.Errorf("volumes_count = %v, want 5", got)
+	}
+}

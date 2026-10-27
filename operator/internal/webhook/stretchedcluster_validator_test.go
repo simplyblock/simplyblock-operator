@@ -13,8 +13,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -169,12 +169,12 @@ func TestARoleSwapToASurvivorStillCreatingIsRefused(t *testing.T) {
 
 // fakeSwapBackend is the control plane as the guard reads it.
 type fakeSwapBackend struct {
-	cluster webapi.ClusterResponse
+	cluster atlascp.Cluster
 	nodes   []utils.NodeStatusResponse
 	err     error
 }
 
-func (f *fakeSwapBackend) Cluster(context.Context, string) (webapi.ClusterResponse, error) {
+func (f *fakeSwapBackend) Cluster(context.Context, string) (atlascp.Cluster, error) {
 	return f.cluster, f.err
 }
 
@@ -186,7 +186,7 @@ func (f *fakeSwapBackend) StorageNodes(context.Context, string) ([]utils.NodeSta
 // both sites online.
 func allOnline() *fakeSwapBackend {
 	return &fakeSwapBackend{
-		cluster: webapi.ClusterResponse{UUID: "cluster-1", SyncReplication: true},
+		cluster: atlascp.Cluster{ID: "cluster-1", SyncReplication: true},
 		nodes: []utils.NodeStatusResponse{
 			{UUID: "a1", Site: "a", Status: "online"}, {UUID: "a2", Site: "a", Status: "online"},
 			{UUID: "b1", Site: "b", Status: "online"}, {UUID: "b2", Site: "b", Status: "online"},

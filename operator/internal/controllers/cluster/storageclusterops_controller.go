@@ -863,6 +863,13 @@ func (r *StorageClusterOpsReconciler) clusterUUIDFor(
 	if err := r.Get(ctx, key, &cluster); err != nil {
 		return "", err
 	}
+	// A supercluster's UUID is the aggregate's identifier and names no backend
+	// cluster, so there is nothing in the control plane for an action to act
+	// on until operations walk the members one at a time.
+	if cluster.Spec.Supercluster != nil {
+		return "", fatalf("cluster %s is a supercluster, and operations on a supercluster "+
+			"are not supported yet; run the operation on each of its members", ops.Spec.ClusterRef)
+	}
 	if cluster.Status.UUID == "" {
 		return "", fatalf("cluster %s has not been created in the control plane yet",
 			ops.Spec.ClusterRef)
@@ -978,7 +985,7 @@ func (r *StorageClusterOpsReconciler) clusterReading(
 		return subscriptions.ClusterDTO{}, fmt.Errorf("read cluster %s: %w", clusterID, err)
 	}
 	return subscriptions.ClusterDTO{
-		ID:                response.UUID,
+		ID:                response.ID,
 		NQN:               response.NQN,
 		Status:            response.Status,
 		Rebalancing:       response.Rebalancing,

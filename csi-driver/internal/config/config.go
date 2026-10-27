@@ -19,9 +19,13 @@ type Config struct {
 	LinkEnabled bool
 	// LinkHubAddress is the operator's link endpoint, `host:port`.
 	LinkHubAddress string
-	// LinkCAFile signs the operator's serving certificate. Empty uses the
-	// system roots.
+	// LinkCAFile signs the operator's serving certificate. Empty dials
+	// plaintext.
 	LinkCAFile string
+	// LinkCertFile and LinkKeyFile are the client keypair presented to an
+	// operator that requires mutual TLS. Both or neither.
+	LinkCertFile string
+	LinkKeyFile  string
 	// LinkServerName overrides the name verified against that certificate.
 	LinkServerName string
 	// LinkTokenFile is the projected ServiceAccount token presented to the

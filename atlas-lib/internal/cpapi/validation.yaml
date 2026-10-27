@@ -120,3 +120,9 @@ MigrationDTO:
   snaps_migrated: present
   snaps_total: present
   error_message: present
+# A cluster's identity, which the operator records as status.uuid and every
+# later call names (controlplane/clusters.go). The workload names carry no rule:
+# a control plane that predates them sends none, and none means the constant
+# names.
+ClusterDTO:
+  id: required

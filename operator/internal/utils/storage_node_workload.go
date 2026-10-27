@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -260,7 +261,8 @@ func BuildStorageNodeDaemonSet(
 	livenessProbe := buildStorageNodeAgentLivenessProbe(readinessProbe.HTTPGet, tlsMutualEnabled)
 
 	if tlsEnabled {
-		volumes = append(volumes, buildStorageNodeSetTLSVolume(tlsProvider))
+		names, _ := WorkloadNamesOf(sn)
+		volumes = append(volumes, buildStorageNodeSetTLSVolume(tlsProvider, names.NodeAPITLSSecret))
 
 		tlsMounts := []corev1.VolumeMount{
 			{Name: "tls", MountPath: "/etc/simplyblock/tls", ReadOnly: true},
@@ -305,7 +307,7 @@ func BuildStorageNodeDaemonSet(
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "simplyblock-storage-node-sa",
 					HostNetwork:        true,
-					Tolerations:        wl.Tolerations,
+					Tolerations:        storageNodeAgentTolerations(sn, wl),
 					NodeSelector: map[string]string{
 						kube.LabelStorageNodeSet: sn.Name,
 					},
@@ -440,13 +442,13 @@ func buildStorageNodeAgentLivenessProbe(httpGet *corev1.HTTPGetAction, tlsMutual
 // the Secret, so a plain Secret volume is enough; OpenShift's serving-cert
 // controller emits the CA via a separate ConfigMap, so the two sources are
 // combined through a projected volume.
-func buildStorageNodeSetTLSVolume(tlsProvider string) corev1.Volume {
+func buildStorageNodeSetTLSVolume(tlsProvider, secretName string) corev1.Volume {
 	if IsCertManagerTLSProvider(tlsProvider) {
 		return corev1.Volume{
 			Name: "tls",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: SecretNameStorageNodeSetAPITLS,
+					SecretName: secretName,
 				},
 			},
 		}
@@ -460,7 +462,7 @@ func buildStorageNodeSetTLSVolume(tlsProvider string) corev1.Volume {
 					{
 						Secret: &corev1.SecretProjection{
 							LocalObjectReference: corev1.LocalObjectReference{
-								Name: SecretNameStorageNodeSetAPITLS,
+								Name: secretName,
 							},
 						},
 					},
@@ -540,17 +542,20 @@ func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 
 // StorageNodeSetAPIAddress returns the per-pod headless-service DNS address that
 // the cluster control-plane uses to reach a storage-node-api pod backing the
-// given worker node.
-func StorageNodeSetAPIAddress(workerNode, namespace string) string {
-	return fmt.Sprintf("%s.%s:5000", NodeHostnameLabel(workerNode), ServiceFQDN(kube.StorageNodeSetAPIServiceName, namespace))
+// given worker node, in the Service the cluster's workload names name.
+func StorageNodeSetAPIAddress(workerNode, namespace string, names kube.WorkloadNames) string {
+	return fmt.Sprintf("%s.%s:5000", names.Hostname(workerNode), ServiceFQDN(names.NodeAPIService, namespace))
 }
 
+// BuildStorageNodeService is the headless Service the storage-node API pods'
+// per-pod DNS names hang off, under the cluster's recorded name.
 func BuildStorageNodeService(sn *simplyblockv1alpha2.StorageCluster, tlsEnabled bool, tlsProvider string) *corev1.Service {
+	names, _ := WorkloadNamesOf(sn)
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        kube.StorageNodeSetAPIServiceName,
+			Name:        names.NodeAPIService,
 			Namespace:   sn.Namespace,
-			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, SecretNameStorageNodeSetAPITLS),
+			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, names.NodeAPITLSSecret),
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "None",
@@ -566,13 +571,14 @@ func BuildStorageNodeService(sn *simplyblockv1alpha2.StorageCluster, tlsEnabled 
 }
 
 func BuildStorageNodeEndpointSlice(sn *simplyblockv1alpha2.StorageCluster, nodeIPs map[string]string) *discoveryv1.EndpointSlice {
+	names, _ := WorkloadNamesOf(sn)
 	protocol := corev1.ProtocolTCP
 	port := int32(5000)
 	portName := "api"
 
 	endpoints := make([]discoveryv1.Endpoint, 0, len(nodeIPs))
 	for nodeName, ip := range nodeIPs {
-		hostname := NodeHostnameLabel(nodeName)
+		hostname := names.Hostname(nodeName)
 		endpoints = append(endpoints, discoveryv1.Endpoint{
 			Addresses: []string{ip},
 			Hostname:  &hostname,
@@ -586,7 +592,7 @@ func BuildStorageNodeEndpointSlice(sn *simplyblockv1alpha2.StorageCluster, nodeI
 			Name:      kube.StorageNodeSetAPIEndpointSliceName(sn.Name),
 			Namespace: sn.Namespace,
 			Labels: map[string]string{
-				"kubernetes.io/service-name": kube.StorageNodeSetAPIServiceName,
+				discoveryv1.LabelServiceName: names.NodeAPIService,
 			},
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
@@ -609,12 +615,15 @@ type SpdkProxyEndpoint struct {
 	RpcPort  int32
 }
 
+// BuildSpdkProxyService is the headless Service the SPDK proxies' per-pod DNS
+// names hang off, under the cluster's recorded name.
 func BuildSpdkProxyService(sn *simplyblockv1alpha2.StorageCluster, tlsEnabled bool, tlsProvider string) *corev1.Service {
+	names, _ := WorkloadNamesOf(sn)
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        "simplyblock-spdk-proxy",
+			Name:        names.SpdkProxyService,
 			Namespace:   sn.Namespace,
-			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, SecretNameSpdkProxyTLS),
+			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, names.SpdkProxyTLSSecret),
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "None",
@@ -632,6 +641,7 @@ func BuildSpdkProxyEndpointSlice(
 	rpcPort int32,
 	endpoints []SpdkProxyEndpoint,
 ) (*discoveryv1.EndpointSlice, error) {
+	names, _ := WorkloadNamesOf(sn)
 	protocol := corev1.ProtocolTCP
 	port := rpcPort
 	portName := "proxy"
@@ -640,7 +650,7 @@ func BuildSpdkProxyEndpointSlice(
 	eps := make([]discoveryv1.Endpoint, 0, len(endpoints))
 	seen := make(map[string]string, len(endpoints))
 	for _, e := range endpoints {
-		label := NodeHostnameLabel(e.NodeName)
+		label := names.Hostname(e.NodeName)
 		if prev, ok := seen[label]; ok && prev != e.NodeName {
 			return nil, fmt.Errorf("spdk-proxy endpoint hostname collision on label %q (nodes %q and %q): node names share the same first DNS segment", label, prev, e.NodeName)
 		}
@@ -656,10 +666,10 @@ func BuildSpdkProxyEndpointSlice(
 
 	return &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("spdk-proxy-endpoints-%d", rpcPort),
+			Name:      SpdkProxyEndpointSliceName(sn, rpcPort),
 			Namespace: sn.Namespace,
 			Labels: map[string]string{
-				"kubernetes.io/service-name": "simplyblock-spdk-proxy",
+				discoveryv1.LabelServiceName: names.SpdkProxyService,
 			},
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
@@ -672,6 +682,18 @@ func BuildSpdkProxyEndpointSlice(
 			},
 		},
 	}, nil
+}
+
+// SpdkProxyEndpointSliceName names the slice publishing one RPC port's SPDK
+// proxies of one cluster. A cluster under the constant names keeps the name
+// every cluster published under before a namespace could hold two; any other
+// prefixes its own name, because a supercluster's members publish into one
+// Service and their SPDK pods may answer on one port.
+func SpdkProxyEndpointSliceName(cluster *simplyblockv1alpha2.StorageCluster, rpcPort int32) string {
+	if names, _ := WorkloadNamesOf(cluster); names.IsConstant() {
+		return fmt.Sprintf("spdk-proxy-endpoints-%d", rpcPort)
+	}
+	return fmt.Sprintf("%s-spdk-proxy-endpoints-%d", cluster.Name, rpcPort)
 }
 
 // NodeHostnameLabel returns the DNS-label form of a node name: the segment
@@ -745,4 +767,27 @@ func skipKubeletConfiguration(wl *simplyblockv1alpha2.StorageNodesSpec) string {
 		return "false"
 	}
 	return "true"
+}
+
+// storageNodeAgentTolerations is what the storage-node agent tolerates: the
+// configured tolerations, and on a cluster with host fencing the out-of-service
+// taint as well. The storage fence remediation puts that taint on a fenced
+// node, and the control plane heals the node through its agent; evicted, the
+// agent would hold the heal, and with it the release of the taint, forever
+// (sbcli docs/design/two-node-kubernetes-fencing.md §1). The SPDK pods the
+// control plane starts tolerate every NoExecute taint already.
+func storageNodeAgentTolerations(
+	cluster *simplyblockv1alpha2.StorageCluster, wl *simplyblockv1alpha2.StorageNodesSpec,
+) []corev1.Toleration {
+	if !cluster.HostFencingEnabled() {
+		return wl.Tolerations
+	}
+	for _, t := range wl.Tolerations {
+		if (t.Key == simplyblockv1alpha2.TaintOutOfService || (t.Key == "" && t.Operator == corev1.TolerationOpExists)) &&
+			(t.Effect == "" || t.Effect == corev1.TaintEffectNoExecute) {
+			return wl.Tolerations
+		}
+	}
+	return append(slices.Clone(wl.Tolerations), corev1.Toleration{Key: simplyblockv1alpha2.TaintOutOfService,
+		Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute})
 }

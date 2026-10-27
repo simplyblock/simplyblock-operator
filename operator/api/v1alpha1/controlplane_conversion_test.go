@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	"github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -239,5 +240,125 @@ func TestControlPlaneRoundTripsThroughTheHub(t *testing.T) {
 					back.Namespace, back.Name, tc.obj.Namespace, tc.obj.Name)
 			}
 		})
+	}
+}
+
+// A v1alpha1 ControlPlane has no TLS field, because the installation's TLS was
+// stated to the operator through its environment. Reading it as the hub's
+// default, which is on, flips a plaintext installation to TLS on its first
+// write, and spec.source.local.tls is immutable from then on. So an object that
+// states nothing converts to plaintext, which is what the release that wrote it
+// installed by default, and it is explicit so that nothing defaults it later.
+func TestControlPlaneConvertToIsPlaintextWhenNoTLSWasRecorded(t *testing.T) {
+	src := &ControlPlane{Spec: ControlPlaneSpec{Image: testImage}}
+
+	var dst v1alpha2.ControlPlane
+	if err := src.ConvertTo(&dst); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	tls := dst.Spec.Source.Local.TLS
+	if tls.EnableTLS == nil || *tls.EnableTLS {
+		t.Errorf("enableTLS = %v, want an explicit false", tls.EnableTLS)
+	}
+	if tls.EnableMutualTLS == nil || *tls.EnableMutualTLS {
+		t.Errorf("enableMutualTLS = %v, want an explicit false", tls.EnableMutualTLS)
+	}
+	if tls.Provider != v1alpha2.ControlPlaneTLSCertManager {
+		t.Errorf("provider = %q, want %q", tls.Provider, v1alpha2.ControlPlaneTLSCertManager)
+	}
+}
+
+// An installation that did use TLS records it on the object before the upgrade,
+// and conversion carries it. The annotation is consumed, so the converted object
+// carries the field rather than both the field and the note about it.
+func TestControlPlaneConvertToCarriesTheRecordedTLS(t *testing.T) {
+	src := &ControlPlane{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				AnnotationControlPlaneTLS: `{"enableTLS":true,"enableMutualTLS":false,"provider":"OpenShift"}`,
+				"unrelated":               "kept",
+			},
+		},
+		Spec: ControlPlaneSpec{Image: testImage},
+	}
+
+	var dst v1alpha2.ControlPlane
+	if err := src.ConvertTo(&dst); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	tls := dst.Spec.Source.Local.TLS
+	if tls.EnableTLS == nil || !*tls.EnableTLS {
+		t.Errorf("enableTLS = %v, want true", tls.EnableTLS)
+	}
+	if tls.EnableMutualTLS == nil || *tls.EnableMutualTLS {
+		t.Errorf("enableMutualTLS = %v, want an explicit false", tls.EnableMutualTLS)
+	}
+	if tls.Provider != v1alpha2.ControlPlaneTLSOpenShift {
+		t.Errorf("provider = %q, want %q", tls.Provider, v1alpha2.ControlPlaneTLSOpenShift)
+	}
+	if _, left := dst.Annotations[AnnotationControlPlaneTLS]; left {
+		t.Error("the TLS annotation was left on the converted object")
+	}
+	if dst.Annotations["unrelated"] != "kept" {
+		t.Error("an unrelated annotation was lost")
+	}
+	if _, left := src.Annotations[AnnotationControlPlaneTLS]; !left {
+		t.Error("conversion consumed the annotation on the object it was given")
+	}
+}
+
+// A record that cannot be read costs the setting rather than the object, as every
+// other stash does, and what is left is the plaintext an unrecorded object gets.
+func TestControlPlaneConvertToIgnoresAnUnreadableTLSRecord(t *testing.T) {
+	src := &ControlPlane{ObjectMeta: metav1.ObjectMeta{
+		Annotations: map[string]string{AnnotationControlPlaneTLS: "not json"},
+	}}
+
+	var dst v1alpha2.ControlPlane
+	if err := src.ConvertTo(&dst); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	if tls := dst.Spec.Source.Local.TLS; tls.EnableTLS == nil || *tls.EnableTLS {
+		t.Errorf("enableTLS = %v, want an explicit false", tls.EnableTLS)
+	}
+}
+
+// The API server converts a v1alpha2 object down for a v1alpha1 reader and back
+// up when that reader writes. The old operator is such a reader during an
+// upgrade, so a v1alpha1 view that dropped the TLS would reset it on its next
+// write, and the field is immutable.
+func TestControlPlaneTLSSurvivesTheV1Alpha1View(t *testing.T) {
+	hub := &v1alpha2.ControlPlane{Spec: v1alpha2.ControlPlaneSpec{
+		Source: v1alpha2.ControlPlaneSource{Local: &v1alpha2.LocalControlPlane{
+			Image: testImage,
+			TLS: v1alpha2.ControlPlaneTLS{
+				EnableTLS:       ptr.To(true),
+				EnableMutualTLS: ptr.To(false),
+				Provider:        v1alpha2.ControlPlaneTLSOpenShift,
+			},
+		}},
+	}}
+
+	var spoke ControlPlane
+	if err := spoke.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	if spoke.Annotations[AnnotationControlPlaneTLS] == "" {
+		t.Fatal("the v1alpha1 view carries no record of the TLS")
+	}
+
+	var back v1alpha2.ControlPlane
+	if err := spoke.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	got, want := back.Spec.Source.Local.TLS, hub.Spec.Source.Local.TLS
+	if *got.EnableTLS != *want.EnableTLS || *got.EnableMutualTLS != *want.EnableMutualTLS ||
+		got.Provider != want.Provider {
+		t.Errorf("TLS after the round trip = %+v, want %+v", got, want)
+	}
+	if _, left := hub.Annotations[AnnotationControlPlaneTLS]; left {
+		t.Error("conversion wrote its record onto the hub object it was given")
 	}
 }

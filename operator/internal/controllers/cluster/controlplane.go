@@ -29,6 +29,8 @@ import (
 	"net/url"
 	"sync"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
+
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -45,21 +47,23 @@ type ControlPlane interface {
 
 	// CreateCluster is not idempotent, which is why the creation machine
 	// claims its slot in Kubernetes before calling it.
-	CreateCluster(ctx context.Context, params utils.ClusterAddParams) (webapi.ClusterResponse, error)
+	CreateCluster(ctx context.Context, params atlascp.CreateClusterParams) (atlascp.Cluster, error)
 
 	// Cluster reads one cluster by its UUID.
-	Cluster(ctx context.Context, clusterID string) (webapi.ClusterResponse, error)
+	Cluster(ctx context.Context, clusterID string) (atlascp.Cluster, error)
 
 	// ClusterByName finds a cluster the operator may not have created. It
 	// reports false rather than an error when there is none, because "no such
 	// cluster" is the ordinary answer on the creation path.
-	ClusterByName(ctx context.Context, name string) (utils.ClusterListEntry, bool, error)
+	ClusterByName(ctx context.Context, name string) (atlascp.Cluster, bool, error)
 	// Clusters lists every cluster of the control plane, as ClusterByName
 	// reads them.
-	Clusters(ctx context.Context) ([]utils.ClusterListEntry, error)
+	Clusters(ctx context.Context) ([]atlascp.Cluster, error)
 
-	// DeleteCluster is retried until it succeeds, and the finalizer is not
-	// removed before it does.
+	// DeleteCluster brings the cluster down completely: its storage nodes are
+	// shut down and deleted without migration, and its pools deleted with
+	// their volumes. It is retried until it succeeds, and the finalizer is
+	// not removed before it does.
 	DeleteCluster(ctx context.Context, clusterID string) error
 
 	// The four cluster-level actions. Each must tolerate a repeat, because a
@@ -144,55 +148,79 @@ func (c *httpControlPlane) Ready(ctx context.Context) error {
 	return err
 }
 
+// The cluster's own calls go through atlas-lib's generated client, which checks
+// every body against the control plane's spec; the rest of this surface is
+// still hand-written requests over webapi.Client.
+
 func (c *httpControlPlane) CreateCluster(
-	ctx context.Context, params utils.ClusterAddParams,
-) (webapi.ClusterResponse, error) {
-	body, err := c.call(c.adminContext(ctx), http.MethodPost, "/api/v2/clusters/", params)
+	ctx context.Context, params atlascp.CreateClusterParams,
+) (atlascp.Cluster, error) {
+	api, err := c.atlasFor(c.adminContext(ctx))
 	if err != nil {
-		return webapi.ClusterResponse{}, err
+		return atlascp.Cluster{}, err
 	}
-	return webapi.ParseClusterResponse(body)
+	return api.CreateCluster(ctx, params)
 }
 
 func (c *httpControlPlane) Cluster(
 	ctx context.Context, clusterID string,
-) (webapi.ClusterResponse, error) {
-	body, err := c.call(ctx, http.MethodGet, "/api/v2/clusters/"+clusterID, nil)
+) (atlascp.Cluster, error) {
+	api, err := c.atlasFor(ctx)
 	if err != nil {
-		return webapi.ClusterResponse{}, err
+		return atlascp.Cluster{}, err
 	}
-	return webapi.ParseClusterResponse(body)
+	return api.GetCluster(ctx, clusterID)
 }
 
-func (c *httpControlPlane) Clusters(ctx context.Context) ([]utils.ClusterListEntry, error) {
-	body, err := c.call(c.adminContext(ctx), http.MethodGet, "/api/v2/clusters/", nil)
+func (c *httpControlPlane) Clusters(ctx context.Context) ([]atlascp.Cluster, error) {
+	api, err := c.atlasFor(c.adminContext(ctx))
 	if err != nil {
 		return nil, err
 	}
-	var entries []utils.ClusterListEntry
-	if err := json.Unmarshal(body, &entries); err != nil {
-		return nil, fmt.Errorf("read the cluster list: %w", err)
-	}
-	return entries, nil
+	return api.ListClusters(ctx)
 }
 
 func (c *httpControlPlane) ClusterByName(
 	ctx context.Context, name string,
-) (utils.ClusterListEntry, bool, error) {
-	entries, err := c.Clusters(ctx)
+) (atlascp.Cluster, bool, error) {
+	clusters, err := c.Clusters(ctx)
 	if err != nil {
-		return utils.ClusterListEntry{}, false, err
+		return atlascp.Cluster{}, false, err
 	}
-	for _, entry := range entries {
-		if entry.Name == name {
-			return entry, true, nil
+	for _, cluster := range clusters {
+		if cluster.Name == name {
+			return cluster, true, nil
 		}
 	}
-	return utils.ClusterListEntry{}, false, nil
+	return atlascp.Cluster{}, false, nil
 }
 
+// atlasFor is atlas-lib's client for one call: the endpoint and connection this
+// call goes out on, and the credential the context carries, which is the
+// cluster's secret where a caller attached one and the operator's own token
+// otherwise.
+func (c *httpControlPlane) atlasFor(ctx context.Context) (*atlascp.Client, error) {
+	api, err := atlascp.New(c.clientFor(ctx).AtlasConfig(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("build the control-plane client: %w", err)
+	}
+	return api, nil
+}
+
+// DeleteCluster sends the delete with force. Without it the control plane
+// refuses a cluster that still has nodes or pools, and its node removal is an
+// online drain onto the other nodes, which a cluster being deleted, and the
+// one node of a single-node cluster, cannot do.
+//
+// A 404 is success: the cluster is gone. A forced delete can outlast the
+// client's timeout while it shuts nodes down, and the retry that follows finds
+// the cluster already deleted.
 func (c *httpControlPlane) DeleteCluster(ctx context.Context, clusterID string) error {
-	_, err := c.call(ctx, http.MethodDelete, "/api/v2/clusters/"+clusterID, nil)
+	_, err := c.call(ctx, http.MethodDelete, "/api/v2/clusters/"+clusterID+"?force=true", nil)
+	var refusal *ControlPlaneError
+	if errors.As(err, &refusal) && refusal.Status == http.StatusNotFound {
+		return nil
+	}
 	return err
 }
 

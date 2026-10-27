@@ -1,19 +1,14 @@
-// Tests for the StorageCluster admission guard.
+// Tests for the StorageCluster admission guard's namespace rule.
 //
-// The rule under test is one cluster per namespace, and the cases are the two
-// sides of why it exists. A cluster renders a workload whose serving certificate
-// is named for atlas-lib/kube.StorageNodeSetAPIServiceName, which is a constant,
-// so the second cluster in a namespace cannot own it: its workload pass aborts
-// at that step and never reaches the DaemonSet four steps later. What the
-// operator then shows is a cluster whose nodes wait forever on a hostname with
-// no pod behind it, which is why this is refused at admission instead.
+// Every cluster records workload names of its own (design-superclusters.md
+// §6.1), and a supercluster's members share the Services the supercluster
+// builds (§6.2), so any number of clusters of any role share a namespace.
 
 package webhook
 
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 
 	admissionv1 "k8s.io/api/admission/v1"
@@ -80,7 +75,7 @@ func TestTheFirstClusterOfANamespaceIsAdmitted(t *testing.T) {
 	}
 }
 
-func TestASecondClusterInOneNamespaceIsRefused(t *testing.T) {
+func TestASecondClusterInOneNamespaceIsAdmitted(t *testing.T) {
 	scheme := newClusterScheme(t)
 	validator := &StorageClusterValidator{
 		Client: fake.NewClientBuilder().WithScheme(scheme).
@@ -91,16 +86,55 @@ func TestASecondClusterInOneNamespaceIsRefused(t *testing.T) {
 	response := validator.Handle(context.Background(),
 		clusterRequest(t, admissionv1.Create, clusterAt("cluster1", "second")))
 
-	if response.Allowed {
-		t.Fatal("a second cluster in one namespace was admitted")
+	if !response.Allowed {
+		t.Fatalf("a second cluster in one namespace was refused: %s", response.Result.Message)
 	}
-	// The refusal has to name the cluster already there and say what to do,
-	// because the person reading it is holding a manifest that looks correct.
-	message := response.Result.Message
-	for _, want := range []string{"already-there", "namespace"} {
-		if !strings.Contains(message, want) {
-			t.Errorf("the refusal does not mention %q: %s", want, message)
-		}
+}
+
+func memberOf(namespace, name, supercluster string) *simplyblockv1alpha2.StorageCluster {
+	member := clusterAt(namespace, name)
+	member.Spec.SuperclusterRef = supercluster
+	return member
+}
+
+func superclusterNamed(namespace, name string) *simplyblockv1alpha2.StorageCluster {
+	supercluster := clusterAt(namespace, name)
+	supercluster.Spec.Supercluster = &simplyblockv1alpha2.SuperclusterSpec{}
+	return supercluster
+}
+
+func TestAMemberBesideAnotherClusterIsAdmitted(t *testing.T) {
+	scheme := newClusterScheme(t)
+	validator := &StorageClusterValidator{
+		Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+			clusterAt("cluster1", "already-there"), superclusterNamed("cluster1", "prod"),
+			memberOf("cluster1", "prod-dense", "prod"),
+		).Build(),
+		Decoder: admission.NewDecoder(scheme),
+	}
+
+	response := validator.Handle(context.Background(),
+		clusterRequest(t, admissionv1.Create, memberOf("cluster1", "prod-fast", "prod")))
+
+	if !response.Allowed {
+		t.Fatalf("a member was refused beside other clusters: %s", response.Result.Message)
+	}
+}
+
+func TestAStandaloneClusterBesideAMemberIsAdmitted(t *testing.T) {
+	scheme := newClusterScheme(t)
+	validator := &StorageClusterValidator{
+		Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+			superclusterNamed("cluster1", "prod"), memberOf("cluster1", "prod-fast", "prod"),
+		).Build(),
+		Decoder: admission.NewDecoder(scheme),
+	}
+
+	response := validator.Handle(context.Background(),
+		clusterRequest(t, admissionv1.Create, clusterAt("cluster1", "standalone")))
+
+	if !response.Allowed {
+		t.Fatalf("a standalone cluster was refused beside a member: %s", response.Result.Message)
 	}
 }
 
