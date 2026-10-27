@@ -169,7 +169,7 @@ func TestStorageNetworkAttachmentHoldsExactlyOneCase(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
 				Data: []simplyblockv1alpha2.StorageNetwork{network},
-			})), "exactly one of networkAttachmentRef and hostInterface must be set")
+			})), "exactly one of networkAttachmentRef, hostInterface and podNetwork must be set")
 		})
 	}
 }
@@ -343,5 +343,48 @@ func TestStorageNetworkNamesAreUniqueDNSLabels(t *testing.T) {
 		wantAccepted(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
 			Data: []simplyblockv1alpha2.StorageNetwork{viaDefinition(strings.Repeat("a", 63), "storage-data")},
 		})))
+	})
+}
+
+func viaPodNetwork(name string) simplyblockv1alpha2.StorageNetwork {
+	return simplyblockv1alpha2.StorageNetwork{
+		Name:       name,
+		Attachment: simplyblockv1alpha2.NetworkAttachment{PodNetwork: &simplyblockv1alpha2.PodNetworkAttachment{}},
+	}
+}
+
+// A pod network is the whole declaration: the pod has one interface, which
+// carries the RPC too, and its address comes from the cluster CNI, not a pool.
+func TestStorageClusterPodNetworkIsTheWholeDeclaration(t *testing.T) {
+	apiClient := apiServer(t)
+	const alone = "a podNetwork attachment is the only data network and has no management network"
+
+	t.Run("alone", func(t *testing.T) {
+		wantAccepted(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
+			Data: []simplyblockv1alpha2.StorageNetwork{viaPodNetwork("cni")},
+		})))
+	})
+	t.Run("with a pool", func(t *testing.T) {
+		pooled := viaPodNetwork("cni")
+		pooled.AddressPool = aPool("10.10.10.0/24", "10.10.10.101", "10.10.10.110")
+		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
+			Data: []simplyblockv1alpha2.StorageNetwork{pooled},
+		})), "addressPool is not allowed with podNetwork")
+	})
+	t.Run("with a management network", func(t *testing.T) {
+		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
+			Management: ptr.To(viaHostInterface("management", "eth0")),
+			Data:       []simplyblockv1alpha2.StorageNetwork{viaPodNetwork("cni")},
+		})), alone)
+	})
+	t.Run("as the management network", func(t *testing.T) {
+		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
+			Management: ptr.To(viaPodNetwork("cni")),
+		})), alone)
+	})
+	t.Run("beside another data network", func(t *testing.T) {
+		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
+			Data: []simplyblockv1alpha2.StorageNetwork{viaPodNetwork("cni"), viaHostInterface("storage-b", "eth2")},
+		})), alone)
 	})
 }

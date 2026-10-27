@@ -790,6 +790,7 @@ func (r *StorageNodeReconciler) postNode(
 		return fmt.Errorf("add node %s on worker %s: %w", node.Name, node.Spec.WorkerNode, err)
 	}
 	params.Networks = networks
+	params.PodNetwork = onPodNetwork(cluster)
 	taskID, err := r.API.AddNode(ctx, cluster.Status.UUID, params)
 	if err != nil {
 		return fmt.Errorf("add node %s on worker %s: %w",

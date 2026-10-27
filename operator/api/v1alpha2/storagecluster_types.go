@@ -1349,9 +1349,11 @@ func init() {
 
 // StorageNetworkSpec is the management network and the data networks of a
 // storage cluster. Its networks are attached the same way: all through
-// NetworkAttachmentDefinitions or all as host interfaces.
+// NetworkAttachmentDefinitions or all as host interfaces. A pod network is the
+// whole declaration: the pod has one interface, which carries the RPC too.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.data) || self.data.size() == 0 || (self.data.all(n, has(n.attachment.networkAttachmentRef) == has(self.data[0].attachment.networkAttachmentRef)) && (!has(self.management) || has(self.management.attachment.networkAttachmentRef) == has(self.data[0].attachment.networkAttachmentRef)))",message="all networks must use networkAttachmentRef, or all must use hostInterface"
+// +kubebuilder:validation:XValidation:rule="(!has(self.data) || !self.data.exists(n, has(n.attachment.podNetwork)) || (self.data.size() == 1 && !has(self.management))) && (!has(self.management) || !has(self.management.attachment.podNetwork))",message="a podNetwork attachment is the only data network and has no management network"
 type StorageNetworkSpec struct {
 	// Management is the network the control plane reaches the SPDK RPC on.
 	// Unset, the RPC is served on the pod network.
@@ -1373,6 +1375,7 @@ type StorageNetworkSpec struct {
 // holds on the worker.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.attachment.hostInterface) || !has(self.addressPool)",message="addressPool is not allowed with hostInterface"
+// +kubebuilder:validation:XValidation:rule="!has(self.attachment.podNetwork) || !has(self.addressPool)",message="addressPool is not allowed with podNetwork"
 type StorageNetwork struct {
 	// Name identifies the network within the cluster, and is the key the nodes'
 	// addresses and status use.
@@ -1425,7 +1428,7 @@ type NetworkAddressPool struct {
 
 // NetworkAttachment names the mechanism that connects a pod to a network.
 // Exactly one field is set.
-// +kubebuilder:validation:XValidation:rule="has(self.networkAttachmentRef) != has(self.hostInterface)",message="exactly one of networkAttachmentRef and hostInterface must be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.networkAttachmentRef) ? 1 : 0) + (has(self.hostInterface) ? 1 : 0) + (has(self.podNetwork) ? 1 : 0) == 1",message="exactly one of networkAttachmentRef, hostInterface and podNetwork must be set"
 type NetworkAttachment struct {
 	// NetworkAttachmentRef is a Multus NetworkAttachmentDefinition in the
 	// namespace of the storage cluster. The pod attaches to it and takes the
@@ -1439,7 +1442,18 @@ type NetworkAttachment struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	HostInterface string `json:"hostInterface,omitempty"`
+
+	// PodNetwork puts the pods on the cluster CNI's network with no further
+	// attachment. The pod's one interface carries the RPC and the data, and a
+	// Service in front of the pod is the address peers and clients hold, since
+	// the pod's own address changes on every restart. The control plane keeps
+	// the Service and the ports it forwards.
+	// +optional
+	PodNetwork *PodNetworkAttachment `json:"podNetwork,omitempty"`
 }
+
+// PodNetworkAttachment has no fields yet: the pod network needs nothing named.
+type PodNetworkAttachment struct{}
 
 // NetworkDefinitionReference names a NetworkAttachmentDefinition in the
 // namespace of the object that holds the reference.
