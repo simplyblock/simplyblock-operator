@@ -239,6 +239,11 @@ func TestTheDrivesOwnAtomicityDecidesTheJournal(t *testing.T) {
 				NamespaceSpecific: true, NamespaceBlocks: 8, ControllerBlocks: 1}}, false},
 		{"AWUPF the kernel ignored",
 			geometry{blockSize: 512, atomicMin: 512, atomicMax: 512, formats: only512, powerFail: controllerOnly(8)}, false},
+		// atlas-lib/nvme/testdata/identify_*_samsung_pm983_512.bin, decoded.
+		{"a Samsung PM983 left at 512 bytes, as read on dev-ocp",
+			geometry{blockSize: 512, atomicMin: 512, atomicMax: 4096, formats: offers4K, current: 0,
+				powerFail: &nodeprobe.PowerFailAtomicity{
+					NamespaceSpecific: true, NamespaceBlocks: 8, ControllerBlocks: 8, BoundaryBlocks: 8}}, false},
 		{"boundaries that split an aligned 4K write",
 			geometry{blockSize: 512, formats: only512, powerFail: &nodeprobe.PowerFailAtomicity{
 				NamespaceSpecific: true, NamespaceBlocks: 16, BoundaryBlocks: 6}}, true},
