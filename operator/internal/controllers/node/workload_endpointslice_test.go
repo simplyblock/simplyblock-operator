@@ -7,12 +7,15 @@ package node
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -363,5 +366,115 @@ func TestAnAgentPodWakesItsClustersPass(t *testing.T) {
 	other.Labels = map[string]string{"app": "something-else"}
 	if got := r.clusterOfAgentPod(context.Background(), other); len(got) != 0 {
 		t.Errorf("requests for another pod = %v, want none", got)
+	}
+}
+
+// anAgentPodNamed is a second agent pod on the worker, aged and made ready as given.
+func anAgentPodNamed(name, podIP string, ready bool, created time.Time) *corev1.Pod {
+	pod := anAgentPod(podIP)
+	pod.Name = name
+	pod.CreationTimestamp = metav1.NewTime(created)
+	status := corev1.ConditionFalse
+	if ready {
+		status = corev1.ConditionTrue
+	}
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: status}}
+	return pod
+}
+
+// Two live pods on one worker coexist while a DaemonSet is recreated. The name follows the
+// ready one, then the newest, and never the order the list happens to come back in.
+func TestTheSliceFollowsTheReadyAgentPodThenTheNewest(t *testing.T) {
+	now := time.Now()
+	for name, tc := range map[string]struct {
+		pods []*corev1.Pod
+		want string
+	}{
+		"ready beats newer":    {[]*corev1.Pod{anAgentPodNamed("a", "10.42.0.1", true, now.Add(-time.Hour)), anAgentPodNamed("b", "10.42.0.2", false, now)}, "10.42.0.1"},
+		"newest of two ready":  {[]*corev1.Pod{anAgentPodNamed("a", "10.42.0.1", true, now.Add(-time.Hour)), anAgentPodNamed("b", "10.42.0.2", true, now)}, "10.42.0.2"},
+		"order does not count": {[]*corev1.Pod{anAgentPodNamed("b", "10.42.0.2", true, now), anAgentPodNamed("a", "10.42.0.1", true, now.Add(-time.Hour))}, "10.42.0.2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := theSliceAfterAPassWith(t, tc.pods...)
+
+			if got[utils.NodeHostnameLabel(opsWorker)] != tc.want {
+				t.Errorf("published workers = %v, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// Pods that have finished, or that belong to another cluster, never name a worker.
+func TestTheSliceIgnoresAgentPodsThatAreNotThisClustersLiveOnes(t *testing.T) {
+	failed := anAgentPod("10.42.0.3")
+	failed.Name = "failed"
+	failed.Status.Phase = corev1.PodFailed
+	foreign := anAgentPod("10.42.0.4")
+	foreign.Name = "foreign"
+	foreign.Labels[atlaskube.LabelSimplyblockCluster] = "another-cluster"
+
+	got := theSliceAfterAPassWith(t, failed, foreign)
+
+	if got[utils.NodeHostnameLabel(opsWorker)] != sourceWorkerAddress {
+		t.Errorf("published workers = %v, want the worker address %s", got, sourceWorkerAddress)
+	}
+}
+
+// Every status update of every agent pod would otherwise rerun the whole pass; only a
+// change to what the slice carries should.
+func TestOnlyAChangeToWhatTheSliceCarriesWakesThePass(t *testing.T) {
+	old := anAgentPodNamed("a", agentPodIP, true, time.Now())
+	same := old.DeepCopy()
+	same.ResourceVersion = "2"
+	same.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "x", RestartCount: 1}}
+	moved := old.DeepCopy()
+	moved.Status.PodIP = "10.42.0.77"
+	notReady := anAgentPodNamed("a", agentPodIP, false, old.CreationTimestamp.Time)
+	deleting := old.DeepCopy()
+	now := metav1.Now()
+	deleting.DeletionTimestamp = &now
+
+	filter := isAgentPod()
+	if filter.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: same}) {
+		t.Error("an update that changes nothing the slice carries woke the pass")
+	}
+	for name, changed := range map[string]*corev1.Pod{"IP": moved, "readiness": notReady, "deletion": deleting} {
+		if !filter.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: changed}) {
+			t.Errorf("a change of %s did not wake the pass", name)
+		}
+	}
+	if !filter.Create(event.CreateEvent{Object: old}) || !filter.Delete(event.DeleteEvent{Object: old}) {
+		t.Error("a pod appearing or disappearing did not wake the pass")
+	}
+}
+
+// A managed control plane runs elsewhere and is given the worker's address, where the
+// agent no longer answers. That has to be said, not discovered as refused connections.
+func TestAManagedControlPlaneIsToldItCannotReachTheAgent(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cp   *simplyblockv1alpha2.ControlPlane
+		want int
+	}{"managed": {managedControlPlaneSingleton(), 1}, "local": {localControlPlaneSingleton(), 0}} {
+		t.Run(name, func(t *testing.T) {
+			scheme := testsupport.NewScheme(t, corev1.AddToScheme, discoveryv1.AddToScheme)
+			apiClient := fake.NewClientBuilder().WithScheme(scheme).
+				WithObjects(anOpsCluster(), anOpsNode(), aWorker(opsWorker, true), tc.cp).Build()
+			recorder := events.NewFakeRecorder(8)
+			r := &StorageNodeWorkloadReconciler{Client: apiClient, Scheme: scheme, Namespace: opsNamespace, Recorder: recorder}
+
+			if err := reconcileTheSlice(r); err != nil {
+				t.Fatalf("reconcileEndpointSlice: %v", err)
+			}
+
+			warned := 0
+			for len(recorder.Events) > 0 {
+				if strings.Contains(<-recorder.Events, "ManagedControlPlaneUnsupported") {
+					warned++
+				}
+			}
+			if warned != tc.want {
+				t.Errorf("ManagedControlPlaneUnsupported events = %d, want %d", warned, tc.want)
+			}
+		})
 	}
 }

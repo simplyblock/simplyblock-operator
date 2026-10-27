@@ -159,14 +159,6 @@ func isSpdkProxyPod() predicate.Predicate {
 	})
 }
 
-// isAgentPod admits the storage-node agent pods, which carry the app label the
-// DaemonSet sets.
-func isAgentPod() predicate.Predicate {
-	return predicate.NewPredicateFuncs(func(object client.Object) bool {
-		return object.GetLabels()[atlaskube.LabelApp] == atlaskube.AppStorageNode
-	})
-}
-
 // clusterOfAgentPod maps an agent pod to the cluster its DaemonSet belongs to,
 // which the pod's own label names.
 func (r *StorageNodeWorkloadReconciler) clusterOfAgentPod(
@@ -526,6 +518,7 @@ func (r *StorageNodeWorkloadReconciler) reconcileEndpointSlice(
 	if err != nil {
 		return err
 	}
+	r.warnIfManagedControlPlane(ctx, cluster)
 
 	addresses := map[string]string{}
 	for i := range nodes {
@@ -755,9 +748,7 @@ func (r *StorageNodeWorkloadReconciler) agentPodIPs(
 		return nil, fmt.Errorf("list the storage-node API pods: %w", err)
 	}
 
-	// A pod that exists but has no IP yet is recorded with an empty one, so its worker is
-	// left out of the slice rather than published at an address nothing answers on.
-	ips := map[string]string{}
+	best := map[string]*corev1.Pod{}
 	for i := range pods.Items {
 		pod := &pods.Items[i]
 		if pod.DeletionTimestamp != nil || pod.Spec.NodeName == "" {
@@ -766,9 +757,57 @@ func (r *StorageNodeWorkloadReconciler) agentPodIPs(
 		if pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
 			continue
 		}
-		ips[pod.Spec.NodeName] = pod.Status.PodIP
+		if current, ok := best[pod.Spec.NodeName]; !ok || agentPodPreferred(pod, current) {
+			best[pod.Spec.NodeName] = pod
+		}
+	}
+	// A pod that exists but has no IP yet is recorded with an empty one, so its worker is
+	// left out of the slice rather than published at an address nothing answers on.
+	ips := make(map[string]string, len(best))
+	for worker, pod := range best {
+		ips[worker] = pod.Status.PodIP
 	}
 	return ips, nil
+}
+
+// warnIfManagedControlPlane says so when the control plane is a managed one. It is given a
+// worker's own address (NodeAddress), and the agent now answers on its pod IP and not there,
+// so the control plane's calls to it are refused until the agent is published on the worker.
+func (r *StorageNodeWorkloadReconciler) warnIfManagedControlPlane(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+) {
+	if r.Recorder == nil {
+		return
+	}
+	var cp simplyblockv1alpha2.ControlPlane
+	key := types.NamespacedName{Namespace: cluster.Namespace, Name: SingletonControlPlaneName}
+	if err := r.Get(ctx, key, &cp); err != nil || cp.Spec.Source.Managed == nil {
+		return
+	}
+	r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning, "ManagedControlPlaneUnsupported", "Reconcile",
+		"the storage-node API runs on the pod network, so a managed control plane cannot reach it at the worker's address")
+}
+
+// agentPodPreferred reports whether a is the better pod to name a worker by than b: a ready
+// pod over one that is not, then the newer, then the name, so the answer never depends on the
+// order the list came back in.
+func agentPodPreferred(a, b *corev1.Pod) bool {
+	if ra, rb := podReady(a), podReady(b); ra != rb {
+		return ra
+	}
+	if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
+		return b.CreationTimestamp.Before(&a.CreationTimestamp)
+	}
+	return a.Name > b.Name
+}
+
+func podReady(pod *corev1.Pod) bool {
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodReady {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 // agentAddress is what a worker's per-pod DNS name resolves to: its agent pod's IP, which
@@ -782,4 +821,29 @@ func (r *StorageNodeWorkloadReconciler) agentAddress(
 		return ip, nil
 	}
 	return r.workerAddress(ctx, worker)
+}
+
+// isAgentPod is the watch's filter for the storage-node API pods. A pod appearing or going
+// wakes the pass; an update does only when it changes what the slice carries, which is the
+// pod's IP, its readiness, or its deletion.
+func isAgentPod() predicate.Predicate {
+	isAgent := func(object client.Object) bool {
+		return object.GetLabels()[atlaskube.LabelApp] == atlaskube.AppStorageNode
+	}
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool { return isAgent(e.Object) },
+		DeleteFunc: func(e event.DeleteEvent) bool { return isAgent(e.Object) },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldPod, ok := e.ObjectOld.(*corev1.Pod)
+			newPod, ok2 := e.ObjectNew.(*corev1.Pod)
+			if !ok || !ok2 || !isAgent(newPod) {
+				return false
+			}
+			return oldPod.Status.PodIP != newPod.Status.PodIP ||
+				podReady(oldPod) != podReady(newPod) ||
+				(oldPod.DeletionTimestamp == nil) != (newPod.DeletionTimestamp == nil) ||
+				oldPod.Spec.NodeName != newPod.Spec.NodeName
+		},
+		GenericFunc: func(e event.GenericEvent) bool { return isAgent(e.Object) },
+	}
 }

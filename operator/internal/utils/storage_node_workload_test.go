@@ -439,3 +439,17 @@ func TestTheNodeAPIKnowsItsOwnPodIP(t *testing.T) {
 	}
 	t.Fatal("the agent has no POD_IP")
 }
+
+// A restart onto a new address records the host's IP as the node's management IP, and
+// the per-pod DNS name no longer resolves to it, so the agent reports it from its own env.
+func TestTheNodeAPIKnowsItsHostIP(t *testing.T) {
+	for _, e := range agentContainer(t, agentDaemonSet()).Env {
+		if e.Name == "HOST_IP" {
+			if e.ValueFrom == nil || e.ValueFrom.FieldRef == nil || e.ValueFrom.FieldRef.FieldPath != "status.hostIP" {
+				t.Fatalf("HOST_IP must come from status.hostIP, got %#v", e)
+			}
+			return
+		}
+	}
+	t.Fatal("the agent has no HOST_IP")
+}

@@ -110,6 +110,10 @@ func BuildStorageNodeDaemonSet(
 		{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{
 			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
 		}},
+		// The host's own IP, which /info reports as the node's management IP.
+		{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"},
+		}},
 	}
 	if wl.Network != nil {
 		// The agent is in the pod network, where its interfaces are not the host's,
