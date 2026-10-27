@@ -5,7 +5,6 @@ metadata:
 spec:
   cluster:
     clusterMode: null
-    enableMetadataJournal: false
     minHugePagesSize: null
     name: discovered-discover-host-01-cluster
   hostOS: null

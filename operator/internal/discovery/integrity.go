@@ -19,6 +19,7 @@ package discovery
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -63,13 +64,18 @@ type deviceIntegrity struct {
 	metadataKnown bool
 
 	atomic4K atomicity
+
+	// disclaimed is why what the device reports about atomicity is not
+	// believed, and empty for a device whose statement stands.
+	disclaimed string
 }
 
 // checkable reports whether checksum validation runs on the device without
 // enforced atomicity: with the checksum in the block's metadata, or on a
-// separate page of 4K blocks.
+// separate page of 4K blocks, which assumes a 4K write is whole.
 func (d deviceIntegrity) checkable() bool {
-	return (d.metadataKnown && d.metadataSize >= minChecksumMetadata) || d.blockSize >= fourKiB
+	return (d.metadataKnown && d.metadataSize >= minChecksumMetadata) ||
+		(d.blockSize >= fourKiB && d.atomic4K == atomicityYes)
 }
 
 // integrityFindings sorts a plan's devices by what each integrity setting needs
@@ -91,6 +97,10 @@ type integrityFindings struct {
 
 	// checkUnknown is every device nothing says checksum validation can check.
 	checkUnknown []string
+
+	// disclaimed is every device whose atomicity statement is not believed,
+	// by the reason it is not.
+	disclaimed map[string][]string
 }
 
 // integrityOf judges every device the plan names, with formatting as the
@@ -113,6 +123,12 @@ func integrityOf(plan Plan, formatting bool) integrityFindings {
 
 			d := judge(worker, device, formatting)
 			out.devices++
+			if d.disclaimed != "" {
+				if out.disclaimed == nil {
+					out.disclaimed = map[string][]string{}
+				}
+				out.disclaimed[d.disclaimed] = append(out.disclaimed[d.disclaimed], d.name)
+			}
 			if d.atomic4K != atomicityYes {
 				out.journal = append(out.journal, d.name)
 			}
@@ -164,6 +180,13 @@ func judge(worker Worker, device nodeprobe.Device, formatting bool) deviceIntegr
 	if sameFormat && d.blockSize != 0 && d.blockSize < fourKiB && formats != nil && formats.PowerFailAtomicity != nil {
 		d.atomic4K = drivesAtomicity(*formats.PowerFailAtomicity, d.blockSize)
 	}
+	// A device whose provider documents no guarantee proves nothing by what
+	// it reports, its block size included.
+	if controller := controllerOf(worker.Report, device.PCIAddress); controller != nil {
+		if reason, ok := nvme.AtomicityDisclaimed(controller.Vendor, controller.Product); ok {
+			d.atomic4K, d.disclaimed = atomicityNo, reason
+		}
+	}
 	return d
 }
 
@@ -211,23 +234,32 @@ func atomicityAt4K(blockSize uint32, device nodeprobe.Device, sameFormat bool) a
 // address presents, or nil when the probe read none or there is more than one
 // to choose from.
 func namespaceFormatsOf(report nodeprobe.Report, address string) *nodeprobe.NamespaceFormats {
-	index := slices.IndexFunc(report.NVMeControllers, func(c nodeprobe.Controller) bool {
-		return address != "" && c.Address == address
-	})
-	if index < 0 {
+	controller := controllerOf(report, address)
+	if controller == nil {
 		return nil
 	}
 	var found *nodeprobe.NamespaceFormats
-	for i, ns := range report.NVMeControllers[index].LBAFormats {
+	for i, ns := range controller.LBAFormats {
 		if ns.Common {
 			continue
 		}
 		if found != nil {
 			return nil
 		}
-		found = &report.NVMeControllers[index].LBAFormats[i]
+		found = &controller.LBAFormats[i]
 	}
 	return found
+}
+
+// controllerOf is the controller at address in the report, or nil.
+func controllerOf(report nodeprobe.Report, address string) *nodeprobe.Controller {
+	index := slices.IndexFunc(report.NVMeControllers, func(c nodeprobe.Controller) bool {
+		return address != "" && c.Address == address
+	})
+	if index < 0 {
+		return nil
+	}
+	return &report.NVMeControllers[index]
 }
 
 func currentFormat(formats *nodeprobe.NamespaceFormats) *nodeprobe.LBAFormat {
@@ -267,8 +299,8 @@ func journalNote(findings integrityFindings) string {
 			"whole as a storage node will have it: its blocks are 4K, or the atomic write " +
 			"unit it reports covers 4K."
 	}
-	const journals = " The data plane journals the lvstore metadata pages, so a torn write " +
-		"cannot leave a half-written one behind."
+	journals := disclaimedNote(findings) + " The data plane journals the lvstore metadata " +
+		"pages, so a torn write cannot leave a half-written one behind."
 	if len(findings.journal) == findings.devices && findings.devices > 1 {
 		return fmt.Sprintf("enableMetadataJournal is on, because none of the %d devices is known "+
 			"to complete a 4K write whole as a storage node will have it.", findings.devices) + journals
@@ -276,6 +308,21 @@ func journalNote(findings integrityFindings) string {
 	return fmt.Sprintf("enableMetadataJournal is on, because %s not known to complete a 4K "+
 		"write whole as a storage node will have it: %s.",
 		countOf(len(findings.journal), findings.devices), listOf(findings.journal)) + journals
+}
+
+// disclaimedNote says which devices were not believed and why, one sentence
+// per reason, or nothing.
+func disclaimedNote(findings integrityFindings) string {
+	var out string
+	for _, reason := range slices.Sorted(maps.Keys(findings.disclaimed)) {
+		names := findings.disclaimed[reason]
+		if len(names) == 1 {
+			out += fmt.Sprintf(" What %s reports is not believed: it is %s.", names[0], reason)
+			continue
+		}
+		out += fmt.Sprintf(" What %s report is not believed: each is %s.", listOf(names), reason)
+	}
+	return out
 }
 
 // checksumFeasibility says what turning checksum validation on would need,

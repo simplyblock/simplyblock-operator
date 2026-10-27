@@ -1,3 +1,2 @@
 hostOS is unstated: no worker's os-release could be read, which on a probe is the host's root filesystem not having been mounted into it. The cluster this expands into states no host OS either
-enableMetadataJournal is off, because every device completes a 4K write whole as a storage node will have it: its blocks are 4K, or the atomic write unit it reports covers 4K.
 wrote discovered-discover-host-01 in Draft: 6 workers with 6 nvme devices, in 1 group(s) across 1 node set(s); 134 refusal(s)

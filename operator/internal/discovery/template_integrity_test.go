@@ -34,6 +34,7 @@ type geometry struct {
 	formats              []nodeprobe.LBAFormat
 	current              int
 	powerFail            *nodeprobe.PowerFailAtomicity
+	vendor, product      string
 }
 
 // integrityFleet is one worker per geometry, each handing over one NVMe device.
@@ -47,7 +48,7 @@ func integrityFleet(geometries ...geometry) Plan {
 			device.AtomicWriteUnitMinBytes, device.AtomicWriteUnitMaxBytes = ptr.To(g.atomicMin), ptr.To(g.atomicMax)
 		}
 		r := report("worker-"+string(rune('1'+index)), device)
-		controller := nodeprobe.Controller{Address: address, Driver: "nvme"}
+		controller := nodeprobe.Controller{Address: address, Driver: "nvme", Vendor: g.vendor, Product: g.product}
 		if g.formats != nil {
 			controller.LBAFormats = []nodeprobe.NamespaceFormats{{
 				NSID: 1, Formats: g.formats, Current: ptr.To(g.current), PowerFailAtomicity: g.powerFail,
@@ -268,5 +269,45 @@ func TestADriveThatSaysOneBlockCannotBeChecked(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "worker-1") {
 		t.Fatalf("the draft was not refused over worker-1 device: %v", err)
+	}
+}
+
+// googleLocalSSD is the GKE node's local SSD as the probe read it on
+// 2026-10-27: one 4K format, and the one-block floor for its power-fail unit,
+// which on a 4K namespace reads as 4K whether or not anything keeps it.
+func googleLocalSSD() geometry {
+	return geometry{
+		blockSize: 4096, atomicMin: 4096, atomicMax: 4096,
+		formats: []nodeprobe.LBAFormat{lbaf(0, 4096, 0)}, current: 0,
+		powerFail: &nodeprobe.PowerFailAtomicity{NamespaceSpecific: true, NamespaceBlocks: 1, ControllerBlocks: 1},
+		vendor:    "0x1ae0", product: "0x001f",
+	}
+}
+
+// Google documents no torn-write guarantee for Local SSD, so what the device
+// reports does not prove one, and a device nothing proves gets the journal.
+func TestAGoogleLocalSSDNeedsTheJournalWhateverItReports(t *testing.T) {
+	template := templateFor(t, integrityFleet(googleLocalSSD()), nil)
+
+	if got := template.Template.EnableMetadataJournal; got == nil || !*got {
+		t.Fatalf("enableMetadataJournal = %v, want on", got)
+	}
+	if note := noteAbout(template, "enableMetadataJournal"); !strings.Contains(note, "Google") {
+		t.Errorf("the note is %q, want it to say why the device is not believed", note)
+	}
+}
+
+// Fallback checksums on 4K blocks assume a 4K write is whole, so a device that
+// cannot be shown to keep that, and carries no metadata, cannot be checked.
+func TestChecksumValidationCannotCheckAGoogleLocalSSD(t *testing.T) {
+	template := templateFor(t, integrityFleet(googleLocalSSD()), nil)
+	if note := noteAbout(template, "enableChecksumValidation"); !strings.Contains(note, "cannot check worker-1") {
+		t.Errorf("the note is %q, want it to say the device cannot be checked", note)
+	}
+
+	_, err := ClusterTemplateFor("a-cluster", integrityFleet(googleLocalSSD()),
+		TemplateOptions{Seed: &simplyblockv1alpha2.ClusterTemplate{EnableChecksumValidation: ptr.To(true)}})
+	if err == nil || !strings.Contains(err.Error(), "worker-1") {
+		t.Fatalf("stated checksum validation over the device was not refused: %v", err)
 	}
 }
