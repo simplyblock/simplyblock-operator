@@ -113,6 +113,10 @@ type NamespaceFormats struct {
 	// of each block rather than in a separate buffer. It is meaningless for
 	// NSIDAll.
 	ExtendedMetadata bool
+
+	// PowerFailAtomicity is what the namespace promises about a write a power
+	// failure interrupts, in blocks of the format in use. Nil for NSIDAll.
+	PowerFailAtomicity *PowerFailAtomicity
 }
 
 // Current returns the format the namespace is formatted with, and false when
@@ -164,6 +168,8 @@ func namespaceFormatsFromIdentify(buf []byte, nsid NamespaceID) NamespaceFormats
 	flbas := buf[flbasOffset]
 	formats.InUse = int(flbas&0x0f) | int(flbas&0x60)>>1
 	formats.ExtendedMetadata = flbas&0x10 != 0
+	atomicity := namespaceAtomicityFromIdentify(buf)
+	formats.PowerFailAtomicity = &atomicity
 	return formats
 }
 
@@ -171,6 +177,10 @@ func namespaceFormatsFromIdentify(buf []byte, nsid NamespaceID) NamespaceFormats
 // character device at devicePath. It is a package variable so tests can
 // substitute the ioctl.
 var identifyNS = identifyNamespace
+
+// identifyCtrl reads the Identify Controller data through the controller
+// character device at devicePath, a package variable for the same reason.
+var identifyCtrl = identifyController
 
 // ReadNamespaceFormats issues an NVMe Identify Namespace admin command for nsid
 // against the controller character device at controllerDevicePath (such as
@@ -184,7 +194,18 @@ func ReadNamespaceFormats(controllerDevicePath string, nsid NamespaceID) (Namesp
 	if err != nil {
 		return NamespaceFormats{}, fmt.Errorf("identify namespace %d on %s: %w", nsid, controllerDevicePath, err)
 	}
-	return namespaceFormatsFromIdentify(buf, nsid), nil
+	formats := namespaceFormatsFromIdentify(buf, nsid)
+	if formats.PowerFailAtomicity == nil {
+		return formats, nil
+	}
+	// AWUPF is the controller's, and applies where the namespace states no
+	// value of its own.
+	ctrl, err := identifyCtrl(controllerDevicePath)
+	if err != nil {
+		return NamespaceFormats{}, fmt.Errorf("identify controller %s: %w", controllerDevicePath, err)
+	}
+	formats.PowerFailAtomicity.ControllerBlocks = awupfFromIdentify(ctrl)
+	return formats, nil
 }
 
 // ControllerNamespaceIDs lists the namespaces attached to the controller whose
