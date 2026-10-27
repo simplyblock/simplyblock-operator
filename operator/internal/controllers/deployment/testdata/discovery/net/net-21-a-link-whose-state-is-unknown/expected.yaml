@@ -11,6 +11,7 @@ spec:
   cluster:
     clusterMode: Single
     enableDriveFormat: true
+    enableMetadataJournal: true
     maxSubsystemCount: 30
     minHugePagesSize: 16G
     name: discovered-discover-net-21-cluster

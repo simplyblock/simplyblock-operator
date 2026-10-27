@@ -563,6 +563,16 @@ type ClusterTemplate struct {
 	// +optional
 	EnableAtomicity4K *bool `json:"enableAtomicity4K,omitempty"`
 
+	// EnableMetadataJournal journals the lvstore's metadata pages against torn
+	// writes, which a device needs when it does not complete a 4K write whole.
+	//
+	// It is on the document because it is immutable on the cluster it lands on:
+	// the data plane records it when the cluster's lvstores are created. A
+	// discovery run derives it from the devices it found: on when any of them
+	// is not known to be 4K-write atomic once formatted.
+	// +optional
+	EnableMetadataJournal *bool `json:"enableMetadataJournal,omitempty"`
+
 	// EnableCpuTopology turns on topology-aware CPU assignment on the storage
 	// nodes. It is valid only when spec.environment is Vanilla, whose workers
 	// the environment does not describe. Every other environment decides it:

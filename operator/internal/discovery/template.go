@@ -163,17 +163,8 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 		out.Notes = append(out.Notes, note)
 	}
 
-	// The two integrity settings are stated or absent. Discovery proposes neither:
-	// nothing a probe reports says whether a deployment wants its I/O checked, and
-	// an absent setting leaves the cluster's own default to decide rather than
-	// having the run invent one.
-	if seed.EnableChecksumValidation != nil {
-		out.Template.EnableChecksumValidation = seed.EnableChecksumValidation
-		out.Notes = append(out.Notes, statedNote("enableChecksumValidation",
-			enabled(*seed.EnableChecksumValidation))+
-			" The backend bakes the checksum method into each device when the cluster "+
-			"is created and never re-applies it, so a cluster created without this is "+
-			"one nobody can turn it on for.")
+	if err := integritySettingsFor(&out, seed, plan); err != nil {
+		return ClusterTemplate{}, err
 	}
 	if len(seed.SocketsToUse) > 0 {
 		out.Template.SocketsToUse = slices.Clone(seed.SocketsToUse)
@@ -197,7 +188,56 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 				"failure domain, and each group names its workers' domain")
 		}
 	}
-	if seed.EnableAtomicity4K != nil {
+
+	return out, nil
+}
+
+// integritySettingsFor fills in the three integrity settings.
+//
+// Checksum validation is stated or left to the reviewer: nothing a probe
+// reports says whether a deployment wants its I/O checked. The metadata journal
+// and atomicity are derived from the devices where nothing stated them, and a
+// stated value is kept with a note on any device it leaves exposed.
+//
+// A stated checksum validation over a device it cannot check is an error,
+// because that device is a node add the control plane refuses.
+func integritySettingsFor(out *ClusterTemplate, seed *simplyblockv1alpha2.ClusterTemplate, plan Plan) error {
+	findings := integrityOf(plan, ptr.BoolFromOrFalse(out.Template.EnableDriveFormat))
+
+	switch {
+	case seed.EnableMetadataJournal != nil:
+		out.Template.EnableMetadataJournal = seed.EnableMetadataJournal
+		note := statedNote("enableMetadataJournal", enabled(*seed.EnableMetadataJournal))
+		if !*seed.EnableMetadataJournal && len(findings.journal) > 0 {
+			note += fmt.Sprintf(" It leaves %s exposed to a torn metadata write, which are "+
+				"not known to complete a 4K write whole.", listOf(findings.journal))
+		}
+		out.Notes = append(out.Notes, note)
+	case findings.devices > 0:
+		out.Template.EnableMetadataJournal = ptr.To(len(findings.journal) > 0)
+		out.Notes = append(out.Notes, journalNote(findings))
+	}
+
+	checksums := ptr.BoolFromOrFalse(seed.EnableChecksumValidation)
+	if seed.EnableChecksumValidation != nil {
+		out.Template.EnableChecksumValidation = seed.EnableChecksumValidation
+		out.Notes = append(out.Notes, statedNote("enableChecksumValidation",
+			enabled(*seed.EnableChecksumValidation))+
+			" The backend bakes the checksum method into each device when the cluster "+
+			"is created and never re-applies it, so a cluster created without this is "+
+			"one nobody can turn it on for.")
+		if checksums && len(findings.cannotCheck) > 0 {
+			return fmt.Errorf("enableChecksumValidation is stated, and the control plane "+
+				"cannot check %s: no metadata format, blocks under 4K, and an atomic write "+
+				"unit under 4K. Format them to 4K, leave them out, or state checksum "+
+				"validation off", listOf(findings.cannotCheck))
+		}
+	} else if findings.devices > 0 {
+		out.Notes = append(out.Notes, checksumFeasibility(findings))
+	}
+
+	switch {
+	case seed.EnableAtomicity4K != nil:
 		out.Template.EnableAtomicity4K = seed.EnableAtomicity4K
 		out.Notes = append(out.Notes, statedNote("enableAtomicity4K",
 			enabled(*seed.EnableAtomicity4K))+
@@ -205,9 +245,19 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 			"keep the guarantee, a torn write becomes a checksum that silently "+
 			"disagrees with it. The device reports in this run are what to check it "+
 			"against.")
+	case !checksums:
+	case len(findings.checkUnknown) > 0:
+		out.Notes = append(out.Notes, fmt.Sprintf("enableAtomicity4K is unset, and the "+
+			"control plane refuses %s without it unless they turn out to carry a metadata "+
+			"format or 4K blocks. Nothing in this run says they complete a 4K write whole, "+
+			"which is what setting it asserts.", listOf(findings.checkUnknown)))
+	case len(findings.needsAtomicity) > 0:
+		out.Template.EnableAtomicity4K = ptr.To(true)
+		out.Notes = append(out.Notes, fmt.Sprintf("enableAtomicity4K is on, because checksum "+
+			"validation is, and %s have no metadata format and blocks under 4K, and report "+
+			"an atomic write unit that covers 4K.", listOf(findings.needsAtomicity)))
 	}
-
-	return out, nil
+	return nil
 }
 
 // statedNote accounts for a value this installation decided, so that a reviewer

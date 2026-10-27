@@ -10,6 +10,7 @@ spec:
   approved: false
   cluster:
     enableDriveFormat: true
+    enableMetadataJournal: true
     maxSubsystemCount: 30
     name: discovered-discover-size-10-cluster
     stripe:

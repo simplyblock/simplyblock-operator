@@ -40,6 +40,17 @@ function bytes(n) {
 }
 
 function badge(text, kind) { return el("span", { class: `badge ${kind}` }, text); }
+
+// blockGeometry is a device's logical block size and the range of writes it
+// completes whole across a power failure. The range is absent on a kernel older
+// than 6.11, which is a question nothing answered rather than a no.
+function blockGeometry(d) {
+  if (!d.logicalBlockSize) return "";
+  const max = d.atomicWriteUnitMaxBytes;
+  if (max === undefined || max === null) return bytes(d.logicalBlockSize);
+  return el("span", {}, bytes(d.logicalBlockSize), el("br"),
+    el("span", { class: "muted" }, `atomic ${bytes(d.atomicWriteUnitMinBytes || d.logicalBlockSize)} to ${bytes(max)}`));
+}
 function facts(pairs) {
   return el("dl", { class: "facts" }, pairs.filter(([, v]) => v !== undefined && v !== null && v !== "")
     .map(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
@@ -316,10 +327,10 @@ function workerDetail(w) {
     hidden ? el("div", { class: "row" }, el("label", { class: "row" }, el("input", { type: "checkbox", checked: !!state.showNoise,
       onchange: (e) => { state.showNoise = e.target.checked; render(); } }), `Show loop, network, RAM, and empty devices (${hidden})`)) : null,
     !devices.length ? el("p", { class: "note" }, hidden ? "Only loop, network, RAM, and empty devices." : "The report lists no block device.") :
-    table(["Device", "Kind", "Transport", "Size", "Model", "NUMA", "CDC name", "Status"],
+    table(["Device", "Kind", "Transport", "Size", "Block size", "Model", "NUMA", "CDC name", "Status"],
       devices.map((d) => [
         el("span", {}, el("strong", {}, d.name), el("br"), el("span", { class: "muted" }, d.stablePath || d.path)),
-        d.kind, d.transport || "", bytes(d.sizeBytes), d.model || "", numa(d.numaNode),
+        d.kind, d.transport || "", bytes(d.sizeBytes), blockGeometry(d), d.model || "", numa(d.numaNode),
         d.kind === "Disk" ? el("code", {}, d.nvmeID || d.blockID || "") : "",
         d.available ? badge(d.content || "available", "ok")
           : el("div", {}, (d.rejections || []).map((x) => el("div", {}, badge(x.reason, "err"), " ", el("span", { class: "muted" }, x.detail || "")))),
@@ -359,13 +370,30 @@ function inUseOf(c) {
 // lbaFormatsCard lists the block sizes each kernel-driven controller's
 // namespaces can be formatted with, one row per format, with the format in use
 // marked. A controller on a userspace driver cannot be asked and has no rows.
+// powerFailOf is the largest write the namespace says it completes whole
+// across a power failure, in bytes of the format in use, and which field said
+// so: the namespace's own NAWUPF or the controller's AWUPF.
+function powerFailOf(ns) {
+  const a = ns.powerFailAtomicity;
+  const current = (ns.formats || []).find((f) => f.index === ns.current);
+  if (!a || !current) return null;
+  const blocks = a.namespaceSpecific ? a.namespaceBlocks : a.controllerBlocks;
+  if (!blocks) return null;
+  const source = a.namespaceSpecific ? "NAWUPF" : "AWUPF";
+  const boundary = a.boundaryBlocks
+    ? `, boundary every ${bytes(a.boundaryBlocks * current.dataSize)}${a.boundaryOffset ? ` from block ${a.boundaryOffset}` : ""}` : "";
+  return [el("br"), el("span", { class: "muted", title: `power-fail atomic write unit (${source})${boundary}` },
+    `atomic to ${bytes(blocks * current.dataSize)} (${source})${boundary}`)];
+}
+
 function lbaFormatsCard(controllers) {
   const rows = [];
   for (const c of controllers) {
     for (const ns of c.lbaFormats || []) {
       ns.formats.forEach((f, i) => rows.push([
         i ? "" : el("code", {}, c.address),
-        i ? "" : (ns.common ? el("span", { class: "muted", title: "no namespace attached: the formats a new namespace could take" }, "common") : `nsid ${ns.nsid}`),
+        i ? "" : (ns.common ? el("span", { class: "muted", title: "no namespace attached: the formats a new namespace could take" }, "common")
+          : el("span", {}, `nsid ${ns.nsid}`, powerFailOf(ns))),
         String(f.index),
         bytes(f.dataSize),
         f.metadataSize ? `${f.metadataSize} B${ns.extendedMetadata && f.index === ns.current ? ", extended" : ""}` : el("span", { class: "muted" }, "none"),
@@ -841,6 +869,7 @@ function editor() {
     el("label", {}, "Failure domains"), tri(c, "enableFailureDomains"),
     el("label", {}, "Checksum validation"), tri(c, "enableChecksumValidation"),
     el("label", {}, "4K atomicity"), tri(c, "enableAtomicity4K"),
+    el("label", {}, "Metadata journal"), tri(c, "enableMetadataJournal"),
     ...(req.environment === "Vanilla"
       ? [el("label", {}, "CPU topology"), tri(c, "enableCpuTopology"),
         el("label", {}, "Kubelet configuration"), tri(c, "enableKubeletConfiguration")]

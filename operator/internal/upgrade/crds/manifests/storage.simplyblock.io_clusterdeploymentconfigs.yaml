@@ -374,6 +374,16 @@ spec:
                       writable or is rebuilt with every node. Unset on a Vanilla document
                       turns it on.
                     type: boolean
+                  enableMetadataJournal:
+                    description: |-
+                      EnableMetadataJournal journals the lvstore's metadata pages against torn
+                      writes, which a device needs when it does not complete a 4K write whole.
+
+                      It is on the document because it is immutable on the cluster it lands on:
+                      the data plane records it when the cluster's lvstores are created. A
+                      discovery run derives it from the devices it found: on when any of them
+                      is not known to be 4K-write atomic once formatted.
+                    type: boolean
                   enableNodeAffinity:
                     description: |-
                       EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O

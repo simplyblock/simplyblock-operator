@@ -89,6 +89,7 @@ type Cluster struct {
 	EnableFailureDomains     *bool    `json:"enableFailureDomains,omitempty"`
 	EnableChecksumValidation *bool    `json:"enableChecksumValidation,omitempty"`
 	EnableAtomicity4K        *bool    `json:"enableAtomicity4K,omitempty"`
+	EnableMetadataJournal    *bool    `json:"enableMetadataJournal,omitempty"`
 
 	// EnableCpuTopology and EnableKubeletConfiguration are stated only on a
 	// Vanilla document; every other environment decides both, and Build drops
@@ -178,7 +179,7 @@ func prefillFromCDC(b *supportbundle.Bundle) Request {
 			NodesPerSocket: c.NodesPerSocket, SocketsToUse: slices.Clone(c.SocketsToUse),
 			EnableDriveFormat: c.EnableDriveFormat, EnableJournalDevice: c.EnableJournalDevice,
 			EnableFailureDomains: c.EnableFailureDomains, EnableChecksumValidation: c.EnableChecksumValidation,
-			EnableAtomicity4K: c.EnableAtomicity4K,
+			EnableAtomicity4K: c.EnableAtomicity4K, EnableMetadataJournal: c.EnableMetadataJournal,
 			EnableCpuTopology: c.EnableCpuTopology, EnableKubeletConfiguration: c.EnableKubeletConfiguration,
 		}
 		if c.Stripe != nil {
@@ -447,7 +448,7 @@ func clusterOf(base *simplyblockv1alpha2.ClusterTemplate, req Request) *simplybl
 	c.MinHugePagesSize, c.SocketsToUse = e.MinHugePagesSize, e.SocketsToUse
 	c.EnableDriveFormat, c.EnableJournalDevice = e.EnableDriveFormat, e.EnableJournalDevice
 	c.EnableFailureDomains, c.EnableChecksumValidation = e.EnableFailureDomains, e.EnableChecksumValidation
-	c.EnableAtomicity4K = e.EnableAtomicity4K
+	c.EnableAtomicity4K, c.EnableMetadataJournal = e.EnableAtomicity4K, e.EnableMetadataJournal
 	if e.ForceJournalDevice {
 		c.EnableJournalDevice = ptr.To(true)
 	}

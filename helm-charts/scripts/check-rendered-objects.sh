@@ -514,7 +514,27 @@ checkDiscovery() {
     ok=0
   fi
 
-  # The draft values are accepted and unused, so they change nothing in the run.
+  # The draft's images are the one draft value the run carries: the operator
+  # copies spec.discover.images into the draft it writes. #780 dropped them with
+  # the bootstrap ConfigMap, and an install pinning an SPDK build got the
+  # default one without a word.
+  doc="$(operatorOps standalone \
+    --set discovery.draft.images.spdk=registry.example.com/spdk:test \
+    --set discovery.draft.images.spdkProxy=registry.example.com/proxy:test)"
+  got="$("$yq" '.spec.discover.images.spdk.image + " " + .spec.discover.images.spdkProxy.image' <<<"$doc")"
+  if [ "$got" != "registry.example.com/spdk:test registry.example.com/proxy:test" ]; then
+    echo "  discovery: the draft images rendered [${got}], want both in spec.discover.images"
+    ok=0
+  fi
+  doc="$(operatorOps standalone --set discovery.draft.images.spdk=registry.example.com/spdk:test)"
+  got="$("$yq" '.spec.discover.images | keys | join(",")' <<<"$doc")"
+  if [ "$got" != "spdk" ]; then
+    echo "  discovery: one pinned image rendered [${got}], want [spdk] alone"
+    ok=0
+  fi
+
+  # The other draft values are accepted and unused, so they change nothing in
+  # the run.
   doc="$(operatorOps standalone --set discovery.draft.name=mine)"
   got="$("$yq" '.spec.discover | keys | join(",")' <<<"$doc")"
   if [ "$got" != "enablePartitionedDevices" ]; then

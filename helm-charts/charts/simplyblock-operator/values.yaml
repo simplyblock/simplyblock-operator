@@ -347,9 +347,11 @@ discovery:
     # -- Size range a device must fall in, for example, `1T-16T`. Applies to either device class.
     driveSizeRange: ""
 
-  # The values below are accepted and not used. The operator no longer seeds the
-  # draft from the chart, so edit the draft before approving it. They stay so that
-  # a values file written for an earlier release still installs.
+  # Of the values below, only images is used: it reaches the discovery run's
+  # spec.discover.images, which the operator copies into the draft. The rest are
+  # accepted and not used, because the operator no longer seeds the draft from
+  # the chart, so edit the draft before approving it. They stay so that a values
+  # file written for an earlier release still installs.
   # What the draft proposes, for the parts no probe can read.
   #
   # Every field here is one discovery would otherwise guess at, and the guesses
@@ -380,10 +382,12 @@ discovery:
     # about it.
     # edgeCluster: true
 
-    # Images the draft pins, as full repository:tag references. Empty leaves each
-    # to its own default, which is the pairing this release was tested as. The
-    # node agent is not here: a draft that pins none takes the ControlPlane
-    # object's image, which this chart already writes.
+    # Images the draft pins, as full repository:tag references, carried by the
+    # discovery run into the draft's spec.images and from there onto every
+    # StorageNode. Empty leaves each to its own default, which is the pairing
+    # this release was tested as. The node agent is not here: a draft that pins
+    # none takes the ControlPlane object's image, which this chart already
+    # writes.
     #
     #   images:
     #     spdk: quay.io/simplyblock-io/spdk:v26.2.6

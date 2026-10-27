@@ -12,6 +12,7 @@ spec:
     clusterMode: Single
     enableDriveFormat: true
     enableJournalDevice: true
+    enableMetadataJournal: true
     maxSubsystemCount: 30
     minHugePagesSize: 16G
     name: discovered-discover-dev-06-cluster

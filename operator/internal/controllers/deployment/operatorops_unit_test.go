@@ -571,6 +571,40 @@ func TestDiscoverNamesTheDocumentItWasAskedFor(t *testing.T) {
 	}
 }
 
+// Regression: the chart's discovery.draft.images seeded the draft through the
+// bootstrap ConfigMap until #780 removed it, after which an SPDK image an
+// installation pinned was accepted and silently dropped. The run carries the
+// images now, and the draft takes them from it.
+func TestDiscoverPinsTheImagesTheRunStates(t *testing.T) {
+	images := &simplyblockv1alpha2.DeploymentImages{
+		SPDK:      &simplyblockv1alpha2.ImageSpec{Image: "public.ecr.aws/simply-block/ultra:md-journal-e2e-latest"},
+		SPDKProxy: &simplyblockv1alpha2.ImageSpec{Image: "public.ecr.aws/simply-block/simplyblock:feat-md-journal-cluster-flag"},
+	}
+	r := newRunner(t,
+		discoverRun(&simplyblockv1alpha2.DiscoverSpec{ConfigName: "pinned", Images: images}),
+		worker("worker-1"),
+	)
+
+	r.step()
+	r.step()
+	r.step()
+	if err := r.client.Create(context.Background(),
+		reportConfigMap(t, "worker-1", "0000:5e:00.0")); err != nil {
+		t.Fatal(err)
+	}
+	r.step()
+	r.step()
+
+	var config simplyblockv1alpha2.ClusterDeploymentConfig
+	if err := r.client.Get(context.Background(),
+		client.ObjectKey{Namespace: opsNamespace, Name: "pinned"}, &config); err != nil {
+		t.Fatalf("read the draft: %v", err)
+	}
+	if !reflect.DeepEqual(config.Spec.Images, images) {
+		t.Errorf("the draft pins %+v, want the run's %+v", config.Spec.Images, images)
+	}
+}
+
 func TestDiscoverIgnoresAReportForAWorkerItIsNotAbout(t *testing.T) {
 	// A reused run name, or a report left by an earlier run. It is not this
 	// run's evidence, and a draft built from it would describe a machine the

@@ -426,6 +426,11 @@ type Device struct {
 	Serial     string `json:"serial,omitempty"`
 	Rotational bool   `json:"rotational,omitempty"`
 
+	// LogicalBlockSize is the smallest unit the device addresses, in bytes.
+	// Under 4K, the atomic write unit below says whether a 4K write still
+	// completes whole. Zero is a report written before the field existed.
+	LogicalBlockSize uint32 `json:"logicalBlockSize,omitempty"`
+
 	// AtomicWriteUnitMaxBytes is the largest write this device completes whole
 	// across a power failure, and AtomicWriteUnitMinBytes the smallest it makes
 	// that promise about. They are what says whether a cluster may run checksum
@@ -541,6 +546,28 @@ type NamespaceFormats struct {
 	// ExtendedMetadata reports that the metadata is transferred at the end of
 	// each block rather than in a separate buffer.
 	ExtendedMetadata bool `json:"extendedMetadata,omitempty"`
+
+	// PowerFailAtomicity is what the namespace promises about a write a power
+	// failure interrupts, read from the drive rather than from the kernel, so
+	// it answers on kernels before 6.11 too. Absent for Common.
+	PowerFailAtomicity *PowerFailAtomicity `json:"powerFailAtomicity,omitempty"`
+}
+
+// PowerFailAtomicity is the drive's own statement of the largest write it
+// completes whole across a power failure. Every size counts logical blocks of
+// the format in use, each field as the specification names it plus one.
+type PowerFailAtomicity struct {
+	// NamespaceSpecific is NSFEAT bit 1: NamespaceBlocks (NAWUPF) applies
+	// instead of the controller's ControllerBlocks (AWUPF).
+	NamespaceSpecific bool   `json:"namespaceSpecific,omitempty"`
+	NamespaceBlocks   uint32 `json:"namespaceBlocks,omitempty"`
+	ControllerBlocks  uint32 `json:"controllerBlocks,omitempty"`
+
+	// BoundaryBlocks (NABSPF) is the spacing of the boundaries an atomic write
+	// must not cross, absent when there are none, and BoundaryOffset (NABO)
+	// where the first falls.
+	BoundaryBlocks uint32 `json:"boundaryBlocks,omitempty"`
+	BoundaryOffset uint32 `json:"boundaryOffset,omitempty"`
 }
 
 // LBAFormat is one block size and metadata size combination.

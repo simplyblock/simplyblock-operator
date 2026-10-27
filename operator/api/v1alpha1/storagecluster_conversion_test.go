@@ -867,3 +867,34 @@ func TestStorageClusterSuperclusterFieldsSurviveTheHub(t *testing.T) {
 		})
 	}
 }
+
+// The metadata journal has no v1alpha1 field, and it is immutable on the
+// cluster: a stored v1alpha1 object that lost it would read back as a cluster
+// that asked for no journal, which is not the cluster the control plane built.
+func TestStorageClusterTheMetadataJournalSurvivesTheHub(t *testing.T) {
+	for _, stated := range []*bool{ptr.To(true), ptr.To(false), nil} {
+		hub := &v1alpha2.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "prod", Namespace: "sb"},
+			Spec: v1alpha2.StorageClusterSpec{
+				MaxSubsystemCount:     ptr.To(int32(20)),
+				VCPUCount:             ptr.To(int32(8)),
+				DeviceClass:           v1alpha2.StorageClusterDeviceClassNVMe,
+				EnableMetadataJournal: stated,
+			},
+		}
+		var spoke StorageCluster
+		if err := spoke.ConvertFrom(hub.DeepCopy()); err != nil {
+			t.Fatalf("ConvertFrom: %v", err)
+		}
+		var back v1alpha2.StorageCluster
+		if err := spoke.ConvertTo(&back); err != nil {
+			t.Fatalf("ConvertTo: %v", err)
+		}
+		if diff := cmp.Diff(hub.Spec.EnableMetadataJournal, back.Spec.EnableMetadataJournal); diff != "" {
+			t.Errorf("enableMetadataJournal changed through v1alpha1 (-before +after):\n%s", diff)
+		}
+		if len(back.Annotations) != 0 {
+			t.Errorf("the stash was left on the hub object: %v", back.Annotations)
+		}
+	}
+}

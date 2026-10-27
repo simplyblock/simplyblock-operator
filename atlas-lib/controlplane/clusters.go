@@ -80,7 +80,11 @@ type CreateClusterParams struct {
 	MaxSubsys           int
 	InlineChecksum      bool
 	Atomic4K            bool
-	DeviceMode          string
+	// MetadataJournal journals the lvstore metadata pages against torn
+	// writes, for devices that are not 4K-write atomic. It is always sent,
+	// because the control plane journals unless told not to.
+	MetadataJournal bool
+	DeviceMode      string
 	// SingleNode creates a cluster of one storage node, which is also created
 	// without HA.
 	SingleNode    bool
@@ -198,7 +202,8 @@ func clusterFromDTO(d cpapi.ClusterDTO) Cluster {
 }
 
 // clusterParamsOf is the create body. A zero value is left out, so the control
-// plane applies its own default for it.
+// plane applies its own default for it, except where that default is not the
+// zero value: md_journal defaults to on, so it is always stated.
 func clusterParamsOf(p CreateClusterParams) cpapi.ClusterParams {
 	body := cpapi.ClusterParams{
 		MaxSubsys:              p.MaxSubsys,
@@ -223,6 +228,7 @@ func clusterParamsOf(p CreateClusterParams) cpapi.ClusterParams {
 		HugepagesMem:           nonZero(int(p.HugepagesMemBytes)),
 		InlineChecksum:         isTrue(p.InlineChecksum),
 		Atomic4k:               isTrue(p.Atomic4K),
+		MdJournal:              ptr.To(p.MetadataJournal),
 		IsSingleNode:           isTrue(p.SingleNode),
 		SnodeApiService:        nonEmpty(p.WorkloadNames.NodeAPIService),
 		SpdkProxyService:       nonEmpty(p.WorkloadNames.SpdkProxyService),

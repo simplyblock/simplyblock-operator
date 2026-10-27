@@ -12,6 +12,7 @@ spec:
     clusterMode: Single
     enableDriveFormat: true
     enableJournalDevice: true
+    enableMetadataJournal: false
     maxSubsystemCount: 30
     name: discovered-discover-host-03-cluster
     stripe:

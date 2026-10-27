@@ -21,6 +21,7 @@ import (
 	"github.com/simplyblock/atlas/inventory"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/pci"
+	"github.com/simplyblock/atlas/ptr"
 )
 
 // probedAt is a fixed instant, so a report is compared against a value rather
@@ -90,6 +91,35 @@ func TestFromInventoryKeepsTheReasonADeviceCouldNotBeChecked(t *testing.T) {
 	}
 	if !strings.Contains(detail, unreadable.Error()) {
 		t.Errorf("the detail is %q, and it does not name why the device could not be asked about", detail)
+	}
+}
+
+// The logical block size and the atomic write unit together say whether a
+// device completes a 4K write whole, which is what decides the cluster's
+// metadata journal. Both have to survive the report's round trip.
+func TestFromInventoryCarriesTheBlockGeometry(t *testing.T) {
+	disk := oneFreeDisk()
+	disk.LogicalBlockSize = 512
+	disk.AtomicWriteUnitMinBytes, disk.AtomicWriteUnitMaxBytes = ptr.To(uint32(512)), ptr.To(uint32(4096))
+
+	encoded, err := Encode(FromInventory(testNode, probedAt, inventory.Inventory{
+		Devices: []blockdev.Candidate{disk},
+	}, nil))
+	if err != nil {
+		t.Fatalf("encode the report: %v", err)
+	}
+	decoded, err := Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode the report: %v", err)
+	}
+
+	device := decoded.Devices[0]
+	if device.LogicalBlockSize != 512 {
+		t.Errorf("logicalBlockSize = %d, want 512", device.LogicalBlockSize)
+	}
+	if ptr.From(device.AtomicWriteUnitMaxBytes, 0) != 4096 || ptr.From(device.AtomicWriteUnitMinBytes, 0) != 512 {
+		t.Errorf("atomic write units = %v..%v, want 512..4096",
+			device.AtomicWriteUnitMinBytes, device.AtomicWriteUnitMaxBytes)
 	}
 }
 
@@ -473,6 +503,40 @@ func TestTheReportCarriesEachControllersLBAFormats(t *testing.T) {
 	}
 	if formats := byAddress["0000:07:00.0"]; len(formats) != 0 {
 		t.Errorf("the controller on vfio-pci reports formats %+v", deref(formats))
+	}
+}
+
+// The power-fail atomicity is what says whether a 512-byte namespace writes 4K
+// whole on a kernel that publishes no atomic write attributes, so every field
+// has to survive the round trip.
+func TestTheReportCarriesEachNamespacesPowerFailAtomicity(t *testing.T) {
+	read := nvme.PowerFailAtomicity{
+		NamespaceSpecific: true, NamespaceBlocks: 8, ControllerBlocks: 1, BoundaryBlocks: 16, BoundaryOffset: 2,
+	}
+	inv := inventory.Inventory{
+		NVMeControllers: []pci.Device{{Address: "0000:06:11.0", Driver: "nvme"}},
+		NVMeFormats: []inventory.NVMeControllerFormats{{Address: "0000:06:11.0", Controller: "nvme0",
+			Namespaces: []nvme.NamespaceFormats{{
+				NSID: 1, Formats: []nvme.LBAFormat{{Index: 0, DataSize: 512}}, InUse: 0,
+				PowerFailAtomicity: &read,
+			}}}},
+	}
+
+	encoded, err := Encode(FromInventory(testNode, probedAt, inv, nil))
+	if err != nil {
+		t.Fatalf("encode the report: %v", err)
+	}
+	report, err := Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode the report: %v", err)
+	}
+
+	got := report.NVMeControllers[0].LBAFormats[0].PowerFailAtomicity
+	want := PowerFailAtomicity{
+		NamespaceSpecific: true, NamespaceBlocks: 8, ControllerBlocks: 1, BoundaryBlocks: 16, BoundaryOffset: 2,
+	}
+	if got == nil || *got != want {
+		t.Errorf("powerFailAtomicity = %+v, want %+v", got, want)
 	}
 }
 

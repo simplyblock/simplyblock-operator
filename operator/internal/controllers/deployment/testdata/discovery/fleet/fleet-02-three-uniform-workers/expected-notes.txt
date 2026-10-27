@@ -5,4 +5,6 @@ maxSubsystemCount is 30, which is the middle of the range this API accepts and n
 minHugePagesSize is 16G, the huge pages free on the memory node chosen on worker-01, which is the smallest of the fleet
 enableJournalDevice is left unset: worker-01 hands over no single disk smaller than its others, so there is none to dedicate. Setting it would give up a disk the fleet did not set aside, and the field cannot be changed once the cluster exists
 stripe is 1+1, the only redundant scheme a fleet of 3 carries: it needs 3 storage nodes and the next scheme up needs more. A cluster's stripe cannot be changed afterward
+enableMetadataJournal is on, because none of the 12 devices is known to complete a 4K write whole as a storage node will have it. The data plane journals the lvstore metadata pages, so a torn write cannot leave a half-written one behind.
+enableChecksumValidation is left to the reviewer. Turned on, nothing in this run says whether it can check any of the 12 devices.
 wrote discovered-discover-fleet-02 in Draft: 3 workers with 12 nvme devices, in 1 group(s) across 1 node set(s); 0 refusal(s)

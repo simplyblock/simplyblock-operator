@@ -121,6 +121,10 @@ const (
 	// Losing the workload names would re-derive them, and every node's
 	// hostname is built from them.
 	annoClusterStatusWorkloadNames = "storage.simplyblock.io/conversion-status.workloadNames"
+
+	// The metadata journal is immutable on the cluster, so losing it would
+	// read back as a cluster that asked for none.
+	annoClusterMetadataJournal = "storage.simplyblock.io/conversion-spec.enableMetadataJournal"
 )
 
 // creationStepToHub maps this version's creation sub-phase onto the hub's
@@ -436,6 +440,7 @@ func stashClusterHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageCluster) 
 		{annoClusterStatusMemberCount, src.Status.MemberCount},
 		{annoClusterStatusCapacity, src.Status.Capacity},
 		{annoClusterStatusWorkloadNames, src.Status.WorkloadNames},
+		{annoClusterMetadataJournal, src.Spec.EnableMetadataJournal},
 	} {
 		if err := stash(meta, field.key, field.value); err != nil {
 			return err
@@ -518,6 +523,7 @@ func restoreClusterHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageCluster
 		{annoClusterStatusMemberCount, &dst.Status.MemberCount},
 		{annoClusterStatusCapacity, &dst.Status.Capacity},
 		{annoClusterStatusWorkloadNames, &dst.Status.WorkloadNames},
+		{annoClusterMetadataJournal, &dst.Spec.EnableMetadataJournal},
 	} {
 		if err := unstash(meta, field.key, field.target); err != nil {
 			return err

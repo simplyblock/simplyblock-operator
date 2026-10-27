@@ -30,7 +30,9 @@ atlas/
 │   ├── sysfs_scan.go       sysfs tree walk + attribute parsing
 │   ├── siblings.go         Siblings (same volume, other paths) + CoTenants (other volumes, same subsystem)
 │   ├── multinamespace.go   IsMultiNamespace / Controller.MaxNamespaces (MNAN)
-│   ├── identify*.go        Identify Controller and Identify Namespace ioctls (Linux) + MNAN decoding
+│   ├── identify*.go        Identify Controller and Identify Namespace ioctls (Linux) + MNAN and AWUPF decoding
+│   ├── atomicity.go        PowerFailAtomicity (NSFEAT, NAWUPF, NABSPF, NABO, AWUPF), AtomicAt
+│   ├── disclaimed.go       AtomicityDisclaimed: controllers whose atomicity statement is not believed
 │   └── lbaformat.go        LBAFormat, ReadNamespaceFormats, ControllerNamespaceIDs, NSIDAll
 ├── nvmeof/                 NVMe-oF fabric connect/disconnect (TCP)
 │   ├── connector.go        Connector iface; Target, Targets + TargetOptions
