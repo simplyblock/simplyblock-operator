@@ -10932,6 +10932,10 @@
             "type": "boolean",
             "title": "Atomic 4K"
           },
+          "md_journal": {
+            "type": "boolean",
+            "title": "Md Journal"
+          },
           "secret": {
             "type": "string",
             "format": "password",
@@ -10991,6 +10995,7 @@
           "device_mode",
           "inline_checksum",
           "atomic_4k",
+          "md_journal",
           "secret",
           "tls_enabled",
           "max_fault_tolerance",
@@ -11284,6 +11289,11 @@
           "atomic_4k": {
             "type": "boolean",
             "title": "Atomic 4K",
+            "default": false
+          },
+          "md_journal": {
+            "type": "boolean",
+            "title": "Md Journal",
             "default": false
           },
           "snode_api_service": {

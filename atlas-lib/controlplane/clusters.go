@@ -80,7 +80,10 @@ type CreateClusterParams struct {
 	MaxSubsys           int
 	InlineChecksum      bool
 	Atomic4K            bool
-	DeviceMode          string
+	// MetadataJournal journals the lvstore metadata pages against torn
+	// writes, for devices that are not 4K-write atomic.
+	MetadataJournal bool
+	DeviceMode      string
 	// SingleNode creates a cluster of one storage node, which is also created
 	// without HA.
 	SingleNode    bool
@@ -223,6 +226,7 @@ func clusterParamsOf(p CreateClusterParams) cpapi.ClusterParams {
 		HugepagesMem:           nonZero(int(p.HugepagesMemBytes)),
 		InlineChecksum:         isTrue(p.InlineChecksum),
 		Atomic4k:               isTrue(p.Atomic4K),
+		MdJournal:              isTrue(p.MetadataJournal),
 		IsSingleNode:           isTrue(p.SingleNode),
 		SnodeApiService:        nonEmpty(p.WorkloadNames.NodeAPIService),
 		SpdkProxyService:       nonEmpty(p.WorkloadNames.SpdkProxyService),

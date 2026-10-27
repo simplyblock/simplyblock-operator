@@ -1229,6 +1229,7 @@ type ClusterDTO struct {
 	IsReBalancing               bool               `json:"is_re_balancing"`
 	IsShrinking                 *bool              `json:"is_shrinking,omitempty"`
 	MaxFaultTolerance           int                `json:"max_fault_tolerance"`
+	MdJournal                   bool               `json:"md_journal"`
 	Name                        *string            `json:"name"`
 	NodeAffinity                bool               `json:"node_affinity"`
 	NodeLabelSuffix             string             `json:"node_label_suffix"`
@@ -1289,6 +1290,7 @@ type ClusterParams struct {
 	IsSingleNode           *bool                    `json:"is_single_node,omitempty"`
 	MaxQueueSize           *int                     `json:"max_queue_size,omitempty"`
 	MaxSubsys              int                      `json:"max_subsys"`
+	MdJournal              *bool                    `json:"md_journal,omitempty"`
 	Name                   *string                  `json:"name,omitempty"`
 	NodeLabelSuffix        *string                  `json:"node_label_suffix,omitempty"`
 	NvmfBasePort           *int                     `json:"nvmf_base_port,omitempty"`
