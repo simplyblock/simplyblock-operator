@@ -5,6 +5,7 @@ metadata:
 spec:
   cluster:
     enableJournalDevice: true
+    enableMetadataJournal: false
     minHugePagesSize: null
     name: discovered-discover-host-03-cluster
     stripe:
