@@ -765,6 +765,7 @@ func (r *OperatorOpsReconciler) draftFor(
 			Approved:    false,
 			Environment: ops.Status.Environment,
 			NodeSets:    plan.NodeSets,
+			Images:      spec.Images.DeepCopy(),
 		},
 	}
 

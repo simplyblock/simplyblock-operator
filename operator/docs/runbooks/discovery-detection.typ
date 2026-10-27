@@ -407,7 +407,9 @@ even when it presents no block device. A held controller, or one that could not 
 
 #note[Every value below is derived by the run. None can be stated ahead of it, by the Helm chart or otherwise:
 a different value is an edit to the draft before it is approved (section 12). The draft's `ConfigWritten`
-events say how each one was derived.]
+events say how each one was derived. The one thing a run takes as stated is the images: `spec.discover.images`
+on the OperatorOps, which the chart fills from `discovery.draft.images.spdk` and `.spdkProxy`, is copied into the
+draft's `spec.images` unchanged.]
 
 #v(4pt)
 #grid((1.4fr, 2.2fr, 3.2fr), ([Draft setting], [From], [Rule]),

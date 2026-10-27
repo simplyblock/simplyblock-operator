@@ -282,6 +282,13 @@ type DiscoverSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
+
+	// Images are the container images the draft pins, copied into its
+	// spec.images, so that an installation testing an SPDK or SPDK proxy build
+	// states it once rather than editing every draft before approving it.
+	// Unstated, each takes the default the draft's own field documents.
+	// +optional
+	Images *DeploymentImages `json:"images,omitempty"`
 }
 
 // OperatorOpsSpec is one operation to perform against the operator itself.
