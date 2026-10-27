@@ -44,7 +44,7 @@ func TestTheServiceNameFollowsThePodsNaming(t *testing.T) {
 }
 
 func TestAPodNetworkNodeIsAttachedOnceItsPodRunsBehindTheService(t *testing.T) {
-	r, _ := onANetwork(t, viaPodNetwork("cni"), anSPDKPodHolding(corev1.PodRunning, ""), theServiceOf(spdkRPCPort))
+	r, _ := onANetwork(t, viaPodNetwork(), anSPDKPodHolding(corev1.PodRunning, ""), theServiceOf(spdkRPCPort))
 
 	settle(t, r)
 
@@ -59,7 +59,7 @@ func TestAPodNetworkNodeIsAttachedOnceItsPodRunsBehindTheService(t *testing.T) {
 }
 
 func TestAPodNetworkNodeIsPendingUntilItsServiceExists(t *testing.T) {
-	r, _ := onANetwork(t, viaPodNetwork("cni"), anSPDKPodHolding(corev1.PodRunning, ""))
+	r, _ := onANetwork(t, viaPodNetwork(), anSPDKPodHolding(corev1.PodRunning, ""))
 
 	settle(t, r)
 
@@ -70,7 +70,7 @@ func TestAPodNetworkNodeIsPendingUntilItsServiceExists(t *testing.T) {
 }
 
 func TestAPodNetworkNodeIsUnavailableWhileItsPodDoesNotRun(t *testing.T) {
-	r, _ := onANetwork(t, viaPodNetwork("cni"), anSPDKPodHolding(corev1.PodPending, ""), theServiceOf(spdkRPCPort))
+	r, _ := onANetwork(t, viaPodNetwork(), anSPDKPodHolding(corev1.PodPending, ""), theServiceOf(spdkRPCPort))
 
 	settle(t, r)
 
@@ -81,7 +81,7 @@ func TestAPodNetworkNodeIsUnavailableWhileItsPodDoesNotRun(t *testing.T) {
 }
 
 func TestAPodNetworkNodeIsNeverShutDownOrProbed(t *testing.T) {
-	r, apiClient := onANetwork(t, viaPodNetwork("cni"), anSPDKPodHolding(corev1.PodRunning, ""), theServiceOf(spdkRPCPort))
+	r, apiClient := onANetwork(t, viaPodNetwork(), anSPDKPodHolding(corev1.PodRunning, ""), theServiceOf(spdkRPCPort))
 	api := r.API.(*scriptedControlPlane)
 
 	settle(t, r)
