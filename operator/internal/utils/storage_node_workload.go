@@ -521,7 +521,7 @@ func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 			// with the node.
 			APIGroups: []string{""},
 			Resources: []string{"services"},
-			Verbs:     []string{"get", "create", "patch", "delete"},
+			Verbs:     []string{"get", "create", "update", "delete"},
 		},
 		{
 			APIGroups: []string{"apps"},
