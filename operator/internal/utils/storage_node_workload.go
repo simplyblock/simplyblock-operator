@@ -516,6 +516,14 @@ func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 			Verbs:     []string{"list", "get", "create", "delete", "watch"},
 		},
 		{
+			// The Service in front of an SPDK pod on the pod network: created
+			// with the pod, its ports set as the node's are allotted, deleted
+			// with the node.
+			APIGroups: []string{""},
+			Resources: []string{"services"},
+			Verbs:     []string{"get", "create", "patch", "delete"},
+		},
+		{
 			APIGroups: []string{"apps"},
 			Resources: []string{"deployments"},
 			Verbs:     []string{"create", "delete"},

@@ -177,3 +177,21 @@ func TestAtMostEightDataNetworksAreBuilt(t *testing.T) {
 		})
 	}
 }
+
+func viaPodNetwork(name string) simplyblockv1alpha2.StorageNetwork {
+	return simplyblockv1alpha2.StorageNetwork{
+		Name:       name,
+		Attachment: simplyblockv1alpha2.NetworkAttachment{PodNetwork: &simplyblockv1alpha2.PodNetworkAttachment{}},
+	}
+}
+
+// A pod on the pod network attaches to nothing: no element, no annotation.
+func TestAPodNetworkHasNoAttachment(t *testing.T) {
+	got := build(t, &simplyblockv1alpha2.StorageNetworkSpec{
+		Data: []simplyblockv1alpha2.StorageNetwork{viaPodNetwork("cni")},
+	}, nil)
+
+	if len(got) != 0 {
+		t.Fatalf("attachments = %+v, want none", got)
+	}
+}

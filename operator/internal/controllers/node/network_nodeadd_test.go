@@ -131,3 +131,49 @@ func nodeAndClusterOf(t *testing.T, r *StorageNodeReconciler) (*simplyblockv1alp
 	}
 	return node, cluster
 }
+
+// The add of a node on the pod network says so and carries no attachment, so the
+// control plane starts the pod off the host network behind its Service.
+func TestTheAddOfAPodNetworkNodeDeclaresTheModeAndNoNetworks(t *testing.T) {
+	r, _ := onANetwork(t, viaPodNetwork("cni"))
+	api := r.API.(*scriptedControlPlane)
+	node, cluster := nodeAndClusterOf(t, r)
+
+	if err := r.postNode(context.Background(), node, cluster); err != nil {
+		t.Fatalf("postNode: %v", err)
+	}
+
+	if !api.adds[0].PodNetwork {
+		t.Fatal("the add did not declare the pod network")
+	}
+	if api.adds[0].Networks != nil {
+		t.Fatalf("networks = %+v, want none on the pod network", api.adds[0].Networks)
+	}
+}
+
+func TestOnlyAPodNetworkDeclarationIsOnThePodNetwork(t *testing.T) {
+	for name, cluster := range map[string]*simplyblockv1alpha2.StorageCluster{
+		"no network":   {},
+		"a definition": clusterDeclaring(aDataNetwork()),
+		"a host interface": clusterDeclaring(simplyblockv1alpha2.StorageNetwork{
+			Name: "lan", Attachment: simplyblockv1alpha2.NetworkAttachment{HostInterface: "eth1"},
+		}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if onPodNetwork(cluster) {
+				t.Fatal("reported on the pod network")
+			}
+		})
+	}
+	if !onPodNetwork(clusterDeclaring(viaPodNetwork("cni"))) {
+		t.Fatal("a pod network declaration was not recognised")
+	}
+}
+
+func clusterDeclaring(network simplyblockv1alpha2.StorageNetwork) *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{Spec: simplyblockv1alpha2.StorageClusterSpec{
+		StorageNodes: &simplyblockv1alpha2.StorageNodesSpec{Network: &simplyblockv1alpha2.StorageNetworkSpec{
+			Data: []simplyblockv1alpha2.StorageNetwork{network},
+		}},
+	}}
+}

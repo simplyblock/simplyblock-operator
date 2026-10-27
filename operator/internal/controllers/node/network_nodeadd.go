@@ -35,3 +35,10 @@ func (r *StorageNodeReconciler) networkParams(
 	}
 	return params, nil
 }
+
+// onPodNetwork reports whether the cluster puts its SPDK pods on the pod network
+// with no attachment. The CRD admits that attachment only as the one data network.
+func onPodNetwork(cluster *simplyblockv1alpha2.StorageCluster) bool {
+	network := networkOf(cluster)
+	return network != nil && len(network.Data) == 1 && network.Data[0].Attachment.PodNetwork != nil
+}

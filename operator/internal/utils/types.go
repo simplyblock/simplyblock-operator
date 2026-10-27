@@ -85,6 +85,9 @@ type StorageNodeSetAddParams struct {
 	// takes on each. Unset for a node on the host network, and then the request
 	// is what it always was.
 	Networks []NodeNetworkParams `json:"networks,omitempty"`
+	// PodNetwork puts the SPDK pod on the pod network with no attachment, fronted
+	// by a Service the control plane keeps. Exclusive with Networks.
+	PodNetwork bool `json:"pod_network,omitempty"`
 }
 
 // NodeNetworkParams is one network the SPDK pod attaches to, as the control

@@ -588,11 +588,21 @@ spec:
                                   required:
                                   - name
                                   type: object
+                                podNetwork:
+                                  description: |-
+                                    PodNetwork puts the pods on the cluster CNI's network with no further
+                                    attachment. The pod's one interface carries the RPC and the data, and a
+                                    Service in front of the pod is the address peers and clients hold, since
+                                    the pod's own address changes on every restart. The control plane keeps
+                                    the Service and the ports it forwards.
+                                  type: object
                               type: object
                               x-kubernetes-validations:
-                              - message: exactly one of networkAttachmentRef and hostInterface
-                                  must be set
-                                rule: has(self.networkAttachmentRef) != has(self.hostInterface)
+                              - message: exactly one of networkAttachmentRef, hostInterface
+                                  and podNetwork must be set
+                                rule: '(has(self.networkAttachmentRef) ? 1 : 0) +
+                                  (has(self.hostInterface) ? 1 : 0) + (has(self.podNetwork)
+                                  ? 1 : 0) == 1'
                             name:
                               description: |-
                                 Name identifies the network within the cluster, and is the key the nodes'
@@ -608,6 +618,8 @@ spec:
                           x-kubernetes-validations:
                           - message: addressPool is not allowed with hostInterface
                             rule: '!has(self.attachment.hostInterface) || !has(self.addressPool)'
+                          - message: addressPool is not allowed with podNetwork
+                            rule: '!has(self.attachment.podNetwork) || !has(self.addressPool)'
                         maxItems: 8
                         type: array
                         x-kubernetes-list-map-keys:
@@ -679,11 +691,20 @@ spec:
                                 required:
                                 - name
                                 type: object
+                              podNetwork:
+                                description: |-
+                                  PodNetwork puts the pods on the cluster CNI's network with no further
+                                  attachment. The pod's one interface carries the RPC and the data, and a
+                                  Service in front of the pod is the address peers and clients hold, since
+                                  the pod's own address changes on every restart. The control plane keeps
+                                  the Service and the ports it forwards.
+                                type: object
                             type: object
                             x-kubernetes-validations:
-                            - message: exactly one of networkAttachmentRef and hostInterface
-                                must be set
-                              rule: has(self.networkAttachmentRef) != has(self.hostInterface)
+                            - message: exactly one of networkAttachmentRef, hostInterface
+                                and podNetwork must be set
+                              rule: '(has(self.networkAttachmentRef) ? 1 : 0) + (has(self.hostInterface)
+                                ? 1 : 0) + (has(self.podNetwork) ? 1 : 0) == 1'
                           name:
                             description: |-
                               Name identifies the network within the cluster, and is the key the nodes'
@@ -699,6 +720,8 @@ spec:
                         x-kubernetes-validations:
                         - message: addressPool is not allowed with hostInterface
                           rule: '!has(self.attachment.hostInterface) || !has(self.addressPool)'
+                        - message: addressPool is not allowed with podNetwork
+                          rule: '!has(self.attachment.podNetwork) || !has(self.addressPool)'
                     type: object
                     x-kubernetes-validations:
                     - message: all networks must use networkAttachmentRef, or all
@@ -707,6 +730,11 @@ spec:
                         has(n.attachment.networkAttachmentRef) == has(self.data[0].attachment.networkAttachmentRef))
                         && (!has(self.management) || has(self.management.attachment.networkAttachmentRef)
                         == has(self.data[0].attachment.networkAttachmentRef)))'
+                    - message: a podNetwork attachment is the only data network and
+                        has no management network
+                      rule: (!has(self.data) || !self.data.exists(n, has(n.attachment.podNetwork))
+                        || (self.data.size() == 1 && !has(self.management))) && (!has(self.management)
+                        || !has(self.management.attachment.podNetwork))
                   nodeProvisioningBudget:
                     description: |-
                       NodeProvisioningBudget is how many workers the expansion may have in the
