@@ -21,6 +21,7 @@ import (
 	"github.com/simplyblock/atlas/inventory"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/pci"
+	"github.com/simplyblock/atlas/ptr"
 )
 
 // probedAt is a fixed instant, so a report is compared against a value rather
@@ -90,6 +91,35 @@ func TestFromInventoryKeepsTheReasonADeviceCouldNotBeChecked(t *testing.T) {
 	}
 	if !strings.Contains(detail, unreadable.Error()) {
 		t.Errorf("the detail is %q, and it does not name why the device could not be asked about", detail)
+	}
+}
+
+// The logical block size and the atomic write unit together say whether a
+// device completes a 4K write whole, which is what decides the cluster's
+// metadata journal. Both have to survive the report's round trip.
+func TestFromInventoryCarriesTheBlockGeometry(t *testing.T) {
+	disk := oneFreeDisk()
+	disk.LogicalBlockSize = 512
+	disk.AtomicWriteUnitMinBytes, disk.AtomicWriteUnitMaxBytes = ptr.To(uint32(512)), ptr.To(uint32(4096))
+
+	encoded, err := Encode(FromInventory(testNode, probedAt, inventory.Inventory{
+		Devices: []blockdev.Candidate{disk},
+	}, nil))
+	if err != nil {
+		t.Fatalf("encode the report: %v", err)
+	}
+	decoded, err := Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode the report: %v", err)
+	}
+
+	device := decoded.Devices[0]
+	if device.LogicalBlockSize != 512 {
+		t.Errorf("logicalBlockSize = %d, want 512", device.LogicalBlockSize)
+	}
+	if ptr.From(device.AtomicWriteUnitMaxBytes, 0) != 4096 || ptr.From(device.AtomicWriteUnitMinBytes, 0) != 512 {
+		t.Errorf("atomic write units = %v..%v, want 512..4096",
+			device.AtomicWriteUnitMinBytes, device.AtomicWriteUnitMaxBytes)
 	}
 }
 

@@ -426,6 +426,11 @@ type Device struct {
 	Serial     string `json:"serial,omitempty"`
 	Rotational bool   `json:"rotational,omitempty"`
 
+	// LogicalBlockSize is the smallest unit the device addresses, in bytes.
+	// Under 4K, the atomic write unit below says whether a 4K write still
+	// completes whole. Zero is a report written before the field existed.
+	LogicalBlockSize uint32 `json:"logicalBlockSize,omitempty"`
+
 	// AtomicWriteUnitMaxBytes is the largest write this device completes whole
 	// across a power failure, and AtomicWriteUnitMinBytes the smallest it makes
 	// that promise about. They are what says whether a cluster may run checksum

@@ -185,7 +185,9 @@ func devicesOf(candidates []blockdev.Candidate) []Device {
 			Model:      c.Model,
 			Serial:     c.Serial,
 			Rotational: c.Rotational,
-			// Carried as the scan read them, nil included: see Device.
+			// The geometry: the block size, and the atomic write units carried
+			// as the scan read them, nil included (see Device).
+			LogicalBlockSize:        c.LogicalBlockSize,
 			AtomicWriteUnitMaxBytes: c.AtomicWriteUnitMaxBytes,
 			AtomicWriteUnitMinBytes: c.AtomicWriteUnitMinBytes,
 			NUMANode:                c.NUMANode,

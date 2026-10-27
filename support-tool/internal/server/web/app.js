@@ -40,6 +40,17 @@ function bytes(n) {
 }
 
 function badge(text, kind) { return el("span", { class: `badge ${kind}` }, text); }
+
+// blockGeometry is a device's logical block size and the range of writes it
+// completes whole across a power failure. The range is absent on a kernel older
+// than 6.11, which is a question nothing answered rather than a no.
+function blockGeometry(d) {
+  if (!d.logicalBlockSize) return "";
+  const max = d.atomicWriteUnitMaxBytes;
+  if (max === undefined || max === null) return bytes(d.logicalBlockSize);
+  return el("span", {}, bytes(d.logicalBlockSize), el("br"),
+    el("span", { class: "muted" }, `atomic ${bytes(d.atomicWriteUnitMinBytes || d.logicalBlockSize)} to ${bytes(max)}`));
+}
 function facts(pairs) {
   return el("dl", { class: "facts" }, pairs.filter(([, v]) => v !== undefined && v !== null && v !== "")
     .map(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
@@ -316,10 +327,10 @@ function workerDetail(w) {
     hidden ? el("div", { class: "row" }, el("label", { class: "row" }, el("input", { type: "checkbox", checked: !!state.showNoise,
       onchange: (e) => { state.showNoise = e.target.checked; render(); } }), `Show loop, network, RAM, and empty devices (${hidden})`)) : null,
     !devices.length ? el("p", { class: "note" }, hidden ? "Only loop, network, RAM, and empty devices." : "The report lists no block device.") :
-    table(["Device", "Kind", "Transport", "Size", "Model", "NUMA", "CDC name", "Status"],
+    table(["Device", "Kind", "Transport", "Size", "Block size", "Model", "NUMA", "CDC name", "Status"],
       devices.map((d) => [
         el("span", {}, el("strong", {}, d.name), el("br"), el("span", { class: "muted" }, d.stablePath || d.path)),
-        d.kind, d.transport || "", bytes(d.sizeBytes), d.model || "", numa(d.numaNode),
+        d.kind, d.transport || "", bytes(d.sizeBytes), blockGeometry(d), d.model || "", numa(d.numaNode),
         d.kind === "Disk" ? el("code", {}, d.nvmeID || d.blockID || "") : "",
         d.available ? badge(d.content || "available", "ok")
           : el("div", {}, (d.rejections || []).map((x) => el("div", {}, badge(x.reason, "err"), " ", el("span", { class: "muted" }, x.detail || "")))),
