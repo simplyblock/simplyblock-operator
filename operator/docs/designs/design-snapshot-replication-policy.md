@@ -30,21 +30,21 @@ The current snapshot replication model is volume-centric: `replication_start` an
 `replication_stop` are called directly on individual volumes, carrying a target cluster ID
 as a parameter. This has several practical limitations:
 
-| Limitation | Impact |
-|---|---|
-| No concept of a replication target as a resource | Cannot manage multiple target clusters (e.g. one for DR, one for live migration) |
-| No shared cadence or retention policy | Every volume is configured individually; no consistent scheduling |
-| Failover is per-volume only | No way to atomically fail over all volumes replicating to a given cluster |
-| `replication_start` / `replication_stop` are imperative | No persistent record of desired state; operator cannot reconcile toward it |
-| Operator has no visibility into replication intent | StorageClass and PVC have no first-class way to express replication requirements |
+| Limitation                                              | Impact                                                                            |
+|---------------------------------------------------------|-----------------------------------------------------------------------------------|
+| No concept of a replication target as a resource        | Cannot manage multiple target clusters (e.g., one for DR, one for live migration) |
+| No shared cadence or retention policy                   | Every volume is configured individually; no consistent scheduling                 |
+| Failover is per-volume only                             | No way to atomically fail over all volumes replicating to a given cluster         |
+| `replication_start` / `replication_stop` are imperative | No persistent record of desired state; operator cannot reconcile toward it        |
+| Operator has no visibility into replication intent      | StorageClass and PVC have no first-class way to express replication requirements  |
 
 This design introduces a **three-tier CRD hierarchy** replacing the ad-hoc per-volume model:
 
-| CRD | Cardinality | Responsibility |
-|---|---|---|
-| `ReplicationPair` | One per site pair | Declares source + target cluster; manages the backend `ReplicationTarget` |
-| `ReplicationPolicy` | One per schedule | References a `ReplicationPair`; sets cadence, mode, retention; manages the backend `ReplicationPolicy` |
-| `ReplicationSlot` | One per PVC | Per-volume runtime state machine; auto-created by the `PVCAnnotationWatcher` |
+| CRD                 | Cardinality       | Responsibility                                                                                         |
+|---------------------|-------------------|--------------------------------------------------------------------------------------------------------|
+| `ReplicationPair`   | One per site pair | Declares source + target cluster; manages the backend `ReplicationTarget`                              |
+| `ReplicationPolicy` | One per schedule  | References a `ReplicationPair`; sets cadence, mode, retention; manages the backend `ReplicationPolicy` |
+| `ReplicationSlot`   | One per PVC       | Per-volume runtime state machine; auto-created by the `PVCAnnotationWatcher`                           |
 
 ---
 
@@ -52,22 +52,22 @@ This design introduces a **three-tier CRD hierarchy** replacing the ad-hoc per-v
 
 ### Goals
 
-- **`ReplicationPair` CR** — reusable site-pair config (source + target cluster). Multiple
+- **`ReplicationPair` CR:** reusable site-pair config (source + target cluster). Multiple
   `ReplicationPolicy` CRs may share the same pair. The pair controller creates and owns the
   backend `ReplicationTarget`.
-- **`ReplicationPolicy` CR** — replication schedule and retention, referencing a
+- **`ReplicationPolicy` CR:** replication schedule and retention, referencing a
   `ReplicationPair` via `spec.pairRef`. The policy controller creates and owns the backend
   `ReplicationPolicy` using the pair's `backendTargetID`.
-- **`ReplicationSlot` CR** — one per PVC, auto-created when a PVC with the
+- **`ReplicationSlot` CR:** one per PVC, auto-created when a PVC with the
   `storage.simplyblock.io/replication-policy` annotation becomes Bound. Drives all
   per-volume backend calls and tracks live state.
-- **StorageClass annotation** — opt all PVCs using a given StorageClass into a named
+- **StorageClass annotation:** opt all PVCs using a given StorageClass into a named
   `ReplicationPolicy` without per-PVC configuration.
-- **PVC annotation** — opt a single PVC into a named `ReplicationPolicy`; overrides the
+- **PVC annotation:** opt a single PVC into a named `ReplicationPolicy`; overrides the
   StorageClass annotation.
-- **Multiple replication targets** — support simultaneously replicating to different clusters
+- **Multiple replication targets:** support simultaneously replicating to different clusters
   via distinct `ReplicationPair` + `ReplicationPolicy` combinations.
-- **`ReplicationOps` CR** — a one-shot user-driven CR (same pattern as `StorageClusterOps`)
+- **`ReplicationOps` CR:** a one-shot user-driven CR (same pattern as `StorageClusterOps`)
   for imperative operations: `failover` and `failback`. The operator drives the backend
   calls and records the outcome; the user never calls the backend directly for these.
 - Guard `replication/start` / `replication/stop` on policy-managed volumes so the operator
@@ -77,7 +77,7 @@ This design introduces a **three-tier CRD hierarchy** replacing the ad-hoc per-v
 
 ### Non-Goals
 
-- Automatically migrating existing manually-started replications to the new model (follow-up).
+- Automatically migrating existing manually started replications to the new model (follow-up).
 - A retention/TTL policy for completed or detached `ReplicationSlot` CRs (follow-up).
 - Cross-namespace `ReplicationPolicy` references.
 - Changing the snapshot or transport protocol.
@@ -370,54 +370,54 @@ annotation changes inherited by existing PVCs.
 
 #### Replication Targets — `GET|POST /replication/targets`
 
-| Method | Path | Body | Notes |
-|--------|------|------|-------|
-| `GET` | `/replication/targets` | — | List all targets (returns array) |
-| `POST` | `/replication/targets` | `target_name*`, `target_cluster_id*` (UUID), `target_pool_id` (UUID), `timeout_sec` | Create; returns `201` with full DTO |
-| `GET` | `/replication/targets/{id}` | — | Detail |
-| `DELETE` | `/replication/targets/{id}` | — | `400` while any policy references it |
-| `POST` | `/replication/targets/{id}/failover` | — | Fail over all volumes on this target |
+| Method   | Path                                 | Body                                                                                | Notes                                |
+|----------|--------------------------------------|-------------------------------------------------------------------------------------|--------------------------------------|
+| `GET`    | `/replication/targets`               | —                                                                                   | List all targets (returns array)     |
+| `POST`   | `/replication/targets`               | `target_name*`, `target_cluster_id*` (UUID), `target_pool_id` (UUID), `timeout_sec` | Create; returns `201` with full DTO  |
+| `GET`    | `/replication/targets/{id}`          | —                                                                                   | Detail                               |
+| `DELETE` | `/replication/targets/{id}`          | —                                                                                   | `400` while any policy references it |
+| `POST`   | `/replication/targets/{id}/failover` | —                                                                                   | Fail over all volumes on this target |
 
 #### Replication Policies — `GET|POST /replication/policies`
 
-| Method | Path | Body | Notes |
-|--------|------|------|-------|
-| `GET` | `/replication/policies` | — | List all policies (returns array) |
-| `POST` | `/replication/policies` | `policy_name*`, `target_id*` (UUID), `interval_min>=1`, `mode=failover\|migration`, `keep_replicated>=2` | Create; returns `201` with full DTO |
-| `GET` | `/replication/policies/{id}` | — | Detail |
-| `DELETE` | `/replication/policies/{id}` | — | `400` while any volume follows it |
-| `POST` | `/replication/policies/{id}/failover` | — | Fail over all volumes under this policy |
+| Method   | Path                                  | Body                                                                                                     | Notes                                   |
+|----------|---------------------------------------|----------------------------------------------------------------------------------------------------------|-----------------------------------------|
+| `GET`    | `/replication/policies`               | —                                                                                                        | List all policies (returns array)       |
+| `POST`   | `/replication/policies`               | `policy_name*`, `target_id*` (UUID), `interval_min>=1`, `mode=failover\|migration`, `keep_replicated>=2` | Create; returns `201` with full DTO     |
+| `GET`    | `/replication/policies/{id}`          | —                                                                                                        | Detail                                  |
+| `DELETE` | `/replication/policies/{id}`          | —                                                                                                        | `400` while any volume follows it       |
+| `POST`   | `/replication/policies/{id}/failover` | —                                                                                                        | Fail over all volumes under this policy |
 
 ### 6.2 New volume endpoints — `PUT /storage-pools/{pool_id}/volumes/{volume_id}`
 
 Policy attach and detach are now folded into the standard volume `PUT`:
 
-| Field | Value | Effect |
-|-------|-------|--------|
-| `replication_policy_id` | UUID string | Attach (or change) policy. Change = detach + attach (full copy). `409` while a cutover is in flight |
-| `replication_policy_id` | `null` | Detach policy. Stops replication, cancels tasks, deletes internal snapshots both sides. `409` while a cutover is in flight |
-| _(omitted)_ | — | No change to existing policy |
+| Field                   | Value       | Effect                                                                                                                     |
+|-------------------------|-------------|----------------------------------------------------------------------------------------------------------------------------|
+| `replication_policy_id` | UUID string | Attach (or change) policy. Change = detach + attach (full copy). `409` while a cutover is in flight                        |
+| `replication_policy_id` | `null`      | Detach policy. Stops replication, cancels tasks, deletes internal snapshots both sides. `409` while a cutover is in flight |
+| _(omitted)_             | —           | No change to existing policy                                                                                               |
 
 Per-volume replication operations move under a `/replication/` sub-resource:
 
-| Method | Path | Notes |
-|--------|------|-------|
-| `GET` | `/{volume_id}/replication/` | Returns `{replication_id, source_lvol_id, target_lvol_id, source_cluster_id, target_cluster_id, mode, state, direction, target_nqn, target_ns_id, is_source}`. `404` if no relationship |
-| `POST` | `/{volume_id}/replication/start` | Start replication; body: `{replication_cluster_id?, mode?, interval_min?}` |
-| `POST` | `/{volume_id}/replication/stop` | Stop replication |
-| `POST` | `/{volume_id}/replication/trigger` | Force one snapshot outside cadence |
-| `POST` | `/{volume_id}/replication/failover` | Unplanned failover of one volume |
-| `POST` | `/{volume_id}/replication/commit` | Planned online cutover; returns `202` with `Location` pointing at the cutover task |
-| `POST` | `/{volume_id}/replication/failback` | Start reverse replication; body: `{source_cluster_id?}` |
+| Method | Path                                | Notes                                                                                                                                                                                   |
+|--------|-------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `GET`  | `/{volume_id}/replication/`         | Returns `{replication_id, source_lvol_id, target_lvol_id, source_cluster_id, target_cluster_id, mode, state, direction, target_nqn, target_ns_id, is_source}`. `404` if no relationship |
+| `POST` | `/{volume_id}/replication/start`    | Start replication; body: `{replication_cluster_id?, mode?, interval_min?}`                                                                                                              |
+| `POST` | `/{volume_id}/replication/stop`     | Stop replication                                                                                                                                                                        |
+| `POST` | `/{volume_id}/replication/trigger`  | Force one snapshot outside cadence                                                                                                                                                      |
+| `POST` | `/{volume_id}/replication/failover` | Unplanned failover of one volume                                                                                                                                                        |
+| `POST` | `/{volume_id}/replication/commit`   | Planned online cutover; returns `202` with `Location` pointing at the cutover task                                                                                                      |
+| `POST` | `/{volume_id}/replication/failback` | Start reverse replication; body: `{source_cluster_id?}`                                                                                                                                 |
 
-### 6.3 Behaviour changes on existing endpoints
+### 6.3 Behavior changes on existing endpoints
 
-| Endpoint | Change |
-|----------|--------|
-| `POST /{volume_id}/replication/start` | `409` on policy-managed volumes |
-| `POST /{volume_id}/replication/stop` | `409` on policy-managed volumes |
-| `GET /{volume_id}/connect` | Relationship-driven: `replicating=source`, `cutover_pending=BOTH`, `failed_over=target`, `cutover_done=post-move only` |
-| `GET /{volume_id}` | `VolumeDTO` now includes `rep_info` |
+| Endpoint                              | Change                                                                                                                 |
+|---------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| `POST /{volume_id}/replication/start` | `409` on policy-managed volumes                                                                                        |
+| `POST /{volume_id}/replication/stop`  | `409` on policy-managed volumes                                                                                        |
+| `GET /{volume_id}/connect`            | Relationship-driven: `replicating=source`, `cutover_pending=BOTH`, `failed_over=target`, `cutover_done=post-move only` |
+| `GET /{volume_id}`                    | `VolumeDTO` now includes `rep_info`                                                                                    |
 
 ---
 
@@ -525,32 +525,32 @@ Per-volume state machine. Dispatches on `status.state`:
 
 - **`""`** (new): validate `spec.volumeID`, call `PUT /{volume}` with
   `replication_policy_id = policy.Status.BackendPolicyID`; set state → `attaching`.
-- **`attaching`**: call `GET /{volume}/replication`; if backend returns a `404` (still
+- **`attaching`:** call `GET /{volume}/replication`; if backend returns a `404` (still
   pending) or state is `replicating`, advance to `poll_attach`.
-- **`poll_attach`**: poll `GET /{volume}/replication` until `state == "replicating"`.
+- **`poll_attach`:** poll `GET /{volume}/replication` until `state == "replicating"`.
   Advance to `replicating`; populate `status.sourceLvolID`, `status.targetLvolID`,
   `status.direction`.
-- **`replicating`**: sync `status.lastReplicatedAt` from backend snapshot timestamp;
+- **`replicating`:** sync `status.lastReplicatedAt` from backend snapshot timestamp;
   watch for externally triggered state changes (cutover, failover).
-- **`cutover_pending`** / **`cutover_done`** / **`failed_over`**: reflect backend state
+- **`cutover_pending`** / **`cutover_done`** / **`failed_over`:** reflect backend state
   into CR status; emit events; expose via conditions.
-- **`detaching`**: call `PUT /{volume}` with `replication_policy_id: null`; remove
+- **`detaching`:** call `PUT /{volume}` with `replication_policy_id: null`; remove
   finalizer on success (object is then GC'd).
-- **`error`**: surface condition, back off, retry.
+- **`error`:** surface condition, back off, retry.
 
 ### 8.4 PVC annotation watcher
 
 A lightweight controller watches `PersistentVolumeClaim` events:
 
-- **Annotation present, PVC Bound**: create a `ReplicationSlot` CR with `spec.policyRef`
+- **Annotation present, PVC Bound:** create a `ReplicationSlot` CR with `spec.policyRef`
   set to the annotation value and `spec.volumeID` from the PV's CSI volume handle.
   Requeue while the PVC is still `Pending`.
-- **Annotation added post-bind**: same — PVC is already Bound, slot is created immediately.
-- **Annotation changed post-bind**: set existing slot state → `detaching`; wait for
+- **Annotation added post-bind:** same — PVC is already Bound, slot is created immediately.
+- **Annotation changed post-bind:** set existing slot state → `detaching`; wait for
   detach to complete; create a new slot against the new policy.
-- **Annotation removed post-bind**: set slot state → `detaching`; slot is deleted on
+- **Annotation removed post-bind:** set slot state → `detaching`; slot is deleted on
   detach completion.
-- **PVC deleted**: OwnerReference GC triggers slot deletion; finalizer on the slot ensures
+- **PVC deleted:** OwnerReference GC triggers slot deletion; finalizer on the slot ensures
   detach completes before the CR is removed.
 
 The same logic applies when the annotation is inherited from the StorageClass.
@@ -559,8 +559,8 @@ The same logic applies when the annotation is inherited from the StorageClass.
 
 ## 9. ReplicationOps — User-Driven Failover and Failback
 
-Failover and failback require human or automation judgement (a cluster is down, recovery
-is complete). They are **not** reconciled automatically. Instead the user creates a
+Failover and failback require human or automation judgment (a cluster is down, recovery
+is complete). They are **not** reconciled automatically. Instead, the user creates a
 `ReplicationOps` CR — a one-shot imperative CR following the same pattern as
 `StorageClusterOps` — and the operator drives the backend calls to completion.
 
@@ -582,24 +582,32 @@ type ReplicationOps struct {
     Status ReplicationOpsStatus `json:"status,omitempty"`
 }
 
+// +kubebuilder:validation:XValidation:rule="self.action != 'snapshot' || self.scope != 'volume'",message="snapshot takes a consistency-group generation of a policy: use scope policy or target"
 type ReplicationOpsSpec struct {
     // Action is the operation to perform. Immutable.
-    // +kubebuilder:validation:Enum=failover;failback
+    // +kubebuilder:validation:Enum=failover;failback;migration;trigger;snapshot
     Action string `json:"action"`
 
     // Scope controls which volumes are affected. Immutable.
+    // target: every ReplicationSlot of every policy that uses the named ReplicationPair.
     // policy: all ReplicationSlots managed by the named ReplicationPolicy CR.
-    // volume: a single ReplicationSlot (unplanned per-volume failover).
-    // +kubebuilder:validation:Enum=policy;volume
+    // volume: a single ReplicationSlot.
+    // +kubebuilder:validation:Enum=target;policy;volume
     Scope string `json:"scope"`
 
-    // Ref is the name of the target resource (ReplicationPolicy name for scope=policy;
-    // ReplicationSlot name for scope=volume). Immutable.
+    // Ref is the name of the target resource (ReplicationPair name for scope=target,
+    // ReplicationPolicy name for scope=policy, ReplicationSlot name for scope=volume).
+    // Immutable.
     Ref string `json:"ref"`
 
     // SourceClusterID is used for failback only. Omit to recover to the original source.
     // +optional
     SourceClusterID string `json:"sourceClusterID,omitempty"`
+
+    // DeleteSource deletes the old volume after a successful cutover: the source
+    // for migration, the failed-over volume for failback.
+    // +optional
+    DeleteSource bool `json:"deleteSource,omitempty"`
 }
 
 type ReplicationOpsStatus struct {
@@ -615,8 +623,13 @@ type ReplicationOpsStatus struct {
 }
 
 type ReplicationOpsResult struct {
-    // SlotRef is the name of the ReplicationSlot CR.
-    SlotRef string `json:"slotRef"`
+    // SlotRef is the name of the ReplicationSlot CR. Empty on a snapshot's
+    // result, which is a policy's.
+    SlotRef string `json:"slotRef,omitempty"`
+    // PolicyRef is the name of the ReplicationPolicy a snapshot's result is for.
+    PolicyRef string `json:"policyRef,omitempty"`
+    // Generation is the consistency-group generation a snapshot took.
+    Generation int64 `json:"generation,omitempty"`
     // Status is the outcome for this volume: succeeded, skipped, or failed.
     // +kubebuilder:validation:Enum=succeeded;skipped;failed
     Status string `json:"status"`
@@ -654,7 +667,7 @@ For `mode: migration` policies, the user creates:
 
 ```yaml
 spec:
-  action: failover
+  action: migration
   scope: policy
   ref: migration-policy
 ```
@@ -688,25 +701,69 @@ Only one `ReplicationOps` may be in `Running` phase for a given `ReplicationPoli
 time, enforced via `ReplicationPolicy.status.activeOpsRef` (same guard as
 `StorageCluster.status.activeOpsRef`).
 
+### 9.6 Replicate now (`trigger`)
+
+`trigger` replicates each volume of its scope now, outside the policy's interval: the
+counterpart of `sbctl volume replication-trigger`. It takes all three scopes.
+
+```yaml
+spec:
+  action: trigger
+  scope: policy
+  ref: dr-policy
+```
+
+For each slot the reconciler calls `POST /{vol}/replication/trigger` on the pair's source
+cluster, which takes a snapshot of the volume and replicates it. The slot's state does not
+change. A trigger takes a new snapshot on every call, so each slot's outcome is written to
+`status.results` as it happens, and a reconcile that resumes after a restart does not
+trigger a slot `status.results` already records. One volume refused fails the operation,
+and the others are still triggered. Event: `ReplicationTriggered`.
+
+### 9.7 Consistency-group snapshot now (`snapshot`)
+
+`snapshot` takes one crash-consistent generation of a consistency-group policy's volumes
+now: the counterpart of `sbctl cluster replication-policy-snapshot`. A generation is a
+policy's, so the action takes scope `policy` or `target`, and admission refuses
+scope `volume`.
+
+```yaml
+spec:
+  action: snapshot
+  scope: policy
+  ref: cg-policy
+```
+
+The reconciler finds the policy's group among the source cluster's consistency groups
+(`GET /consistency-groups/`, the group whose `policy_id` is the policy's
+`status.backendPolicyID`), and takes a generation with
+`POST /consistency-groups/{id}/snapshots`. The take carries the `ReplicationOps` UID as its
+`request_id`, so a retried take answers with the generation the first one took instead of
+taking another. Each policy's result records the generation in `generation`.
+
+With scope `policy`, a policy that has no consistency group fails the operation. With
+scope `target` the action runs over every policy of the pair, and a policy without a group
+is `skipped`. Event: `GenerationTaken`.
+
 ---
 
 ## 10. Observability
 
-| Signal | Details |
-|--------|---------|
-| `ReplicationPair.status.ready` | `true` when backend target provisioned |
-| `ReplicationPair.status.backendTargetID` | UUID of the shared backend target |
-| `ReplicationPolicy.status.ready` | `true` when backend policy provisioned |
-| `ReplicationPolicy.status.slotCount` | Number of actively managed slots |
-| `ReplicationPolicy.status.activeOpsRef` | Name of the running `ReplicationOps` CR; empty when idle |
-| `ReplicationSlot.status.state` | Current replication state per PVC |
-| `ReplicationSlot.status.lastReplicatedAt` | Timestamp of last successful snapshot |
-| `ReplicationSlot.status.conditions` | `Ready`, `Degraded`, `FailedOver` condition types |
-| Kubernetes Events | `Attaching`, `Replicating`, `CutoverDone`, `FailedOver`, `DetachFailed` |
-| `kubectl get relpair -n <ns>` | Short view of all site pairs and readiness |
-| `kubectl get repl -n <ns>` | Short view of all policies, mode, and slot count |
-| `kubectl get relslot -n <ns>` | Short view of all slots, state, and direction |
-| `kubectl get replops -n <ns>` | Short view of all ops CRs, action, scope, and phase |
+| Signal                                    | Details                                                                                                                                                                         |
+|-------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `ReplicationPair.status.ready`            | `true` when backend target provisioned                                                                                                                                          |
+| `ReplicationPair.status.backendTargetID`  | UUID of the shared backend target                                                                                                                                               |
+| `ReplicationPolicy.status.ready`          | `true` when backend policy provisioned                                                                                                                                          |
+| `ReplicationPolicy.status.slotCount`      | Number of actively managed slots                                                                                                                                                |
+| `ReplicationPolicy.status.activeOpsRef`   | Name of the running `ReplicationOps` CR; empty when idle                                                                                                                        |
+| `ReplicationSlot.status.state`            | Current replication state per PVC                                                                                                                                               |
+| `ReplicationSlot.status.lastReplicatedAt` | Timestamp of last successful snapshot                                                                                                                                           |
+| `ReplicationSlot.status.conditions`       | `Ready`, `Degraded`, `FailedOver` condition types                                                                                                                               |
+| Kubernetes Events                         | `Attaching`, `Replicating`, `CutoverDone`, `FailedOver`, `DetachFailed`, and on a `ReplicationOps` `MigrationCommitQueued`, `ReplicationTriggered`, `GenerationTaken`, `Failed` |
+| `kubectl get relpair -n <ns>`             | Short view of all site pairs and readiness                                                                                                                                      |
+| `kubectl get repl -n <ns>`                | Short view of all policies, mode, and slot count                                                                                                                                |
+| `kubectl get relslot -n <ns>`             | Short view of all slots, state, and direction                                                                                                                                   |
+| `kubectl get replops -n <ns>`             | Short view of all ops CRs, action, scope, and phase                                                                                                                             |
 
 ---
 
@@ -722,30 +779,33 @@ time, enforced via `ReplicationPolicy.status.activeOpsRef` (same guard as
   lifecycle, `splitVolumeHandle` and `parseDurationToMinutes` helpers.
 - `PVCAnnotationWatcher`: slot creation on bind, annotation changes, annotation removal.
 - `ReplicationOps` reconciler: failover and failback for scope=policy and scope=volume,
-  mutual exclusion via `activeOpsRef`.
+  mutual exclusion via `activeOpsRef`; trigger over each scope, with no second trigger of
+  a recorded slot; snapshot of a policy's group with the operation's UID as `request_id`,
+  a policy without a group failing scope policy and skipped by scope target, and scope
+  volume refused (`replicationops_trigger_snapshot_unit_test.go`).
 
 ### Integration / e2e tests
 
-- **Happy path**: create `ReplicationPair` → create `ReplicationPolicy` referencing it →
+- **Happy path:** create `ReplicationPair` → create `ReplicationPolicy` referencing it →
   create StorageClass with annotation → provision PVC → verify `ReplicationSlot` reaches
   `replicating` → verify `lastReplicatedAt` updated.
-- **PVC annotation override**: SC annotation set, PVC annotation different → verify slot
+- **PVC annotation override:** SC annotation set, PVC annotation different → verify slot
   references PVC annotation policy, not SC.
-- **Annotation removal**: remove annotation from PVC → verify slot reaches `detaching`
+- **Annotation removal:** remove annotation from PVC → verify slot reaches `detaching`
   → verify backend `PUT` with `replication_policy_id: null` called → verify snapshots
   cleaned up on both sides.
-- **Policy change**: update PVC annotation to different policy → verify old slot detaches
+- **Policy change:** update PVC annotation to different policy → verify old slot detaches
   before new slot attaches.
-- **Failover via `ReplicationOps`**: create `ReplicationOps{action: failover, scope: policy}`
+- **Failover via `ReplicationOps`:** create `ReplicationOps{action: failover, scope: policy}`
   → verify reconciler calls backend failover endpoint → all slots → `failed_over`
   → `ReplicationOps.status.phase → Succeeded` → `GET /{vol}/connect` returns target paths.
-- **Failback via `ReplicationOps`**: create `ReplicationOps{action: failback, scope: policy}`
+- **Failback via `ReplicationOps`:** create `ReplicationOps{action: failback, scope: policy}`
   → verify reconciler calls `replication/failback` then `replication/commit` per volume
   → all slots direction restored → `ReplicationOps.status.phase → Succeeded`.
-- **Concurrency guard**: create two `ReplicationOps` for the same policy simultaneously →
+- **Concurrency guard:** create two `ReplicationOps` for the same policy simultaneously →
   verify second is rejected while first is `Running` (`activeOpsRef` set).
-- **Guard**: attempt `replication/start` on a policy-managed volume → verify `409`.
-- **Deletion ordering**: delete `ReplicationPolicy` → verify blocked while slots exist →
+- **Guard:** attempt `replication/start` on a policy-managed volume → verify `409`.
+- **Deletion ordering:** delete `ReplicationPolicy` → verify blocked while slots exist →
   delete PVC (GC's slot) → verify policy GC'd → delete `ReplicationPair` → verify blocked
   while policies reference it → verify pair GC'd and backend target deleted.
 
@@ -753,18 +813,18 @@ time, enforced via `ReplicationPolicy.status.activeOpsRef` (same guard as
 
 ## 12. Open Questions
 
-1. **Multiple policies per PVC**: The current design restricts a PVC to one slot at a time.
-   If a PVC needs to replicate to two targets simultaneously (e.g. DR + migration), should
-   we allow multiple slots? This complicates the failover and connect semantics.
+1. **Multiple policies per PVC:** The current design restricts a PVC to one slot at a time.
+   If a PVC needs to replicate to two targets simultaneously (e.g., DR + migration), should
+   multiple slots be allowed? This complicates the failover and connect semantics.
 
-2. **`ReplicationSlot` retention after detach**: Should detached slots be deleted immediately
+2. **`ReplicationSlot` retention after detach:** Should detached slots be deleted immediately
    or retained (with a TTL) for audit purposes? Aligns with the open question on
    `StorageNodeOps` retention.
 
-3. **`replication/failback` source cluster discovery**: When `source_cluster_id` is omitted,
+3. **`replication/failback` source cluster discovery:** When `source_cluster_id` is omitted,
    the backend must know the original source. Is this reliable after a node failure? Should
    the operator persist `spec.originalSourceClusterID` on the slot CR?
 
-4. **CSI driver integration point**: Does the CSI driver read `ReplicationSlot.status`
+4. **CSI driver integration point:** Does the CSI driver read `ReplicationSlot.status`
    directly, or does it call `GET /{vol}/connect` and rely solely on the backend? A direct
    CR read avoids an extra API round-trip but couples the driver to the operator data model.

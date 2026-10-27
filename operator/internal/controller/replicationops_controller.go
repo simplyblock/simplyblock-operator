@@ -156,6 +156,27 @@ func (r *ReplicationOpsReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return r.reconcileFailback(ctx, &ops, &policy, apiClient)
 	case "migration":
 		return r.reconcileMigration(ctx, &ops, &policy, apiClient)
+	case replicationOpsActionTrigger:
+		clusterUUID, err := r.sourceClusterUUID(ctx, policy.Namespace, policy.Spec.PairRef)
+		if err != nil {
+			return r.failOps(ctx, &ops, err.Error())
+		}
+		slots, err := r.collectAffectedSlots(ctx, &ops, &policy)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		return r.reconcileTrigger(ctx, &ops, slots, clusterUUID, apiClient)
+	case replicationOpsActionSnapshot:
+		if ops.Spec.Scope == utils.ReplicationOpsScopeVolume {
+			return r.failOps(ctx, &ops,
+				"snapshot takes a consistency-group generation of a policy: use scope policy or target")
+		}
+		clusterUUID, err := r.sourceClusterUUID(ctx, policy.Namespace, policy.Spec.PairRef)
+		if err != nil {
+			return r.failOps(ctx, &ops, err.Error())
+		}
+		return r.reconcileSnapshot(ctx, &ops, []simplyblockv1alpha1.ReplicationPolicy{policy},
+			clusterUUID, true, apiClient)
 	default:
 		return r.failOps(ctx, &ops, fmt.Sprintf("unknown action %q", ops.Spec.Action))
 	}
@@ -212,6 +233,23 @@ func (r *ReplicationOpsReconciler) reconcileTargetScope(
 		return r.reconcileTargetFailover(ctx, ops, &pair, apiClient)
 	case "failback":
 		return r.failOps(ctx, ops, "scope=target failback is not supported; use scope=policy")
+	case replicationOpsActionTrigger, replicationOpsActionSnapshot:
+		clusterUUID, err := r.sourceClusterUUID(ctx, ops.Namespace, pair.Name)
+		if err != nil {
+			return r.failOps(ctx, ops, err.Error())
+		}
+		if ops.Spec.Action == replicationOpsActionSnapshot {
+			policies, err := r.policiesOfPair(ctx, ops.Namespace, pair.Name)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			return r.reconcileSnapshot(ctx, ops, policies, clusterUUID, false, apiClient)
+		}
+		slots, err := r.collectSlotsForPair(ctx, pair.Name, ops.Namespace)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		return r.reconcileTrigger(ctx, ops, slots, clusterUUID, apiClient)
 	default:
 		return r.failOps(ctx, ops, fmt.Sprintf("unknown action %q", ops.Spec.Action))
 	}
