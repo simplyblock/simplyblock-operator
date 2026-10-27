@@ -4,7 +4,7 @@
 // to node-add and reports the Service's address as the node's, since there is no
 // Multus network-status to verify against.
 //
-// Specified by operator/docs/designs/design-storage-network.md §4.7.
+// Specified by operator/docs/designs/design-storage-network.md §4.1a.
 
 package node
 
@@ -25,6 +25,10 @@ const (
 	// podNetworkInterface is the CNI's interface in the pod, the one the node
 	// serves on.
 	podNetworkInterface = "eth0"
+	// clusterLabel is the label the node agent puts on the Service and on the
+	// SPDK pod with the control plane's full cluster id, which the Service's
+	// selector uses too. The Service's name carries only a short id.
+	clusterLabel = "simplyblock.io/cluster"
 	// serviceNamePrefix is how the node agent names the Service in front of an
 	// SPDK pod, followed by the RPC port and the cluster's short id, as the pod
 	// itself is named.
@@ -81,7 +85,11 @@ func (r *StorageNodeReconciler) syncPodNetwork(
 	}); err != nil {
 		return err
 	}
-	r.announceNetwork(node, previous, next)
+	wasAttached := len(previous) == 1 && previous[0].Phase == simplyblockv1alpha2.NodeNetworkPhaseAttached
+	if phase == simplyblockv1alpha2.NodeNetworkPhaseAttached && !wasAttached {
+		r.emit(node, corev1.EventTypeNormal, NetworkAttached,
+			fmt.Sprintf("The SPDK pod serves on the pod network behind Service address %s", address))
+	}
 	return nil
 }
 
@@ -100,6 +108,12 @@ func (r *StorageNodeReconciler) podNetworkAddress(
 			return "", nil
 		}
 		return "", fmt.Errorf("reading the Service %s of the node's SPDK pod: %w", name, err)
+	}
+	// A Service of another cluster whose id shares the short prefix, or one made
+	// by hand, carries another cluster label or none: it fronts no pod of this
+	// node, and its address must not be reported as the node's.
+	if service.Labels[clusterLabel] != cluster.Status.UUID {
+		return "", nil
 	}
 	return service.Spec.ClusterIP, nil
 }
