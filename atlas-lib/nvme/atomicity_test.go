@@ -6,6 +6,8 @@ package nvme
 
 import (
 	"encoding/binary"
+	"os"
+	"slices"
 	"testing"
 )
 
@@ -65,6 +67,47 @@ func TestAWUPFIsDecodedOneBased(t *testing.T) {
 	}
 	if got := awupfFromIdentify(make([]byte, 10)); got != 0 {
 		t.Errorf("a short buffer decoded to %d blocks, want 0", got)
+	}
+}
+
+// Real Identify dumps from a Samsung PM983 (MZQLB1T9HAJR-00007, firmware
+// EDA5702Q) on a dev-ocp worker, formatted at 4K, with the serial number and
+// NGUID blanked. Kernel 6.12 reported atomic_write_unit_max_bytes 4096 for it.
+//
+// The drive states its own power-fail unit (NSFEAT bit 1) as NAWUPF 0, one
+// block, and its controller's AWUPF is one block too. NAWUN is 127, which is
+// the normal-operation unit and says nothing about a power failure. So one 4K
+// block survives whole, and the same drive left at 512 bytes would not write
+// 4K whole.
+func TestTheAtomicityOfARealSamsungPM983(t *testing.T) {
+	ns, err := os.ReadFile("testdata/identify_ns_samsung_pm983.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctrl, err := os.ReadFile("testdata/identify_ctrl_samsung_pm983.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	formats := namespaceFormatsFromIdentify(ns, 1)
+	want := []LBAFormat{
+		{Index: 0, DataSize: 512, RelativePerformance: PerformanceBest},
+		{Index: 1, DataSize: 4096, RelativePerformance: PerformanceBest},
+	}
+	if !slices.Equal(formats.Formats, want) || formats.InUse != 1 {
+		t.Fatalf("formats = %+v in use %d, want %+v in use 1", formats.Formats, formats.InUse, want)
+	}
+
+	got := *formats.PowerFailAtomicity
+	got.ControllerBlocks = awupfFromIdentify(ctrl)
+	if want := (PowerFailAtomicity{NamespaceSpecific: true, NamespaceBlocks: 1, ControllerBlocks: 1}); got != want {
+		t.Fatalf("atomicity = %+v, want %+v", got, want)
+	}
+	if !got.AtomicAt(4096, 4096) {
+		t.Error("a 4K write on the 4K format is not atomic")
+	}
+	if got.AtomicAt(4096, 512) {
+		t.Error("a 4K write on the 512-byte format is atomic, and the drive promises one block")
 	}
 }
 
