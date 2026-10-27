@@ -245,6 +245,14 @@ func TestTheDrivesOwnAtomicityDecidesTheJournal(t *testing.T) {
 			geometry{blockSize: 512, atomicMin: 512, atomicMax: 4096, formats: offers4K, current: 0,
 				powerFail: &nodeprobe.PowerFailAtomicity{
 					NamespaceSpecific: true, NamespaceBlocks: 8, ControllerBlocks: 8, BoundaryBlocks: 8}}, false},
+		// atlas-lib/nvme/testdata/identify_*_aws_*.bin, decoded.
+		{"an EBS volume, as read on EKS",
+			geometry{blockSize: 512, atomicMin: 512, atomicMax: 16384, formats: only512, vendor: "0x1d0f", product: "0x8061",
+				powerFail: &nodeprobe.PowerFailAtomicity{
+					NamespaceSpecific: true, NamespaceBlocks: 32, ControllerBlocks: 1, BoundaryBlocks: 32}}, false},
+		{"an i4i instance store, as read on EKS",
+			geometry{blockSize: 512, atomicMin: 512, atomicMax: 512, formats: only512, vendor: "0x1d0f", product: "0xcd01",
+				powerFail: &nodeprobe.PowerFailAtomicity{ControllerBlocks: 1}}, true},
 		{"boundaries that split an aligned 4K write",
 			geometry{blockSize: 512, formats: only512, powerFail: &nodeprobe.PowerFailAtomicity{
 				NamespaceSpecific: true, NamespaceBlocks: 16, BoundaryBlocks: 6}}, true},
