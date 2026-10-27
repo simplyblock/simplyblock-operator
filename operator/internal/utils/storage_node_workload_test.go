@@ -353,3 +353,75 @@ func TestTheStorageNodeAgentIsRestartedWhenItStopsAnswering(t *testing.T) {
 		})
 	}
 }
+
+func agentDaemonSet() *appsv1.DaemonSet {
+	sn := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
+	}
+	return BuildStorageNodeDaemonSet(sn, false, false, "", "", "")
+}
+
+func agentContainer(t *testing.T, ds *appsv1.DaemonSet) corev1.Container {
+	t.Helper()
+	for _, c := range ds.Spec.Template.Spec.Containers {
+		if c.Name == "s-node-api-container" {
+			return c
+		}
+	}
+	t.Fatal("the DaemonSet has no s-node-api-container")
+	return corev1.Container{}
+}
+
+// The agent serves the control plane over the pod network, and reads the host's
+// network and hostname through SB_HOST_NETNS and SB_NODE_NAME.
+func TestTheNodeAPIRunsOnThePodNetwork(t *testing.T) {
+	if agentDaemonSet().Spec.Template.Spec.HostNetwork {
+		t.Fatal("the node API DaemonSet must not run on the host network")
+	}
+}
+
+func TestTheNodeAPIReadsTheHostNetworkNamespace(t *testing.T) {
+	ds := agentDaemonSet()
+	agent := agentContainer(t, ds)
+
+	var netns string
+	for _, e := range agent.Env {
+		if e.Name == "SB_HOST_NETNS" {
+			netns = e.Value
+		}
+	}
+	if netns != "/host-proc/1/ns/net" {
+		t.Fatalf("SB_HOST_NETNS = %q, want /host-proc/1/ns/net", netns)
+	}
+
+	var mount *corev1.VolumeMount
+	for i, m := range agent.VolumeMounts {
+		if m.MountPath == "/host-proc" {
+			mount = &agent.VolumeMounts[i]
+		}
+	}
+	if mount == nil || !mount.ReadOnly {
+		t.Fatalf("the agent must mount the host /proc read-only at /host-proc, got %#v", mount)
+	}
+	for _, v := range ds.Spec.Template.Spec.Volumes {
+		if v.Name == mount.Name {
+			if v.HostPath == nil || v.HostPath.Path != "/proc" {
+				t.Fatalf("volume %q must be the host's /proc, got %#v", v.Name, v.VolumeSource)
+			}
+			return
+		}
+	}
+	t.Fatalf("no volume named %q", mount.Name)
+}
+
+func TestTheNodeAPIKnowsItsNodeName(t *testing.T) {
+	for _, e := range agentContainer(t, agentDaemonSet()).Env {
+		if e.Name == "SB_NODE_NAME" {
+			if e.ValueFrom == nil || e.ValueFrom.FieldRef == nil || e.ValueFrom.FieldRef.FieldPath != "spec.nodeName" {
+				t.Fatalf("SB_NODE_NAME must come from spec.nodeName, got %#v", e)
+			}
+			return
+		}
+	}
+	t.Fatal("the agent has no SB_NODE_NAME")
+}

@@ -102,8 +102,10 @@ type Workload struct {
 //
 // A managed control plane runs on a different Kubernetes cluster and can
 // never resolve this cluster's own Service DNS, so it is given the worker's
-// real, routable address instead -- one the storage-node-api pod already
-// answers on directly, since it runs with hostNetwork (BuildStorageNodeDaemonSet).
+// real, routable address instead, on the assumption that the storage-node-api
+// pod answers on it. The pod now runs on the pod network, so that address does
+// not answer and a managed control plane is not supported until the agent is
+// published on the worker (a hostPort or a routable pod address).
 // Reading the worker Node's own reported address is what keeps this additive:
 // a deployment with no managed control plane takes exactly the path it always
 // did.

@@ -100,6 +100,12 @@ func BuildStorageNodeDaemonSet(
 			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
 		}},
 		{Name: "CPU_TOPOLOGY_ENABLED", Value: ptr.StringOrDefault(wl.EnableCpuTopology, "false")},
+		// On the pod network the agent reads the host's NICs and pings in the host's
+		// network namespace, and reports the node's name instead of the pod's.
+		{Name: "SB_HOST_NETNS", Value: "/host-proc/1/ns/net"},
+		{Name: "SB_NODE_NAME", ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
+		}},
 	}
 	if wl.Network != nil {
 		// The agent is in the pod network, where its interfaces are not the host's,
@@ -209,6 +215,14 @@ func BuildStorageNodeDaemonSet(
 			},
 		},
 		{
+			Name: "host-proc",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/proc",
+				},
+			},
+		},
+		{
 			Name: "host-modules",
 			VolumeSource: corev1.VolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
@@ -245,6 +259,7 @@ func BuildStorageNodeDaemonSet(
 		{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
 		{Name: "host-sys", MountPath: "/sys"},
 		{Name: "var-run-simplyblock", MountPath: "/var/run/simplyblock"},
+		{Name: "host-proc", MountPath: "/host-proc", ReadOnly: true},
 		nodeEnvMount,
 	}
 
@@ -319,7 +334,6 @@ func BuildStorageNodeDaemonSet(
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "simplyblock-storage-node-sa",
-					HostNetwork:        wl.Network == nil,
 					Tolerations:        storageNodeAgentTolerations(sn, wl),
 					NodeSelector: map[string]string{
 						kube.LabelStorageNodeSet: sn.Name,
