@@ -106,6 +106,10 @@ func BuildStorageNodeDaemonSet(
 		{Name: "SB_NODE_NAME", ValueFrom: &corev1.EnvVarSource{
 			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
 		}},
+		// The init Job runs on the host network and calls the agent back at this address.
+		{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
+		}},
 	}
 	if wl.Network != nil {
 		// The agent is in the pod network, where its interfaces are not the host's,

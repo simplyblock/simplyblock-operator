@@ -425,3 +425,17 @@ func TestTheNodeAPIKnowsItsNodeName(t *testing.T) {
 	}
 	t.Fatal("the agent has no SB_NODE_NAME")
 }
+
+// The init Job the agent creates runs on the host network and has to call the agent back
+// at the agent's own address, which on the pod network is not the host's.
+func TestTheNodeAPIKnowsItsOwnPodIP(t *testing.T) {
+	for _, e := range agentContainer(t, agentDaemonSet()).Env {
+		if e.Name == "POD_IP" {
+			if e.ValueFrom == nil || e.ValueFrom.FieldRef == nil || e.ValueFrom.FieldRef.FieldPath != "status.podIP" {
+				t.Fatalf("POD_IP must come from status.podIP, got %#v", e)
+			}
+			return
+		}
+	}
+	t.Fatal("the agent has no POD_IP")
+}
