@@ -73,12 +73,12 @@ host's, read by the probe through a host mount.
 #grid((1.3fr, 2.4fr, 2.6fr, 0.5fr), ([Source], [What it reads], [Where the customer sees it], [Section]),
   [Kubernetes API, once per run], [The cluster's distribution, from API groups and node metadata], [OperatorOps `status.environment`], [2],
   [Kubernetes Node objects], [Roles, taints, schedulability, internal IP, CPU, memory, and huge-page capacity, topology labels], [`kubectl get node <worker> -o yaml`], [3],
-  [Probe Job on each worker], [Host OS, CPU, memory, huge pages, network interfaces, block devices, NVMe controllers], [Probe report ConfigMap, labeled `storage.simplyblock.io/nodeprobe-run=<run>`], [4 to 9],
+  [Probe Job on each worker], [Host OS, CPU, memory, huge pages, network interfaces, block devices, NVMe controllers, and the NetworkAttachmentDefinitions of the run's namespace], [Probe report ConfigMap, labeled `storage.simplyblock.io/nodeprobe-run=<run>`], [4 to 9],
   [Discovery planner], [Choices made from the readings: interfaces, NUMA node, groups, cluster settings], [The draft CDC and the notes in its status], [10],
 )
 
 #v(4pt)
-The probe report carries a schema version (currently 10). A report from a probe image of another version is
+The probe report carries a schema version (currently 11). A report from a probe image of another version is
 refused, and the probe is run again. A reading the probe could not take is listed under `unreadable` in the
 report, one sentence each. The rest of the report stays valid. Section 11 shows a complete report.
 
@@ -279,6 +279,46 @@ is not compared.
   on those networks.
 - If any remaining worker is left without data interfaces, the draft names data interfaces for none of them.
 
+== Network attachments
+
+The probe lists the Multus NetworkAttachmentDefinitions (`k8s.cni.cncf.io/v1`) in the run's namespace, and
+the report carries them under `networkAttachments`. Whether the cluster serves the kind at all is asked of the
+API server's discovery endpoint first.
+
+#grid((1.1fr, 2fr, 3fr), ([Reading], [Values], [Meaning]),
+  [`state`], [`Served`], [The cluster runs Multus. `definitions` holds the namespace's definitions, possibly none.],
+  [`state`], [`NotServed`], [The cluster does not register the kind: no Multus.],
+  [`state`], [`Unread`], [The list failed, and `detail` says why, for example, missing RBAC. Nothing is concluded about the cluster.],
+  [`type`], [`ipvlan`, `macvlan`, `host-device`, `bridge`, `sriov`, and others], [The CNI plugin that creates the pod's interface. For a plugin list (`plugins`), the first plugin.],
+  [`hostInterface`], [An interface name], [The `master` of an ipvlan, macvlan, or VLAN plugin, the `device` of a host-device, or the `bridge` of a bridge plugin.],
+  [`pciAddress`], [A PCI address], [The `pciBusID` of a host-device named by slot.],
+  [`mode`, `ipam`], [For example, `l2` and `whereabouts`], [The plugin's mode and its address plugin.],
+  [`resourceName`], [A device plugin resource], [The annotation `k8s.v1.cni.cncf.io/resourceName`, which SR-IOV definitions carry.],
+  [`problem`], [A sentence], [Why nothing could be read from the configuration: there is none (Multus then reads it from the node), or it does not parse.],
+)
+
+#v(4pt)
+A run uses the definitions only when `spec.discover.networkAttachment` names them, which the chart values
+`discovery.networkAttachment.management` and `discovery.networkAttachment.data` set. Without it, the draft uses
+host networking as before.
+
+- *Both named:* every group carries `networkAttachment` with `management` and `data`, and names no interfaces.
+- *Only management named:* every group carries `networkAttachment.management` alone. Data traffic flows through the
+  management attachment.
+- *Cluster without Multus:* when no probe found the kind served and at least one found it not served, the draft
+  uses host networking and the run raises the Warning `NetworkAttachmentsUnavailable`.
+- *Definition missing:* a name the namespace does not hold fails the run before any worker is probed, with a
+  Warning naming the missing definition and the definitions the namespace holds. A namespace with no
+  definitions at all fails the same way: a run that asks for an attachment never falls back to host networking.
+- *Host interface missing:* a worker without the `hostInterface` (or without a NIC at the `pciAddress`) of a
+  named definition is refused under the same rule. A `bridge` definition and one naming no host interface are
+  not checked against the worker.
+- *Reading failed:* a worker whose probe reported `Unread` is refused under the same rule, with the reason.
+
+A draft never mixes the two: a group names its interfaces or its attachment, and every group of a document
+uses the same networking. Until storage nodes are built on attachments, a document with attachments is held
+from approval with the finding `NetworkAttachmentNotDeployable`.
+
 = Block devices
 
 == Readings per device
@@ -439,7 +479,7 @@ at the end, one sentence for each, such as
 #set par(leading: 0.42em)
 ```json
 {
-  "version": 10,
+  "version": 11,
   "node": "worker-01",
   "probedAt": "2026-09-18T09:00:00Z",
   "cpu": {
@@ -500,7 +540,14 @@ at the end, one sentence for each, such as
     { "address": "0000:5f:00.0", "driver": "nvme", "vendor": "0x144d", "product": "0xa80a", "numaNode": 0 },
     { "address": "0000:62:00.0", "driver": "uio_pci_generic", "vendor": "0x144d", "product": "0xa80a",
       "numaNode": 0, "inUse": true }
-  ]
+  ],
+  "networkAttachments": {
+    "state": "Served", "namespace": "simplyblock",
+    "definitions": [
+      { "namespace": "simplyblock", "name": "storage-ipvlan", "type": "ipvlan", "hostInterface": "enp1s0",
+        "mode": "l2", "ipam": "static" }
+    ]
+  }
 }
 ```
 ]
@@ -539,6 +586,7 @@ rejections document.
 #grid((1.3fr, 2.6fr, 2.6fr), ([To], [Before the run], [In the draft]),
   [Use another management interface], [No setting. The run takes the interface holding the node's internal IP (section 7.2).], [Set the group's `mgmtInterface`. Every group of one cluster has to name the same interface.],
   [Use other data interfaces], [No setting. The ranking is fixed (section 7.3).], [Set the group's `dataInterfaces`. Every group of one cluster has to name the same interfaces.],
+  [Attach through Multus], [Set `spec.discover.networkAttachment.management`, and `.data` for a separate data network. In the chart: `discovery.networkAttachment.management` and `.data`.], [Set the group's `networkAttachment` and remove its interfaces. Every group of one document has to name the same attachments.],
 )
 
 == Topology

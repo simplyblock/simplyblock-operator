@@ -23,6 +23,11 @@ const (
 	// nodes to bind their management address to.
 	NoManagementInterface = "NoManagementInterface"
 
+	// NetworkAttachmentNotDeployable is a group that attaches its storage nodes
+	// through NetworkAttachmentDefinitions, which the expansion does not build
+	// yet.
+	NetworkAttachmentNotDeployable = "NetworkAttachmentNotDeployable"
+
 	// TooManyFailureDomains is a document whose failure-domain labels, added to
 	// the ones its cluster has already mapped, exceed what the mapping holds.
 	TooManyFailureDomains = "TooManyFailureDomains"

@@ -37,6 +37,19 @@ spec:
     {{ $field }}: true
     {{- end }}
     {{- end }}
+    {{- /* Host networking unless management names an attachment; data alone describes nothing deployable. */}}
+    {{- with $d.networkAttachment }}
+    {{- if and .data (not .management) }}
+    {{- fail (printf "discovery.networkAttachment.data is %q and discovery.networkAttachment.management is empty. Data flows through the management attachment when only that one is set, so set management as well." .data) }}
+    {{- end }}
+    {{- if .management }}
+    networkAttachment:
+      management: {{ .management | quote }}
+      {{- with .data }}
+      data: {{ . | quote }}
+      {{- end }}
+    {{- end }}
+    {{- end }}
     {{- $filter := dict }}
     {{- range $key, $value := $d.deviceFilter }}
     {{- if $value }}{{ $_ := set $filter $key $value }}{{ end }}

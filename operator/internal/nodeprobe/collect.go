@@ -29,19 +29,47 @@ import (
 // which part of the answer is missing.
 func FromInventory(node string, at time.Time, inv inventory.Inventory, unreadable error) Report {
 	return Report{
-		Version:         ReportVersion,
-		Node:            node,
-		ProbedAt:        metav1.NewTime(at),
-		CPU:             cpuOf(inv.CPU),
-		Memory:          memoryOf(inv.Memory),
-		HugePages:       hugePagesOf(inv.HugePages),
-		Interfaces:      interfacesOf(inv.Interfaces),
-		Devices:         devicesOf(inv.Devices),
-		NVMeControllers: controllersOf(inv.NVMeControllers, inv.NVMeFormats),
-		Reclaimed:       controllersOf(inv.Reclaimed, nil),
-		HostOS:          hostOSOf(inv.HostOS),
-		Unreadable:      sentences(unreadable),
+		Version:            ReportVersion,
+		Node:               node,
+		ProbedAt:           metav1.NewTime(at),
+		CPU:                cpuOf(inv.CPU),
+		Memory:             memoryOf(inv.Memory),
+		HugePages:          hugePagesOf(inv.HugePages),
+		Interfaces:         interfacesOf(inv.Interfaces),
+		Devices:            devicesOf(inv.Devices),
+		NVMeControllers:    controllersOf(inv.NVMeControllers, inv.NVMeFormats),
+		Reclaimed:          controllersOf(inv.Reclaimed, nil),
+		HostOS:             hostOSOf(inv.HostOS),
+		NetworkAttachments: networkAttachmentsOf(inv.NetworkAttachments),
+		Unreadable:         sentences(unreadable),
 	}
+}
+
+// networkAttachmentsOf renders the definitions, or nothing for a collection
+// that was given no cluster to read them from.
+func networkAttachmentsOf(attachments inventory.NetworkAttachments) *NetworkAttachments {
+	if attachments.State == "" {
+		return nil
+	}
+	out := &NetworkAttachments{
+		State:     string(attachments.State),
+		Detail:    attachments.Detail,
+		Namespace: attachments.Namespace,
+	}
+	for _, definition := range attachments.Definitions {
+		out.Definitions = append(out.Definitions, NetworkAttachment{
+			Namespace:     definition.Namespace,
+			Name:          definition.Name,
+			Type:          definition.Config.Type,
+			HostInterface: definition.Config.HostInterface,
+			PCIAddress:    definition.Config.PCIAddress,
+			Mode:          definition.Config.Mode,
+			IPAM:          definition.Config.IPAM,
+			ResourceName:  definition.ResourceName,
+			Problem:       definition.Config.Problem,
+		})
+	}
+	return out
 }
 
 // hostOSOf renders the OS reading, which is five strings and no judgment:

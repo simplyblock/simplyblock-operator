@@ -266,6 +266,20 @@ type DiscoverSpec struct {
 	// +optional
 	ForceJournalDevice *bool `json:"forceJournalDevice,omitempty"`
 
+	// NetworkAttachment attaches the proposed storage nodes through Multus
+	// NetworkAttachmentDefinitions in the run's namespace instead of host
+	// networking. Absent keeps host networking, and the draft names each
+	// group's interfaces.
+	//
+	// The draft names the definitions in place of interfaces, and a worker
+	// whose host lacks the interface a definition builds on is left out with
+	// the reason. A definition the namespace does not hold fails the run before
+	// any worker is probed, naming the definitions the namespace does hold. A
+	// cluster that does not serve the NetworkAttachmentDefinition kind keeps
+	// host networking, and the run says so with a Warning event.
+	// +optional
+	NetworkAttachment *NetworkAttachmentSelection `json:"networkAttachment,omitempty"`
+
 	// DeviceFilter narrows which of an inspected worker's devices reach the
 	// draft. Empty reports every device the worker advertises, including the one
 	// it boots from, which is what the approval gate then has to catch.

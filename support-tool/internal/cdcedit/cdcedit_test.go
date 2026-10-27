@@ -21,7 +21,12 @@ import (
 
 func fixture(t *testing.T, edit func(string, []byte) ([]byte, bool)) *supportbundle.Bundle {
 	t.Helper()
-	b, err := supportbundle.Read(bytes.NewReader(bundletest.Archive(t, bundletest.Fixture(t, "bundle-v10"), edit)))
+	return fixtureOf(t, "bundle-v10", edit)
+}
+
+func fixtureOf(t *testing.T, name string, edit func(string, []byte) ([]byte, bool)) *supportbundle.Bundle {
+	t.Helper()
+	b, err := supportbundle.Read(bytes.NewReader(bundletest.Archive(t, bundletest.Fixture(t, name), edit)))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -439,5 +444,57 @@ func TestGrowingASuperclusterKeepsTheMemberSizing(t *testing.T) {
 	}
 	if built.Spec.Cluster == nil {
 		t.Error("growing a supercluster dropped the sizing its new members are created with")
+	}
+}
+
+func TestAnEditKeepsTheGroupsNetworkAttachment(t *testing.T) {
+	b := fixtureOf(t, "bundle-v11", nil)
+	req := Prefill(b)
+
+	want := simplyblockv1alpha2.NetworkAttachmentSelection{Management: "storage-mgmt", Data: "storage-data"}
+	for _, w := range req.Workers {
+		if w.NetworkAttachment == nil || *w.NetworkAttachment != want || w.MgmtInterface != "" {
+			t.Errorf("worker %s is %+v, want the group's attachment and no interface", w.Name, w)
+		}
+	}
+	built, err := Build(b, req)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	group := built.Spec.NodeSets[0].Groups[0]
+	if group.NetworkAttachment == nil || *group.NetworkAttachment != want || group.MgmtInterface != "" {
+		t.Errorf("the rebuilt group is %+v", group)
+	}
+}
+
+// Without a draft, the editor proposes what the run would: the attachments the
+// run named, in place of interfaces.
+func TestThePrefillTakesTheRunsNetworkAttachment(t *testing.T) {
+	req := Prefill(fixtureOf(t, "bundle-v11", withoutCDC))
+
+	if len(req.Workers) == 0 {
+		t.Fatal("no worker is offered")
+	}
+	for _, w := range req.Workers {
+		if w.NetworkAttachment == nil || w.NetworkAttachment.Management != "storage-mgmt" ||
+			w.MgmtInterface != "" || len(w.DataInterfaces) > 0 {
+			t.Errorf("worker %s is %+v, want the run's attachment and no interfaces", w.Name, w)
+		}
+	}
+}
+
+// Workers attached through different definitions are different groups, as
+// workers binding different interfaces are.
+func TestWorkersWithDifferentAttachmentsDoNotShareAGroup(t *testing.T) {
+	b := fixtureOf(t, "bundle-v11", nil)
+	req := Prefill(b)
+	req.Workers[0].NetworkAttachment = &simplyblockv1alpha2.NetworkAttachmentSelection{Management: "storage-mgmt"}
+
+	built, err := Build(b, req)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if groups := len(built.Spec.NodeSets[0].Groups); groups != 2 {
+		t.Errorf("%d groups, want the changed worker in a group of its own", groups)
 	}
 }

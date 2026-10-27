@@ -13,6 +13,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -510,5 +511,6 @@ func netCases() map[string]Case {
 		entry.Gap = gaps[id]
 		cases[id] = entry
 	}
+	maps.Copy(cases, attachmentCases())
 	return cases
 }

@@ -539,6 +539,8 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 	}
 
 	plan := Plan{Class: class}
+	attachment, found := NetworkingOf(run, reports)
+	plan.Findings = append(plan.Findings, found...)
 
 	ordered := slices.Clone(reports)
 	slices.SortFunc(ordered, func(a, b nodeprobe.Report) int { return cmp.Compare(a.Node, b.Node) })
@@ -554,6 +556,15 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 				Worker: report.Node, Rule: refused, Reason: why,
 			})
 			continue
+		}
+
+		if attachment != nil {
+			if ok, why := AdmitAttachment(report, attachment); !ok {
+				plan.Refusals = append(plan.Refusals, Refusal{
+					Worker: report.Node, Rule: NetworkAttachmentRule, Reason: why,
+				})
+				continue
+			}
 		}
 
 		chosen, why := placement.Choose(report, admitted)
@@ -576,8 +587,14 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 			}
 		}
 
+		// An attached worker names no host interface: the definition is what
+		// its storage node binds, on whichever interface Multus gives the pod.
 		kube := p.KubeNodes[report.Node]
-		mgmt, data := Planes(report, kube.InternalIP)
+		var mgmt Management
+		var data []string
+		if attachment == nil {
+			mgmt, data = Planes(report, kube.InternalIP)
+		}
 		plan.Workers = append(plan.Workers, Worker{
 			Name:            report.Node,
 			Report:          report,
@@ -587,6 +604,7 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 			Kube:            kube,
 			Mgmt:            mgmt,
 			Data:            data,
+			Attachment:      attachment,
 		})
 	}
 

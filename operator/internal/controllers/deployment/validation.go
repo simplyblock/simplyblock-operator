@@ -153,6 +153,15 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 	if grown != "" {
 		findings = append(findings, finding{reason: MemberTooLarge, message: grown})
 	}
+	if groups := groupsWithNetworkAttachments(config); len(groups) > 0 {
+		findings = append(findings, finding{
+			reason: NetworkAttachmentNotDeployable,
+			message: fmt.Sprintf(
+				"group(s) %s attach their storage nodes through NetworkAttachmentDefinitions, "+
+					"and this operator does not build storage nodes on network attachments yet",
+				strings.Join(groups, ", ")),
+		})
+	}
 	if groups := groupsWithoutManagementInterface(config); len(groups) > 0 && !onANetwork(config) {
 		findings = append(findings, finding{
 			reason: NoManagementInterface,
@@ -179,7 +188,7 @@ func groupsWithoutManagementInterface(
 	var missing []string
 	for _, set := range config.Spec.NodeSets {
 		for _, group := range set.Groups {
-			if group.MgmtInterface == "" {
+			if group.MgmtInterface == "" && group.NetworkAttachment == nil {
 				missing = append(missing, group.Name)
 			}
 		}
@@ -223,8 +232,12 @@ func duplicateWorkers(config *simplyblockv1alpha2.ClusterDeploymentConfig) []str
 func conflictingInterfaces(config *simplyblockv1alpha2.ClusterDeploymentConfig) string {
 	mgmt := map[string]struct{}{}
 	data := map[string]struct{}{}
+	attachments := map[string]struct{}{}
 	for _, set := range config.Spec.NodeSets {
 		for _, group := range set.Groups {
+			if attachment := group.NetworkAttachment; attachment != nil {
+				attachments[attachmentLabel(attachment)] = struct{}{}
+			}
 			if group.MgmtInterface != "" {
 				mgmt[group.MgmtInterface] = struct{}{}
 			}
@@ -246,7 +259,21 @@ func conflictingInterfaces(config *simplyblockv1alpha2.ClusterDeploymentConfig) 
 				"every node of a cluster, so they cannot differ",
 			strings.Join(sortedKeys(data), "; "))
 	}
+	if len(attachments) > 1 {
+		return fmt.Sprintf(
+			"the groups name different network attachments (%s), and one DaemonSet serves "+
+				"every node of a cluster, so they cannot differ",
+			strings.Join(sortedKeys(attachments), "; "))
+	}
 	return ""
+}
+
+// attachmentLabel is a group's attachment as a reader compares it.
+func attachmentLabel(attachment *simplyblockv1alpha2.NetworkAttachmentSelection) string {
+	if attachment.Data == "" {
+		return "management " + attachment.Management
+	}
+	return "management " + attachment.Management + ", data " + attachment.Data
 }
 
 // missingWorkers names every worker the document lists that is not a node of this
@@ -598,4 +625,23 @@ func blockDevicesWithoutJournalDevice(config *simplyblockv1alpha2.ClusterDeploym
 	return "the groups name logical block devices, and the control plane runs those only with " +
 		"the journal on a device of its own: set spec.cluster.enableJournalDevice, which takes " +
 		"one of each worker's devices, and choose a stripe the rest carry"
+}
+
+// groupsWithNetworkAttachments names the groups that attach their storage nodes
+// through NetworkAttachmentDefinitions.
+//
+// The document states the attachment and the storage nodes are not yet built
+// with it: they run on host networking and would bind no management interface,
+// which the control plane refuses inside node_add. Holding the document here
+// says so before anything is created.
+func groupsWithNetworkAttachments(config *simplyblockv1alpha2.ClusterDeploymentConfig) []string {
+	var attached []string
+	for _, set := range config.Spec.NodeSets {
+		for _, group := range set.Groups {
+			if group.NetworkAttachment != nil {
+				attached = append(attached, group.Name)
+			}
+		}
+	}
+	return attached
 }

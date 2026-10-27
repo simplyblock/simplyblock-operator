@@ -361,6 +361,10 @@ func (r *OperatorOpsReconciler) inspect(
 	if err := refuseUnreadableFilter(spec); err != nil {
 		return false, err
 	}
+	// So is a network attachment the namespace does not hold.
+	if err := r.refuseMissingAttachments(ctx, ops.Namespace, spec); err != nil {
+		return false, err
+	}
 
 	var nodes corev1.NodeList
 	options := []client.ListOption{}

@@ -28,6 +28,7 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
+	"github.com/simplyblock/simplyblock-operator/internal/discovery"
 	"github.com/simplyblock/simplyblock-operator/internal/erasurecoding"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/admission"
@@ -63,6 +64,7 @@ func ViewOf(cdc *simplyblockv1alpha2.ClusterDeploymentConfig) CDC {
 			ns.Groups = append(ns.Groups, Group{
 				Name: g.Name, Workers: g.Workers, Class: class, Devices: devices,
 				MgmtInterface: g.MgmtInterface, DataInterfaces: g.DataInterfaces, FailureDomain: g.FailureDomain,
+				NetworkAttachment: g.NetworkAttachment,
 			})
 		}
 		view.NodeSets = append(view.NodeSets, ns)
@@ -238,6 +240,7 @@ func bundleFindings(b *supportbundle.Bundle, cdc *simplyblockv1alpha2.ClusterDep
 				for _, id := range devices {
 					checkDevice(add, set.Name, g.Name, worker, class, id, report)
 				}
+				checkAttachment(add, set.Name, g.Name, worker, g.NetworkAttachment, report)
 				checkInterface(add, set.Name, g.Name, worker, "management", g.MgmtInterface, report)
 				for _, iface := range g.DataInterfaces {
 					checkInterface(add, set.Name, g.Name, worker, "data", iface, report)
@@ -286,6 +289,27 @@ func checkDevice(
 		}
 	}
 	add(SeverityError, "DeviceNotOnWorker", "%s/%s: %s has no device %s", set, group, worker, id)
+}
+
+// checkAttachment checks a group's network attachment against a worker's report
+// by the rule a discovery run applies. A report from before version 11 carries
+// no reading of the definitions, so the attachment cannot be checked against it.
+func checkAttachment(
+	add func(Severity, string, string, ...any), set, group, worker string,
+	attachment *simplyblockv1alpha2.NetworkAttachmentSelection, report nodeprobe.Report,
+) {
+	if attachment == nil {
+		return
+	}
+	if report.Version < 11 {
+		add(SeverityWarning, "AttachmentNotInspected",
+			"%s/%s: %s's probe report is version %d, which carries no NetworkAttachmentDefinitions, so the attachment cannot be checked",
+			set, group, worker, report.Version)
+		return
+	}
+	if ok, why := discovery.AdmitAttachment(report, attachment); !ok {
+		add(SeverityError, "AttachmentNotOnWorker", "%s/%s: %s: %s", set, group, worker, why)
+	}
 }
 
 func checkInterface(

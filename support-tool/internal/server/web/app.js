@@ -269,6 +269,37 @@ function factState(f) {
   return el("span", {}, badge(f.state, kind), " ", el("span", { class: "muted" }, f.detail || ""));
 }
 
+// attachmentsCard is the NetworkAttachmentDefinitions the probe read, and
+// whether this worker has the host interface each builds on. A report before
+// version 11 carries no reading, which is not a cluster without Multus.
+function attachmentsCard(w) {
+  const r = w.report;
+  if (!w.networkAttachmentsReported) {
+    return card("Network attachments", el("p", { class: "note" }, `Report version ${w.reportVersion} carries no network attachments.`));
+  }
+  const na = r.networkAttachments;
+  if (!na) return card("Network attachments", el("p", { class: "note" }, "The probe was given no cluster to read them from."));
+  if (na.state === "NotServed") {
+    return card("Network attachments", el("p", { class: "note" }, "The cluster does not serve NetworkAttachmentDefinitions (no Multus). Storage nodes use host networking."));
+  }
+  if (na.state !== "Served") {
+    return card("Network attachments", el("div", { class: "finding warning" }, el("span", { class: "reason" }, na.state), na.detail || ""));
+  }
+  const names = new Set((r.interfaces || []).map((i) => i.name));
+  const slots = new Set((r.interfaces || []).map((i) => i.pciAddress).filter(Boolean));
+  const onWorker = (d) => {
+    if (d.type === "bridge") return "created by the plugin";
+    if (d.hostInterface) return names.has(d.hostInterface) ? "yes" : badge(`no ${d.hostInterface}`, "err");
+    if (d.pciAddress) return slots.has(d.pciAddress) ? "yes" : badge(`no NIC at ${d.pciAddress}`, "err");
+    return el("span", { class: "muted" }, d.resourceName ? `placed by ${d.resourceName}` : "not checked");
+  };
+  return card(`Network attachments in ${na.namespace || "every namespace"}`, !(na.definitions || []).length
+    ? el("p", { class: "note" }, "The namespace holds no NetworkAttachmentDefinition.")
+    : table(["Name", "Type", "Host interface", "Mode", "IPAM", "On this worker"], na.definitions.map((d) => [
+      el("strong", {}, d.name), d.type || el("span", { class: "muted" }, d.problem || ""), d.hostInterface || d.pciAddress || "",
+      d.mode || "", d.ipam || "", onWorker(d)])));
+}
+
 function workerDetail(w) {
   const r = w.report;
   const n = w.node;
@@ -304,6 +335,8 @@ function workerDetail(w) {
       ["Management interface", w.suggested.management || el("span", { class: "muted" }, "none qualifies")],
       ["Data interfaces", (w.suggested.data || []).join(", ") || el("span", { class: "muted" }, "none: data runs on the management interface")],
     ]))));
+
+  out.push(attachmentsCard(w));
 
   // Loop, network, and RAM devices and empty ones are refused on every worker by
   // design, and they outnumber the disks; they are one click away rather than
@@ -407,7 +440,10 @@ function nodeSetsOf(sets) {
   return (sets || []).map((s) => el("div", {}, el("h3", {}, `Node set ${s.name}`),
     table(["Group", "Workers", "Devices", "Management", "Data", "Failure domain"], (s.groups || []).map((g) => [
       el("strong", {}, g.name), g.workers.join(", "), el("span", {}, `${g.class || "none"} × ${(g.devices || []).length}`, el("br"), el("span", { class: "muted" }, (g.devices || []).join(", "))),
-      g.mgmtInterface || "", (g.dataInterfaces || []).join(", "), g.failureDomain || ""]))));
+      g.networkAttachment ? el("span", {}, badge("attachment", "ok"), " ", g.networkAttachment.management) : g.mgmtInterface || "",
+      g.networkAttachment ? g.networkAttachment.data || el("span", { class: "muted" }, "the management attachment")
+        : (g.dataInterfaces || []).join(", "),
+      g.failureDomain || ""]))));
 }
 
 function download(name, text) {
@@ -629,6 +665,8 @@ function runEditor() {
   const d = req.discover;
   d.deviceFilter = d.deviceFilter || {};
   const f = d.deviceFilter;
+  d.networkAttachment = d.networkAttachment || {};
+  const na = d.networkAttachment;
 
   const text = (obj, key, placeholder) => el("input", { type: "text", value: obj[key] ?? "", placeholder: placeholder || "",
     oninput: (e) => { obj[key] = e.target.value || undefined; } });
@@ -664,6 +702,7 @@ function runEditor() {
     const filter = body.discover.deviceFilter;
     if (filter && !Object.values(filter).some((v) => v !== undefined && v !== null && v !== "")) delete body.discover.deviceFilter;
     if (!(body.discover.tolerations || []).length) delete body.discover.tolerations;
+    if (!body.discover.networkAttachment?.management && !body.discover.networkAttachment?.data) delete body.discover.networkAttachment;
     try {
       state.ops.built = await api("POST", "/api/operatorops", body);
     } catch (e) {
@@ -698,6 +737,11 @@ function runEditor() {
         el("label", {}, "Failure domain label"), text(d, "failureDomainLabel", "topology.kubernetes.io/zone"),
         el("label", {}, "Tolerations"), tolerations))),
     el("div", { class: "grid" },
+      card("Networking", el("div", { class: "form" },
+        el("label", {}, "Management attachment"), text(na, "management", "empty: host networking"),
+        el("label", {}, "Data attachment"), text(na, "data", "empty: data uses the management attachment")),
+      el("p", { class: "note" }, "NetworkAttachmentDefinitions in the run's namespace. A cluster without Multus keeps host networking."))),
+    el("div", { class: "grid" },
       card("Devices", el("div", { class: "form" },
         el("label", {}, "Logical block devices"), tri(d, "enableLogicalBlockDevices"),
         el("label", {}, "Partitioned devices"), tri(d, "enablePartitionedDevices"),
@@ -715,6 +759,36 @@ function runEditor() {
 }
 
 // ─── Editor ────────────────────────────────────────────────────────────────
+
+// attachmentNames is the NetworkAttachmentDefinitions a worker's report holds.
+function attachmentNames(w) {
+  return (w.report?.networkAttachments?.definitions || []).map((d) => d.name);
+}
+
+// attachToggle switches a worker from host interfaces to network attachments,
+// offered when its report holds a definition. A group names one or the other.
+function attachToggle(w, choice) {
+  const names = attachmentNames(w);
+  if (!names.length) return null;
+  return el("button", { class: "secondary", title: "Attach this worker's storage node through a NetworkAttachmentDefinition instead", onclick: () => {
+    Object.assign(choice, { networkAttachment: { management: names[0] }, mgmtInterface: "", dataInterfaces: [] });
+    render();
+  } }, "Use attachment");
+}
+
+// attachmentSelect chooses one of a worker's definitions for a plane. Data may
+// be empty, which sends it through the management attachment, and clearing
+// management returns the worker to host interfaces.
+function attachmentSelect(w, choice, plane) {
+  const names = attachmentNames(w);
+  const current = choice.networkAttachment[plane] || "";
+  const options = [...new Set(["", ...names, current])];
+  const empty = plane === "management" ? "host interfaces" : "the management attachment";
+  return el("select", { onchange: (e) => {
+    if (plane === "management" && !e.target.value) { delete choice.networkAttachment; render(); return; }
+    choice.networkAttachment[plane] = e.target.value || undefined;
+  } }, options.map((n) => el("option", { value: n, selected: current === n }, n || empty)));
+}
 
 // currentRequest is what the editor has chosen, as the API takes it.
 function currentRequest() {
@@ -883,8 +957,11 @@ function editor() {
       } }), el("strong", {}, w.name)),
       text(choice, "nodeSet"),
       text(choice, "failureDomain", { placeholder: "none" }),
-      el("select", { onchange: (e) => { choice.mgmtInterface = e.target.value; } },
-        ["", ...ifaces].map((i) => el("option", { value: i, selected: choice.mgmtInterface === i }, i || "none"))),
+      choice.networkAttachment ? attachmentSelect(w, choice, "management") : el("div", {},
+        el("select", { onchange: (e) => { choice.mgmtInterface = e.target.value; } },
+          ["", ...ifaces].map((i) => el("option", { value: i, selected: choice.mgmtInterface === i }, i || "none"))),
+        attachToggle(w, choice)),
+      choice.networkAttachment ? attachmentSelect(w, choice, "data") :
       el("div", { class: "checks" }, ifaces.map((i) => el("label", {}, el("input", { type: "checkbox", checked: (choice.dataInterfaces || []).includes(i), onchange: (e) => {
         choice.dataInterfaces = e.target.checked ? [...(choice.dataInterfaces || []), i] : (choice.dataInterfaces || []).filter((x) => x !== i);
       } }), i))),
@@ -893,7 +970,8 @@ function editor() {
         for (const name of state.edit.included) {
           const other = state.edit.byWorker[name];
           if (!other || other === choice) continue;
-          Object.assign(other, { nodeSet: choice.nodeSet, mgmtInterface: choice.mgmtInterface, dataInterfaces: [...(choice.dataInterfaces || [])] });
+          Object.assign(other, { nodeSet: choice.nodeSet, mgmtInterface: choice.mgmtInterface, dataInterfaces: [...(choice.dataInterfaces || [])],
+            networkAttachment: choice.networkAttachment ? { ...choice.networkAttachment } : undefined });
         }
         render();
       } }, "Copy to all"),
@@ -909,7 +987,9 @@ function editor() {
       el("label", { class: "row" }, el("input", { type: "checkbox", checked: state.edit.included.has(name), onchange: (e) => {
         if (e.target.checked) state.edit.included.add(name); else state.edit.included.delete(name);
       } }), el("strong", {}, name), badge("no report", "warn")),
-      choice.nodeSet, choice.failureDomain || "", choice.mgmtInterface || "", (choice.dataInterfaces || []).join(", "),
+      choice.nodeSet, choice.failureDomain || "",
+      choice.networkAttachment ? choice.networkAttachment.management : choice.mgmtInterface || "",
+      choice.networkAttachment ? choice.networkAttachment.data || "" : (choice.dataInterfaces || []).join(", "),
       el("span", { class: "muted" }, (choice.devices || []).join(", ")), "",
     ]);
   }
@@ -939,8 +1019,8 @@ function editor() {
 
   return el("div", {},
     el("div", { class: "grid" }, docCard, clusterCard),
-    card("Workers", el("p", { class: "note" }, "Workers with the same node set, devices, interfaces, and failure domain share one group in the document."),
-      table(["Worker", "Node set", "Failure domain", "Management", "Data interfaces", "Devices", ""], rows)),
+    card("Workers", el("p", { class: "note" }, "Workers with the same node set, devices, interfaces or network attachments, and failure domain share one group in the document."),
+      table(["Worker", "Node set", "Failure domain", "Management", "Data", "Devices", ""], rows)),
     el("div", { class: "row" }, el("button", { class: "primary", onclick: build }, "Build document"),
       el("button", { class: "secondary", onclick: () => { state.edit = null; state.built = null; render(); } }, "Start over")),
     el("div", { style: "margin-top:16px" }, resultCard));

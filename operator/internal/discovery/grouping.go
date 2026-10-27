@@ -72,6 +72,12 @@ type Worker struct {
 	// interface is.
 	Data []string
 
+	// Attachment is the NetworkAttachmentDefinitions the draft attaches the
+	// worker's storage node through, nil on host networking. A run names one
+	// for the whole fleet, so it does not split groups on its own, and it is
+	// in the signature all the same: a NodeGroup names one for every worker.
+	Attachment *simplyblockv1alpha2.NetworkAttachmentSelection
+
 	// FailureDomain is the value of the failure-domain label on the worker's
 	// Node, empty when it carries none or one the field does not accept. It is
 	// part of what makes two workers groupable, because a NodeGroup names one
@@ -124,6 +130,10 @@ type Group struct {
 	// traffic on, empty when they serve data on the management interface.
 	DataInterfaces []string
 
+	// NetworkAttachment is the attachment every worker in the group is drafted
+	// with, nil on host networking.
+	NetworkAttachment *simplyblockv1alpha2.NetworkAttachmentSelection
+
 	// FailureDomain is the failure domain every worker in the group is in.
 	FailureDomain string
 }
@@ -155,16 +165,18 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 
 	for _, worker := range workers {
 		addresses := worker.Addresses()
-		signature := worker.Class.signature(addresses, worker.Mgmt.Name, worker.Data) + "\x00" + worker.FailureDomain
+		signature := worker.Class.signature(addresses, worker.Mgmt.Name, worker.Data) + "\x00" + worker.FailureDomain +
+			"\x00" + attachmentSignature(worker.Attachment)
 
 		group, seen := bySignature[signature]
 		if !seen {
 			group = &Group{
-				Class:          worker.Class,
-				Addresses:      addresses,
-				MgmtInterface:  worker.Mgmt.Name,
-				DataInterfaces: worker.Data,
-				FailureDomain:  worker.FailureDomain,
+				Class:             worker.Class,
+				Addresses:         addresses,
+				MgmtInterface:     worker.Mgmt.Name,
+				DataInterfaces:    worker.Data,
+				NetworkAttachment: worker.Attachment,
+				FailureDomain:     worker.FailureDomain,
 			}
 			bySignature[signature] = group
 			order = append(order, signature)
@@ -204,6 +216,14 @@ func (c DeviceClass) signature(addresses []string, mgmtInterface string, dataInt
 		string(c) + "\x00" + mgmtInterface + "\x00" + strings.Join(dataInterfaces, ",") +
 			"\x00" + strings.Join(addresses, "\x00")))
 	return hex.EncodeToString(digest[:])
+}
+
+// attachmentSignature is a worker's attachment as part of its group key.
+func attachmentSignature(attachment *simplyblockv1alpha2.NetworkAttachmentSelection) string {
+	if attachment == nil {
+		return ""
+	}
+	return attachment.Management + "\x00" + attachment.Data
 }
 
 // groupName names a group for a reader.
@@ -295,6 +315,10 @@ func nodeGroupOf(group Group) simplyblockv1alpha2.NodeGroup {
 		MgmtInterface:  group.MgmtInterface,
 		DataInterfaces: group.DataInterfaces,
 		FailureDomain:  group.FailureDomain,
+	}
+	if group.NetworkAttachment != nil {
+		attachment := *group.NetworkAttachment
+		out.NetworkAttachment = &attachment
 	}
 	if len(group.Addresses) > 0 {
 		selection := &simplyblockv1alpha2.DeviceSelection{}

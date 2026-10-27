@@ -68,6 +68,25 @@ func TestEveryWorkerIsShownWithItsFacts(t *testing.T) {
 	}
 }
 
+func TestAVersion11WorkerShowsItsNetworkAttachments(t *testing.T) {
+	a := analyze(t, "bundle-v11", nil)
+
+	w := worker(t, a, "worker-01")
+	if !w.InReport || w.ReportVersion != 11 || !w.NetworkAttachmentsReported {
+		t.Fatalf("worker-01 is %+v", w)
+	}
+	if w.Report.NetworkAttachments == nil || len(w.Report.NetworkAttachments.Definitions) != 2 {
+		t.Errorf("worker-01's network attachments are %+v", w.Report.NetworkAttachments)
+	}
+}
+
+func TestAVersion10WorkerShowsNoNetworkAttachmentReading(t *testing.T) {
+	w := worker(t, analyze(t, "bundle-v10", nil), "worker-01")
+	if w.NetworkAttachmentsReported {
+		t.Error("a version-10 report is shown with a network attachment reading")
+	}
+}
+
 func TestAVersion9WorkerShowsNoKernelFacts(t *testing.T) {
 	a := analyze(t, "bundle-v9", nil)
 
@@ -274,5 +293,83 @@ func TestTheFixtureDraftIsAdmitted(t *testing.T) {
 		if f.Source == "admission" {
 			t.Errorf("the draft the run wrote is refused by admission: %s", f.Message)
 		}
+	}
+}
+
+// selectionOf is a group's attachment, for an assertion.
+func selectionOf(g Group) string {
+	if g.NetworkAttachment == nil {
+		return "none"
+	}
+	return g.NetworkAttachment.Management + "/" + g.NetworkAttachment.Data
+}
+
+func TestAnAttachedDraftShowsItsAttachmentsAndHasNoErrors(t *testing.T) {
+	a := analyze(t, "bundle-v11", nil)
+
+	if a.CDC == nil || len(a.CDC.NodeSets) == 0 || len(a.CDC.NodeSets[0].Groups) == 0 {
+		t.Fatalf("the CDC shows no groups: %+v", a.CDC)
+	}
+	if got := selectionOf(a.CDC.NodeSets[0].Groups[0]); got != "storage-mgmt/storage-data" {
+		t.Errorf("the group's attachment is %s", got)
+	}
+	// The operator holds an attached document until it builds storage nodes on
+	// attachments, and the tool shows that hold. Nothing else is wrong with it.
+	held := false
+	for _, f := range a.CDC.Findings {
+		if f.Reason == "NetworkAttachmentNotDeployable" {
+			held = true
+			continue
+		}
+		if f.Severity == SeverityError {
+			t.Errorf("the attached draft has an error: %+v", f)
+		}
+	}
+	if !held {
+		t.Errorf("the operator's hold on an attached document is not shown: %+v", a.CDC.Findings)
+	}
+}
+
+func TestAnAttachmentTheNamespaceDoesNotHoldIsAnError(t *testing.T) {
+	a := analyze(t, "bundle-v11", func(name string, data []byte) ([]byte, bool) {
+		if name == "cdc.yaml" {
+			return bytes.Replace(data, []byte("data: storage-data"), []byte("data: storage-nope"), 1), true
+		}
+		return data, true
+	})
+
+	var found int
+	for _, f := range a.CDC.Findings {
+		if f.Severity == SeverityError && f.Reason == "AttachmentNotOnWorker" && strings.Contains(f.Message, "storage-nope") {
+			found++
+		}
+	}
+	if found != 3 {
+		t.Errorf("%d errors about the missing attachment, want one per worker: %+v", found, a.CDC.Findings)
+	}
+}
+
+// A report from before version 11 carries no reading of the definitions, so
+// an attachment cannot be checked against it, which is not the same as one the
+// worker cannot take.
+func TestAnAttachmentCannotBeCheckedAgainstAnOlderReport(t *testing.T) {
+	a := analyze(t, "bundle-v11", func(name string, data []byte) ([]byte, bool) {
+		if strings.HasSuffix(name, ".json") {
+			return bytes.Replace(data, []byte(`"version": 11`), []byte(`"version": 10`), 1), true
+		}
+		return data, true
+	})
+
+	var warned int
+	for _, f := range a.CDC.Findings {
+		if f.Severity == SeverityError && f.Reason != "NetworkAttachmentNotDeployable" {
+			t.Errorf("an attachment against a version-10 report is an error: %+v", f)
+		}
+		if f.Reason == "AttachmentNotInspected" {
+			warned++
+		}
+	}
+	if warned != 3 {
+		t.Errorf("%d warnings that the attachment cannot be checked, want one per worker: %+v", warned, a.CDC.Findings)
 	}
 }

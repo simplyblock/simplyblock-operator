@@ -880,14 +880,15 @@ kind exists for.
 
 ### 8.1 What it inspects
 
-| Source                                                | Yields                                                      |
-|-------------------------------------------------------|-------------------------------------------------------------|
-| The Kubernetes API's node list                        | Worker hostnames, labels, taints, and allocatable resources |
-| Each node's available NVMe devices                    | Candidate devices, by PCI address (§8.2)                    |
-| Each node's available block devices, where enabled    | Candidate devices, by persistent path (§8.2)                |
-| Node labels, annotations, and cluster-scoped services | `spec.environment`, from the markers a distribution leaves  |
-| Each node's `/etc/os-release` and `uname`             | `spec.hostOS`, when every worker agrees                     |
-| `StorageNode` objects in the namespace                | Which workers and devices are already taken                 |
+| Source                                                  | Yields                                                       |
+|---------------------------------------------------------|--------------------------------------------------------------|
+| The Kubernetes API's node list                          | Worker hostnames, labels, taints, and allocatable resources  |
+| Each node's available NVMe devices                      | Candidate devices, by PCI address (§8.2)                     |
+| Each node's available block devices, where enabled      | Candidate devices, by persistent path (§8.2)                 |
+| Node labels, annotations, and cluster-scoped services   | `spec.environment`, from the markers a distribution leaves   |
+| Each node's `/etc/os-release` and `uname`               | `spec.hostOS`, when every worker agrees                      |
+| `StorageNode` objects in the namespace                  | Which workers and devices are already taken                  |
+| Each probe's list of the namespace's Multus definitions | Whether the named network attachments can attach each worker |
 
 **Discovery reads the cluster it runs in and nothing else.** What a worker has
 free is a property of the worker, so the Kubernetes API and the node itself are
@@ -946,6 +947,27 @@ with, and a document that stated the machines but not their taints described a
 deployment whose DaemonSet schedules nowhere.
 It also means two documents written against one Kubernetes cluster agree on it
 without anybody coordinating, since both runs read the same evidence.
+
+**A run names network attachments or uses host networking, never both.**
+`spec.discover.networkAttachment` names the Multus NetworkAttachmentDefinitions in
+the run's namespace that the storage nodes are attached through, `management`
+always and `data` optionally. Absent, the draft names host interfaces as it always
+has. Present, every group of the draft carries the same `networkAttachment` and
+names no interfaces, and with `management` alone, data traffic flows through the
+management attachment, as it flows through the management interface of a group
+that names no data interfaces. Each probe lists the definitions and the report
+carries them (report version 11), because what a definition builds on is the
+worker's: a macvlan, ipvlan, or host-device on a NIC the worker lacks leaves its
+pod unable to start. A name the namespace does not hold fails the run before any
+worker is probed, naming the definitions the namespace holds: an attachment the
+administrator asked for is never replaced by host networking. A worker whose
+probe could not read the definitions, and a worker missing the host interface,
+are each refused with the reason. A cluster that does not serve the kind has no Multus, and the run
+then drafts host networking and raises `NetworkAttachmentsUnavailable`. The
+document's schema keeps the two apart: a group names its interfaces or its
+attachment, and every group of a document uses the same networking. Building
+storage nodes on attachments is not part of this document's expansion, so a
+document carrying them is held from approval with `NetworkAttachmentNotDeployable`.
 
 **Two classes of backend storage, and a run scans one of them.** NVMe devices are
 the class simplyblock has always accepted, and logical block devices are the class
@@ -1431,8 +1453,27 @@ type DeviceSelection struct {
 	Block []string `json:"block,omitempty"`
 }
 
+// NetworkAttachmentSelection names the Multus NetworkAttachmentDefinitions a
+// storage node is attached through instead of the host's network. The names
+// are definitions in the namespace the storage nodes run in. With Data left
+// out, data traffic flows through the management attachment.
+type NetworkAttachmentSelection struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
+	// +kubebuilder:validation:Required
+	Management string `json:"management"`
+
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
+	// +optional
+	Data string `json:"data,omitempty"`
+}
+
 // NodeGroup is a set of workers that share one configuration, which is what
 // makes ten identical machines one entry rather than ten.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.networkAttachment) || (!has(self.mgmtInterface) && !has(self.dataInterfaces))",message="a group names its network interfaces or its network attachments, not both"
 type NodeGroup struct {
 	// Name identifies the group within its node set, for a reader and for the
 	// events a validation failure emits.
@@ -1453,6 +1494,13 @@ type NodeGroup struct {
 	// DataInterfaces are the data-plane network interfaces.
 	// +optional
 	DataInterfaces []string `json:"dataInterfaces,omitempty"`
+
+	// NetworkAttachment attaches the storage nodes through Multus
+	// NetworkAttachmentDefinitions instead of host networking. A group names
+	// this or its interfaces, and every group of a document uses the same
+	// networking.
+	// +optional
+	NetworkAttachment *NetworkAttachmentSelection `json:"networkAttachment,omitempty"`
 
 	// Devices selects the storage devices every worker in the group uses.
 	// +optional
@@ -1782,6 +1830,7 @@ type ClusterTemplate struct {
 // +kubebuilder:validation:XValidation:rule="!oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
 // +kubebuilder:validation:XValidation:rule="!oldSelf.approved || self.approved",message="approval cannot be withdrawn"
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))) || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group must name the same device class: all nvme or all block"
+// +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, has(g.networkAttachment))) || self.nodeSets.all(s, s.groups.all(g, !has(g.networkAttachment)))",message="every group must use the same networking: all host networking or all network attachments"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
@@ -2130,6 +2179,13 @@ type DiscoverSpec struct {
 	// where every member of the filter narrows it.
 	// +optional
 	EnablePartitionedDevices *bool `json:"enablePartitionedDevices,omitempty"`
+
+	// NetworkAttachment attaches the proposed storage nodes through Multus
+	// NetworkAttachmentDefinitions in the run's namespace instead of host
+	// networking. Absent keeps host networking. A cluster that does not serve
+	// the kind keeps host networking, and the run says so with a Warning event.
+	// +optional
+	NetworkAttachment *NetworkAttachmentSelection `json:"networkAttachment,omitempty"`
 
 	// DeviceFilter narrows which of an inspected worker's devices reach the
 	// draft. Empty reports every device the worker advertises, including the one
