@@ -10,6 +10,7 @@ spec:
   approved: false
   cluster:
     enableDriveFormat: true
+    enableMetadataJournal: true
     maxSubsystemCount: 30
     minHugePagesSize: 16G
     name: discovered-discover-role-02-cluster

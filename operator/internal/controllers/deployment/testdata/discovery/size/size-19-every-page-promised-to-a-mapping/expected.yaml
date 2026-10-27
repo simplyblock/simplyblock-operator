@@ -11,6 +11,7 @@ spec:
   cluster:
     clusterMode: Single
     enableDriveFormat: true
+    enableMetadataJournal: true
     maxSubsystemCount: 30
     name: discovered-discover-size-19-cluster
     stripe:

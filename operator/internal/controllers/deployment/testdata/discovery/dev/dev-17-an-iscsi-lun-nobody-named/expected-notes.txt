@@ -5,4 +5,6 @@ maxSubsystemCount is 30, which is the middle of the range this API accepts and n
 minHugePagesSize is 16G, the huge pages free on the memory node chosen on worker-01, which is the smallest of the fleet
 enableJournalDevice is set: every worker hands over one disk smaller than its others, the smallest being 2T (/dev/vdb) on worker-01, and the control plane dedicates that disk to the journal manager instead of carving a journal partition out of every disk. This is the line to remove if the disk was meant to carry data
 stripe is 1+0 as a single-node cluster (clusterMode Single), which protects nothing: the worker hands over 1 device for data, and a redundant scheme places each chunk of a stripe on its own device, so 1+1 needs two. A cluster's stripe cannot be changed afterward
+enableMetadataJournal is on, because none of the 2 devices is known to complete a 4K write whole as a storage node will have it. The data plane journals the lvstore metadata pages, so a torn write cannot leave a half-written one behind.
+enableChecksumValidation is left to the reviewer. Turned on, nothing in this run says whether it can check any of the 2 devices.
 wrote discovered-discover-dev-17 in Draft: 1 workers with 2 block devices, in 1 group(s) across 1 node set(s); 1 refusal(s)

@@ -290,8 +290,8 @@ The probe lists every block device in `/sys/class/block`. Hidden NVMe multipath 
   [Stable path], [`/dev/disk/by-partuuid`, `/dev/disk/by-id`], [Preferred in this order: `by-partuuid`, then by-id links built from the device's own identifier (`wwn-`, `nvme-eui.`, `nvme-uuid.`), then other by-id links (model and serial). `by-uuid`, `by-label`, and `by-path` are never used.], [The device name in logical block device mode.],
   [PCI address], [The controller of the device], [For example `0000:5e:00.0`.], [The device name in NVMe mode.],
   [Size], [`size` (512-byte sectors)], [Bytes. 0 is refused as `NoCapacity`.], [Size filter, journal disk, grouping.],
-  [Block sizes], [`queue/logical_block_size`, `queue/physical_block_size`], [Bytes.], [Content reading.],
-  [Atomic write unit], [`queue/atomic_write_unit_max_bytes` and `_min_bytes`], [Bytes. Absent on kernels before 6.11, which is not the same as 0.], [Review against `enableAtomicity4K` and checksum validation.],
+  [Block sizes], [`queue/logical_block_size`, `queue/physical_block_size`], [Bytes.], [Content reading, `enableMetadataJournal`.],
+  [Atomic write unit], [`queue/atomic_write_unit_max_bytes` and `_min_bytes`], [Bytes. Absent on kernels before 6.11, which is not the same as 0.], [`enableMetadataJournal`, `enableAtomicity4K`.],
   [Vendor, model, serial], [`device/vendor`, `device/model`, `device/serial`], [As reported.], [`pcieModel` filter, review.],
   [Rotational], [`queue/rotational`], [True for a spinning disk.], [Review.],
   [Read-only, removable], [`ro`, `removable`], [Either one refuses the device (`ReadOnly`, `Removable`).], [Availability.],
@@ -392,6 +392,7 @@ controllers that present no block device.
   [Driver], [`driver` link], [`nvme` (the kernel presents its disks), `uio_pci_generic` or `vfio-pci` (a userspace driver holds it), or none.], [Explains a worker with NVMe hardware and no NVMe disks.],
   [In use], [The host's process table, for the controller's `/dev/uio*` or `/dev/vfio/*` files], [Held, free, or unknown when the process table could not be read.], [Whether the controller may be offered.],
   [NUMA node], [`numa_node`], [The memory node, or unknown.], [NUMA placement.],
+  [LBA formats], [Identify Namespace, per attached namespace, or for all namespaces (`0xFFFFFFFF`) on a controller with none], [Each format's data size, metadata size, and relative performance, and the one in use. Read only from a live controller on the `nvme` driver.], [`enableMetadataJournal`, and what checksum validation would need (section 10).],
 )
 
 #v(4pt)
@@ -420,6 +421,8 @@ events say how each one was derived.]
   [`enableJournalDevice`], [Disk sizes per worker], [Set when every worker has exactly one disk smaller than all its others. Disks tied for smallest are taken only with `forceJournalDevice`. In logical block device mode a worker without such a disk fails the run.],
   [`stripe`, `clusterMode`], [Worker count, disk count], [3 or more nodes: 2+1 (1+1 when the scheme needs more nodes). 2 nodes: 1+1 and `clusterMode: Dual`. 1 node: 2+1 with 3 or more data disks, 1+1 with 2, 1+0 with 1, and `clusterMode: Single`.],
   [`enableFailureDomains`], [Failure-domain label], [On when every worker carries a valid value and the stripe fits the domains.],
+  [`enableMetadataJournal`], [Block size, atomic write unit, LBA formats], [On unless every device completes a 4K write whole as a storage node will have it: 4K blocks, or an atomic write unit from at most 4K up to at least 4K. With `enableDriveFormat`, an NVMe namespace not at 4K is judged at the plain 4K format it is reformatted to, or at format 0 where it has none, and its atomic write unit no longer applies. A device with no reading counts as one that needs the journal.],
+  [`enableChecksumValidation`, `enableAtomicity4K`], [Same], [Never set: checksum validation is the reviewer's choice. A note says what turning it on would need: which devices have neither a metadata format (8 bytes or more) nor 4K blocks and report an atomic write unit that covers 4K, so need `enableAtomicity4K`, and which report one under 4K, so cannot be checked at all.],
   [`hostOS`], [os-release], [Set when every worker runs the same distribution.],
 )
 
@@ -468,11 +471,11 @@ at the end, one sentence for each, such as
   ],
   "devices": [
     { "name": "nvme0n1", "path": "/dev/nvme0n1", "pciAddress": "0000:5e:00.0", "sizeBytes": 3298534883328,
-      "kind": "Disk", "transport": "NVMe", "model": "SAMSUNG MZQL23T8HCLS-00A07", "numaNode": 0,
-      "available": true, "content": "Blank" },
+      "kind": "Disk", "transport": "NVMe", "model": "SAMSUNG MZQL23T8HCLS-00A07", "logicalBlockSize": 512,
+      "numaNode": 0, "available": true, "content": "Blank" },
     { "name": "nvme1n1", "path": "/dev/nvme1n1", "pciAddress": "0000:5f:00.0", "sizeBytes": 3298534883328,
-      "kind": "Disk", "transport": "NVMe", "model": "SAMSUNG MZQL23T8HCLS-00A07", "numaNode": 0,
-      "available": true, "content": "Blank" },
+      "kind": "Disk", "transport": "NVMe", "model": "SAMSUNG MZQL23T8HCLS-00A07", "logicalBlockSize": 512,
+      "numaNode": 0, "available": true, "content": "Blank" },
     { "name": "sda", "path": "/dev/sda", "stablePath": "/dev/disk/by-id/ata-SAMSUNG_MZ7L3480HCHQ-00A07_S6Q1NX0T",
       "sizeBytes": 480103981056, "kind": "Disk", "transport": "SATA", "model": "SAMSUNG MZ7L3480HCHQ-00A07",
       "numaNode": -1, "available": false,
@@ -496,7 +499,10 @@ at the end, one sentence for each, such as
     }
   },
   "nvmeControllers": [
-    { "address": "0000:5e:00.0", "driver": "nvme", "vendor": "0x144d", "product": "0xa80a", "numaNode": 0 },
+    { "address": "0000:5e:00.0", "driver": "nvme", "vendor": "0x144d", "product": "0xa80a", "numaNode": 0,
+      "lbaFormats": [ { "nsid": 1, "current": 0, "formats": [
+        { "index": 0, "dataSize": 512, "metadataSize": 0, "relativePerformance": "best" },
+        { "index": 1, "dataSize": 4096, "metadataSize": 0, "relativePerformance": "best" } ] } ] },
     { "address": "0000:5f:00.0", "driver": "nvme", "vendor": "0x144d", "product": "0xa80a", "numaNode": 0 },
     { "address": "0000:62:00.0", "driver": "uio_pci_generic", "vendor": "0x144d", "product": "0xa80a",
       "numaNode": 0, "inUse": true }
@@ -563,7 +569,9 @@ under `spec.nodeSets[].cluster`, on a document with more than one node set or on
   [`stripe`, `clusterMode`], [Derived from the worker and disk counts (section 10).], [Cannot be changed once the cluster exists. The draft check refuses a stripe the fleet is too small for.],
   [`enableJournalDevice`], [On when every worker has exactly one disk smaller than all its others.], [`spec.discover.forceJournalDevice` before the run picks one where disks tie. Logical block device mode requires it.],
   [`enableFailureDomains`], [On when every worker carries a valid failure domain.], [See topology above.],
-  [`enableChecksumValidation`, `enableAtomicity4K`, `socketsToUse`, `nodesPerSocket`], [Not set. Nothing the probe reads decides them.], [`enableChecksumValidation` is applied to each disk when the cluster is created and never afterward, so a cluster created without it cannot have it.],
+  [`enableMetadataJournal`], [On unless every device completes a 4K write whole once formatted (section 10).], [Cannot be changed once the cluster exists. Turning it off over a device that can tear a 4K write leaves the lvstore metadata exposed to a power loss.],
+  [`enableChecksumValidation`, `socketsToUse`, `nodesPerSocket`], [Not set. Nothing the probe reads decides them. A note says what checksum validation would need on these devices.], [`enableChecksumValidation` is applied to each disk when the cluster is created and never afterward, so a cluster created without it cannot have it. Set `enableAtomicity4K` with it when the note names devices that need it.],
+  [`enableAtomicity4K`], [Not set, because checksum validation is not.], [Safe only on a device that completes a 4K write whole. The note names the devices whose report says so.],
   [`tolerations`], [The tolerations the run probed with.], [What the storage-node pods tolerate. Correct it when the run's tolerations are not the fleet's taints.],
   [`spec.hostOS`], [The workers' distribution, when they all run the same one.], [Set it when os-release was unreadable. One document states one host OS for all its workers, so workers on different distributions go into separate documents.],
   [`spec.environment`], [The run's `status.environment`.], [Correct it when the platform was misread, for example after `EnvironmentPartiallyRead`.],
