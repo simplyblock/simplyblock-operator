@@ -11,6 +11,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -284,5 +285,83 @@ func TestADeletingNodesWorkerIsNotPublished(t *testing.T) {
 	}
 	if got[utils.NodeHostnameLabel(opsWorker)] != sourceWorkerAddress {
 		t.Errorf("published workers = %v, want the live node's worker kept", got)
+	}
+}
+
+const agentPodIP = "10.42.0.9"
+
+// theSliceAfterAPassWith runs one slice pass over anOpsCluster's node with the given pods
+// beside the one worker, and returns what the slice publishes.
+func theSliceAfterAPassWith(t *testing.T, pods ...*corev1.Pod) map[string]string {
+	t.Helper()
+
+	scheme := testsupport.NewScheme(t, corev1.AddToScheme, discoveryv1.AddToScheme)
+	objects := []client.Object{anOpsCluster(), anOpsNode(), aWorker(opsWorker, true)}
+	for _, pod := range pods {
+		objects = append(objects, pod)
+	}
+	apiClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	r := &StorageNodeWorkloadReconciler{Client: apiClient, Scheme: scheme, Namespace: opsNamespace}
+
+	if err := reconcileTheSlice(r); err != nil {
+		t.Fatalf("reconcileEndpointSlice: %v", err)
+	}
+	return publishedWorkers(t, apiClient)
+}
+
+// The agent runs on the pod network, so the worker's address answers nothing on port 5000.
+// The per-pod DNS name has to resolve to the pod's IP, or the control plane is refused on
+// every call and marks the node unreachable.
+func TestTheSliceCarriesTheAgentPodIPOnThePodNetwork(t *testing.T) {
+	got := theSliceAfterAPassWith(t, anAgentPod(agentPodIP))
+
+	if got[utils.NodeHostnameLabel(opsWorker)] != agentPodIP {
+		t.Errorf("published workers = %v, want %s at %s", got, utils.NodeHostnameLabel(opsWorker), agentPodIP)
+	}
+}
+
+// A worker with no agent pod at all is still published, at the worker's address, because a
+// migration target is published before any pod runs there. A pod that exists but has no IP
+// yet is not (I-39).
+func TestTheSliceFallsBackToTheWorkerAddressOnlyWhenThereIsNoAgentPod(t *testing.T) {
+	got := theSliceAfterAPassWith(t)
+	if got[utils.NodeHostnameLabel(opsWorker)] != sourceWorkerAddress {
+		t.Errorf("published workers = %v, want the worker address %s", got, sourceWorkerAddress)
+	}
+
+	if got := theSliceAfterAPassWith(t, anAgentPod("")); len(got) != 0 {
+		t.Errorf("published workers = %v for a pod without an IP, want nothing", got)
+	}
+}
+
+// During a rolling update the old pod terminates beside its replacement, and the name has to
+// follow the replacement, not the pod on its way out.
+func TestTheSliceIgnoresAnAgentPodThatIsTerminating(t *testing.T) {
+	old := anAgentPod("10.42.0.1")
+	old.Name = "agent-old"
+	now := metav1.Now()
+	old.DeletionTimestamp = &now
+	old.Finalizers = []string{"test/hold"}
+
+	got := theSliceAfterAPassWith(t, old, anAgentPod(agentPodIP))
+
+	if got[utils.NodeHostnameLabel(opsWorker)] != agentPodIP {
+		t.Errorf("published workers = %v, want the replacement at %s", got, agentPodIP)
+	}
+}
+
+// A pod appearing, getting its IP, or being replaced is what makes the slice wrong, so it
+// has to wake the cluster's pass. A pod that is not an agent pod does not.
+func TestAnAgentPodWakesItsClustersPass(t *testing.T) {
+	r, _ := aMigrationWorld(t)
+
+	if got := r.clusterOfAgentPod(context.Background(), anAgentPod(agentPodIP)); len(got) != 1 || got[0].Name != opsCluster {
+		t.Errorf("requests for an agent pod = %v, want the cluster %s", got, opsCluster)
+	}
+
+	other := anAgentPod(agentPodIP)
+	other.Labels = map[string]string{"app": "something-else"}
+	if got := r.clusterOfAgentPod(context.Background(), other); len(got) != 0 {
+		t.Errorf("requests for another pod = %v, want none", got)
 	}
 }

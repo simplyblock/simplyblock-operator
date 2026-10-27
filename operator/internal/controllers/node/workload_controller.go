@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"time"
 
+	atlaskube "github.com/simplyblock/atlas/kube"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -46,7 +47,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	atlaskube "github.com/simplyblock/atlas/kube"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -126,8 +126,8 @@ func (r *StorageNodeWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error
 		Watches(&corev1.Pod{},
 			handler.EnqueueRequestsFromMapFunc(r.clusterOfProxyPod),
 			builder.WithPredicates(isSpdkProxyPod())).
-		// The agent's endpoint carries the pod's own address once the cluster
-		// declares a network, and a restarted pod comes back on a new one.
+		// The agent's endpoint carries the pod's own address, and a restarted pod
+		// comes back on a new one.
 		Watches(&corev1.Pod{},
 			handler.EnqueueRequestsFromMapFunc(r.clusterOfAgentPod),
 			builder.WithPredicates(isAgentPod())).
@@ -522,6 +522,11 @@ func (r *StorageNodeWorkloadReconciler) reconcileEndpointSlice(
 		return err
 	}
 
+	podIPs, err := r.agentPodIPs(ctx, cluster)
+	if err != nil {
+		return err
+	}
+
 	addresses := map[string]string{}
 	for i := range nodes {
 		node := &nodes[i]
@@ -529,7 +534,7 @@ func (r *StorageNodeWorkloadReconciler) reconcileEndpointSlice(
 			if _, known := addresses[worker]; known || worker == "" {
 				continue
 			}
-			address, err := r.agentAddress(ctx, cluster, worker)
+			address, err := r.agentAddress(ctx, worker, podIPs)
 			if err != nil || address == "" {
 				log.V(1).Info("a worker has no internal address yet and is not published",
 					"worker", worker)
@@ -620,34 +625,6 @@ func (r *StorageNodeWorkloadReconciler) clusterOfOperation(
 		return nil
 	}
 	return r.clusterOf(ctx, &node)
-}
-
-// agentAddress is what the storage-node API endpoint of a worker carries: the
-// worker's internal IP while the agent runs on the host network, and the agent
-// pod's own IP once the cluster declares a network and the pod has left it.
-func (r *StorageNodeWorkloadReconciler) agentAddress(
-	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, worker string,
-) (string, error) {
-	if cluster.Spec.StorageNodes == nil || cluster.Spec.StorageNodes.Network == nil {
-		return r.workerAddress(ctx, worker)
-	}
-
-	var pods corev1.PodList
-	if err := r.List(ctx, &pods,
-		client.InNamespace(cluster.Namespace),
-		client.MatchingLabels{
-			atlaskube.LabelApp:                atlaskube.AppStorageNode,
-			atlaskube.LabelSimplyblockCluster: cluster.Name,
-		},
-	); err != nil {
-		return "", fmt.Errorf("list the storage-node agent pods: %w", err)
-	}
-	for i := range pods.Items {
-		if pods.Items[i].Spec.NodeName == worker {
-			return pods.Items[i].Status.PodIP, nil
-		}
-	}
-	return "", nil
 }
 
 // workerAddress is the worker's internal IP, which is what an endpoint carries.
@@ -756,4 +733,53 @@ func (r *StorageNodeWorkloadReconciler) apply(ctx context.Context, desired clien
 	}
 	desired.SetResourceVersion(existing.GetResourceVersion())
 	return r.Update(ctx, desired)
+}
+
+// agentPodIPs maps each worker to the IP its storage-node API pod answers on.
+//
+// The agent runs on the pod network, so that is the pod's own IP and the worker's
+// address answers nothing on port 5000. A pod on its way out is skipped, because
+// during a rolling update it sits beside its replacement and the name has to follow
+// the replacement.
+func (r *StorageNodeWorkloadReconciler) agentPodIPs(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+) (map[string]string, error) {
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods,
+		client.InNamespace(cluster.Namespace),
+		client.MatchingLabels{
+			atlaskube.LabelApp:                atlaskube.AppStorageNode,
+			atlaskube.LabelSimplyblockCluster: cluster.Name,
+		},
+	); err != nil {
+		return nil, fmt.Errorf("list the storage-node API pods: %w", err)
+	}
+
+	// A pod that exists but has no IP yet is recorded with an empty one, so its worker is
+	// left out of the slice rather than published at an address nothing answers on.
+	ips := map[string]string{}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if pod.DeletionTimestamp != nil || pod.Spec.NodeName == "" {
+			continue
+		}
+		if pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
+			continue
+		}
+		ips[pod.Spec.NodeName] = pod.Status.PodIP
+	}
+	return ips, nil
+}
+
+// agentAddress is what a worker's per-pod DNS name resolves to: its agent pod's IP, which
+// is empty while the pod has none and then leaves the worker unpublished. A worker with no
+// agent pod at all takes its own address, because a migration target is published before
+// any pod runs there and a name that does not resolve fails the step that waits on it.
+func (r *StorageNodeWorkloadReconciler) agentAddress(
+	ctx context.Context, worker string, podIPs map[string]string,
+) (string, error) {
+	if ip, ok := podIPs[worker]; ok {
+		return ip, nil
+	}
+	return r.workerAddress(ctx, worker)
 }

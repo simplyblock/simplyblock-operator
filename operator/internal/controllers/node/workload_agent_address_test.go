@@ -1,6 +1,7 @@
-// The address the storage-node API EndpointSlice publishes for a worker: the
-// worker's own IP while the agent runs on the host network, and the agent pod's
-// IP once the cluster declares spec.storageNodes.network (design §5.2).
+// The address the storage-node API EndpointSlice publishes for a worker: the agent
+// pod's IP, since the agent runs on the pod network whether or not the cluster
+// declares spec.storageNodes.network (design §5.2). A worker with no agent pod at
+// all keeps its own IP, which a migration target needs before a pod runs there.
 
 package node
 
@@ -86,12 +87,13 @@ func TestTheSliceOmitsAnAgentPodWithNoAddressYet(t *testing.T) {
 	}
 }
 
-// I-40
-func TestTheSliceKeepsTheWorkerAddressWhenNoNetworkIsDeclared(t *testing.T) {
+// I-40: the agent is on the pod network with no network declared as well, so its
+// pod's address is published, not the worker's.
+func TestTheSliceCarriesTheAgentPodAddressWhenNoNetworkIsDeclared(t *testing.T) {
 	published := publishedAfterReconcile(t, nil, anAgentPod(agentPodAddress))
 
-	if got := published[utils.NodeHostnameLabel(opsWorker)]; got != sourceWorkerAddress {
-		t.Fatalf("published %q, want the worker's %q (all: %v)", got, sourceWorkerAddress, published)
+	if got := published[utils.NodeHostnameLabel(opsWorker)]; got != agentPodAddress {
+		t.Fatalf("published %q, want the agent pod's %q (all: %v)", got, agentPodAddress, published)
 	}
 }
 
