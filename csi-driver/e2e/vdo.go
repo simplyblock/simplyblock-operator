@@ -7,10 +7,9 @@
 // pass every other suite in this package but fail here.
 //
 // The csi-node image needs the "vdo" package (vdoformat) for lvcreate --type
-// vdo to succeed; deploy/image/Dockerfile_base installs it, but only the base
-// image build (a separate, cron/manual-triggered workflow) bakes it in, not
-// the per-branch app image this suite runs against. A run against an image
-// missing vdoformat fails at NodeStageVolume, not inside these specs.
+// vdo to succeed; deploy/image/Dockerfile installs it on x86_64 only, since no
+// AArch64 build exists. A run against an ARM64 image fails at NodeStageVolume,
+// not inside these specs.
 package e2e
 
 import (
