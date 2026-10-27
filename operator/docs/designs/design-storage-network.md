@@ -33,7 +33,7 @@ Today, `StorageCluster.spec.storageNodes.mgmtInterface` and `dataInterfaces` are
 
 ### 1.1 How a storage node uses the network today
 
-A storage node is two kinds of pod. The operator's DaemonSet runs one node agent per worker, a Flask API on port 5000, on the host network (`operator/internal/utils/storage_node_workload.go`). When the control plane adds or restarts a node, it asks the agent to start the node's SPDK pod from the control plane's `storage_deploy_spdk.yaml.j2`. That template also uses the host network, has a restart policy of `Never`, and is named for the node's RPC port, so a worker with several sockets runs several SPDK pods behind one agent.
+A storage node is two kinds of pod. The operator's DaemonSet runs one node agent per worker, a Flask API on port 5000, which runs on the pod network whether or not a network is declared (`operator/internal/utils/storage_node_workload.go`). When the control plane adds or restarts a node, it asks the agent to start the node's SPDK pod from the control plane's `storage_deploy_spdk.yaml.j2`. That template also uses the host network, has a restart policy of `Never`, and is named for the node's RPC port, so a worker with several sockets runs several SPDK pods behind one agent.
 
 The agent reports the host's interfaces, read with `ip -j address show`. The control plane takes the management address from the interface named by `interface_name` and dials it later as SPDK's RPC address (`mgmt_ip`). It takes data addresses from the interfaces in `data_nics` and creates an NVMe-oF listener on each. Both values come from `StorageCluster.spec.storageNodes` and are immutable once set, because the control plane spends them at node-add and never revisits them.
 
@@ -52,7 +52,7 @@ The management API pods also run on the host network, because they dial the node
 ### Goals
 
 - Management and data networks are references in the API, and the SPDK pod attaches to them.
-- The node agent and the control plane's pods leave the host network whenever a network is declared. Host networking remains a mode a cluster selects.
+- The node agent and the control plane's pods run on the pod network. The SPDK pods leave the host network when a network is declared, and host networking remains a mode a cluster selects for them.
 - The declaration is the same on any primary CNI.
 - Each node's address on each network is stable across pod restarts, because the control plane and every initiator hold it, and it is chosen by the operator from a pool the cluster declares, so no address is typed per node.
 - The pod-to-network mapping is readable from the Kubernetes API, and per-interface traffic is attributable to a pod.

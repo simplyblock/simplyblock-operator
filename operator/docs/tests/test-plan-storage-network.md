@@ -164,12 +164,12 @@ File: `network_verify_reconcile_test.go`
 
 File: `network_workloads_test.go`
 
-| #    | Scenario                                                                                        | Type       |
-|------|-------------------------------------------------------------------------------------------------|------------|
-| I-39 | A cluster with `network` renders the node agent DaemonSet without `hostNetwork`                 | Positive   |
-| I-40 | A cluster without `network` renders every pod with `hostNetwork: true`, byte-identical to today | Regression |
-| I-41 | The CSI node plugin and the mds-proxy keep `hostNetwork: true` in both modes                    | Negative   |
-| I-42 | A node-preparation job keeps `hostNetwork: true` in both modes                                  | Negative   |
+| #    | Scenario                                                                        | Type       |
+|------|---------------------------------------------------------------------------------|------------|
+| I-39 | A cluster with `network` renders the node agent DaemonSet without `hostNetwork` | Positive   |
+| I-40 | A cluster without `network` renders the node agent without `hostNetwork` too    | Regression |
+| I-41 | The CSI node plugin and the mds-proxy keep `hostNetwork: true` in both modes    | Negative   |
+| I-42 | A node-preparation job keeps `hostNetwork: true` in both modes                  | Negative   |
 
 ---
 

@@ -1,5 +1,5 @@
-// Tests that the node agent DaemonSet leaves the host network exactly when the
-// cluster declares spec.storageNodes.network (storage network design §5.2).
+// Tests that the node agent DaemonSet is off the host network, with or without
+// spec.storageNodes.network declared (storage network design §5.2).
 package utils
 
 import (
@@ -32,15 +32,16 @@ func TestTheAgentLeavesTheHostNetworkWhenANetworkIsDeclared(t *testing.T) {
 	}
 }
 
-// I-40
-func TestTheAgentKeepsTheHostNetworkWhenNoNetworkIsDeclared(t *testing.T) {
+// I-40: the agent is on the pod network whether or not a network is declared. A
+// declared network adds the attachment; it no longer decides where the agent runs.
+func TestTheAgentIsOffTheHostNetworkWhenNoNetworkIsDeclared(t *testing.T) {
 	for name, cluster := range map[string]*simplyblockv1alpha2.StorageCluster{
 		"no storageNodes": {ObjectMeta: metav1.ObjectMeta{Name: "c1"}},
 		"no network":      clusterWithNetwork(nil),
 	} {
 		ds := BuildStorageNodeDaemonSet(cluster, false, false, "", "", "agent:test")
-		if !ds.Spec.Template.Spec.HostNetwork {
-			t.Errorf("%s: the agent lost hostNetwork with no network declared", name)
+		if ds.Spec.Template.Spec.HostNetwork {
+			t.Errorf("%s: the agent kept hostNetwork", name)
 		}
 	}
 }
@@ -57,8 +58,7 @@ func envVarOf(cluster *simplyblockv1alpha2.StorageCluster, name string) (corev1.
 }
 
 // With the agent in the pod network its own interfaces are not the host's, so the
-// pod is handed the worker's address. A cluster on the host network gets no new
-// variable, because one would roll every agent when the operator is upgraded.
+// pod is handed the worker's address.
 func TestTheAgentOfANetworkClusterIsToldItsHostAddress(t *testing.T) {
 	cluster := clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
 		Data: []simplyblockv1alpha2.StorageNetwork{{Name: "fabric"}},
@@ -83,13 +83,13 @@ func TestTheAgentOfANetworkClusterKnowsItsOwnPodAddress(t *testing.T) {
 	if !found || podIP.ValueFrom == nil || podIP.ValueFrom.FieldRef.FieldPath != "status.podIP" {
 		t.Fatalf("POD_IP = %+v, want the downward API's status.podIP", podIP)
 	}
-	if _, found := envVarOf(clusterWithNetwork(nil), "POD_IP"); found {
-		t.Fatal("a host-network cluster's agent gained POD_IP, which rolls it on upgrade")
+	if _, found := envVarOf(clusterWithNetwork(nil), "POD_IP"); !found {
+		t.Fatal("a cluster with no network declared has no POD_IP, and its agent is on the pod network too")
 	}
 }
 
-func TestTheAgentOfAHostNetworkClusterGetsNoHostAddress(t *testing.T) {
-	if _, found := envVarOf(clusterWithNetwork(nil), "HOST_IP"); found {
-		t.Fatal("a host-network cluster's agent gained HOST_IP, which rolls it on upgrade")
+func TestTheAgentOfAClusterWithNoNetworkIsToldItsHostAddressToo(t *testing.T) {
+	if _, found := envVarOf(clusterWithNetwork(nil), "HOST_IP"); !found {
+		t.Fatal("a cluster with no network declared has no HOST_IP, and its agent is on the pod network too")
 	}
 }

@@ -106,7 +106,9 @@ func BuildStorageNodeDaemonSet(
 		{Name: "SB_NODE_NAME", ValueFrom: &corev1.EnvVarSource{
 			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
 		}},
-		// The init Job runs on the host network and calls the agent back at this address.
+		// The agent is on the pod network, where its interfaces are not the host's. The
+		// node-preparation Job runs on the host network and calls the agent back at its own
+		// address, and the control plane takes the worker's address from HOST_IP.
 		{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{
 			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
 		}},
@@ -114,19 +116,6 @@ func BuildStorageNodeDaemonSet(
 		{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{
 			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"},
 		}},
-	}
-	if wl.Network != nil {
-		// The agent is in the pod network, where its interfaces are not the host's,
-		// so the control plane takes the worker's address from here.
-		mainEnv = append(mainEnv,
-			corev1.EnvVar{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{
-				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"},
-			}},
-			// The node-preparation job calls the agent, and the agent is no longer at
-			// the worker's address.
-			corev1.EnvVar{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{
-				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
-			}})
 	}
 	if wl.NodeProvisioningBudget != nil {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "MAX_PARALLEL_NODE_ADDS", Value: fmt.Sprintf("%d", *wl.NodeProvisioningBudget)})
