@@ -347,3 +347,33 @@ func TestARealGKENodeReadsAsGKE(t *testing.T) {
 		t.Errorf("evidence came from %v, want both the kubelet version and the node labels", sources)
 	}
 }
+
+// A real EKS node, read from a one-node cluster on 2026-10-27 (Amazon Linux
+// 2023, kernel 6.18, EKS 1.37), trimmed like the GKE one. Like GKE, EKS
+// registers no API group of its own.
+func TestARealEKSNodeReadsAsEKS(t *testing.T) {
+	raw, err := os.ReadFile("testdata/environment/eks-al2023-i4i.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list corev1.NodeList
+	if err := json.Unmarshal(raw, &list); err != nil {
+		t.Fatal(err)
+	}
+
+	env := DetectEnvironment(nil, list.Items)
+
+	if env.Distribution != DistributionEKS {
+		t.Fatalf("distribution = %s, want EKS: %+v", env.Distribution, env.Evidence)
+	}
+	sources := map[Source]bool{}
+	for _, e := range env.Evidence {
+		if e.Distribution != DistributionEKS {
+			t.Errorf("evidence for another distribution: %+v", e)
+		}
+		sources[e.Source] = true
+	}
+	if !sources[SourceKubeletVersion] || !sources[SourceNodeLabel] {
+		t.Errorf("evidence came from %v, want both the kubelet version and the node labels", sources)
+	}
+}
