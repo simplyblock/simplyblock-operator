@@ -550,3 +550,46 @@ func TestStorageClusterClusterModeRules(t *testing.T) {
 	}
 	_ = apiClient.Delete(context.Background(), same)
 }
+
+// enableMetadataJournal defaults on: a cluster that does not state it journals
+// its metadata, and only an explicit false turns the journal off.
+func TestStorageClusterMetadataJournalDefaultsOn(t *testing.T) {
+	apiClient := apiServer(t)
+
+	for _, tc := range []struct {
+		name   string
+		stated *bool
+		want   bool
+	}{
+		{name: "unstated", want: true},
+		{name: "stated off", stated: ptr.To(false), want: false},
+		{name: "stated on", stated: ptr.To(true), want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := &simplyblockv1alpha2.StorageCluster{
+				ObjectMeta: metav1.ObjectMeta{GenerateName: "journal-", Namespace: "default"},
+				Spec: simplyblockv1alpha2.StorageClusterSpec{
+					MaxSubsystemCount:     ptr.To(int32(10)),
+					VCPUCount:             ptr.To(int32(6)),
+					EnableMetadataJournal: tc.stated,
+				},
+			}
+			if err := apiClient.Create(context.Background(), cluster); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			t.Cleanup(func() { _ = apiClient.Delete(context.Background(), cluster) })
+
+			var stored simplyblockv1alpha2.StorageCluster
+			if err := apiClient.Get(context.Background(), client.ObjectKeyFromObject(cluster), &stored); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			got := stored.Spec.EnableMetadataJournal
+			if got == nil {
+				t.Fatalf("enableMetadataJournal is unset, want %v", tc.want)
+			}
+			if *got != tc.want {
+				t.Errorf("enableMetadataJournal = %v, want %v", *got, tc.want)
+			}
+		})
+	}
+}

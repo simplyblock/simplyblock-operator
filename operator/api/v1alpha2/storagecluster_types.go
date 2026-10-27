@@ -809,9 +809,13 @@ type StorageClusterSpec struct {
 	// needs it when it does not complete a 4K write whole: its block size is
 	// under 4K, and the atomic write unit it reports does not cover 4K.
 	//
+	// It is on unless stated off. Turning it off is safe only when every device
+	// is known to complete a 4K write whole, which a discovery run checks
+	// before it writes false.
+	//
 	// The data plane records the choice in the lvstore's super block when the
 	// cluster's lvstores are created, so it cannot change under a live cluster.
-	// +kubebuilder:default=false
+	// +kubebuilder:default=true
 	// +optional
 	// +k8s:immutable
 	EnableMetadataJournal *bool `json:"enableMetadataJournal,omitempty"`

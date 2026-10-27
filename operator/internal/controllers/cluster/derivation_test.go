@@ -291,6 +291,26 @@ func TestTheClusterSecretIsOwnedByTheCluster(t *testing.T) {
 	}
 }
 
+// A cluster whose spec does not state the journal asks for it: the CRD
+// defaults it on, and the create request reads an unset field the same way.
+func TestCreationParamsJournalAnUnstatedCluster(t *testing.T) {
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "prod", Namespace: "sb"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			MaxSubsystemCount: ptr.To(int32(10)),
+			VCPUCount:         ptr.To(int32(8)),
+		},
+	}
+
+	params, err := (&StorageClusterReconciler{}).creationParams(context.Background(), cluster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !params.MetadataJournal {
+		t.Errorf("MetadataJournal = false for a cluster that does not state it, want true")
+	}
+}
+
 // The three integrity settings are fixed when the control plane creates the
 // cluster, so the create request is the only place each one can be asked for.
 func TestCreationParamsCarryTheIntegritySettings(t *testing.T) {

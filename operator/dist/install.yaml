@@ -8246,12 +8246,16 @@ spec:
                 - message: field is immutable
                   rule: self == oldSelf
               enableMetadataJournal:
-                default: false
+                default: true
                 description: |-
                   EnableMetadataJournal journals the lvstore's metadata pages, so a write
                   torn by a power loss cannot leave a half-written page behind. A device
                   needs it when it does not complete a 4K write whole: its block size is
                   under 4K, and the atomic write unit it reports does not cover 4K.
+
+                  It is on unless stated off. Turning it off is safe only when every device
+                  is known to complete a 4K write whole, which a discovery run checks
+                  before it writes false.
 
                   The data plane records the choice in the lvstore's super block when the
                   cluster's lvstores are created, so it cannot change under a live cluster.
