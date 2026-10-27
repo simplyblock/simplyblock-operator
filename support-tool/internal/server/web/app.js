@@ -841,6 +841,7 @@ function editor() {
     el("label", {}, "Failure domains"), tri(c, "enableFailureDomains"),
     el("label", {}, "Checksum validation"), tri(c, "enableChecksumValidation"),
     el("label", {}, "4K atomicity"), tri(c, "enableAtomicity4K"),
+    el("label", {}, "Metadata journal"), tri(c, "enableMetadataJournal"),
     ...(req.environment === "Vanilla"
       ? [el("label", {}, "CPU topology"), tri(c, "enableCpuTopology"),
         el("label", {}, "Kubelet configuration"), tri(c, "enableKubeletConfiguration")]

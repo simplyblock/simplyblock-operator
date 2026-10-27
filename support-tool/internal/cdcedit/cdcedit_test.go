@@ -247,6 +247,36 @@ func TestAVanillaDocumentCarriesItsNodeFlags(t *testing.T) {
 	}
 }
 
+// The integrity settings are immutable on the cluster the document expands
+// into, so the editor has to carry each one from the prefill to the document.
+func TestTheIntegritySettingsReachTheDocument(t *testing.T) {
+	b := fixture(t, withoutCDC)
+	req := Prefill(b)
+	on := true
+	req.Cluster.EnableChecksumValidation, req.Cluster.EnableAtomicity4K = &on, &on
+	req.Cluster.EnableMetadataJournal = &on
+
+	built, err := Build(b, req)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	c := built.Spec.Cluster
+	for name, got := range map[string]*bool{
+		"enableChecksumValidation": c.EnableChecksumValidation,
+		"enableAtomicity4K":        c.EnableAtomicity4K,
+		"enableMetadataJournal":    c.EnableMetadataJournal,
+	} {
+		if got == nil || !*got {
+			t.Errorf("%s = %v, want true", name, got)
+		}
+	}
+
+	again := Prefill(&supportbundle.Bundle{CDC: built, Reports: b.Reports})
+	if again.Cluster.EnableMetadataJournal == nil || !*again.Cluster.EnableMetadataJournal {
+		t.Errorf("the prefill from the document reads enableMetadataJournal as %v", again.Cluster.EnableMetadataJournal)
+	}
+}
+
 func TestTheNodeFlagsAreDroppedOutsideVanilla(t *testing.T) {
 	b := fixture(t, withoutCDC)
 	req := Prefill(b)

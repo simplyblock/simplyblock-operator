@@ -319,12 +319,13 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 		Spec: simplyblockv1alpha2.StorageClusterSpec{
 			MaxSubsystemCount: template.MaxSubsystemCount,
 			VCPUCount:         template.VCPUCount,
-			// Both are immutable on the cluster, so this is the only moment
-			// either can be set at all. Copied as stated, nil included: an
-			// unstated setting leaves the cluster's own default to decide
-			// rather than having the expansion invent one.
+			// All three are immutable on the cluster, so this is the only
+			// moment any of them can be set at all. Copied as stated, nil
+			// included: an unstated setting leaves the cluster's own default
+			// to decide rather than having the expansion invent one.
 			EnableChecksumValidation: template.EnableChecksumValidation,
 			EnableAtomicity4K:        template.EnableAtomicity4K,
+			EnableMetadataJournal:    template.EnableMetadataJournal,
 			MinHugePagesSize:         template.MinHugePagesSize,
 			Stripe:                   template.Stripe,
 			ClusterMode:              template.ClusterMode,

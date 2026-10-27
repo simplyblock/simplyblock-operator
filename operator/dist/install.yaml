@@ -1047,6 +1047,16 @@ spec:
                       writable or is rebuilt with every node. Unset on a Vanilla document
                       turns it on.
                     type: boolean
+                  enableMetadataJournal:
+                    description: |-
+                      EnableMetadataJournal journals the lvstore's metadata pages against torn
+                      writes, which a device needs when it does not complete a 4K write whole.
+
+                      It is on the document because it is immutable on the cluster it lands on:
+                      the data plane records it when the cluster's lvstores are created. A
+                      discovery run derives it from the devices it found: on when any of them
+                      is not known to be 4K-write atomic once formatted.
+                    type: boolean
                   enableNodeAffinity:
                     description: |-
                       EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
@@ -8129,6 +8139,20 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              enableMetadataJournal:
+                default: false
+                description: |-
+                  EnableMetadataJournal journals the lvstore's metadata pages, so a write
+                  torn by a power loss cannot leave a half-written page behind. A device
+                  needs it when it does not complete a 4K write whole: its block size is
+                  under 4K, and the atomic write unit it reports does not cover 4K.
+
+                  The data plane records the choice in the lvstore's super block when the
+                  cluster's lvstores are created, so it cannot change under a live cluster.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               enableNodeAffinity:
                 description: |-
                   EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
@@ -8844,6 +8868,8 @@ spec:
               rule: '!has(oldSelf.enableChecksumValidation) || has(self.enableChecksumValidation)'
             - message: field enableAtomicity4K is immutable once set
               rule: '!has(oldSelf.enableAtomicity4K) || has(self.enableAtomicity4K)'
+            - message: field enableMetadataJournal is immutable once set
+              rule: '!has(oldSelf.enableMetadataJournal) || has(self.enableMetadataJournal)'
             - message: field deviceClass is immutable once set
               rule: '!has(oldSelf.deviceClass) || has(self.deviceClass)'
             - message: kms is immutable once set
@@ -13892,6 +13918,16 @@ spec:
                           Talos, EKS, GKE, AKS, and OKE, whose kubelet configuration is not
                           writable or is rebuilt with every node. Unset on a Vanilla document
                           turns it on.
+                        type: boolean
+                      enableMetadataJournal:
+                        description: |-
+                          EnableMetadataJournal journals the lvstore's metadata pages against torn
+                          writes, which a device needs when it does not complete a 4K write whole.
+
+                          It is on the document because it is immutable on the cluster it lands on:
+                          the data plane records it when the cluster's lvstores are created. A
+                          discovery run derives it from the devices it found: on when any of them
+                          is not known to be 4K-write atomic once formatted.
                         type: boolean
                       enableNodeAffinity:
                         description: |-

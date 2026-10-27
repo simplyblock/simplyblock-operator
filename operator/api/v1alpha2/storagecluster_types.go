@@ -804,6 +804,18 @@ type StorageClusterSpec struct {
 	// +k8s:immutable
 	EnableAtomicity4K *bool `json:"enableAtomicity4K,omitempty"`
 
+	// EnableMetadataJournal journals the lvstore's metadata pages, so a write
+	// torn by a power loss cannot leave a half-written page behind. A device
+	// needs it when it does not complete a 4K write whole: its block size is
+	// under 4K, and the atomic write unit it reports does not cover 4K.
+	//
+	// The data plane records the choice in the lvstore's super block when the
+	// cluster's lvstores are created, so it cannot change under a live cluster.
+	// +kubebuilder:default=false
+	// +optional
+	// +k8s:immutable
+	EnableMetadataJournal *bool `json:"enableMetadataJournal,omitempty"`
+
 	// DeviceClass is the class of backend storage every node in this cluster
 	// hands over: NVMe devices named by PCI address, or logical block devices
 	// named by path. A cluster is built out of one of them, because an

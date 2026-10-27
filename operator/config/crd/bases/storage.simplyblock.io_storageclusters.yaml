@@ -858,6 +858,20 @@ spec:
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
+                enableMetadataJournal:
+                  default: false
+                  description: |-
+                    EnableMetadataJournal journals the lvstore's metadata pages, so a write
+                    torn by a power loss cannot leave a half-written page behind. A device
+                    needs it when it does not complete a 4K write whole: its block size is
+                    under 4K, and the atomic write unit it reports does not cover 4K.
+
+                    The data plane records the choice in the lvstore's super block when the
+                    cluster's lvstores are created, so it cannot change under a live cluster.
+                  type: boolean
+                  x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                 enableNodeAffinity:
                   description: |-
                     EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
@@ -1558,6 +1572,8 @@ spec:
                   rule: '!has(oldSelf.enableChecksumValidation) || has(self.enableChecksumValidation)'
                 - message: field enableAtomicity4K is immutable once set
                   rule: '!has(oldSelf.enableAtomicity4K) || has(self.enableAtomicity4K)'
+                - message: field enableMetadataJournal is immutable once set
+                  rule: '!has(oldSelf.enableMetadataJournal) || has(self.enableMetadataJournal)'
                 - message: field deviceClass is immutable once set
                   rule: '!has(oldSelf.deviceClass) || has(self.deviceClass)'
                 - message: kms is immutable once set

@@ -290,3 +290,30 @@ func TestTheClusterSecretIsOwnedByTheCluster(t *testing.T) {
 		t.Errorf("the Secret does not carry the cluster's secret")
 	}
 }
+
+// The three integrity settings are fixed when the control plane creates the
+// cluster, so the create request is the only place each one can be asked for.
+func TestCreationParamsCarryTheIntegritySettings(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		cluster := &simplyblockv1alpha2.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "prod", Namespace: "sb"},
+			Spec: simplyblockv1alpha2.StorageClusterSpec{
+				MaxSubsystemCount:        ptr.To(int32(20)),
+				VCPUCount:                ptr.To(int32(8)),
+				EnableChecksumValidation: ptr.To(on),
+				EnableAtomicity4K:        ptr.To(on),
+				EnableMetadataJournal:    ptr.To(on),
+			},
+		}
+
+		params, err := (&StorageClusterReconciler{}).creationParams(context.Background(), cluster)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if params.InlineChecksum != on || params.Atomic4K != on || params.MetadataJournal != on {
+			t.Errorf("stated %v: InlineChecksum=%v Atomic4K=%v MetadataJournal=%v",
+				on, params.InlineChecksum, params.Atomic4K, params.MetadataJournal)
+		}
+	}
+}

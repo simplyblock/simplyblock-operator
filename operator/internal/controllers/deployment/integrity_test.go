@@ -44,8 +44,20 @@ func TestADocumentStatesFourKiBAtomicity(t *testing.T) {
 	}
 }
 
-// A document that states neither leaves both unset rather than false, so the
-// cluster's own defaults decide and the expansion invents nothing.
+func TestADocumentStatesTheMetadataJournal(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Cluster.EnableMetadataJournal = ptr.To(true)
+	})
+
+	cluster := builtCluster(t, config)
+
+	if got := cluster.Spec.EnableMetadataJournal; got == nil || !*got {
+		t.Fatalf("EnableMetadataJournal = %v", got)
+	}
+}
+
+// A document that states none of them leaves them unset rather than false, so
+// the cluster's own defaults decide and the expansion invents nothing.
 func TestADocumentStatingNeitherLeavesBothToTheCluster(t *testing.T) {
 	cluster := builtCluster(t, aDocument(nil))
 
@@ -54,6 +66,9 @@ func TestADocumentStatingNeitherLeavesBothToTheCluster(t *testing.T) {
 	}
 	if got := cluster.Spec.EnableAtomicity4K; got != nil {
 		t.Errorf("EnableAtomicity4K = %v, want unset", *got)
+	}
+	if got := cluster.Spec.EnableMetadataJournal; got != nil {
+		t.Errorf("EnableMetadataJournal = %v, want unset", *got)
 	}
 }
 
