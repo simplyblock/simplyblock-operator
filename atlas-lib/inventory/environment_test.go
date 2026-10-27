@@ -11,6 +11,8 @@
 package inventory
 
 import (
+	"encoding/json"
+	"os"
 	"slices"
 	"testing"
 
@@ -313,5 +315,35 @@ func TestDetectEnvironmentPrefersTheManagedServiceOverRancher(t *testing.T) {
 	}
 	if !evidenceFor(env, DistributionRancher) {
 		t.Errorf("recorded %+v, and the Rancher markers are missing from it", env.Evidence)
+	}
+}
+
+// A real GKE node, read from a one-node cluster on 2026-10-27 (COS, kernel
+// 6.12, GKE 1.36) and trimmed to its labels, annotations, and node info. GKE
+// registers no API group of its own, so the nodes are the whole of the case.
+func TestARealGKENodeReadsAsGKE(t *testing.T) {
+	raw, err := os.ReadFile("testdata/environment/gke-cos-n2.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list corev1.NodeList
+	if err := json.Unmarshal(raw, &list); err != nil {
+		t.Fatal(err)
+	}
+
+	env := DetectEnvironment(nil, list.Items)
+
+	if env.Distribution != DistributionGKE {
+		t.Fatalf("distribution = %s, want GKE: %+v", env.Distribution, env.Evidence)
+	}
+	sources := map[Source]bool{}
+	for _, e := range env.Evidence {
+		if e.Distribution != DistributionGKE {
+			t.Errorf("evidence for another distribution: %+v", e)
+		}
+		sources[e.Source] = true
+	}
+	if !sources[SourceKubeletVersion] || !sources[SourceNodeLabel] {
+		t.Errorf("evidence came from %v, want both the kubelet version and the node labels", sources)
 	}
 }
