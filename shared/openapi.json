@@ -11294,7 +11294,7 @@
           "md_journal": {
             "type": "boolean",
             "title": "Md Journal",
-            "default": false
+            "default": true
           },
           "snode_api_service": {
             "type": "string",
