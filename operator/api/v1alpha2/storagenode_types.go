@@ -640,17 +640,20 @@ func init() {
 type NodeNetworkPhase string
 
 const (
-	// NodeNetworkPhasePending means the pod has not reported the network.
+	// NodeNetworkPhasePending means the pod has not reported the network; on
+	// the pod network, that the Service in front of the pod does not exist yet.
 	NodeNetworkPhasePending NodeNetworkPhase = "Pending"
 
-	// NodeNetworkPhaseAttached means the pod holds the declared address.
+	// NodeNetworkPhaseAttached means the pod holds the declared address; on the
+	// pod network, that the pod runs behind its Service.
 	NodeNetworkPhaseAttached NodeNetworkPhase = "Attached"
 
 	// NodeNetworkPhaseMismatched means the pod holds a different address from
 	// the one the node states.
 	NodeNetworkPhaseMismatched NodeNetworkPhase = "Mismatched"
 
-	// NodeNetworkPhaseUnavailable means the interface the pod held is gone.
+	// NodeNetworkPhaseUnavailable means the interface the pod held is gone; on
+	// the pod network, that the Service exists and the pod does not run.
 	NodeNetworkPhaseUnavailable NodeNetworkPhase = "Unavailable"
 )
 

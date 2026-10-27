@@ -159,7 +159,7 @@ The pod's own address changes on every restart, and every peer and client holds 
 
 The operator does none of the attaching: there is no definition to require, no address to assign and no probe to run, so a pod-network node passes the network check at once. Node-add carries `pod_network: true` and no `networks`. The node's status reports the one network with interface `eth0`, the Service's address, and a phase of `Attached` once the pod runs behind the Service, `Unavailable` while it does not, and `Pending` until the Service exists.
 
-What the pod network costs is measured in §9: the traffic goes through the CNI's datapath instead of a NIC, so a cluster in tunnel mode loses most of its cross-node bandwidth, and native routing on a jumbo node network is the configuration this mode is meant for.
+What the pod network costs: the traffic goes through the CNI's datapath instead of a NIC. Measured on the Talos lab (Cilium 1.20, four nodes 2+1, node NIC at 1500, fio 4k random read at queue depth 32 through the CSI), a client on the primary's node reached 36k IOPS against 48-50k on a VF, and a cross-node client 31k with native routing against 48k on a VF; in tunnel mode the cross-node figure drops by a further third and large-block bandwidth to a third. Native routing on a jumbo node network is the configuration this mode is meant for.
 
 ### 4.2 The administrator owns the definition
 
@@ -195,7 +195,7 @@ The pool is not allowed with `hostInterface`, which carries the host's own addre
 - `network` is present from the cluster's creation or never. It cannot be added to an existing cluster, changed, or removed, because the control plane resolves the networks at node-add and nothing re-reads the cluster field, and because a cluster that exists on the host network stays there.
 - A node's assigned address is fixed once recorded, because the listeners and every initiator hold it. Changing one is a remove and a re-add.
 - `network` and the legacy fields are mutually exclusive. The legacy fields stay supported and mean `hostInterface` attachments.
-- A cluster's networks are all `networkAttachmentRef` or all `hostInterface`, because a pod is either on the host network or not.
+- A cluster's networks are all `networkAttachmentRef` or all `hostInterface`, because a pod is either on the host network or not; or the one `podNetwork` data network alone (§4.1a).
 - A cluster whose `fabricType` includes RDMA cannot declare a `networkAttachmentRef` data network.
 
 ### 4.5 Per-node status

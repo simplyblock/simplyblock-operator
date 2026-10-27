@@ -7,6 +7,7 @@ package node
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -23,6 +24,7 @@ func theServiceOf(rpcPort int32) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: podNetworkServiceName(rpcPort, opsClusterID), Namespace: opsNamespace,
+			Labels: map[string]string{clusterLabel: opsClusterID},
 		},
 		Spec: corev1.ServiceSpec{ClusterIP: podNetworkServiceAddress},
 	}
@@ -80,8 +82,8 @@ func TestAPodNetworkNodeIsUnavailableWhileItsPodDoesNotRun(t *testing.T) {
 	}
 }
 
-func TestAPodNetworkNodeIsNeverShutDownOrProbed(t *testing.T) {
-	r, apiClient := onANetwork(t, viaPodNetwork(), anSPDKPodHolding(corev1.PodRunning, ""), theServiceOf(spdkRPCPort))
+func TestAPodNetworkNodeIsNeverShutDown(t *testing.T) {
+	r, _ := onANetwork(t, viaPodNetwork(), anSPDKPodHolding(corev1.PodRunning, ""), theServiceOf(spdkRPCPort))
 	api := r.API.(*scriptedControlPlane)
 
 	settle(t, r)
@@ -90,13 +92,65 @@ func TestAPodNetworkNodeIsNeverShutDownOrProbed(t *testing.T) {
 	if got := api.asked("ShutdownNode"); got != 0 {
 		t.Fatalf("ShutdownNode was asked %d times", got)
 	}
-	var pods corev1.PodList
-	if err := apiClient.List(context.Background(), &pods); err != nil {
+}
+
+// A Service of another cluster whose id shares the short prefix fronts no pod of
+// this node: its address is not the node's.
+func TestAServiceOfAnotherClusterIsNotReportedAsTheNodes(t *testing.T) {
+	foreign := theServiceOf(spdkRPCPort)
+	foreign.Labels = map[string]string{clusterLabel: "cluster-1111-of-someone-else"}
+	r, _ := onANetwork(t, viaPodNetwork(), anSPDKPodHolding(corev1.PodRunning, ""), foreign)
+
+	settle(t, r)
+
+	got := podNetworkStatusOf(t, r)
+	if got.Phase != simplyblockv1alpha2.NodeNetworkPhasePending || got.Address != "" {
+		t.Fatalf("status.network[0] = %+v, want Pending with no address", got)
+	}
+}
+
+func TestAPodNetworkNodeOfAClusterWithoutAUUIDIsPending(t *testing.T) {
+	r, apiClient := onANetwork(t, viaPodNetwork(), anSPDKPodHolding(corev1.PodRunning, ""), theServiceOf(spdkRPCPort))
+	_, cluster := nodeAndClusterOf(t, r)
+	cluster.Status.UUID = ""
+	if err := apiClient.Status().Update(context.Background(), cluster); err != nil {
 		t.Fatal(err)
 	}
-	for _, pod := range pods.Items {
-		if pod.Labels["role"] != spdkPodRole {
-			t.Fatalf("a probe pod %s was started on the pod network", pod.Name)
+
+	settle(t, r)
+
+	got := podNetworkStatusOf(t, r)
+	if got.Phase != simplyblockv1alpha2.NodeNetworkPhasePending || got.Address != "" {
+		t.Fatalf("status.network[0] = %+v, want Pending with no address", got)
+	}
+}
+
+func TestTheAttachedEventFiresOnceForAPodNetworkNode(t *testing.T) {
+	r, _ := onANetwork(t, viaPodNetwork(), anSPDKPodHolding(corev1.PodRunning, ""), theServiceOf(spdkRPCPort))
+
+	settle(t, r)
+	settle(t, r)
+
+	attached := 0
+	for _, e := range recordedEvents(r) {
+		if strings.Contains(e, NetworkAttached) {
+			attached++
 		}
+	}
+	if attached != 1 {
+		t.Fatalf("the attached event was recorded %d times, want once", attached)
+	}
+}
+
+// Provisioning a node on the pod network skips the network check: there is no
+// definition to require, no address to assign and no probe to run.
+func TestAPodNetworkNodeSkipsTheNetworkCheck(t *testing.T) {
+	r, _ := aSteadyNode(t, aControlPlane())
+
+	next, done, err := r.checkConfig(context.Background(),
+		anUnprovisionedNode(stepCheckingConfig), clusterDeclaring(viaPodNetwork()))
+
+	if err != nil || !done || next != stepAwaitingSlot {
+		t.Fatalf("next=%s done=%v err=%v, want AwaitingSlot", next, done, err)
 	}
 }
