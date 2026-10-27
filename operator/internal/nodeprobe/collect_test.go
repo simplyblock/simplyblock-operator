@@ -506,6 +506,40 @@ func TestTheReportCarriesEachControllersLBAFormats(t *testing.T) {
 	}
 }
 
+// The power-fail atomicity is what says whether a 512-byte namespace writes 4K
+// whole on a kernel that publishes no atomic write attributes, so every field
+// has to survive the round trip.
+func TestTheReportCarriesEachNamespacesPowerFailAtomicity(t *testing.T) {
+	read := nvme.PowerFailAtomicity{
+		NamespaceSpecific: true, NamespaceBlocks: 8, ControllerBlocks: 1, BoundaryBlocks: 16, BoundaryOffset: 2,
+	}
+	inv := inventory.Inventory{
+		NVMeControllers: []pci.Device{{Address: "0000:06:11.0", Driver: "nvme"}},
+		NVMeFormats: []inventory.NVMeControllerFormats{{Address: "0000:06:11.0", Controller: "nvme0",
+			Namespaces: []nvme.NamespaceFormats{{
+				NSID: 1, Formats: []nvme.LBAFormat{{Index: 0, DataSize: 512}}, InUse: 0,
+				PowerFailAtomicity: &read,
+			}}}},
+	}
+
+	encoded, err := Encode(FromInventory(testNode, probedAt, inv, nil))
+	if err != nil {
+		t.Fatalf("encode the report: %v", err)
+	}
+	report, err := Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode the report: %v", err)
+	}
+
+	got := report.NVMeControllers[0].LBAFormats[0].PowerFailAtomicity
+	want := PowerFailAtomicity{
+		NamespaceSpecific: true, NamespaceBlocks: 8, ControllerBlocks: 1, BoundaryBlocks: 16, BoundaryOffset: 2,
+	}
+	if got == nil || *got != want {
+		t.Errorf("powerFailAtomicity = %+v, want %+v", got, want)
+	}
+}
+
 // deref renders Current by value, so two reports compare by what they say.
 func deref(formats []NamespaceFormats) []string {
 	out := make([]string, 0, len(formats))

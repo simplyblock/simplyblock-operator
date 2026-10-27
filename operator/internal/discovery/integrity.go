@@ -22,6 +22,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/simplyblock/atlas/nvme"
+
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
@@ -159,7 +161,31 @@ func judge(worker Worker, device nodeprobe.Device, formatting bool) deviceIntegr
 		}
 	}
 	d.atomic4K = atomicityAt4K(d.blockSize, device, sameFormat)
+	if sameFormat && d.blockSize != 0 && d.blockSize < fourKiB && formats != nil && formats.PowerFailAtomicity != nil {
+		d.atomic4K = drivesAtomicity(*formats.PowerFailAtomicity, d.blockSize)
+	}
 	return d
+}
+
+// drivesAtomicity is the drive's own statement, read from Identify, which
+// answers on every kernel and is believed over the kernel's attributes where
+// both exist: the kernel ignores the controller-wide AWUPF the specification
+// applies to a namespace that states no value of its own.
+func drivesAtomicity(a nodeprobe.PowerFailAtomicity, blockSize uint32) atomicity {
+	read := nvme.PowerFailAtomicity{
+		NamespaceSpecific: a.NamespaceSpecific,
+		NamespaceBlocks:   a.NamespaceBlocks,
+		ControllerBlocks:  a.ControllerBlocks,
+		BoundaryBlocks:    a.BoundaryBlocks,
+		BoundaryOffset:    a.BoundaryOffset,
+	}
+	if read.Blocks() == 0 {
+		return atomicityUnknown
+	}
+	if read.AtomicAt(fourKiB, blockSize) {
+		return atomicityYes
+	}
+	return atomicityNo
 }
 
 // atomicityAt4K is whether a device with blocks of blockSize completes a 4K

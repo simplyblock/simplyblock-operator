@@ -267,6 +267,15 @@ func namespaceFormatsOf(namespace nvme.NamespaceFormats) NamespaceFormats {
 			RelativePerformance: format.RelativePerformance.String(),
 		})
 	}
+	if a := namespace.PowerFailAtomicity; a != nil {
+		out.PowerFailAtomicity = &PowerFailAtomicity{
+			NamespaceSpecific: a.NamespaceSpecific,
+			NamespaceBlocks:   a.NamespaceBlocks,
+			ControllerBlocks:  a.ControllerBlocks,
+			BoundaryBlocks:    a.BoundaryBlocks,
+			BoundaryOffset:    a.BoundaryOffset,
+		}
+	}
 	return out
 }
 

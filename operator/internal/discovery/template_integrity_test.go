@@ -33,6 +33,7 @@ type geometry struct {
 	atomicMin, atomicMax uint32
 	formats              []nodeprobe.LBAFormat
 	current              int
+	powerFail            *nodeprobe.PowerFailAtomicity
 }
 
 // integrityFleet is one worker per geometry, each handing over one NVMe device.
@@ -48,7 +49,9 @@ func integrityFleet(geometries ...geometry) Plan {
 		r := report("worker-"+string(rune('1'+index)), device)
 		controller := nodeprobe.Controller{Address: address, Driver: "nvme"}
 		if g.formats != nil {
-			controller.LBAFormats = []nodeprobe.NamespaceFormats{{NSID: 1, Formats: g.formats, Current: ptr.To(g.current)}}
+			controller.LBAFormats = []nodeprobe.NamespaceFormats{{
+				NSID: 1, Formats: g.formats, Current: ptr.To(g.current), PowerFailAtomicity: g.powerFail,
+			}}
 		}
 		r.NVMeControllers = []nodeprobe.Controller{controller}
 		plan.Workers = append(plan.Workers, Worker{
@@ -211,5 +214,54 @@ func TestWithoutChecksumValidationTheDraftSaysWhatItWouldNeed(t *testing.T) {
 	note := noteAbout(template, "enableChecksumValidation")
 	if !strings.Contains(note, "enableAtomicity4K") {
 		t.Errorf("the note is %q, want it to say checksum validation would need enableAtomicity4K", note)
+	}
+}
+
+// The drive states its power-fail atomicity in the Identify data the probe
+// reads on every kernel, so a 512-byte drive is judged without the 6.11
+// attributes, and the drive is believed over the kernel where both answer:
+// the kernel ignores the controller-wide AWUPF.
+func TestTheDrivesOwnAtomicityDecidesTheJournal(t *testing.T) {
+	controllerOnly := func(blocks uint32) *nodeprobe.PowerFailAtomicity {
+		return &nodeprobe.PowerFailAtomicity{ControllerBlocks: blocks}
+	}
+	for _, tc := range []struct {
+		name    string
+		g       geometry
+		journal bool
+	}{
+		{"a controller atomic to eight blocks, on an old kernel",
+			geometry{blockSize: 512, formats: only512, powerFail: controllerOnly(8)}, false},
+		{"a controller atomic to one block, on an old kernel",
+			geometry{blockSize: 512, formats: only512, powerFail: controllerOnly(1)}, true},
+		{"a namespace atomic to eight blocks under a controller atomic to one",
+			geometry{blockSize: 512, formats: only512, powerFail: &nodeprobe.PowerFailAtomicity{
+				NamespaceSpecific: true, NamespaceBlocks: 8, ControllerBlocks: 1}}, false},
+		{"AWUPF the kernel ignored",
+			geometry{blockSize: 512, atomicMin: 512, atomicMax: 512, formats: only512, powerFail: controllerOnly(8)}, false},
+		{"boundaries that split an aligned 4K write",
+			geometry{blockSize: 512, formats: only512, powerFail: &nodeprobe.PowerFailAtomicity{
+				NamespaceSpecific: true, NamespaceBlocks: 16, BoundaryBlocks: 6}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			template := templateFor(t, integrityFleet(tc.g), nil)
+
+			if got := template.Template.EnableMetadataJournal; got == nil || *got != tc.journal {
+				t.Fatalf("enableMetadataJournal = %v, want %v", got, tc.journal)
+			}
+		})
+	}
+}
+
+// A drive that states it writes only one block whole is a definite no, so
+// stated checksum validation over it is refused rather than left unknown.
+func TestADriveThatSaysOneBlockCannotBeChecked(t *testing.T) {
+	_, err := ClusterTemplateFor("a-cluster",
+		integrityFleet(geometry{blockSize: 512, formats: only512,
+			powerFail: &nodeprobe.PowerFailAtomicity{ControllerBlocks: 1}}),
+		TemplateOptions{Seed: &simplyblockv1alpha2.ClusterTemplate{EnableChecksumValidation: ptr.To(true)}})
+
+	if err == nil || !strings.Contains(err.Error(), "worker-1") {
+		t.Fatalf("the draft was not refused over worker-1 device: %v", err)
 	}
 }

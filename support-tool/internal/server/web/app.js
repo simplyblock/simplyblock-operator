@@ -370,13 +370,30 @@ function inUseOf(c) {
 // lbaFormatsCard lists the block sizes each kernel-driven controller's
 // namespaces can be formatted with, one row per format, with the format in use
 // marked. A controller on a userspace driver cannot be asked and has no rows.
+// powerFailOf is the largest write the namespace says it completes whole
+// across a power failure, in bytes of the format in use, and which field said
+// so: the namespace's own NAWUPF or the controller's AWUPF.
+function powerFailOf(ns) {
+  const a = ns.powerFailAtomicity;
+  const current = (ns.formats || []).find((f) => f.index === ns.current);
+  if (!a || !current) return null;
+  const blocks = a.namespaceSpecific ? a.namespaceBlocks : a.controllerBlocks;
+  if (!blocks) return null;
+  const source = a.namespaceSpecific ? "NAWUPF" : "AWUPF";
+  const boundary = a.boundaryBlocks
+    ? `, boundary every ${bytes(a.boundaryBlocks * current.dataSize)}${a.boundaryOffset ? ` from block ${a.boundaryOffset}` : ""}` : "";
+  return [el("br"), el("span", { class: "muted", title: `power-fail atomic write unit (${source})${boundary}` },
+    `atomic to ${bytes(blocks * current.dataSize)} (${source})${boundary}`)];
+}
+
 function lbaFormatsCard(controllers) {
   const rows = [];
   for (const c of controllers) {
     for (const ns of c.lbaFormats || []) {
       ns.formats.forEach((f, i) => rows.push([
         i ? "" : el("code", {}, c.address),
-        i ? "" : (ns.common ? el("span", { class: "muted", title: "no namespace attached: the formats a new namespace could take" }, "common") : `nsid ${ns.nsid}`),
+        i ? "" : (ns.common ? el("span", { class: "muted", title: "no namespace attached: the formats a new namespace could take" }, "common")
+          : el("span", {}, `nsid ${ns.nsid}`, powerFailOf(ns))),
         String(f.index),
         bytes(f.dataSize),
         f.metadataSize ? `${f.metadataSize} B${ns.extendedMetadata && f.index === ns.current ? ", extended" : ""}` : el("span", { class: "muted" }, "none"),
