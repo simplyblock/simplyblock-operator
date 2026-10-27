@@ -573,6 +573,11 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.EnableMetadataJournal != nil {
+		in, out := &in.EnableMetadataJournal, &out.EnableMetadataJournal
+		*out = new(bool)
+		**out = **in
+	}
 	if in.EnableCpuTopology != nil {
 		in, out := &in.EnableCpuTopology, &out.EnableCpuTopology
 		*out = new(bool)
@@ -4091,6 +4096,11 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 	}
 	if in.EnableAtomicity4K != nil {
 		in, out := &in.EnableAtomicity4K, &out.EnableAtomicity4K
+		*out = new(bool)
+		**out = **in
+	}
+	if in.EnableMetadataJournal != nil {
+		in, out := &in.EnableMetadataJournal, &out.EnableMetadataJournal
 		*out = new(bool)
 		**out = **in
 	}
