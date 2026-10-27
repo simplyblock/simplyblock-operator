@@ -66,7 +66,7 @@ const (
 
 // StorageNodeStep is one step of the provisioning path. There is one graph rather
 // than a MultiConfig, because an entity has no spec.action to key one on.
-// +kubebuilder:validation:Enum=CheckingHost;CheckingConfig;AwaitingSlot;Posting;Resolving;Adopting;AwaitingWorker
+// +kubebuilder:validation:Enum=CheckingHost;CheckingConfig;CheckingNetwork;AwaitingSlot;Posting;Resolving;Adopting;AwaitingWorker
 type StorageNodeStep string
 
 const (
@@ -78,6 +78,12 @@ const (
 	// where its cluster requires one. It is a gate rather than a validation: the
 	// value can arrive later, and holding is what makes filling it in sufficient.
 	StorageNodeStepCheckingConfig StorageNodeStep = "CheckingConfig"
+
+	// StorageNodeStepCheckingNetwork runs the probe pod that attaches to the
+	// declared networks the way the SPDK pod will, and holds the node until the
+	// attach, the address, and the peers check out. A node on the host network
+	// never enters it.
+	StorageNodeStepCheckingNetwork StorageNodeStep = "CheckingNetwork"
 
 	// StorageNodeStepAwaitingSlot holds until the cluster is under its
 	// parallel-add limit and no FoundationDB worker is in flight.
@@ -494,7 +500,7 @@ type StorageNodeStatus struct {
 
 	// Step is the position of the provisioning machine. The value is one of the
 	// steps that machine declares.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['CheckingHost','CheckingConfig','AwaitingSlot','Posting','Resolving','Adopting','AwaitingWorker']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['CheckingHost','CheckingConfig','CheckingNetwork','AwaitingSlot','Posting','Resolving','Adopting','AwaitingWorker']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
@@ -550,6 +556,14 @@ type StorageNodeStatus struct {
 	// rebalancer reads.
 	// +optional
 	LatencyMetrics *NodeLatencyMetrics `json:"latencyMetrics,omitempty"`
+
+	// Network records, per storage network, what the node's SPDK pod reported
+	// and whether the attachment matches the declaration. A node on the host
+	// network has no entries.
+	// +listType=map
+	// +listMapKey=network
+	// +optional
+	Network []NodeNetworkStatus `json:"network,omitempty"`
 
 	// Message is the reason the phase is what it is: one sentence, replaced as the
 	// node moves, and never a log.
@@ -619,4 +633,60 @@ type StorageNodeList struct {
 
 func init() {
 	SchemeBuilder.Register(&StorageNode{}, &StorageNodeList{})
+}
+
+// NodeNetworkPhase is where a node's attachment to one network stands.
+// +kubebuilder:validation:Enum=Pending;Attached;Mismatched;Unavailable
+type NodeNetworkPhase string
+
+const (
+	// NodeNetworkPhasePending means the pod has not reported the network.
+	NodeNetworkPhasePending NodeNetworkPhase = "Pending"
+
+	// NodeNetworkPhaseAttached means the pod holds the declared address.
+	NodeNetworkPhaseAttached NodeNetworkPhase = "Attached"
+
+	// NodeNetworkPhaseMismatched means the pod holds a different address from
+	// the one the node states.
+	NodeNetworkPhaseMismatched NodeNetworkPhase = "Mismatched"
+
+	// NodeNetworkPhaseUnavailable means the interface the pod held is gone.
+	NodeNetworkPhaseUnavailable NodeNetworkPhase = "Unavailable"
+)
+
+// NodeNetworkStatus is what a node's SPDK pod reports for one network.
+type NodeNetworkStatus struct {
+	// Network is the name of the cluster network.
+	Network string `json:"network"`
+
+	// Interface is the interface's name inside the pod.
+	// +optional
+	Interface string `json:"interface,omitempty"`
+
+	// Assigned is the address the operator took from the network's pool for this
+	// node, with the prefix length of the pool's subnet. It is chosen once,
+	// before the node is added, and never changes, so the node keeps it across
+	// restarts and reboots. It is empty until the choice is made.
+	// +optional
+	Assigned string `json:"assigned,omitempty"`
+
+	// Rejected are the pool addresses another host answered for, which this node
+	// does not try again.
+	// +kubebuilder:validation:MaxItems=64
+	// +listType=atomic
+	// +optional
+	Rejected []string `json:"rejected,omitempty"`
+
+	// Address is the address the pod reported.
+	// +optional
+	Address string `json:"address,omitempty"`
+
+	// HostReachable is whether the worker's host network namespace can reach
+	// the address, which a volume attach or an RPC from a host-network pod on
+	// that worker needs. It is unset until the preflight has checked.
+	// +optional
+	HostReachable *bool `json:"hostReachable,omitempty"`
+
+	// Phase is where the attachment stands.
+	Phase NodeNetworkPhase `json:"phase"`
 }

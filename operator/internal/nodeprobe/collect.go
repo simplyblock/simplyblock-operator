@@ -17,6 +17,7 @@ import (
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/inventory"
+	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/pci"
 )
 
@@ -36,8 +37,8 @@ func FromInventory(node string, at time.Time, inv inventory.Inventory, unreadabl
 		HugePages:          hugePagesOf(inv.HugePages),
 		Interfaces:         interfacesOf(inv.Interfaces),
 		Devices:            devicesOf(inv.Devices),
-		NVMeControllers:    controllersOf(inv.NVMeControllers),
-		Reclaimed:          controllersOf(inv.Reclaimed),
+		NVMeControllers:    controllersOf(inv.NVMeControllers, inv.NVMeFormats),
+		Reclaimed:          controllersOf(inv.Reclaimed, nil),
 		HostOS:             hostOSOf(inv.HostOS),
 		NetworkAttachments: networkAttachmentsOf(inv.NetworkAttachments),
 		Unreadable:         sentences(unreadable),
@@ -238,16 +239,58 @@ func devicesOf(candidates []blockdev.Candidate) []Device {
 	return out
 }
 
-func controllersOf(devices []pci.Device) []Controller {
+// controllersOf renders the controllers, each with the LBA formats read from
+// it. The formats are joined by PCI address, which is the key both readings
+// share.
+func controllersOf(devices []pci.Device, formats []inventory.NVMeControllerFormats) []Controller {
+	byAddress := make(map[string][]NamespaceFormats, len(formats))
+	for _, controller := range formats {
+		for _, namespace := range controller.Namespaces {
+			// A namespace with no formats says nothing a reader can use.
+			if len(namespace.Formats) == 0 {
+				continue
+			}
+			byAddress[controller.Address] = append(byAddress[controller.Address], namespaceFormatsOf(namespace))
+		}
+	}
+
 	out := make([]Controller, 0, len(devices))
 	for _, device := range devices {
 		out = append(out, Controller{
-			Address:  device.Address,
-			Driver:   device.Driver,
-			Vendor:   device.Vendor,
-			Product:  device.Product,
-			NUMANode: device.NUMANode,
-			InUse:    device.InUse,
+			Address:    device.Address,
+			Driver:     device.Driver,
+			Vendor:     device.Vendor,
+			Product:    device.Product,
+			NUMANode:   device.NUMANode,
+			InUse:      device.InUse,
+			LBAFormats: byAddress[device.Address],
+		})
+	}
+	return out
+}
+
+// namespaceFormatsOf renders one namespace's formats. The broadcast NSID
+// becomes Common, because 4294967295 in a report reads as a namespace.
+func namespaceFormatsOf(namespace nvme.NamespaceFormats) NamespaceFormats {
+	out := NamespaceFormats{
+		Formats:          make([]LBAFormat, 0, len(namespace.Formats)),
+		ExtendedMetadata: namespace.ExtendedMetadata,
+	}
+	if namespace.NSID == nvme.NSIDAll {
+		out.Common = true
+	} else {
+		out.NSID = uint32(namespace.NSID)
+	}
+	if namespace.InUse >= 0 {
+		current := namespace.InUse
+		out.Current = &current
+	}
+	for _, format := range namespace.Formats {
+		out.Formats = append(out.Formats, LBAFormat{
+			Index:               format.Index,
+			DataSize:            format.DataSize,
+			MetadataSize:        format.MetadataSize,
+			RelativePerformance: format.RelativePerformance.String(),
 		})
 	}
 	return out

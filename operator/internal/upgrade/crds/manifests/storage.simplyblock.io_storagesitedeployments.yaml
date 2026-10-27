@@ -683,6 +683,237 @@ spec:
                           succeed, since the cluster it would write is one the API server refuses.
                         maxLength: 63
                         type: string
+                      network:
+                        description: |-
+                          Network states the networks the storage nodes' SPDK pods attach to, which
+                          is spec.storageNodes.network of the cluster this document creates. It is
+                          set here and nowhere else, because a cluster's network is fixed when it is
+                          created. Unstated, the nodes run on the host network.
+                        properties:
+                          data:
+                            description: |-
+                              Data are the networks the storage nodes serve volumes on. Unset, data is
+                              served on the management network.
+                            items:
+                              description: StorageNetwork is one network a storage
+                                node's SPDK pod attaches to.
+                              properties:
+                                addressPool:
+                                  description: |-
+                                    AddressPool is the range the operator takes each node's address on this
+                                    network from. It is required for a network attached through a definition,
+                                    whose static addressing needs one address per node, and not allowed for a
+                                    host interface, which carries the host's own address.
+                                  properties:
+                                    exclude:
+                                      description: |-
+                                        Exclude are addresses the operator never hands out, each an IPv4 address
+                                        or an inclusive range written 10.10.10.1-10.10.10.50. They are for
+                                        addresses the network cannot show: a gateway, a switch, or a machine that
+                                        is powered off, whose address no ARP check would find taken. An entry
+                                        outside the subnet has no effect.
+                                      items:
+                                        maxLength: 31
+                                        pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(-((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]))?$
+                                        type: string
+                                      maxItems: 32
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                    first:
+                                      description: |-
+                                        First is the lowest address the operator may hand out. Unset, the range
+                                        starts at the subnet's first host address. It is set together with Last.
+                                      maxLength: 15
+                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                      type: string
+                                    last:
+                                      description: |-
+                                        Last is the highest address the operator may hand out. Unset, the range
+                                        ends at the subnet's last host address. It is set together with First.
+                                      maxLength: 15
+                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                      type: string
+                                    subnet:
+                                      description: |-
+                                        Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
+                                        length is the one each node's address carries.
+                                      maxLength: 18
+                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$
+                                      type: string
+                                  required:
+                                  - subnet
+                                  type: object
+                                  x-kubernetes-validations:
+                                  - message: first and last are set together
+                                    rule: has(self.first) == has(self.last)
+                                  - message: first and last must lie inside subnet
+                                    rule: '!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first))
+                                      && cidr(self.subnet).containsIP(ip(self.last)))'
+                                attachment:
+                                  description: Attachment is how the pod reaches the
+                                    network.
+                                  properties:
+                                    hostInterface:
+                                      description: |-
+                                        HostInterface is the name of a host interface. The pods run on the host
+                                        network and bind it.
+                                      maxLength: 63
+                                      minLength: 1
+                                      type: string
+                                    networkAttachmentRef:
+                                      description: |-
+                                        NetworkAttachmentRef is a Multus NetworkAttachmentDefinition in the
+                                        namespace of the storage cluster. The pod attaches to it and takes the
+                                        interface the definition's plugin creates.
+                                      properties:
+                                        name:
+                                          description: Name is the definition's name.
+                                          maxLength: 253
+                                          minLength: 1
+                                          type: string
+                                      required:
+                                      - name
+                                      type: object
+                                  type: object
+                                  x-kubernetes-validations:
+                                  - message: exactly one of networkAttachmentRef and
+                                      hostInterface must be set
+                                    rule: has(self.networkAttachmentRef) != has(self.hostInterface)
+                                name:
+                                  description: |-
+                                    Name identifies the network within the cluster, and is the key the nodes'
+                                    addresses and status use.
+                                  maxLength: 63
+                                  minLength: 1
+                                  pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                  type: string
+                              required:
+                              - attachment
+                              - name
+                              type: object
+                              x-kubernetes-validations:
+                              - message: addressPool is required with networkAttachmentRef
+                                rule: '!has(self.attachment.networkAttachmentRef)
+                                  || has(self.addressPool)'
+                              - message: addressPool is not allowed with hostInterface
+                                rule: '!has(self.attachment.hostInterface) || !has(self.addressPool)'
+                            maxItems: 8
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          management:
+                            description: |-
+                              Management is the network the control plane reaches the SPDK RPC on.
+                              Unset, the RPC is served on the pod network.
+                            properties:
+                              addressPool:
+                                description: |-
+                                  AddressPool is the range the operator takes each node's address on this
+                                  network from. It is required for a network attached through a definition,
+                                  whose static addressing needs one address per node, and not allowed for a
+                                  host interface, which carries the host's own address.
+                                properties:
+                                  exclude:
+                                    description: |-
+                                      Exclude are addresses the operator never hands out, each an IPv4 address
+                                      or an inclusive range written 10.10.10.1-10.10.10.50. They are for
+                                      addresses the network cannot show: a gateway, a switch, or a machine that
+                                      is powered off, whose address no ARP check would find taken. An entry
+                                      outside the subnet has no effect.
+                                    items:
+                                      maxLength: 31
+                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(-((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]))?$
+                                      type: string
+                                    maxItems: 32
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                  first:
+                                    description: |-
+                                      First is the lowest address the operator may hand out. Unset, the range
+                                      starts at the subnet's first host address. It is set together with Last.
+                                    maxLength: 15
+                                    pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                    type: string
+                                  last:
+                                    description: |-
+                                      Last is the highest address the operator may hand out. Unset, the range
+                                      ends at the subnet's last host address. It is set together with First.
+                                    maxLength: 15
+                                    pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                    type: string
+                                  subnet:
+                                    description: |-
+                                      Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
+                                      length is the one each node's address carries.
+                                    maxLength: 18
+                                    pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$
+                                    type: string
+                                required:
+                                - subnet
+                                type: object
+                                x-kubernetes-validations:
+                                - message: first and last are set together
+                                  rule: has(self.first) == has(self.last)
+                                - message: first and last must lie inside subnet
+                                  rule: '!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first))
+                                    && cidr(self.subnet).containsIP(ip(self.last)))'
+                              attachment:
+                                description: Attachment is how the pod reaches the
+                                  network.
+                                properties:
+                                  hostInterface:
+                                    description: |-
+                                      HostInterface is the name of a host interface. The pods run on the host
+                                      network and bind it.
+                                    maxLength: 63
+                                    minLength: 1
+                                    type: string
+                                  networkAttachmentRef:
+                                    description: |-
+                                      NetworkAttachmentRef is a Multus NetworkAttachmentDefinition in the
+                                      namespace of the storage cluster. The pod attaches to it and takes the
+                                      interface the definition's plugin creates.
+                                    properties:
+                                      name:
+                                        description: Name is the definition's name.
+                                        maxLength: 253
+                                        minLength: 1
+                                        type: string
+                                    required:
+                                    - name
+                                    type: object
+                                type: object
+                                x-kubernetes-validations:
+                                - message: exactly one of networkAttachmentRef and
+                                    hostInterface must be set
+                                  rule: has(self.networkAttachmentRef) != has(self.hostInterface)
+                              name:
+                                description: |-
+                                  Name identifies the network within the cluster, and is the key the nodes'
+                                  addresses and status use.
+                                maxLength: 63
+                                minLength: 1
+                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                type: string
+                            required:
+                            - attachment
+                            - name
+                            type: object
+                            x-kubernetes-validations:
+                            - message: addressPool is required with networkAttachmentRef
+                              rule: '!has(self.attachment.networkAttachmentRef) ||
+                                has(self.addressPool)'
+                            - message: addressPool is not allowed with hostInterface
+                              rule: '!has(self.attachment.hostInterface) || !has(self.addressPool)'
+                        type: object
+                        x-kubernetes-validations:
+                        - message: all networks must use networkAttachmentRef, or
+                            all must use hostInterface
+                          rule: '!has(self.data) || self.data.size() == 0 || (self.data.all(n,
+                            has(n.attachment.networkAttachmentRef) == has(self.data[0].attachment.networkAttachmentRef))
+                            && (!has(self.management) || has(self.management.attachment.networkAttachmentRef)
+                            == has(self.data[0].attachment.networkAttachmentRef)))'
                       nodeProvisioningBudget:
                         description: |-
                           NodeProvisioningBudget is how many workers the expansion may have in the

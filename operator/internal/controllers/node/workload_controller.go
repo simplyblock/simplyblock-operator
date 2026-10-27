@@ -46,6 +46,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	atlaskube "github.com/simplyblock/atlas/kube"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -125,6 +126,11 @@ func (r *StorageNodeWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error
 		Watches(&corev1.Pod{},
 			handler.EnqueueRequestsFromMapFunc(r.clusterOfProxyPod),
 			builder.WithPredicates(isSpdkProxyPod())).
+		// The agent's endpoint carries the pod's own address once the cluster
+		// declares a network, and a restarted pod comes back on a new one.
+		Watches(&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(r.clusterOfAgentPod),
+			builder.WithPredicates(isAgentPod())).
 		Complete(r)
 }
 
@@ -151,6 +157,30 @@ func isSpdkProxyPod() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(object client.Object) bool {
 		return object.GetLabels()["role"] == utils.LabelSpdkProxyRole
 	})
+}
+
+// isAgentPod admits the storage-node agent pods, which carry the app label the
+// DaemonSet sets.
+func isAgentPod() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(object client.Object) bool {
+		return object.GetLabels()[atlaskube.LabelApp] == atlaskube.AppStorageNode
+	})
+}
+
+// clusterOfAgentPod maps an agent pod to the cluster its DaemonSet belongs to,
+// which the pod's own label names.
+func (r *StorageNodeWorkloadReconciler) clusterOfAgentPod(
+	_ context.Context, object client.Object,
+) []reconcile.Request {
+	labels := object.GetLabels()
+	cluster := labels[atlaskube.LabelSimplyblockCluster]
+	if labels[atlaskube.LabelApp] != atlaskube.AppStorageNode || cluster == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Name:      cluster,
+		Namespace: object.GetNamespace(),
+	}}}
 }
 
 // clusterOfProxyPod maps an spdk-proxy pod to the clusters whose workload pass
@@ -499,7 +529,7 @@ func (r *StorageNodeWorkloadReconciler) reconcileEndpointSlice(
 			if _, known := addresses[worker]; known || worker == "" {
 				continue
 			}
-			address, err := r.workerAddress(ctx, worker)
+			address, err := r.agentAddress(ctx, cluster, worker)
 			if err != nil || address == "" {
 				log.V(1).Info("a worker has no internal address yet and is not published",
 					"worker", worker)
@@ -590,6 +620,34 @@ func (r *StorageNodeWorkloadReconciler) clusterOfOperation(
 		return nil
 	}
 	return r.clusterOf(ctx, &node)
+}
+
+// agentAddress is what the storage-node API endpoint of a worker carries: the
+// worker's internal IP while the agent runs on the host network, and the agent
+// pod's own IP once the cluster declares a network and the pod has left it.
+func (r *StorageNodeWorkloadReconciler) agentAddress(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, worker string,
+) (string, error) {
+	if cluster.Spec.StorageNodes == nil || cluster.Spec.StorageNodes.Network == nil {
+		return r.workerAddress(ctx, worker)
+	}
+
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods,
+		client.InNamespace(cluster.Namespace),
+		client.MatchingLabels{
+			atlaskube.LabelApp:                atlaskube.AppStorageNode,
+			atlaskube.LabelSimplyblockCluster: cluster.Name,
+		},
+	); err != nil {
+		return "", fmt.Errorf("list the storage-node agent pods: %w", err)
+	}
+	for i := range pods.Items {
+		if pods.Items[i].Spec.NodeName == worker {
+			return pods.Items[i].Status.PodIP, nil
+		}
+	}
+	return "", nil
 }
 
 // workerAddress is the worker's internal IP, which is what an endpoint carries.

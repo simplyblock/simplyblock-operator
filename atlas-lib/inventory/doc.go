@@ -5,14 +5,15 @@
 // it answers them for a fleet that is not yet running one: how many CPUs each
 // worker has and whether they are hyperthreaded, how much huge-page memory is
 // already allocated and on which NUMA nodes, which network interfaces exist and
-// how fast their links are, which disks nothing is using, which operating
-// system and architecture each worker runs, and which Kubernetes distribution
-// installed the kubelet. A discovery run asks exactly this, and the answers
+// how fast their links are, which disks nothing is using, which block sizes
+// each NVMe controller can format its disks with, which operating system and
+// architecture each worker runs, and which Kubernetes distribution installed
+// the kubelet. A discovery run asks exactly this, and the answers
 // become the ClusterDeploymentConfig a reviewer approves.
 //
 // One call gathers all of it. [Collect] is the entry point, and the readers it
 // composes — [ReadCPU], [ReadMemory], [ReadHugePages], [ReadInterfaces],
-// [ReadHostOS], the blockdev scan, [DetectEnvironment], and
+// [ReadHostOS], [ReadNVMeFormats], the blockdev scan, [DetectEnvironment], and
 // [CollectNetworkAttachments] — are exported for the caller that wants one of
 // them alone.
 //
@@ -29,6 +30,7 @@
 //	inv.HostOS.Distro              // ubuntu / rocky / rhel, as os-release names it
 //	inv.AvailableDevices()         // the disks nothing is using
 //	inv.CPU.HyperThreading
+//	inv.NVMeFormats                // LBA formats per kernel-driven NVMe controller
 //
 // # NUMA is the join, not a detail
 //

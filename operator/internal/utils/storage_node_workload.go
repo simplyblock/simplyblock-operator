@@ -101,6 +101,19 @@ func BuildStorageNodeDaemonSet(
 		}},
 		{Name: "CPU_TOPOLOGY_ENABLED", Value: ptr.StringOrDefault(wl.EnableCpuTopology, "false")},
 	}
+	if wl.Network != nil {
+		// The agent is in the pod network, where its interfaces are not the host's,
+		// so the control plane takes the worker's address from here.
+		mainEnv = append(mainEnv,
+			corev1.EnvVar{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"},
+			}},
+			// The node-preparation job calls the agent, and the agent is no longer at
+			// the worker's address.
+			corev1.EnvVar{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
+			}})
+	}
 	if wl.NodeProvisioningBudget != nil {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "MAX_PARALLEL_NODE_ADDS", Value: fmt.Sprintf("%d", *wl.NodeProvisioningBudget)})
 	}
@@ -306,7 +319,7 @@ func BuildStorageNodeDaemonSet(
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "simplyblock-storage-node-sa",
-					HostNetwork:        true,
+					HostNetwork:        wl.Network == nil,
 					Tolerations:        storageNodeAgentTolerations(sn, wl),
 					NodeSelector: map[string]string{
 						kube.LabelStorageNodeSet: sn.Name,
