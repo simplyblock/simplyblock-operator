@@ -135,7 +135,7 @@ func nodeAndClusterOf(t *testing.T, r *StorageNodeReconciler) (*simplyblockv1alp
 // The add of a node on the pod network says so and carries no attachment, so the
 // control plane starts the pod off the host network behind its Service.
 func TestTheAddOfAPodNetworkNodeDeclaresTheModeAndNoNetworks(t *testing.T) {
-	r, _ := onANetwork(t, viaPodNetwork("cni"))
+	r, _ := onANetwork(t, viaPodNetwork())
 	api := r.API.(*scriptedControlPlane)
 	node, cluster := nodeAndClusterOf(t, r)
 
@@ -165,7 +165,7 @@ func TestOnlyAPodNetworkDeclarationIsOnThePodNetwork(t *testing.T) {
 			}
 		})
 	}
-	if !onPodNetwork(clusterDeclaring(viaPodNetwork("cni"))) {
+	if !onPodNetwork(clusterDeclaring(viaPodNetwork())) {
 		t.Fatal("a pod network declaration was not recognised")
 	}
 }

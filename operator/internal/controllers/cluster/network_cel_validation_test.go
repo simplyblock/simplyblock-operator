@@ -346,9 +346,10 @@ func TestStorageNetworkNamesAreUniqueDNSLabels(t *testing.T) {
 	})
 }
 
-func viaPodNetwork(name string) simplyblockv1alpha2.StorageNetwork {
+// viaPodNetwork is the one data network of a cluster on the pod network.
+func viaPodNetwork() simplyblockv1alpha2.StorageNetwork {
 	return simplyblockv1alpha2.StorageNetwork{
-		Name:       name,
+		Name:       "cni",
 		Attachment: simplyblockv1alpha2.NetworkAttachment{PodNetwork: &simplyblockv1alpha2.PodNetworkAttachment{}},
 	}
 }
@@ -361,11 +362,11 @@ func TestStorageClusterPodNetworkIsTheWholeDeclaration(t *testing.T) {
 
 	t.Run("alone", func(t *testing.T) {
 		wantAccepted(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-			Data: []simplyblockv1alpha2.StorageNetwork{viaPodNetwork("cni")},
+			Data: []simplyblockv1alpha2.StorageNetwork{viaPodNetwork()},
 		})))
 	})
 	t.Run("with a pool", func(t *testing.T) {
-		pooled := viaPodNetwork("cni")
+		pooled := viaPodNetwork()
 		pooled.AddressPool = aPool("10.10.10.0/24", "10.10.10.101", "10.10.10.110")
 		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
 			Data: []simplyblockv1alpha2.StorageNetwork{pooled},
@@ -374,17 +375,17 @@ func TestStorageClusterPodNetworkIsTheWholeDeclaration(t *testing.T) {
 	t.Run("with a management network", func(t *testing.T) {
 		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
 			Management: ptr.To(viaHostInterface("management", "eth0")),
-			Data:       []simplyblockv1alpha2.StorageNetwork{viaPodNetwork("cni")},
+			Data:       []simplyblockv1alpha2.StorageNetwork{viaPodNetwork()},
 		})), alone)
 	})
 	t.Run("as the management network", func(t *testing.T) {
 		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-			Management: ptr.To(viaPodNetwork("cni")),
+			Management: ptr.To(viaPodNetwork()),
 		})), alone)
 	})
 	t.Run("beside another data network", func(t *testing.T) {
 		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-			Data: []simplyblockv1alpha2.StorageNetwork{viaPodNetwork("cni"), viaHostInterface("storage-b", "eth2")},
+			Data: []simplyblockv1alpha2.StorageNetwork{viaPodNetwork(), viaHostInterface("storage-b", "eth2")},
 		})), alone)
 	})
 }
