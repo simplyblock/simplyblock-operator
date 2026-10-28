@@ -236,6 +236,20 @@ spec:
                     x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
+                  volumeMode:
+                    description: |-
+                      VolumeMode is the volume mode of the restored claim and its volume. It
+                      defaults to the mode recorded in the backup's status.source, and has to be
+                      set for a backup that recorded none, such as one whose source volume was
+                      gone when the backup was discovered. A Block source restored as Filesystem
+                      is formatted over on first mount.
+                    enum:
+                    - Filesystem
+                    - Block
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                 required:
                 - claimName
                 - targetPool
@@ -245,6 +259,8 @@ spec:
                   rule: '!has(oldSelf.claimLabels) || has(self.claimLabels)'
                 - message: field claimAnnotations is immutable once set
                   rule: '!has(oldSelf.claimAnnotations) || has(self.claimAnnotations)'
+                - message: field volumeMode is immutable once set
+                  rule: '!has(oldSelf.volumeMode) || has(self.volumeMode)'
             required:
             - action
             - clusterRef
