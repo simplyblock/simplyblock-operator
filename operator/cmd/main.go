@@ -73,7 +73,6 @@ import (
 	twonodecp "github.com/simplyblock/simplyblock-operator/internal/controllers/twonode/cpadapter"
 	volumecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/volume"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
-	"github.com/simplyblock/simplyblock-operator/internal/ownimage"
 	"github.com/simplyblock/simplyblock-operator/internal/placement"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
@@ -862,7 +861,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeClaim")
 		os.Exit(1)
 	}
-	if err := (&nodecontroller.StorageNodeReconciler{
+	storageNodeReconciler := &nodecontroller.StorageNodeReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagenode-controller"),
@@ -874,8 +873,13 @@ func main() {
 		DeviceScopes: deviceScopes,
 		Capacity:     nodeCapacity,
 		Workload:     storageNodeWorkload,
-		ProbeImage:   os.Getenv(ownimage.Env),
-	}).SetupWithManager(ctrlMgr); err != nil {
+	}
+	// The host checks go to the CSI node plugins over the link. Without it a
+	// node on a network waits for them.
+	if csiPeers != nil {
+		storageNodeReconciler.HostCheck = csilink.NewHostCheck(csilink.RegistryNodePeers(csiPeers))
+	}
+	if err := storageNodeReconciler.SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
 	}

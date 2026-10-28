@@ -663,27 +663,21 @@ type NodeNetworkStatus struct {
 	// +optional
 	Interface string `json:"interface,omitempty"`
 
-	// Assigned is the address the operator took from the network's pool for this
-	// node, with the prefix length of the pool's subnet. It is chosen once,
-	// before the node is added, and never changes, so the node keeps it across
-	// restarts and reboots. It is empty until the choice is made.
+	// Assigned is the node's address on the network, with its prefix length: the
+	// one the operator took from the network's address pool, or, for a network
+	// with no pool, the one the NIC the definition moves holds on the worker. It
+	// is chosen once, before the node is added, and never changes, so the node
+	// keeps it across restarts and reboots. It is empty until it is chosen.
 	// +optional
 	Assigned string `json:"assigned,omitempty"`
-
-	// Rejected are the pool addresses another host answered for, which this node
-	// does not try again.
-	// +kubebuilder:validation:MaxItems=64
-	// +listType=atomic
-	// +optional
-	Rejected []string `json:"rejected,omitempty"`
 
 	// Address is the address the pod reported.
 	// +optional
 	Address string `json:"address,omitempty"`
 
-	// HostReachable is whether the worker's host network namespace can reach
-	// the address, which a volume attach or an RPC from a host-network pod on
-	// that worker needs. It is unset until the preflight has checked.
+	// HostReachable is whether the initiators on the workers can reach the
+	// address, which a volume attach needs. It is unset until the reachability
+	// gate has run.
 	// +optional
 	HostReachable *bool `json:"hostReachable,omitempty"`
 

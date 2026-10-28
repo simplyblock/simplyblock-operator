@@ -1194,30 +1194,19 @@ spec:
                           Data are the networks the storage nodes serve volumes on. Unset, data is
                           served on the management network.
                         items:
-                          description: StorageNetwork is one network a storage node's
-                            SPDK pod attaches to.
+                          description: |-
+                            StorageNetwork is one network a storage node's SPDK pod attaches to. A
+                            network attached through a definition takes each node's address from its
+                            address pool, or, with no pool, from the address the NIC the definition moves
+                            holds on the worker.
                           properties:
                             addressPool:
                               description: |-
                                 AddressPool is the range the operator takes each node's address on this
-                                network from. It is required for a network attached through a definition,
-                                whose static addressing needs one address per node, and not allowed for a
-                                host interface, which carries the host's own address.
+                                network from. Unset, a network attached through a definition takes the
+                                address its NIC holds on the worker. It is not allowed for a host
+                                interface, which carries the host's own address.
                               properties:
-                                exclude:
-                                  description: |-
-                                    Exclude are addresses the operator never hands out, each an IPv4 address
-                                    or an inclusive range written 10.10.10.1-10.10.10.50. They are for
-                                    addresses the network cannot show: a gateway, a switch, or a machine that
-                                    is powered off, whose address no ARP check would find taken. An entry
-                                    outside the subnet has no effect.
-                                  items:
-                                    maxLength: 31
-                                    pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(-((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]))?$
-                                    type: string
-                                  maxItems: 32
-                                  type: array
-                                  x-kubernetes-list-type: atomic
                                 first:
                                   description: |-
                                     First is the lowest address the operator may hand out. Unset, the range
@@ -1290,8 +1279,6 @@ spec:
                           - name
                           type: object
                           x-kubernetes-validations:
-                          - message: addressPool is required with networkAttachmentRef
-                            rule: '!has(self.attachment.networkAttachmentRef) || has(self.addressPool)'
                           - message: addressPool is not allowed with hostInterface
                             rule: '!has(self.attachment.hostInterface) || !has(self.addressPool)'
                         maxItems: 8
@@ -1307,24 +1294,10 @@ spec:
                           addressPool:
                             description: |-
                               AddressPool is the range the operator takes each node's address on this
-                              network from. It is required for a network attached through a definition,
-                              whose static addressing needs one address per node, and not allowed for a
-                              host interface, which carries the host's own address.
+                              network from. Unset, a network attached through a definition takes the
+                              address its NIC holds on the worker. It is not allowed for a host
+                              interface, which carries the host's own address.
                             properties:
-                              exclude:
-                                description: |-
-                                  Exclude are addresses the operator never hands out, each an IPv4 address
-                                  or an inclusive range written 10.10.10.1-10.10.10.50. They are for
-                                  addresses the network cannot show: a gateway, a switch, or a machine that
-                                  is powered off, whose address no ARP check would find taken. An entry
-                                  outside the subnet has no effect.
-                                items:
-                                  maxLength: 31
-                                  pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(-((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]))?$
-                                  type: string
-                                maxItems: 32
-                                type: array
-                                x-kubernetes-list-type: atomic
                               first:
                                 description: |-
                                   First is the lowest address the operator may hand out. Unset, the range
@@ -1397,8 +1370,6 @@ spec:
                         - name
                         type: object
                         x-kubernetes-validations:
-                        - message: addressPool is required with networkAttachmentRef
-                          rule: '!has(self.attachment.networkAttachmentRef) || has(self.addressPool)'
                         - message: addressPool is not allowed with hostInterface
                           rule: '!has(self.attachment.hostInterface) || !has(self.addressPool)'
                     type: object
@@ -8774,30 +8745,19 @@ spec:
                           Data are the networks the storage nodes serve volumes on. Unset, data is
                           served on the management network.
                         items:
-                          description: StorageNetwork is one network a storage node's
-                            SPDK pod attaches to.
+                          description: |-
+                            StorageNetwork is one network a storage node's SPDK pod attaches to. A
+                            network attached through a definition takes each node's address from its
+                            address pool, or, with no pool, from the address the NIC the definition moves
+                            holds on the worker.
                           properties:
                             addressPool:
                               description: |-
                                 AddressPool is the range the operator takes each node's address on this
-                                network from. It is required for a network attached through a definition,
-                                whose static addressing needs one address per node, and not allowed for a
-                                host interface, which carries the host's own address.
+                                network from. Unset, a network attached through a definition takes the
+                                address its NIC holds on the worker. It is not allowed for a host
+                                interface, which carries the host's own address.
                               properties:
-                                exclude:
-                                  description: |-
-                                    Exclude are addresses the operator never hands out, each an IPv4 address
-                                    or an inclusive range written 10.10.10.1-10.10.10.50. They are for
-                                    addresses the network cannot show: a gateway, a switch, or a machine that
-                                    is powered off, whose address no ARP check would find taken. An entry
-                                    outside the subnet has no effect.
-                                  items:
-                                    maxLength: 31
-                                    pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(-((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]))?$
-                                    type: string
-                                  maxItems: 32
-                                  type: array
-                                  x-kubernetes-list-type: atomic
                                 first:
                                   description: |-
                                     First is the lowest address the operator may hand out. Unset, the range
@@ -8870,8 +8830,6 @@ spec:
                           - name
                           type: object
                           x-kubernetes-validations:
-                          - message: addressPool is required with networkAttachmentRef
-                            rule: '!has(self.attachment.networkAttachmentRef) || has(self.addressPool)'
                           - message: addressPool is not allowed with hostInterface
                             rule: '!has(self.attachment.hostInterface) || !has(self.addressPool)'
                         maxItems: 8
@@ -8887,24 +8845,10 @@ spec:
                           addressPool:
                             description: |-
                               AddressPool is the range the operator takes each node's address on this
-                              network from. It is required for a network attached through a definition,
-                              whose static addressing needs one address per node, and not allowed for a
-                              host interface, which carries the host's own address.
+                              network from. Unset, a network attached through a definition takes the
+                              address its NIC holds on the worker. It is not allowed for a host
+                              interface, which carries the host's own address.
                             properties:
-                              exclude:
-                                description: |-
-                                  Exclude are addresses the operator never hands out, each an IPv4 address
-                                  or an inclusive range written 10.10.10.1-10.10.10.50. They are for
-                                  addresses the network cannot show: a gateway, a switch, or a machine that
-                                  is powered off, whose address no ARP check would find taken. An entry
-                                  outside the subnet has no effect.
-                                items:
-                                  maxLength: 31
-                                  pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(-((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]))?$
-                                  type: string
-                                maxItems: 32
-                                type: array
-                                x-kubernetes-list-type: atomic
                               first:
                                 description: |-
                                   First is the lowest address the operator may hand out. Unset, the range
@@ -8977,8 +8921,6 @@ spec:
                         - name
                         type: object
                         x-kubernetes-validations:
-                        - message: addressPool is required with networkAttachmentRef
-                          rule: '!has(self.attachment.networkAttachmentRef) || has(self.addressPool)'
                         - message: addressPool is not allowed with hostInterface
                           rule: '!has(self.attachment.hostInterface) || !has(self.addressPool)'
                     type: object
@@ -11913,16 +11855,17 @@ spec:
                       type: string
                     assigned:
                       description: |-
-                        Assigned is the address the operator took from the network's pool for this
-                        node, with the prefix length of the pool's subnet. It is chosen once,
-                        before the node is added, and never changes, so the node keeps it across
-                        restarts and reboots. It is empty until the choice is made.
+                        Assigned is the node's address on the network, with its prefix length: the
+                        one the operator took from the network's address pool, or, for a network
+                        with no pool, the one the NIC the definition moves holds on the worker. It
+                        is chosen once, before the node is added, and never changes, so the node
+                        keeps it across restarts and reboots. It is empty until it is chosen.
                       type: string
                     hostReachable:
                       description: |-
-                        HostReachable is whether the worker's host network namespace can reach
-                        the address, which a volume attach or an RPC from a host-network pod on
-                        that worker needs. It is unset until the preflight has checked.
+                        HostReachable is whether the initiators on the workers can reach the
+                        address, which a volume attach needs. It is unset until the reachability
+                        gate has run.
                       type: boolean
                     interface:
                       description: Interface is the interface's name inside the pod.
@@ -11938,15 +11881,6 @@ spec:
                       - Mismatched
                       - Unavailable
                       type: string
-                    rejected:
-                      description: |-
-                        Rejected are the pool addresses another host answered for, which this node
-                        does not try again.
-                      items:
-                        type: string
-                      maxItems: 64
-                      type: array
-                      x-kubernetes-list-type: atomic
                   required:
                   - network
                   - phase
@@ -14639,30 +14573,19 @@ spec:
                               Data are the networks the storage nodes serve volumes on. Unset, data is
                               served on the management network.
                             items:
-                              description: StorageNetwork is one network a storage
-                                node's SPDK pod attaches to.
+                              description: |-
+                                StorageNetwork is one network a storage node's SPDK pod attaches to. A
+                                network attached through a definition takes each node's address from its
+                                address pool, or, with no pool, from the address the NIC the definition moves
+                                holds on the worker.
                               properties:
                                 addressPool:
                                   description: |-
                                     AddressPool is the range the operator takes each node's address on this
-                                    network from. It is required for a network attached through a definition,
-                                    whose static addressing needs one address per node, and not allowed for a
-                                    host interface, which carries the host's own address.
+                                    network from. Unset, a network attached through a definition takes the
+                                    address its NIC holds on the worker. It is not allowed for a host
+                                    interface, which carries the host's own address.
                                   properties:
-                                    exclude:
-                                      description: |-
-                                        Exclude are addresses the operator never hands out, each an IPv4 address
-                                        or an inclusive range written 10.10.10.1-10.10.10.50. They are for
-                                        addresses the network cannot show: a gateway, a switch, or a machine that
-                                        is powered off, whose address no ARP check would find taken. An entry
-                                        outside the subnet has no effect.
-                                      items:
-                                        maxLength: 31
-                                        pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(-((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]))?$
-                                        type: string
-                                      maxItems: 32
-                                      type: array
-                                      x-kubernetes-list-type: atomic
                                     first:
                                       description: |-
                                         First is the lowest address the operator may hand out. Unset, the range
@@ -14736,9 +14659,6 @@ spec:
                               - name
                               type: object
                               x-kubernetes-validations:
-                              - message: addressPool is required with networkAttachmentRef
-                                rule: '!has(self.attachment.networkAttachmentRef)
-                                  || has(self.addressPool)'
                               - message: addressPool is not allowed with hostInterface
                                 rule: '!has(self.attachment.hostInterface) || !has(self.addressPool)'
                             maxItems: 8
@@ -14754,24 +14674,10 @@ spec:
                               addressPool:
                                 description: |-
                                   AddressPool is the range the operator takes each node's address on this
-                                  network from. It is required for a network attached through a definition,
-                                  whose static addressing needs one address per node, and not allowed for a
-                                  host interface, which carries the host's own address.
+                                  network from. Unset, a network attached through a definition takes the
+                                  address its NIC holds on the worker. It is not allowed for a host
+                                  interface, which carries the host's own address.
                                 properties:
-                                  exclude:
-                                    description: |-
-                                      Exclude are addresses the operator never hands out, each an IPv4 address
-                                      or an inclusive range written 10.10.10.1-10.10.10.50. They are for
-                                      addresses the network cannot show: a gateway, a switch, or a machine that
-                                      is powered off, whose address no ARP check would find taken. An entry
-                                      outside the subnet has no effect.
-                                    items:
-                                      maxLength: 31
-                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(-((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]))?$
-                                      type: string
-                                    maxItems: 32
-                                    type: array
-                                    x-kubernetes-list-type: atomic
                                   first:
                                     description: |-
                                       First is the lowest address the operator may hand out. Unset, the range
@@ -14845,9 +14751,6 @@ spec:
                             - name
                             type: object
                             x-kubernetes-validations:
-                            - message: addressPool is required with networkAttachmentRef
-                              rule: '!has(self.attachment.networkAttachmentRef) ||
-                                has(self.addressPool)'
                             - message: addressPool is not allowed with hostInterface
                               rule: '!has(self.attachment.hostInterface) || !has(self.addressPool)'
                         type: object
@@ -16470,7 +16373,6 @@ rules:
   resources:
   - pods
   verbs:
-  - create
   - delete
   - get
   - list

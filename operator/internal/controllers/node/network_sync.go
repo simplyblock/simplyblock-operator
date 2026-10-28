@@ -10,7 +10,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -52,7 +51,10 @@ func (r *StorageNodeReconciler) syncNetwork(
 	}
 
 	previous := node.Status.Network
-	next := networkStatusOf(verdicts, previous)
+	next, err := r.gateReachability(ctx, node, networkStatusOf(verdicts, previous))
+	if err != nil {
+		return err
+	}
 	recordNetworkMetrics(node.Spec.ClusterRef, node.Name, next)
 	if !equalNetworkStatus(previous, next) {
 		if err := r.writeStatus(ctx, node, func(status *simplyblockv1alpha2.StorageNodeStatus) {
@@ -128,7 +130,7 @@ func networkStatusOf(
 	for _, v := range verdicts {
 		next = append(next, simplyblockv1alpha2.NodeNetworkStatus{
 			Network: v.Network, Interface: v.Interface, Address: v.Reported,
-			Assigned: kept[v.Network].Assigned, Rejected: kept[v.Network].Rejected,
+			Assigned:      kept[v.Network].Assigned,
 			HostReachable: kept[v.Network].HostReachable, Phase: v.Phase,
 		})
 	}
@@ -202,7 +204,7 @@ func equalNetworkStatus(a, b []simplyblockv1alpha2.NodeNetworkStatus) bool {
 	for i := range a {
 		if a[i].Network != b[i].Network || a[i].Interface != b[i].Interface ||
 			a[i].Address != b[i].Address || a[i].Assigned != b[i].Assigned ||
-			!slices.Equal(a[i].Rejected, b[i].Rejected) || a[i].Phase != b[i].Phase || !equalBool(a[i].HostReachable, b[i].HostReachable) {
+			a[i].Phase != b[i].Phase || !equalBool(a[i].HostReachable, b[i].HostReachable) {
 			return false
 		}
 	}

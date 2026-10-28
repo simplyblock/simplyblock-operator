@@ -22,9 +22,6 @@ func aNetwork() *simplyblockv1alpha2.StorageNetworkSpec {
 			Attachment: simplyblockv1alpha2.NetworkAttachment{
 				NetworkAttachmentRef: &simplyblockv1alpha2.NetworkDefinitionReference{Name: "fabric-data"},
 			},
-			AddressPool: &simplyblockv1alpha2.NetworkAddressPool{
-				Subnet: "10.10.10.0/24", First: "10.10.10.151", Last: "10.10.10.170",
-			},
 		}},
 	}
 }
@@ -71,8 +68,8 @@ func TestTheDocumentsNetworkReachesTheClusterItCreates(t *testing.T) {
 	if got == nil || len(got.Data) != 1 || got.Data[0].Name != "fabric" {
 		t.Fatalf("cluster network = %+v, want the document's", got)
 	}
-	if got.Data[0].AddressPool == nil || got.Data[0].AddressPool.First != "10.10.10.151" {
-		t.Errorf("the cluster's network lost its address pool: %+v", got.Data[0])
+	if got.Data[0].Attachment.NetworkAttachmentRef == nil || got.Data[0].Attachment.NetworkAttachmentRef.Name != "fabric-data" {
+		t.Errorf("the cluster's network lost its definition reference: %+v", got.Data[0])
 	}
 	if got == config.Spec.Cluster.Network {
 		t.Error("the cluster shares the document's network, so an edit to one would change the other")

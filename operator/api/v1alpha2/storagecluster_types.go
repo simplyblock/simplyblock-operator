@@ -1367,9 +1367,11 @@ type StorageNetworkSpec struct {
 	Data []StorageNetwork `json:"data,omitempty"`
 }
 
-// StorageNetwork is one network a storage node's SPDK pod attaches to.
+// StorageNetwork is one network a storage node's SPDK pod attaches to. A
+// network attached through a definition takes each node's address from its
+// address pool, or, with no pool, from the address the NIC the definition moves
+// holds on the worker.
 //
-// +kubebuilder:validation:XValidation:rule="!has(self.attachment.networkAttachmentRef) || has(self.addressPool)",message="addressPool is required with networkAttachmentRef"
 // +kubebuilder:validation:XValidation:rule="!has(self.attachment.hostInterface) || !has(self.addressPool)",message="addressPool is not allowed with hostInterface"
 type StorageNetwork struct {
 	// Name identifies the network within the cluster, and is the key the nodes'
@@ -1385,18 +1387,16 @@ type StorageNetwork struct {
 	Attachment NetworkAttachment `json:"attachment"`
 
 	// AddressPool is the range the operator takes each node's address on this
-	// network from. It is required for a network attached through a definition,
-	// whose static addressing needs one address per node, and not allowed for a
-	// host interface, which carries the host's own address.
+	// network from. Unset, a network attached through a definition takes the
+	// address its NIC holds on the worker. It is not allowed for a host
+	// interface, which carries the host's own address.
 	// +optional
 	AddressPool *NetworkAddressPool `json:"addressPool,omitempty"`
 }
 
 // NetworkAddressPool is the subnet a network's node addresses are taken from.
-// The operator gives each node of the cluster the first address of the subnet
-// that no other node holds and that no other host answers for, and keeps it for
-// the life of the node. The subnet is the one thing the operator cannot learn:
-// it is the address plan of the fabric. The rest is optional narrowing.
+// The operator gives each node of the namespace the first address of the range
+// that no other node holds, and keeps it for the life of the node.
 //
 // +kubebuilder:validation:XValidation:rule="has(self.first) == has(self.last)",message="first and last are set together"
 // +kubebuilder:validation:XValidation:rule="!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first)) && cidr(self.subnet).containsIP(ip(self.last)))",message="first and last must lie inside subnet"
@@ -1421,18 +1421,6 @@ type NetworkAddressPool struct {
 	// +kubebuilder:validation:Pattern=`^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$`
 	// +optional
 	Last string `json:"last,omitempty"`
-
-	// Exclude are addresses the operator never hands out, each an IPv4 address
-	// or an inclusive range written 10.10.10.1-10.10.10.50. They are for
-	// addresses the network cannot show: a gateway, a switch, or a machine that
-	// is powered off, whose address no ARP check would find taken. An entry
-	// outside the subnet has no effect.
-	// +kubebuilder:validation:MaxItems=32
-	// +kubebuilder:validation:items:MaxLength=31
-	// +kubebuilder:validation:items:Pattern=`^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(-((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]))?$`
-	// +listType=atomic
-	// +optional
-	Exclude []string `json:"exclude,omitempty"`
 }
 
 // NetworkAttachment names the mechanism that connects a pod to a network.
