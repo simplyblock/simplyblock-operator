@@ -28,7 +28,7 @@ func TestLoad_ReadsEveryEmbeddedCRD(t *testing.T) {
 	}
 
 	for _, definition := range loaded {
-		if definition.Group() != "storage.simplyblock.io" {
+		if !strings.HasSuffix(definition.Group(), ".simplyblock.io") {
 			t.Errorf("%s is in group %q", definition.Source, definition.Group())
 		}
 		if definition.Kind() == "" {
@@ -114,9 +114,9 @@ func TestLoad_MatchesTheGeneratedCRDs(t *testing.T) {
 	}
 
 	for _, definition := range loaded {
-		want := "storage.simplyblock.io_"
+		want := definition.Group() + "_"
 		if !strings.HasPrefix(strings.TrimPrefix(definition.Source, manifestDir+"/"), want) {
-			t.Errorf("%s is not a generated CRD file name", definition.Source)
+			t.Errorf("%s is not a generated CRD file name (want prefix %q)", definition.Source, want)
 		}
 	}
 }

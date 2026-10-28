@@ -37,6 +37,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/bucketdelivery/bucketdeliveryrpc"
 	"github.com/simplyblock/atlas/conntrack"
 	"github.com/simplyblock/atlas/conntrack/conntrackrpc"
 	"github.com/simplyblock/atlas/link"
@@ -149,7 +150,7 @@ func Run(conf *config.Config) {
 	if conf.LinkEnabled {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		agent, err := startLink(ctx, conf)
+		agent, err := startLink(ctx, conf, ns)
 		if err != nil {
 			klog.Fatalf("failed to start the operator link: %s", err)
 		}
@@ -193,7 +194,7 @@ func Run(conf *config.Config) {
 // linking it, and is identified by the node it runs on. A controller plugin
 // links as itself and serves nothing: it calls the operator's placement
 // service over the link instead.
-func startLink(ctx context.Context, conf *config.Config) (*link.Agent, error) {
+func startLink(ctx context.Context, conf *config.Config, ns *node.Server) (*link.Agent, error) {
 	cfg := csilink.Config{
 		HubAddress:  conf.LinkHubAddress,
 		CAFile:      conf.LinkCAFile,
@@ -224,14 +225,23 @@ func startLink(ctx context.Context, conf *config.Config) (*link.Agent, error) {
 		if err != nil {
 			return nil, fmt.Errorf("node flows: %w", err)
 		}
+		// DeliverBucket/WithdrawBucket: ns itself satisfies
+		// bucketdeliveryrpc.Deliverer, wrapping its own NodeStageVolume family
+		// in-process (design-bucket-provisioning.md §5.2).
+		bucketDelivery, err := bucketdeliveryrpc.NewServer(ns)
+		if err != nil {
+			return nil, fmt.Errorf("node bucket delivery: %w", err)
+		}
 		// No export service: exports are assembled in the metadata server's
 		// guest, never on a node.
 		cfg.ID = link.NodePeer(conf.NodeID)
 		cfg.Register = func(r grpc.ServiceRegistrar) {
 			srv.Register(r)
 			flows.Register(r)
+			bucketDelivery.Register(r)
 		}
 		cfg.Capabilities = append(storagerpc.Capabilities(), conntrackrpc.Capabilities()...)
+		cfg.Capabilities = append(cfg.Capabilities, bucketdeliveryrpc.Capabilities()...)
 
 	case conf.IsControllerServer:
 		if conf.PodName == "" {

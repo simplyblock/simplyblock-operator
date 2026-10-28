@@ -113,10 +113,14 @@ func TestAliasUsesThePrefixTheKernelTries(t *testing.T) {
 	}
 }
 
-// Every pNFS mount carries vers=4.1: layouts do not exist before it.
-func TestMountOptionsAlwaysCarryV41(t *testing.T) {
-	if !slices.Contains(nfsMountOptions, "vers=4.1") {
-		t.Fatalf("options = %v, want vers=4.1 among them", nfsMountOptions)
+// Every pNFS mount carries vers=4.2: the gateway's posix backend stores
+// object/bucket metadata as user.* extended attributes (meta.XattrMeta), and
+// GETXATTR/SETXATTR/LISTXATTR/REMOVEXATTR do not exist before NFSv4.2
+// (RFC 8276) -- 4.1 only has the pNFS layout operations this mount also
+// needs, which 4.2 carries forward unchanged (it is a strict superset).
+func TestMountOptionsAlwaysCarryV42(t *testing.T) {
+	if !slices.Contains(nfsMountOptions, "vers=4.2") {
+		t.Fatalf("options = %v, want vers=4.2 among them", nfsMountOptions)
 	}
 }
 

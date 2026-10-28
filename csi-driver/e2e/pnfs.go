@@ -58,12 +58,12 @@ var _ = ginkgo.Describe("SPDKCSI-PNFS", func() {
 
 		pnfsVolume(f, ns, pvcName, podName)
 
-		ginkgo.By("verify the mount is NFSv4.1, which is the floor a layout exists at")
+		ginkgo.By("verify the mount is NFSv4.2, which xattr-backed bucket metadata requires")
 		opts, _ := execCommandInPod(f, "grep -m1 ' /spdkvol ' /proc/self/mounts", ns, &label)
 		gomega.Expect(opts).To(gomega.ContainSubstring("nfs4"),
 			"/spdkvol should be an NFSv4 mount, got: %s", opts)
-		gomega.Expect(opts).To(gomega.ContainSubstring("vers=4.1"),
-			"layouts do not exist before NFSv4.1, got: %s", opts)
+		gomega.Expect(opts).To(gomega.ContainSubstring("vers=4.2"),
+			"GETXATTR/SETXATTR do not exist before NFSv4.2, got: %s", opts)
 
 		ginkgo.By("verify the volume is writable and reads back")
 		out, stderr := execCommandInPod(f,

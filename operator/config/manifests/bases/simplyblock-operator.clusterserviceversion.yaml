@@ -655,6 +655,20 @@ spec:
       kind: StorageSiteDeployment
       name: storagesitedeployments.storage.simplyblock.io
       version: v1alpha2
+    - description: ObjectStore is one S3 gateway, comprising the Deployment that
+        serves the buckets delivered to it, its Service, and that Service's serving
+        certificate.
+      displayName: Object Store
+      kind: ObjectStore
+      name: objectstores.storage.simplyblock.io
+      version: v1alpha2
+    - description: S3Bucket is one bucket on an ObjectStore's gateway, backed by a
+        volume the CSI driver provisions and an NFSExport that serves it, delivered
+        as a mount to every node the gateway runs on.
+      displayName: S3 Bucket
+      kind: S3Bucket
+      name: s3buckets.storage.simplyblock.io
+      version: v1alpha2
   description: The Simplyblock Operator helps with installation, operation, and management
     of Simplyblock Control Planes, Storage Planes, and the CSI Driver.
   displayName: Simplyblock Operator
