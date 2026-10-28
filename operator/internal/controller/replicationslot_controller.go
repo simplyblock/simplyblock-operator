@@ -66,6 +66,16 @@ const (
 	// cutover-proceed there rather than on the source cluster.
 	annotFailbackTarget = "replication.simplyblock.io/failback-target"
 
+	// annotPreconnectKind marks which path created a preconnect Job. Both paths
+	// share one Job name per volume, so a late Job left over from an earlier
+	// cutover_done can still exist when a new cutover_pending arrives; its
+	// success says nothing about this cutover's target paths and must not
+	// release it (2026-10-28 back-and-forth bed: the return trip proceeded on
+	// such a Job, the client never got its target paths, fio-1/fio-6 EIO).
+	annotPreconnectKind  = "replication.simplyblock.io/preconnect-kind"
+	preconnectKindCutover = "cutover"
+	preconnectKindLate    = "late"
+
 	backendStateCutoverPending = "cutover_pending"
 	backendStateCutoverDone    = "cutover_done"
 	backendStateFailedOver     = "failed_over"
@@ -332,7 +342,14 @@ func (r *ReplicationSlotReconciler) reconcileReplicating(
 			// Attempt a late preconnect so the CSI node gets target NVMe paths even
 			// after the ANA flip — this limits IO downtime to ctrl_loss_tmo instead
 			// of indefinite path loss.
-			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, volumeID, clusterID, poolID, volumeID)
+			//
+			// Only for this volume's own cutover: a record with is_source=false is
+			// the one that moved IO here (the previous leg of a back-and-forth
+			// migration), the volume is already live, and there is nothing to
+			// connect.
+			if status.IsSource {
+				r.reconcilePreconnect(ctx, slot, apiClient, clusterID, volumeID, clusterID, poolID, volumeID)
+			}
 		}
 	}
 
@@ -597,6 +614,16 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 	var existingJob batchv1.Job
 	switch getErr := r.Get(ctx, types.NamespacedName{Namespace: slot.Namespace, Name: jobName}, &existingJob); {
 	case getErr == nil:
+		if existingJob.Annotations[annotPreconnectKind] != preconnectKindCutover {
+			// Not created for this cutover (a late Job from an earlier
+			// cutover_done): it connected other paths. Drop it and create our own.
+			log.Info("Discarding preconnect job not created for this cutover", "job", jobName,
+				"kind", existingJob.Annotations[annotPreconnectKind])
+			if delErr := r.Delete(ctx, &existingJob, client.PropagationPolicy(metav1.DeletePropagationBackground)); delErr != nil && !apierrors.IsNotFound(delErr) {
+				log.Error(delErr, "Failed to delete stale preconnect job", "job", jobName)
+			}
+			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+		}
 		return r.handleExistingPreconnectJob(ctx, slot, apiClient, &existingJob, proceedClusterID, proceedPoolID, proceedVolumeID)
 	case !apierrors.IsNotFound(getErr):
 		return ctrl.Result{}, fmt.Errorf("get preconnect job %q: %w", jobName, getErr)
@@ -656,6 +683,7 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		TTL:          150,
 		Deadline:     120,
 	})
+	job.Annotations = map[string]string{annotPreconnectKind: preconnectKindCutover}
 	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 		return ctrl.Result{}, fmt.Errorf("create preconnect job %q: %w", jobName, err)
 	}
@@ -787,6 +815,7 @@ func (r *ReplicationSlotReconciler) reconcilePreconnect(
 		TTL:          150,
 		Deadline:     120,
 	})
+	job.Annotations = map[string]string{annotPreconnectKind: preconnectKindLate}
 	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 		log.Error(err, "Late preconnect: job creation failed", "slot", slot.Name)
 		return

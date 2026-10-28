@@ -736,7 +736,7 @@ func TestSlot_CutoverPending_JobComplete_Signals(t *testing.T) {
 	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending))
 	jobName := replSlotPreconnectJobName("vol-id")
 	existingJob := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "default", Annotations: cutoverJobAnnotations()},
 		Status: batchv1.JobStatus{
 			Conditions: []batchv1.JobCondition{
 				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
@@ -779,6 +779,111 @@ func TestSlot_CutoverPending_JobComplete_Signals(t *testing.T) {
 	}
 }
 
+// cutoverJobAnnotations marks a test Job as created by the cutover_pending path.
+func cutoverJobAnnotations() map[string]string {
+	return map[string]string{annotPreconnectKind: preconnectKindCutover}
+}
+
+// ---------- reconcileCutoverPending: a late Job left from an earlier cutover is not trusted ----------
+
+// The return leg of a back-and-forth migration: a completed late preconnect Job
+// from the previous leg holds this volume's Job name when cutover_pending
+// arrives. It connected other paths; proceeding on it cut the consumer off at
+// the ANA flip (2026-10-28 bed, fio-1/fio-6 EIO). The Job is replaced instead.
+func TestSlot_CutoverPending_LateJobFromEarlierCutover_NotTrusted(t *testing.T) {
+	pol := readyReplicationPolicy()
+	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending))
+	jobName := replSlotPreconnectJobName("vol-id")
+	lateJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "default",
+			Annotations: map[string]string{annotPreconnectKind: preconnectKindLate}},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{
+				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+
+	var proceedCalled bool
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		path := req.URL.Path
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
+			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{State: backendStateCutoverPending, IsSource: true})
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
+			_ = json.NewEncoder(w).Encode([]webapi.LvolConnectResp{{TargetType: "tcp", IP: "1.2.3.4", Port: 4420, Nqn: "nqn.test"}})
+		case req.Method == http.MethodPost && strings.HasSuffix(path, "/cutover-proceed"):
+			proceedCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	r, cl := newSlotReconciler(t, slot, pol, lateJob)
+
+	if _, err := r.Reconcile(context.Background(), slotRequest("slot1")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if proceedCalled {
+		t.Error("POST cutover-proceed must not be sent on a late Job from an earlier cutover")
+	}
+	if got := getSlot(t, cl); got.Annotations[annotCutoverProceedSignaled] != "" {
+		t.Errorf("annotation %q set on a stale Job", annotCutoverProceedSignaled)
+	}
+	var job batchv1.Job
+	err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: jobName}, &job)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("stale late Job should be deleted so this cutover gets its own; Get err = %v", err)
+	}
+}
+
+// ---------- reconcileReplicating: the previous leg's cutover_done starts no late preconnect ----------
+
+// On the return leg the volume was the previous leg's target: its backend
+// record is cutover_done with is_source=false, the volume is live here, and a
+// late preconnect would only park a Job under its name (see the test above).
+func TestSlot_ReconcileReplicating_PreviousLegCutoverDone_NoLatePreconnect(t *testing.T) {
+	t.Setenv(ownimage.Env, "quay.io/simplyblock-io/simplyblock-operator:v0.0.0-test")
+	pol := readyReplicationPolicy()
+	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateReplicating))
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-pod", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			NodeName: "worker-1",
+			Volumes: []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "pvc1"},
+			}}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		path := req.URL.Path
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
+			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{State: backendStateCutoverDone, IsSource: false})
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
+			_ = json.NewEncoder(w).Encode([]webapi.LvolConnectResp{{TargetType: "tcp", IP: "1.2.3.4", Port: 4420, Nqn: "nqn.test"}})
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	r, cl := newSlotReconciler(t, slot, pol, pod)
+
+	if _, err := r.Reconcile(context.Background(), slotRequest("slot1")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var job batchv1.Job
+	err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: replSlotPreconnectJobName("vol-id")}, &job)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("no preconnect Job expected for the previous leg's cutover_done; Get err = %v", err)
+	}
+}
+
 // ---------- reconcileCutoverPending: Job failed → signals proceed anyway ----------
 
 func TestSlot_CutoverPending_JobFailed_RetriesWithoutSignal(t *testing.T) {
@@ -786,7 +891,7 @@ func TestSlot_CutoverPending_JobFailed_RetriesWithoutSignal(t *testing.T) {
 	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending))
 	jobName := replSlotPreconnectJobName("vol-id")
 	existingJob := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "default", Annotations: cutoverJobAnnotations()},
 		Status: batchv1.JobStatus{
 			Conditions: []batchv1.JobCondition{
 				{Type: batchv1.JobFailed, Status: corev1.ConditionTrue},
@@ -845,7 +950,7 @@ func TestSlot_CutoverPending_JobStillRunning_Waits(t *testing.T) {
 	jobName := replSlotPreconnectJobName("vol-id")
 	// Job exists but has no terminal conditions — still running.
 	existingJob := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "default", Annotations: cutoverJobAnnotations()},
 		Status:     batchv1.JobStatus{},
 	}
 
@@ -890,7 +995,7 @@ func TestSlot_CutoverPending_ProceedRetried_WhenJobTerminates(t *testing.T) {
 	jobName := replSlotPreconnectJobName("vol-id")
 	// A completed job — simulates a new job created after the first proceed failed.
 	completedJob := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "default", Annotations: cutoverJobAnnotations()},
 		Status: batchv1.JobStatus{
 			Conditions: []batchv1.JobCondition{
 				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
