@@ -112,7 +112,7 @@ func (r *StorageNodeReconciler) networkGateHolds(
 	if r.HostCheck == nil {
 		return false
 	}
-	for _, declared := range definitionNetworks(networkOf(cluster)) {
+	for _, declared := range pooledNetworks(networkOf(cluster)) {
 		passed := false
 		for _, n := range node.Status.Network {
 			if n.Network == declared.Name {

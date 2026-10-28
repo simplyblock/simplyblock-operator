@@ -24,7 +24,7 @@ import (
 // declaresDefinitions reports whether the declaration attaches any network
 // through a definition, which is what the checks have something to look at.
 func declaresDefinitions(network *simplyblockv1alpha2.StorageNetworkSpec) bool {
-	return len(definitionNetworks(network)) > 0
+	return len(pooledNetworks(network)) > 0
 }
 
 // checkNetwork is the gate. A cluster that attaches no network through a
@@ -44,7 +44,7 @@ func (r *StorageNodeReconciler) checkNetwork(
 	if err != nil {
 		return stepCheckingNetwork, false, err
 	}
-	if err := r.adoptAddresses(ctx, node, cluster, configs); err != nil {
+	if err := r.assignAddresses(ctx, node, cluster, configs); err != nil {
 		return stepCheckingNetwork, false, err
 	}
 	if _, err := BuildAttachments(node.Namespace, network, assignedAddresses(node.Status.Network)); err != nil {
@@ -70,7 +70,7 @@ func (r *StorageNodeReconciler) requireDefinitions(
 	cluster *simplyblockv1alpha2.StorageCluster, network *simplyblockv1alpha2.StorageNetworkSpec,
 ) (map[string]inventory.NetworkAttachmentConfig, error) {
 	configs := map[string]inventory.NetworkAttachmentConfig{}
-	for _, n := range definitionNetworks(network) {
+	for _, n := range pooledNetworks(network) {
 		ref := n.Attachment.NetworkAttachmentRef
 		definition, err := multus.GetDefinition(ctx, r.Client, client.ObjectKey{Namespace: node.Namespace, Name: ref.Name})
 		switch {

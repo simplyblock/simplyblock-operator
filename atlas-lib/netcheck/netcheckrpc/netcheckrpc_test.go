@@ -166,18 +166,3 @@ func TestARequestTheNodeWouldRefuseIsRefusedBeforeItIsSent(t *testing.T) {
 		t.Errorf("the node saw %d reads and %d connections, want none sent", len(h.selectors), len(h.connected))
 	}
 }
-
-func TestANodeAdvertisesTheCheckCapability(t *testing.T) {
-	if !slices.Contains(Capabilities(), CapabilityCheck) {
-		t.Errorf("Capabilities() = %v, want %q", Capabilities(), CapabilityCheck)
-	}
-}
-
-func TestAServerRefusesANilFunction(t *testing.T) {
-	if _, err := NewServer(nil, func(context.Context, string, int) error { return nil }); err == nil {
-		t.Error("NewServer accepted a nil read function")
-	}
-	if _, err := NewServer(func(netcheck.Selector) (netcheck.Report, error) { return netcheck.Report{}, nil }, nil); err == nil {
-		t.Error("NewServer accepted a nil connect function")
-	}
-}

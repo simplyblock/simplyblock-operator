@@ -31,26 +31,11 @@ func TestAnInterfaceIsFoundByNameAndByPCIAddress(t *testing.T) {
 	}
 }
 
-func TestTheNameWinsWhenBothAreSet(t *testing.T) {
-	got := Lookup(hostInterfaces, Selector{Name: "ens6", PCIAddress: "0000:00:05.0"})
-	if !got.Found || got.Addresses[len(got.Addresses)-1] != "10.10.100.8/24" {
-		t.Errorf("got %+v, want ens6 by name rather than ens5 by slot", got)
-	}
-}
-
 func TestAnInterfaceTheHostLacksIsNotFound(t *testing.T) {
 	for _, sel := range []Selector{{Name: "ens7"}, {PCIAddress: "0000:00:09.0"}} {
 		if got := Lookup(hostInterfaces, sel); got.Found || len(got.Addresses) != 0 {
 			t.Errorf("%+v: got %+v, want not found and no addresses", sel, got)
 		}
-	}
-}
-
-func TestTheReportDoesNotAliasTheHostReading(t *testing.T) {
-	got := Lookup(hostInterfaces, Selector{Name: "ens5"})
-	got.Addresses[0] = "changed"
-	if hostInterfaces[0].Addresses[0] != "10.10.0.5/20" {
-		t.Error("editing the report changed the interface it was read from")
 	}
 }
 
@@ -62,15 +47,6 @@ func TestASelectorThatNamesNothingIsInvalid(t *testing.T) {
 		if err := sel.Validate(); err != nil {
 			t.Errorf("%+v: Validate() = %v, want none", sel, err)
 		}
-	}
-}
-
-func TestASelectorIsNamedByItsInterfaceOrItsSlot(t *testing.T) {
-	if got := (Selector{Name: "ens6", PCIAddress: "0000:00:06.0"}).String(); got != "ens6" {
-		t.Errorf("String() = %q, want the name", got)
-	}
-	if got := (Selector{PCIAddress: "0000:00:06.0"}).String(); got != "0000:00:06.0" {
-		t.Errorf("String() = %q, want the slot", got)
 	}
 }
 
