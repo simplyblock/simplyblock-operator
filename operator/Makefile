@@ -112,9 +112,14 @@ openapi: openapi-gen ## Generate the OpenAPI v3 definitions the aggregated metri
 	for version in $(METRICS_API_VERSIONS); do \
 		"$(OPENAPI_GEN)" \
 			--output-file zz_generated.openapi.go \
+			--output-model-name-file zz_generated.model_name.go \
 			--output-dir ./api/metrics/$$version \
 			--output-pkg github.com/simplyblock/simplyblock-operator/api/metrics/$$version \
 			--go-header-file hack/boilerplate.go.txt \
+			--readonly-pkg k8s.io/apimachinery/pkg/apis/meta/v1 \
+			--readonly-pkg k8s.io/apimachinery/pkg/api/resource \
+			--readonly-pkg k8s.io/apimachinery/pkg/runtime \
+			--readonly-pkg k8s.io/apimachinery/pkg/version \
 			k8s.io/apimachinery/pkg/apis/meta/v1 \
 			k8s.io/apimachinery/pkg/api/resource \
 			k8s.io/apimachinery/pkg/runtime \
