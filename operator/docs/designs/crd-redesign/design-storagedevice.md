@@ -110,8 +110,10 @@ with it. That is the blast-radius argument
   reports the devices a node ended up with, and does not choose them.
 - **Not partitioning.** How a device is carved into a journal slice and a storage
   slice, and what `enableJournalDevice` does, belong to the node's configuration.
-- **Not SMART or firmware.** Device health beyond what the control plane reports
-  is the host's business and a node-exporter's, not this operator's.
+- **Not firmware.** Firmware levels and updates are the host's business. Device
+  health (the SMART log and performance against the fleet) was a non-goal here
+  and is now [`design-device-health.md`](../design-device-health.md), which adds
+  `status.health` and the `CheckHealth` action.
 - **Not the API group's conventions.** The entity and action split, the enum
   casing, the lock, and the observed generation belong to
   [`design-crd-model.md`](design-crd-model.md) and are cited rather than restated.

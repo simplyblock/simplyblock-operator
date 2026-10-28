@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/link"
@@ -250,6 +251,19 @@ func main() {
 	flag.StringVar(&latencyPercentile, "latency-percentile", "p50",
 		"fio write-latency percentile driving the volume-rebalancing deviation signal: "+
 			"\"p50\" (median, stable) or \"p99\" (tail, noisy).")
+	var enableDeviceHealth bool
+	var deviceHealthInterval, deviceHealthWindow, deviceSMARTInterval time.Duration
+	flag.BoolVar(&enableDeviceHealth, "enable-device-health", true,
+		"Assess every storage device's performance against its fleet and read its SMART health log, "+
+			"publish the verdicts on the StorageDevice, and report them to the control plane's alerts "+
+			"endpoint as device_slow and device_unhealthy.")
+	flag.DurationVar(&deviceHealthInterval, "device-health-interval", nodecontroller.DefaultDeviceHealthInterval,
+		"How often the storage devices are assessed against their fleet.")
+	flag.DurationVar(&deviceHealthWindow, "device-health-window", nodecontroller.DefaultDeviceHealthWindow,
+		"The window each performance assessment averages device IO over.")
+	flag.DurationVar(&deviceSMARTInterval, "device-smart-interval", nodecontroller.DefaultSMARTInterval,
+		"How often each storage device's SMART health log is read. A StorageDeviceOps with action "+
+			"CheckHealth reads one immediately.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -939,12 +953,41 @@ func main() {
 	// whole of why the kind exists (design-storagedevice.md §6). Its three other
 	// actions wait on control-plane verbs the v2 API does not offer, and the
 	// TODO beside their constants in storagedeviceops_types.go is the list.
-	if err := (&nodecontroller.StorageDeviceOpsReconciler{
+	// Device health: each device measured against the others of its cluster
+	// and its health log read on a schedule, both published on the device and
+	// reported to the control plane, whose alerts endpoint raises them. The
+	// CheckHealth operation reads a log through the same monitor, so a read on
+	// demand is judged and reported exactly as a scheduled one.
+	var deviceHealth *nodecontroller.StorageDeviceHealthMonitor
+	if enableDeviceHealth {
+		deviceHealth = &nodecontroller.StorageDeviceHealthMonitor{
+			Client:        mgr.GetClient(),
+			Recorder:      mgr.GetEventRecorder("storagedevice-health"),
+			API:           backupAPI,
+			Interval:      deviceHealthInterval,
+			Window:        deviceHealthWindow,
+			SMARTInterval: deviceSMARTInterval,
+		}
+		if provider, err := atlasprom.New(prometheusURL); err != nil {
+			setupLog.Error(err, "storage-device performance will not be assessed", "prometheusURL", prometheusURL)
+		} else {
+			deviceHealth.IO = provider
+		}
+		if err := mgr.Add(deviceHealth); err != nil {
+			setupLog.Error(err, "unable to add the storage device health monitor")
+			os.Exit(1)
+		}
+	}
+	deviceOps := &nodecontroller.StorageDeviceOpsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagedeviceops-controller"),
 		API:      backupAPI,
-	}).SetupWithManager(ctrlMgr); err != nil {
+	}
+	if deviceHealth != nil {
+		deviceOps.Health = deviceHealth
+	}
+	if err := deviceOps.SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageDeviceOps")
 		os.Exit(1)
 	}

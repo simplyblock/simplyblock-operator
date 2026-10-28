@@ -465,6 +465,10 @@ func (r *StorageDeviceReconciler) upsert(
 		// field over is what stops an unrelated event releasing a lock its
 		// holder still believes it has.
 		status.ActiveOpsRef = sd.Status.ActiveOpsRef
+		// The health block is the health monitor's for the same reason: the
+		// device stream says nothing about it, so rebuilding it here would clear
+		// a slow or failing verdict on every unrelated event.
+		status.Health = sd.Status.Health
 		if !reflect.DeepEqual(sd.Status, status) {
 			sd.Status = status
 			if err := r.Status().Update(ctx, &sd); err != nil {
