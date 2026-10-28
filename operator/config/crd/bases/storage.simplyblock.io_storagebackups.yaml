@@ -442,6 +442,16 @@ spec:
                       type: string
                     snapshotName:
                       type: string
+                    volumeMode:
+                      description: |-
+                        VolumeMode is how the source volume was presented to its workload: as a
+                        filesystem or as a raw block device. A restore needs it because a claim
+                        restored as Filesystem from a Block source is staged as a blank device
+                        and formatted over the data.
+                      enum:
+                        - Filesystem
+                        - Block
+                      type: string
                   type: object
               type: object
           required:

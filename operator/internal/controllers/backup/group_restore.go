@@ -356,6 +356,7 @@ func (r *StorageBackupOpsReconciler) ensureMemberVolume(
 			StorageClassName:              storageClass,
 			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: restoredSize(backup)},
 			AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			VolumeMode:                    restoredVolumeMode(ops, backup),
 			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
 			ClaimRef: &corev1.ObjectReference{
 				APIVersion: "v1",
@@ -414,6 +415,7 @@ func (r *StorageBackupOpsReconciler) ensureMemberClaim(
 			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			StorageClassName: ptr.To(storageClass),
 			VolumeName:       restoredMemberVolumeName(ops, member.LvolID),
+			VolumeMode:       restoredVolumeMode(ops, backup),
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{corev1.ResourceStorage: restoredSize(backup)},
 			},

@@ -18,6 +18,7 @@
 package v1alpha2
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -141,6 +142,16 @@ type RestoreSpec struct {
 	// +k8s:immutable
 	// +optional
 	ClaimAnnotations map[string]string `json:"claimAnnotations,omitempty"`
+
+	// VolumeMode is the volume mode of the restored claim and its volume. It
+	// defaults to the mode recorded in the backup's status.source, and has to be
+	// set for a backup that recorded none, such as one whose source volume was
+	// gone when the backup was discovered. A Block source restored as Filesystem
+	// is formatted over on first mount.
+	// +kubebuilder:validation:Enum=Filesystem;Block
+	// +k8s:immutable
+	// +optional
+	VolumeMode corev1.PersistentVolumeMode `json:"volumeMode,omitempty"`
 }
 
 // StorageBackupOpsSpec is one operation to perform against a backup.

@@ -22,6 +22,7 @@ package v1alpha2
 import (
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/simplyblock/atlas/kube"
@@ -138,6 +139,14 @@ type BackupSource struct {
 	// needs in order to produce a mountable claim.
 	// +optional
 	FSType string `json:"fsType,omitempty"`
+
+	// VolumeMode is how the source volume was presented to its workload: as a
+	// filesystem or as a raw block device. A restore needs it because a claim
+	// restored as Filesystem from a Block source is staged as a blank device
+	// and formatted over the data.
+	// +kubebuilder:validation:Enum=Filesystem;Block
+	// +optional
+	VolumeMode corev1.PersistentVolumeMode `json:"volumeMode,omitempty"`
 
 	// SnapshotID and SnapshotName identify the snapshot the backup was taken
 	// from.
