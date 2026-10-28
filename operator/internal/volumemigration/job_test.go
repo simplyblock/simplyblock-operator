@@ -250,3 +250,16 @@ func TestJobPlacementOfAClusterThatTakesNoTaint(t *testing.T) {
 		t.Errorf("the placement tolerates %+v with nothing stated", placement.Tolerations)
 	}
 }
+
+func TestBuildJobRunsTheRebalancerAsRoot(t *testing.T) {
+	job := BuildJob(JobParams{Name: "j", Namespace: testNamespace, Hostname: "worker-3"})
+	sc := job.Spec.Template.Spec.Containers[0].SecurityContext
+	if sc == nil || sc.Privileged == nil || !*sc.Privileged {
+		t.Fatalf("the container must be privileged: %+v", sc)
+	}
+	// The container calls nvme-cli directly as root, as the CSI node plugin does; the
+	// sudo hop a non-root uid needed failed PAM inside a privileged container on GKE.
+	if sc.RunAsUser == nil || *sc.RunAsUser != 0 || sc.RunAsGroup == nil || *sc.RunAsGroup != 0 {
+		t.Fatalf("the container must run as root (uid 0, gid 0): user=%v group=%v", sc.RunAsUser, sc.RunAsGroup)
+	}
+}

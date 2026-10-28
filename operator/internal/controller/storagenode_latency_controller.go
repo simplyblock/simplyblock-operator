@@ -328,7 +328,6 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 	conn benchmarkConnInfo,
 	image string,
 ) error {
-	privileged := true
 	ttl := baselineJobTTLSeconds
 	backoffLimit := int32(2)
 	hostDevPath := "/dev"
@@ -386,7 +385,7 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 								"--termination-log=/tmp/termination-log",
 							},
 							TerminationMessagePath: "/tmp/termination-log",
-							SecurityContext:        &corev1.SecurityContext{Privileged: &privileged},
+							SecurityContext:        volumemigration.PrivilegedAsRoot(),
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "host-dev", MountPath: "/dev"},
 							},

@@ -57,20 +57,17 @@ RUN dnf update -y --nogpgcheck && \
     dnf install -y --nodocs \
         fio \
         nvme-cli \
-        sudo \
     && dnf remove -y python3-urllib3 python3-requests python3-idna --nogpgcheck \
     && dnf clean all
 
 COPY --from=builder /workspace/simplyblock-rebalancer /usr/local/bin/simplyblock-rebalancer
 
-# Run as non-root (uid 65532, gid 0) to satisfy OpenShift SCC and Red Hat
-# certification requirements. sudo grants nvme-cli and fio the kernel-level
-# access they require (NVMe-fabrics, raw block devices).
+# The image defaults to a non-root user (uid 65532) for OpenShift SCC and Red
+# Hat certification. The operator runs every container of this image as root:
+# they are privileged (NVMe-fabrics, raw block devices) and reach nvme-cli and
+# fio directly, as the CSI node plugin does, with no sudo in between.
 RUN groupadd --gid 65532 nonroot \
-    && useradd --uid 65532 --gid 65532 --no-create-home --shell /sbin/nologin nonroot \
-    && echo "ALL ALL=(root) NOPASSWD: /usr/sbin/nvme, /usr/bin/fio" \
-        > /etc/sudoers.d/simplyblock-rebalancer \
-    && chmod 0440 /etc/sudoers.d/simplyblock-rebalancer
+    && useradd --uid 65532 --gid 65532 --no-create-home --shell /sbin/nologin nonroot
 
 USER 65532:65532
 
