@@ -257,9 +257,8 @@ func TestBuildJobRunsTheRebalancerAsRoot(t *testing.T) {
 	if sc == nil || sc.Privileged == nil || !*sc.Privileged {
 		t.Fatalf("the container must be privileged: %+v", sc)
 	}
-	// The image's uid 65532 reaches nvme-cli through sudo, which fails PAM account
-	// management inside a privileged container on GKE's Ubuntu nodes; root needs no
-	// such step and a privileged container gains nothing from a non-root uid.
+	// The container calls nvme-cli directly as root, as the CSI node plugin does; the
+	// sudo hop a non-root uid needed failed PAM inside a privileged container on GKE.
 	if sc.RunAsUser == nil || *sc.RunAsUser != 0 || sc.RunAsGroup == nil || *sc.RunAsGroup != 0 {
 		t.Fatalf("the container must run as root (uid 0, gid 0): user=%v group=%v", sc.RunAsUser, sc.RunAsGroup)
 	}

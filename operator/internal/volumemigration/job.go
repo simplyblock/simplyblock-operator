@@ -241,13 +241,12 @@ func JobImage(ctx context.Context, c client.Client, namespace, clusterUUID strin
 
 // PrivilegedAsRoot is the security context of every container that runs the
 // simplyblock-rebalancer image against the host's kernel: the migration path
-// Jobs, the injected sidecar and the latency baseline Job. The image runs as
-// uid 65532 and reaches nvme-cli and fio through sudo; in a privileged
-// container on GKE's Ubuntu nodes (containerd 2.2) that sudo fails PAM account
-// management ("Authentication service cannot retrieve authentication info")
-// and no path can ever be established, while the same image as a plain pod,
-// or as root, works (2026-10-28). A privileged container gains nothing from
-// a non-root uid, so these run as root and sudo degenerates to a no-op.
+// Jobs, the injected sidecar and the latency baseline Job. They are privileged
+// (NVMe-fabrics, raw block devices) and run as root, calling nvme-cli and fio
+// directly as the CSI node plugin does. The image's default uid 65532 is for
+// certification only: a privileged container gains nothing from a non-root
+// uid, and the sudo hop it used to need failed PAM account management inside
+// a privileged container on GKE's Ubuntu nodes (containerd 2.2, 2026-10-28).
 func PrivilegedAsRoot() *corev1.SecurityContext {
 	privileged, root := true, int64(0)
 	return &corev1.SecurityContext{Privileged: &privileged, RunAsUser: &root, RunAsGroup: &root}
