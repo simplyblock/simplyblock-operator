@@ -168,3 +168,29 @@ func clusterDeclaring(network *simplyblockv1alpha2.StorageNetworkSpec) *simplybl
 		StorageNodes: &simplyblockv1alpha2.StorageNodesSpec{Network: network},
 	}}
 }
+
+// A definition whose device a device plugin hands out (an SR-IOV VF pool) names
+// the plugin's resource in the k8s.v1.cni.cncf.io/resourceName annotation. The
+// add carries it with the network, so the SPDK pod requests one of it: without
+// the request the plugin allocates no device and Multus has none to attach.
+func TestTheAddCarriesTheDeviceResourceOfTheDefinition(t *testing.T) {
+	definition := aDefinition()
+	definition.SetAnnotations(map[string]string{
+		"k8s.v1.cni.cncf.io/resourceName": "intel.com/sriov_storage",
+	})
+	r, _ := onANetwork(t, aDataNetwork(), definition)
+	api := r.API.(*scriptedControlPlane)
+	node, cluster := nodeAndClusterOf(t, r)
+
+	if err := r.postNode(context.Background(), node, cluster); err != nil {
+		t.Fatalf("postNode: %v", err)
+	}
+
+	want := []utils.NodeNetworkParams{{
+		Name: nodeAddDefinition, Namespace: opsNamespace, Interface: "data0", IPs: []string{"10.10.10.101/24"},
+		Resource: "intel.com/sriov_storage",
+	}}
+	if len(api.adds) != 1 || !reflect.DeepEqual(api.adds[0].Networks, want) {
+		t.Fatalf("add carried %+v, want networks %+v", api.adds, want)
+	}
+}

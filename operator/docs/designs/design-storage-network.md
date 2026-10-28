@@ -62,7 +62,7 @@ The management API pods also run on the host network, because they dial the node
 
 ### Non-Goals
 
-- **Other plugins.** `bridge` and SR-IOV are not qualified. The operator does not inspect the plugin, so a definition of another type attaches only if it takes its address from the `ips` of the network selection element.
+- **Other plugins.** `bridge` is not qualified. The operator does not inspect the plugin, so a definition of another type attaches only if it takes its address from the `ips` of the network selection element. Devices a device plugin hands out (an SR-IOV VF pool) are covered in §5.3.
 - **Replacing the primary CNI.** The pod network and Service routing stay with the cluster's CNI. Interfaces are added beside the default one.
 - **Creating the `NetworkAttachmentDefinition`, the routes, or the CNI plugins.** The administrator owns them (§4.2). Multus and the plugins are a prerequisite (P0-3).
 - **RDMA on an attached network.** An RDMA fabric states its data networks as host interfaces (§4.4).
@@ -269,6 +269,17 @@ A definition that serves a storage node meets these requirements, and the operat
 - **Two interfaces of a pod do not share a subnet,** because that causes ARP flux and reverse-path filtering drops. A definition that must share one adds a `tuning` plugin to set `arp_ignore` and `arp_announce`.
 - **One NIC per pod for `host-device`.** The plugin moves the whole interface, so a worker that runs several SPDK pods needs a NIC and a definition for each. `macvlan` and `ipvlan` leave the parent on the host, so several pods share it, and a pool gives each its own address.
 - **The `device` or `master` is one name for the whole cluster.** A fleet with different NIC names needs a definition per name, or a PCI address when the slots agree (Q3).
+- **A device a device plugin hands out.** A definition annotated `k8s.v1.cni.cncf.io/resourceName: <vendor>/<pool>` takes its device from a device plugin at attach time: the SR-IOV Network Device Plugin's VF pools, with the `sriov` CNI, or with `host-device` and the `deviceID` capability, which takes the PCI address Multus passes in. The operator reads the annotation and sends the resource with the network to node-add, as the `resource` field of its element, and the SPDK container requests one of it in both requests and limits, which keeps the pod Guaranteed. Without the request the plugin allocates nothing and Multus has no device to attach. The definition names no device, so the node's address comes from an `addressPool`: there is no NIC to adopt an address from before the device is allocated, and the node is held until a pool is declared.
+
+```json
+{
+  "cniVersion": "0.3.1",
+  "name": "storage-vf",
+  "type": "sriov",
+  "capabilities": { "ips": true },
+  "ipam": { "type": "static" }
+}
+```
 
 ### 5.4 Verification in two stages
 

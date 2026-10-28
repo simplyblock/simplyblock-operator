@@ -78,7 +78,8 @@ func (r *StorageNodeReconciler) readNIC(
 	selector := selectorOf(config)
 	if selector.Validate() != nil {
 		return "", r.heldFor(cluster, NetworkAttachmentFailed,
-			"network %q: its definition names no device or PCI address, so the NIC whose address the node takes cannot be found", network)
+			"network %q: its definition names no device or PCI address, so the NIC whose address the node takes cannot be found; "+
+				"a definition whose device a device plugin hands out (an SR-IOV VF pool) names none and needs an addressPool", network)
 	}
 	if r.HostCheck == nil {
 		return "", r.heldFor(cluster, NetworkHostCheckUnavailable,

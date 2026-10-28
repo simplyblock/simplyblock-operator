@@ -6,9 +6,15 @@
 package node
 
 import (
+	"context"
 	"fmt"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/simplyblock/atlas/inventory"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/multus"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -16,7 +22,7 @@ import (
 // cluster with no network. A missing address is an error, because leaving the
 // network out would start the SPDK pod on the host network.
 func (r *StorageNodeReconciler) networkParams(
-	node *simplyblockv1alpha2.StorageNode, cluster *simplyblockv1alpha2.StorageCluster,
+	ctx context.Context, node *simplyblockv1alpha2.StorageNode, cluster *simplyblockv1alpha2.StorageCluster,
 ) ([]utils.NodeNetworkParams, error) {
 	network := networkOf(cluster)
 	attachments, err := BuildAttachments(node.Namespace, network, assignedAddresses(node.Status.Network))
@@ -29,8 +35,12 @@ func (r *StorageNodeReconciler) networkParams(
 
 	params := make([]utils.NodeNetworkParams, 0, len(attachments))
 	for _, a := range attachments {
+		resource, err := r.deviceResourceOf(ctx, a)
+		if err != nil {
+			return nil, err
+		}
 		params = append(params, utils.NodeNetworkParams{
-			Name: a.Name, Namespace: a.Namespace, Interface: a.Interface, IPs: a.IPs,
+			Name: a.Name, Namespace: a.Namespace, Interface: a.Interface, IPs: a.IPs, Resource: resource,
 		})
 	}
 	return params, nil
@@ -42,4 +52,17 @@ func (r *StorageNodeReconciler) networkParams(
 func onPodNetwork(cluster *simplyblockv1alpha2.StorageCluster) bool {
 	network := networkOf(cluster)
 	return network != nil && network.PodNetwork && len(network.Data) == 0
+}
+
+// deviceResourceOf is the extended resource the attachment's definition hands its
+// device out under, "" for a definition whose plugin creates the interface itself
+// (macvlan, ipvlan) or names its device (host-device with device or pciBusID).
+// The preflight already required the definition to exist, so a read failure here
+// is an error to retry, not a hold.
+func (r *StorageNodeReconciler) deviceResourceOf(ctx context.Context, a Attachment) (string, error) {
+	definition, err := multus.GetDefinition(ctx, r.Client, client.ObjectKey{Namespace: a.Namespace, Name: a.Name})
+	if err != nil {
+		return "", fmt.Errorf("reading the definition %s/%s of network %q: %w", a.Namespace, a.Name, a.Network, err)
+	}
+	return definition.GetAnnotations()[inventory.NetworkAttachmentResourceNameAnnotation], nil
 }

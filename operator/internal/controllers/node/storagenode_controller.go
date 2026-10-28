@@ -785,7 +785,7 @@ func (r *StorageNodeReconciler) postNode(
 	cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
 	params := r.addParams(ctx, node, cluster)
-	networks, err := r.networkParams(node, cluster)
+	networks, err := r.networkParams(ctx, node, cluster)
 	if err != nil {
 		return fmt.Errorf("add node %s on worker %s: %w", node.Name, node.Spec.WorkerNode, err)
 	}
