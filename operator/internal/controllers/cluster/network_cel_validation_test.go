@@ -26,7 +26,6 @@ func viaDefinition(name, definition string) simplyblockv1alpha2.StorageNetwork {
 		Attachment: simplyblockv1alpha2.NetworkAttachment{
 			NetworkAttachmentRef: &simplyblockv1alpha2.NetworkDefinitionReference{Name: definition},
 		},
-		AddressPool: aPool("10.10.10.0/24", "10.10.10.101", "10.10.10.110"),
 	}
 }
 
@@ -82,18 +81,15 @@ func wantRejected(t *testing.T, err error, reason string) {
 	}
 }
 
-// I-09: a network attached through a definition takes its nodes' addresses from a
-// pool, and a network on a host interface carries the host's own addresses and
-// has none.
-func TestStorageNetworkPoolBelongsToDefinitionNetworksOnly(t *testing.T) {
+// I-56: a pool is optional on a network attached through a definition, and a
+// network on a host interface carries the host's own addresses and has none.
+func TestStorageNetworkPoolIsOptionalAndNotForHostInterfaces(t *testing.T) {
 	apiClient := apiServer(t)
 
 	t.Run("a definition network without a pool", func(t *testing.T) {
-		network := viaDefinition("storage-a", "storage-data")
-		network.AddressPool = nil
-		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-			Data: []simplyblockv1alpha2.StorageNetwork{network},
-		})), "addressPool is required with networkAttachmentRef")
+		wantAccepted(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
+			Data: []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-a", "storage-data")},
+		})))
 	})
 	t.Run("a host interface network with a pool", func(t *testing.T) {
 		network := viaHostInterface("storage-a", "eth1")
@@ -104,7 +100,7 @@ func TestStorageNetworkPoolBelongsToDefinitionNetworksOnly(t *testing.T) {
 	})
 }
 
-// I-10: a pool is a range inside its subnet, written as IPv4 addresses.
+// I-12, I-47: a pool is a range inside its subnet, written as IPv4 addresses.
 func TestStorageNetworkPoolIsARangeInsideItsSubnet(t *testing.T) {
 	apiClient := apiServer(t)
 
@@ -128,47 +124,6 @@ func TestStorageNetworkPoolIsARangeInsideItsSubnet(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			network := viaDefinition("storage-a", "storage-data")
 			network.AddressPool = aPool(tc.subnet, tc.first, tc.last)
-			err := create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-				Data: []simplyblockv1alpha2.StorageNetwork{network},
-			}))
-			if tc.reason == "" {
-				wantAccepted(t, err)
-				return
-			}
-			wantRejected(t, err, tc.reason)
-		})
-	}
-}
-
-// The exclude list keeps the operator away from addresses no ARP check would find
-// taken. Its entries are IPv4 addresses or hyphenated ranges, and it is bounded.
-func TestStorageNetworkPoolExcludeIsAddressesAndRanges(t *testing.T) {
-	apiClient := apiServer(t)
-
-	tooMany := make([]string, 33)
-	for i := range tooMany {
-		tooMany[i] = fmt.Sprintf("10.10.10.%d", i+1)
-	}
-	for _, tc := range []struct {
-		name    string
-		exclude []string
-		reason  string
-	}{
-		{"an address", []string{"10.10.10.1"}, ""},
-		{"a range", []string{"10.10.10.1-10.10.10.50"}, ""},
-		{"an address and a range", []string{"10.10.10.1", "10.10.10.10-10.10.10.20"}, ""},
-		{"thirty-two entries", tooMany[:32], ""},
-		{"thirty-three entries", tooMany, "Too many"},
-		{"an entry that is not an address", []string{"gateway"}, "should match"},
-		{"a prefix length", []string{"10.10.10.0/24"}, "should match"},
-		{"a range missing its end", []string{"10.10.10.1-"}, "should match"},
-		{"an out-of-range octet", []string{"10.10.10.256"}, "should match"},
-		{"a range of three", []string{"10.10.10.1-10.10.10.2-10.10.10.3"}, "Too long"},
-		{"an IPv6 address", []string{"fd00::1"}, "should match"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			network := viaDefinition("storage-a", "storage-data")
-			network.AddressPool = &simplyblockv1alpha2.NetworkAddressPool{Subnet: "10.10.10.0/24", Exclude: tc.exclude}
 			err := create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
 				Data: []simplyblockv1alpha2.StorageNetwork{network},
 			}))

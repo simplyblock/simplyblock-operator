@@ -60,12 +60,3 @@ func TestANetworkBesideAGroupsInterfacesIsRefused(t *testing.T) {
 
 	wantRefused(t, err, "network")
 }
-
-func TestADefinitionNetworkWithoutAPoolIsRefused(t *testing.T) {
-	err := createDocument(t, "net-no-pool", func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
-		withNetwork(c)
-		c.Spec.Cluster.Network.Data[0].AddressPool = nil
-	})
-
-	wantRefused(t, err, "addressPool is required")
-}

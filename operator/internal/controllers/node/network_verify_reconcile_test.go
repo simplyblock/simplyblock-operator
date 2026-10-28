@@ -42,7 +42,7 @@ func onANetwork(
 	}
 
 	node := nodeRead(t, apiClient)
-	if network.AddressPool != nil {
+	if network.Attachment.NetworkAttachmentRef != nil {
 		node.Status.Network = []simplyblockv1alpha2.NodeNetworkStatus{{
 			Network: network.Name, Phase: simplyblockv1alpha2.NodeNetworkPhasePending, Assigned: "10.10.10.101/24",
 		}}
@@ -195,7 +195,7 @@ func TestAHostInterfaceNodeHasNoNetworkStatus(t *testing.T) {
 
 // Another worker's SPDK pod on the same RPC port is not this node's: with only
 // that pod present the node has no pod to verify against and stays Pending,
-// rather than being judged by a neighbour's address.
+// rather than being judged by a neighbor's address.
 func TestAnotherWorkersPodOnTheSamePortIsNotVerifiedAsTheNodes(t *testing.T) {
 	other := anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.222"))
 	other.Name = "snode-spdk-pod-8080-other"

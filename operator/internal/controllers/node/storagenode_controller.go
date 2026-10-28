@@ -84,9 +84,10 @@ type StorageNodeReconciler struct {
 	Recorder events.EventRecorder
 	API      ControlPlane
 
-	// ProbeImage is the image the network probe pods run: the operator's own,
-	// which carries a shell, arping, and ping.
-	ProbeImage string
+	// HostCheck asks the CSI node plugins, which run on the host network of
+	// their worker, to read a NIC's address and to test a connection to the SPDK
+	// listener (design §8.1). Unset, a node on a network waits for it.
+	HostCheck HostChecker
 
 	// Nodes is the storage-node stream's cache, which steady state is read from
 	// and which adoption matches against. It is optional: a deployment without the
@@ -464,10 +465,6 @@ func (r *StorageNodeReconciler) performNodeStep(
 	case stepCheckingNetwork:
 		return r.checkNetwork(ctx, node, cluster)
 	case stepPosting:
-		gone, err := r.probeGone(ctx, node)
-		if err != nil || !gone {
-			return stepPosting, false, err
-		}
 		return stepResolving, true, r.postNode(ctx, node, cluster)
 	case stepResolving:
 		return r.resolve(ctx, node, cluster)
@@ -1018,6 +1015,11 @@ func (r *StorageNodeReconciler) syncStatus(
 	err = r.writeStatus(ctx, node, func(status *simplyblockv1alpha2.StorageNodeStatus) {
 		applyReading(status, reading)
 		status.Phase = phaseOf(reading)
+		// A node on a network is not online until the CSI node plugins reach its
+		// listener: a volume cannot attach to one they cannot reach.
+		if status.Phase == simplyblockv1alpha2.StorageNodePhaseOnline && r.networkGateHolds(node, cluster) {
+			status.Phase = simplyblockv1alpha2.StorageNodePhaseProvisioning
+		}
 		if sampled && worthWriting(status.Resources.Capacity, sample) {
 			status.Resources.Capacity = &simplyblockv1alpha2.StorageNodeCapacity{
 				TotalBytes: ptr.To(sample.Total),

@@ -16,6 +16,8 @@ import (
 const (
 	attachNamespace = "simplyblock"
 	firstData       = "data0"
+	// nicAddress is the address the NIC a definition moves holds on the host.
+	nicAddress = "10.10.10.101/24"
 )
 
 func viaDefinition(name string) simplyblockv1alpha2.StorageNetwork {
@@ -23,9 +25,6 @@ func viaDefinition(name string) simplyblockv1alpha2.StorageNetwork {
 		Name: name,
 		Attachment: simplyblockv1alpha2.NetworkAttachment{
 			NetworkAttachmentRef: &simplyblockv1alpha2.NetworkDefinitionReference{Name: name + "-def"},
-		},
-		AddressPool: &simplyblockv1alpha2.NetworkAddressPool{
-			Subnet: "10.10.10.0/24", First: "10.10.10.101", Last: "10.10.10.110",
 		},
 	}
 }
@@ -63,13 +62,13 @@ func TestAttachmentsAreNamedInTheOrderTheClusterListsThem(t *testing.T) {
 		Management: &[]simplyblockv1alpha2.StorageNetwork{viaDefinition("management")}[0],
 		Data:       []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-a"), viaDefinition("storage-b")},
 	}
-	config := statedAddresses("management", "10.0.0.5/24", "storage-a", firstInPool, "storage-b", "10.20.20.101/24")
+	config := statedAddresses("management", "10.0.0.5/24", "storage-a", nicAddress, "storage-b", "10.20.20.101/24")
 
 	got := build(t, network, config)
 
 	want := []struct{ name, iface, ip string }{
 		{"management-def", "mgmt0", "10.0.0.5/24"},
-		{"storage-a-def", firstData, firstInPool},
+		{"storage-a-def", firstData, nicAddress},
 		{"storage-b-def", "data1", "10.20.20.101/24"},
 	}
 	if len(got) != len(want) {
@@ -91,7 +90,7 @@ func TestAttachmentsAreNamedInTheOrderTheClusterListsThem(t *testing.T) {
 // U-02
 func TestAnAttachmentCarriesTheAddressAndNeverARoute(t *testing.T) {
 	network := &simplyblockv1alpha2.StorageNetworkSpec{Data: []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-a")}}
-	got := build(t, network, statedAddresses("storage-a", firstInPool))
+	got := build(t, network, statedAddresses("storage-a", nicAddress))
 
 	encoded, err := AnnotationValue(got)
 	if err != nil {
@@ -108,7 +107,7 @@ func TestAnAttachmentCarriesTheAddressAndNeverARoute(t *testing.T) {
 		decoded[0]["namespace"] != attachNamespace {
 		t.Fatalf("annotation = %s", encoded)
 	}
-	if ips, _ := decoded[0]["ips"].([]any); len(ips) != 1 || ips[0] != firstInPool {
+	if ips, _ := decoded[0]["ips"].([]any); len(ips) != 1 || ips[0] != nicAddress {
 		t.Fatalf("ips = %v", decoded[0]["ips"])
 	}
 }
@@ -116,7 +115,7 @@ func TestAnAttachmentCarriesTheAddressAndNeverARoute(t *testing.T) {
 // U-03
 func TestWithoutAManagementNetworkTheDataNetworksStartAtDataZero(t *testing.T) {
 	network := &simplyblockv1alpha2.StorageNetworkSpec{Data: []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-a")}}
-	got := build(t, network, statedAddresses("storage-a", firstInPool))
+	got := build(t, network, statedAddresses("storage-a", nicAddress))
 
 	if len(got) != 1 || got[0].Interface != firstData {
 		t.Fatalf("got %+v", got)
@@ -142,7 +141,7 @@ func TestAMissingAddressIsAnErrorNamingTheNetwork(t *testing.T) {
 	network := &simplyblockv1alpha2.StorageNetworkSpec{
 		Data: []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-a"), viaDefinition("storage-b")},
 	}
-	_, err := BuildAttachments(attachNamespace, network, statedAddresses("storage-a", firstInPool))
+	_, err := BuildAttachments(attachNamespace, network, statedAddresses("storage-a", nicAddress))
 	if err == nil || !strings.Contains(err.Error(), "storage-b") {
 		t.Fatalf("err = %v, want one naming storage-b", err)
 	}

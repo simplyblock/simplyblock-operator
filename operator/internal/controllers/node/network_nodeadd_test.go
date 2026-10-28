@@ -27,9 +27,6 @@ func aDataNetwork() simplyblockv1alpha2.StorageNetwork {
 		Attachment: simplyblockv1alpha2.NetworkAttachment{
 			NetworkAttachmentRef: &simplyblockv1alpha2.NetworkDefinitionReference{Name: nodeAddDefinition},
 		},
-		AddressPool: &simplyblockv1alpha2.NetworkAddressPool{
-			Subnet: "10.10.10.0/24", First: "10.10.10.101", Last: "10.10.10.110",
-		},
 	}
 }
 

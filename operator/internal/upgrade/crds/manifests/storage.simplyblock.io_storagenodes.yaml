@@ -803,16 +803,17 @@ spec:
                         type: string
                       assigned:
                         description: |-
-                          Assigned is the address the operator took from the network's pool for this
-                          node, with the prefix length of the pool's subnet. It is chosen once,
-                          before the node is added, and never changes, so the node keeps it across
-                          restarts and reboots. It is empty until the choice is made.
+                          Assigned is the node's address on the network, with its prefix length: the
+                          one the operator took from the network's address pool, or, for a network
+                          with no pool, the one the NIC the definition moves holds on the worker. It
+                          is chosen once, before the node is added, and never changes, so the node
+                          keeps it across restarts and reboots. It is empty until it is chosen.
                         type: string
                       hostReachable:
                         description: |-
-                          HostReachable is whether the worker's host network namespace can reach
-                          the address, which a volume attach or an RPC from a host-network pod on
-                          that worker needs. It is unset until the preflight has checked.
+                          HostReachable is whether the initiators on the workers can reach the
+                          address, which a volume attach needs. It is unset until the reachability
+                          gate has run.
                         type: boolean
                       interface:
                         description: Interface is the interface's name inside the pod.
@@ -828,15 +829,6 @@ spec:
                           - Mismatched
                           - Unavailable
                         type: string
-                      rejected:
-                        description: |-
-                          Rejected are the pool addresses another host answered for, which this node
-                          does not try again.
-                        items:
-                          type: string
-                        maxItems: 64
-                        type: array
-                        x-kubernetes-list-type: atomic
                     required:
                       - network
                       - phase
