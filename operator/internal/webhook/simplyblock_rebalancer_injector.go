@@ -176,7 +176,7 @@ skipVolume:
 			"--config=/etc/simplyblock/simplyblock-rebalancer/$(HOSTNAME)",
 			"--metrics-addr=:9199",
 		},
-		SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true)},
+		SecurityContext: volumemigration.PrivilegedAsRoot(),
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("100m"),

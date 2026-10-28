@@ -77,7 +77,6 @@ type JobPlacement struct {
 // namespaced Job, so a caller that has no owner to name passes none and cleans
 // its Jobs up itself.
 func BuildJob(p JobParams) *batchv1.Job {
-	privileged := true
 	readOnly := true
 	var owners []metav1.OwnerReference
 	if p.OwnerRef.Name != "" {
@@ -124,7 +123,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 							ImagePullPolicy:        corev1.PullAlways,
 							Command:                []string{"simplyblock-rebalancer", "--mode=" + p.Mode},
 							Env:                    p.Env,
-							SecurityContext:        &corev1.SecurityContext{Privileged: &privileged},
+							SecurityContext:        PrivilegedAsRoot(),
 							TerminationMessagePath: p.TerminationMessagePath,
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "host-dev", MountPath: "/dev"},
@@ -238,4 +237,18 @@ func JobPlacementOf(ctx context.Context, c client.Client, namespace, clusterUUID
 func JobImage(ctx context.Context, c client.Client, namespace, clusterUUID string) (string, error) {
 	placement, err := JobPlacementOf(ctx, c, namespace, clusterUUID)
 	return placement.Image, err
+}
+
+// PrivilegedAsRoot is the security context of every container that runs the
+// simplyblock-rebalancer image against the host's kernel: the migration path
+// Jobs, the injected sidecar and the latency baseline Job. The image runs as
+// uid 65532 and reaches nvme-cli and fio through sudo; in a privileged
+// container on GKE's Ubuntu nodes (containerd 2.2) that sudo fails PAM account
+// management ("Authentication service cannot retrieve authentication info")
+// and no path can ever be established, while the same image as a plain pod,
+// or as root, works (2026-10-28). A privileged container gains nothing from
+// a non-root uid, so these run as root and sudo degenerates to a no-op.
+func PrivilegedAsRoot() *corev1.SecurityContext {
+	privileged, root := true, int64(0)
+	return &corev1.SecurityContext{Privileged: &privileged, RunAsUser: &root, RunAsGroup: &root}
 }
