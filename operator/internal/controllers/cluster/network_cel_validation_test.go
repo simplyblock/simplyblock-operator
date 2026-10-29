@@ -1,8 +1,8 @@
 // Validation of the CEL rules compiled into the StorageCluster CRD for
 // spec.storageNodes.network, run against a real apiserver like the rest of this
 // package's CEL suite. The rules decide how a cluster may state its storage
-// networks: one way only, all through definitions or all as host interfaces,
-// set at creation only, and never a definition on an RDMA fabric.
+// networks: exactly one of the pod network, the host network and Multus data
+// networks, set at creation only, and never a definition on an RDMA fabric.
 
 package cluster
 
@@ -20,24 +20,14 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-func viaDefinition(name, definition string) simplyblockv1alpha2.StorageNetwork {
+func viaDefinition(definition string) simplyblockv1alpha2.StorageNetwork {
 	return simplyblockv1alpha2.StorageNetwork{
-		Name: name,
-		Attachment: simplyblockv1alpha2.NetworkAttachment{
-			NetworkAttachmentRef: &simplyblockv1alpha2.NetworkDefinitionReference{Name: definition},
-		},
+		NetworkAttachmentRef: simplyblockv1alpha2.NetworkDefinitionReference{Name: definition},
 	}
 }
 
 func aPool(subnet, first, last string) *simplyblockv1alpha2.NetworkAddressPool {
 	return &simplyblockv1alpha2.NetworkAddressPool{Subnet: subnet, First: first, Last: last}
-}
-
-func viaHostInterface(name, iface string) simplyblockv1alpha2.StorageNetwork {
-	return simplyblockv1alpha2.StorageNetwork{
-		Name:       name,
-		Attachment: simplyblockv1alpha2.NetworkAttachment{HostInterface: iface},
-	}
 }
 
 func clusterWithNetwork(
@@ -81,22 +71,15 @@ func wantRejected(t *testing.T, err error, reason string) {
 	}
 }
 
-// I-56: a pool is optional on a network attached through a definition, and a
-// network on a host interface carries the host's own addresses and has none.
-func TestStorageNetworkPoolIsOptionalAndNotForHostInterfaces(t *testing.T) {
+// I-56: a pool is optional on a data network, and a range inside its subnet.
+func TestStorageNetworkPoolIsOptional(t *testing.T) {
 	apiClient := apiServer(t)
 
 	t.Run("a definition network without a pool", func(t *testing.T) {
 		wantAccepted(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-			Data: []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-a", "storage-data")},
+			PodNetwork: true,
+			Data:       []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-data")},
 		})))
-	})
-	t.Run("a host interface network with a pool", func(t *testing.T) {
-		network := viaHostInterface("storage-a", "eth1")
-		network.AddressPool = aPool("10.10.10.0/24", "10.10.10.101", "10.10.10.110")
-		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-			Data: []simplyblockv1alpha2.StorageNetwork{network},
-		})), "addressPool is not allowed with hostInterface")
 	})
 }
 
@@ -122,10 +105,11 @@ func TestStorageNetworkPoolIsARangeInsideItsSubnet(t *testing.T) {
 		{"a last without a first", "10.10.10.0/24", "", "10.10.10.9", "first and last are set together"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			network := viaDefinition("storage-a", "storage-data")
-			network.AddressPool = aPool(tc.subnet, tc.first, tc.last)
+			network := viaDefinition("storage-data")
+			network.NetworkAttachmentRef.AddressPool = aPool(tc.subnet, tc.first, tc.last)
 			err := create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-				Data: []simplyblockv1alpha2.StorageNetwork{network},
+				PodNetwork: true,
+				Data:       []simplyblockv1alpha2.StorageNetwork{network},
 			}))
 			if tc.reason == "" {
 				wantAccepted(t, err)
@@ -136,69 +120,71 @@ func TestStorageNetworkPoolIsARangeInsideItsSubnet(t *testing.T) {
 	}
 }
 
-// I-02: the legacy interface names and the network group are two ways of stating
-// one thing, so a cluster cannot state both.
-func TestStorageClusterNetworkExcludesTheLegacyInterfaces(t *testing.T) {
+// I-02: dataInterfaces name host NICs, so they are allowed only when the SPDK pods
+// run on the host network. The management interface is mgmtInterface whatever the
+// mode.
+func TestStorageClusterDataInterfacesNeedTheHostNetwork(t *testing.T) {
 	apiClient := apiServer(t)
-	network := &simplyblockv1alpha2.StorageNetworkSpec{
-		Data: []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-a", "storage-data")},
-	}
+	multus := &simplyblockv1alpha2.StorageNetworkSpec{PodNetwork: true, Data: []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-data")}}
+	const refused = "dataInterfaces are allowed only with network.spdkOnHostNetwork"
 
-	for name, mutate := range map[string]func(*simplyblockv1alpha2.StorageNodesSpec){
-		"mgmtInterface":  func(s *simplyblockv1alpha2.StorageNodesSpec) { s.MgmtInterface = "eth0" },
-		"dataInterfaces": func(s *simplyblockv1alpha2.StorageNodesSpec) { s.DataInterfaces = []string{"eth1"} },
+	for name, network := range map[string]*simplyblockv1alpha2.StorageNetworkSpec{
+		"a definition network": multus,
+		"the pod network":      {PodNetwork: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cluster := clusterWithNetwork(network)
-			mutate(cluster.Spec.StorageNodes)
-			wantRejected(t, create(t, apiClient, cluster),
-				"network cannot be combined with mgmtInterface or dataInterfaces")
+			cluster.Spec.StorageNodes.DataInterfaces = []string{"eth1"}
+			wantRejected(t, create(t, apiClient, cluster), refused)
 		})
 	}
+
+	t.Run("the host network", func(t *testing.T) {
+		cluster := clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{SpdkOnHostNetwork: true})
+		cluster.Spec.StorageNodes.DataInterfaces = []string{"eth1"}
+		wantAccepted(t, create(t, apiClient, cluster))
+	})
+
+	t.Run("mgmtInterface is accepted beside any network", func(t *testing.T) {
+		cluster := clusterWithNetwork(multus)
+		cluster.Spec.StorageNodes.MgmtInterface = "eth0"
+		wantAccepted(t, create(t, apiClient, cluster))
+	})
 }
 
-// I-03: an attachment is a definition or a host interface, and nothing else.
-func TestStorageNetworkAttachmentHoldsExactlyOneCase(t *testing.T) {
+// I-03: the pods are on the host network, which excludes the rest, or on the pod
+// network, which data networks may add interfaces to. Data networks need the pod
+// network they attach to.
+func TestStorageNetworkModes(t *testing.T) {
 	apiClient := apiServer(t)
+	data := []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-data")}
 
-	both := viaDefinition("storage-a", "storage-data")
-	both.Attachment.HostInterface = "eth1"
-	neither := simplyblockv1alpha2.StorageNetwork{Name: "storage-a"}
-
-	for name, network := range map[string]simplyblockv1alpha2.StorageNetwork{"both": both, "neither": neither} {
-		t.Run(name, func(t *testing.T) {
-			wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-				Data: []simplyblockv1alpha2.StorageNetwork{network},
-			})), "exactly one of networkAttachmentRef, hostInterface and podNetwork must be set")
+	for name, tc := range map[string]struct {
+		network *simplyblockv1alpha2.StorageNetworkSpec
+		reason  string
+	}{
+		"none of them":                 {&simplyblockv1alpha2.StorageNetworkSpec{}, "one of podNetwork and spdkOnHostNetwork must be set"},
+		"false flags and no data list": {&simplyblockv1alpha2.StorageNetworkSpec{PodNetwork: false}, "one of podNetwork and spdkOnHostNetwork must be set"},
+		"the pod and host networks":    {&simplyblockv1alpha2.StorageNetworkSpec{PodNetwork: true, SpdkOnHostNetwork: true}, "podNetwork and spdkOnHostNetwork are exclusive"},
+		"all three":                    {&simplyblockv1alpha2.StorageNetworkSpec{PodNetwork: true, SpdkOnHostNetwork: true, Data: data}, "podNetwork and spdkOnHostNetwork are exclusive"},
+		"data without a pod network":   {&simplyblockv1alpha2.StorageNetworkSpec{Data: data}, "data networks require podNetwork: true"},
+		"the host network and data":    {&simplyblockv1alpha2.StorageNetworkSpec{SpdkOnHostNetwork: true, Data: data}, "data networks require podNetwork: true"},
+	} {
+		t.Run("rejects "+name, func(t *testing.T) {
+			wantRejected(t, create(t, apiClient, clusterWithNetwork(tc.network)), tc.reason)
 		})
 	}
-}
 
-// I-04: a pod is on the host network or it is not, so the networks of a cluster
-// are all definitions or all host interfaces.
-func TestStorageClusterNetworksShareOneAttachmentKind(t *testing.T) {
-	apiClient := apiServer(t)
-	const mixed = "all networks must use networkAttachmentRef, or all must use hostInterface"
-
-	t.Run("management by definition and data by host interface", func(t *testing.T) {
-		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-			Management: ptr.To(viaDefinition("management", "storage-mgmt")),
-			Data:       []simplyblockv1alpha2.StorageNetwork{viaHostInterface("storage-a", "eth1")},
-		})), mixed)
-	})
-	t.Run("two data networks of different kinds", func(t *testing.T) {
-		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-			Data: []simplyblockv1alpha2.StorageNetwork{
-				viaDefinition("storage-a", "storage-data"), viaHostInterface("storage-b", "eth2"),
-			},
-		})), mixed)
-	})
-	t.Run("all host interfaces", func(t *testing.T) {
-		wantAccepted(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-			Management: ptr.To(viaHostInterface("management", "eth0")),
-			Data:       []simplyblockv1alpha2.StorageNetwork{viaHostInterface("storage-a", "eth1")},
-		})))
-	})
+	for name, network := range map[string]*simplyblockv1alpha2.StorageNetworkSpec{
+		"the pod network":               {PodNetwork: true},
+		"the host network":              {SpdkOnHostNetwork: true},
+		"the pod network with data":     {PodNetwork: true, Data: data},
+		"the pod network with two data": {PodNetwork: true, Data: []simplyblockv1alpha2.StorageNetwork{viaDefinition("a"), viaDefinition("b")}},
+	} {
+		t.Run("accepts "+name, func(t *testing.T) {
+			wantAccepted(t, create(t, apiClient, clusterWithNetwork(network)))
+		})
+	}
 }
 
 // I-05: the control plane resolves the networks at node-add and never reads the
@@ -212,7 +198,8 @@ func TestStorageClusterNetworkIsSetAtCreationOnly(t *testing.T) {
 
 	network := func() *simplyblockv1alpha2.StorageNetworkSpec {
 		return &simplyblockv1alpha2.StorageNetworkSpec{
-			Data: []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-a", "storage-data")},
+			PodNetwork: true,
+			Data:       []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-data")},
 		}
 	}
 
@@ -239,11 +226,11 @@ func TestStorageClusterNetworkIsSetAtCreationOnly(t *testing.T) {
 
 	for name, mutate := range map[string]func(*simplyblockv1alpha2.StorageCluster){
 		"changing a definition": func(c *simplyblockv1alpha2.StorageCluster) {
-			c.Spec.StorageNodes.Network.Data[0].Attachment.NetworkAttachmentRef.Name = "other"
+			c.Spec.StorageNodes.Network.Data[0].NetworkAttachmentRef.Name = "other"
 		},
 		"adding a network": func(c *simplyblockv1alpha2.StorageCluster) {
 			c.Spec.StorageNodes.Network.Data = append(c.Spec.StorageNodes.Network.Data,
-				viaDefinition("storage-b", "storage-data-b"))
+				viaDefinition("storage-data-b"))
 		},
 		"clearing the group": func(c *simplyblockv1alpha2.StorageCluster) {
 			c.Spec.StorageNodes.Network = nil
@@ -270,25 +257,25 @@ func TestStorageClusterNetworkIsSetAtCreationOnly(t *testing.T) {
 }
 
 // I-06: the attachment plugins this design targets cannot carry RDMA, so a
-// fabric that includes it states its data networks as host interfaces.
+// fabric that includes it runs on the host network.
 func TestStorageClusterRDMAFabricRefusesDefinitionNetworks(t *testing.T) {
 	apiClient := apiServer(t)
 	const refused = "a data network attached through a NetworkAttachmentDefinition serves NVMe/TCP only"
 
 	byDefinition := clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-		Data: []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-a", "storage-data")},
+		PodNetwork: true,
+		Data:       []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-data")},
 	})
 	byDefinition.Spec.FabricType = "rdma"
 	wantRejected(t, create(t, apiClient, byDefinition), refused)
 
-	byHostInterface := clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-		Data: []simplyblockv1alpha2.StorageNetwork{viaHostInterface("storage-a", "eth1")},
-	})
-	byHostInterface.Spec.FabricType = "rdma"
-	wantAccepted(t, create(t, apiClient, byHostInterface))
+	onTheHost := clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{SpdkOnHostNetwork: true})
+	onTheHost.Spec.FabricType = "rdma"
+	wantAccepted(t, create(t, apiClient, onTheHost))
 
 	tcp := clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-		Data: []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-a", "storage-data")},
+		PodNetwork: true,
+		Data:       []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-data")},
 	})
 	tcp.Spec.FabricType = "tcp"
 	wantAccepted(t, create(t, apiClient, tcp))
@@ -304,10 +291,10 @@ func TestStorageClusterDataNetworksAreBoundedAtEight(t *testing.T) {
 	}{{1, true}, {8, true}, {9, false}} {
 		t.Run(fmt.Sprintf("%d networks", tc.count), func(t *testing.T) {
 			var data []simplyblockv1alpha2.StorageNetwork
-			for i := 0; i < tc.count; i++ {
-				data = append(data, viaDefinition(fmt.Sprintf("storage-%d", i), "storage-data"))
+			for i := range tc.count {
+				data = append(data, viaDefinition(fmt.Sprintf("storage-data-%d", i)))
 			}
-			err := create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{Data: data}))
+			err := create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{PodNetwork: true, Data: data}))
 			if tc.accepted {
 				wantAccepted(t, err)
 				return
@@ -317,75 +304,21 @@ func TestStorageClusterDataNetworksAreBoundedAtEight(t *testing.T) {
 	}
 }
 
-// I-08: a network's name is the key the nodes' addresses and status use, so it
-// is unique within the cluster and a DNS label.
-func TestStorageNetworkNamesAreUniqueDNSLabels(t *testing.T) {
+// I-08: a definition's name is the key the nodes' addresses and status use, so a
+// cluster names each definition once.
+func TestStorageNetworksNameDistinctDefinitions(t *testing.T) {
 	apiClient := apiServer(t)
 
 	t.Run("duplicate", func(t *testing.T) {
 		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-			Data: []simplyblockv1alpha2.StorageNetwork{
-				viaDefinition("storage-a", "storage-data"), viaDefinition("storage-a", "storage-data-b"),
-			},
-		})), "Duplicate value")
+			PodNetwork: true,
+			Data:       []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-data"), viaDefinition("storage-data")},
+		})), "data networks must name distinct NetworkAttachmentDefinitions")
 	})
-	for _, name := range []string{"Storage_A", "-leading", "trailing-", strings.Repeat("a", 64)} {
-		t.Run("invalid "+name, func(t *testing.T) {
-			err := create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-				Data: []simplyblockv1alpha2.StorageNetwork{viaDefinition(name, "storage-data")},
-			}))
-			if err == nil {
-				t.Fatal("expected the apiserver to reject the name, but it was accepted")
-			}
-		})
-	}
-	t.Run("a label of 63 characters", func(t *testing.T) {
+	t.Run("two definitions", func(t *testing.T) {
 		wantAccepted(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-			Data: []simplyblockv1alpha2.StorageNetwork{viaDefinition(strings.Repeat("a", 63), "storage-data")},
+			PodNetwork: true,
+			Data:       []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-data"), viaDefinition("storage-data-b")},
 		})))
-	})
-}
-
-// viaPodNetwork is the one data network of a cluster on the pod network.
-func viaPodNetwork() simplyblockv1alpha2.StorageNetwork {
-	return simplyblockv1alpha2.StorageNetwork{
-		Name:       "cni",
-		Attachment: simplyblockv1alpha2.NetworkAttachment{PodNetwork: &simplyblockv1alpha2.PodNetworkAttachment{}},
-	}
-}
-
-// A pod network is the whole declaration: the pod has one interface, which
-// carries the RPC too, and its address comes from the cluster CNI, not a pool.
-func TestStorageClusterPodNetworkIsTheWholeDeclaration(t *testing.T) {
-	apiClient := apiServer(t)
-	const alone = "a podNetwork attachment is the only data network and has no management network"
-
-	t.Run("alone", func(t *testing.T) {
-		wantAccepted(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-			Data: []simplyblockv1alpha2.StorageNetwork{viaPodNetwork()},
-		})))
-	})
-	t.Run("with a pool", func(t *testing.T) {
-		pooled := viaPodNetwork()
-		pooled.AddressPool = aPool("10.10.10.0/24", "10.10.10.101", "10.10.10.110")
-		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-			Data: []simplyblockv1alpha2.StorageNetwork{pooled},
-		})), "addressPool is not allowed with podNetwork")
-	})
-	t.Run("with a management network", func(t *testing.T) {
-		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-			Management: ptr.To(viaHostInterface("management", "eth0")),
-			Data:       []simplyblockv1alpha2.StorageNetwork{viaPodNetwork()},
-		})), alone)
-	})
-	t.Run("as the management network", func(t *testing.T) {
-		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-			Management: ptr.To(viaPodNetwork()),
-		})), alone)
-	})
-	t.Run("beside another data network", func(t *testing.T) {
-		wantRejected(t, create(t, apiClient, clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-			Data: []simplyblockv1alpha2.StorageNetwork{viaPodNetwork(), viaHostInterface("storage-b", "eth2")},
-		})), alone)
 	})
 }

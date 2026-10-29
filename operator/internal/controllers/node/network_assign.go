@@ -21,28 +21,18 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// declaredNetworks are the cluster's networks, the management network first.
+// declaredNetworks are the cluster's data networks.
 func declaredNetworks(network *simplyblockv1alpha2.StorageNetworkSpec) []simplyblockv1alpha2.StorageNetwork {
 	if network == nil {
 		return nil
 	}
-	var declared []simplyblockv1alpha2.StorageNetwork
-	if network.Management != nil {
-		declared = append(declared, *network.Management)
-	}
-	return append(declared, network.Data...)
+	return network.Data
 }
 
-// pooledNetworks are the networks attached through a definition, which are the
-// ones whose node addresses come from a pool or from their NIC.
+// pooledNetworks are the networks attached through a definition, which are all of
+// them: their node addresses come from a pool or from their NIC.
 func pooledNetworks(network *simplyblockv1alpha2.StorageNetworkSpec) []simplyblockv1alpha2.StorageNetwork {
-	var pooled []simplyblockv1alpha2.StorageNetwork
-	for _, n := range declaredNetworks(network) {
-		if n.Attachment.NetworkAttachmentRef != nil {
-			pooled = append(pooled, n)
-		}
-	}
-	return pooled
+	return declaredNetworks(network)
 }
 
 // assignAddresses records, for every network attached through a definition that
@@ -57,7 +47,7 @@ func (r *StorageNodeReconciler) assignAddresses(
 ) error {
 	networks := pooledNetworks(networkOf(cluster))
 	var siblings []simplyblockv1alpha2.StorageNode
-	if slices.ContainsFunc(networks, func(n simplyblockv1alpha2.StorageNetwork) bool { return n.AddressPool != nil }) {
+	if slices.ContainsFunc(networks, func(n simplyblockv1alpha2.StorageNetwork) bool { return n.Pool() != nil }) {
 		var err error
 		if siblings, err = r.poolSiblings(ctx, node); err != nil {
 			return err
@@ -66,19 +56,19 @@ func (r *StorageNodeReconciler) assignAddresses(
 
 	next := slices.Clone(node.Status.Network)
 	for _, n := range networks {
-		index := slices.IndexFunc(next, func(s simplyblockv1alpha2.NodeNetworkStatus) bool { return s.Network == n.Name })
+		index := slices.IndexFunc(next, func(s simplyblockv1alpha2.NodeNetworkStatus) bool { return s.Network == n.Name() })
 		if index < 0 {
 			next = append(next, simplyblockv1alpha2.NodeNetworkStatus{
-				Network: n.Name, Phase: simplyblockv1alpha2.NodeNetworkPhasePending,
+				Network: n.Name(), Phase: simplyblockv1alpha2.NodeNetworkPhasePending,
 			})
 			index = len(next) - 1
 		}
 		entry := &next[index]
 
 		var held []string
-		if n.AddressPool != nil {
+		if n.Pool() != nil {
 			var earlier []string
-			held, earlier = heldOnPool(siblings, node.Name, n.Name, n.AddressPool.Subnet)
+			held, earlier = heldOnPool(siblings, node.Name, n.Name(), n.Pool().Subnet)
 			if entry.Assigned != "" && entry.Phase == simplyblockv1alpha2.NodeNetworkPhasePending &&
 				slices.ContainsFunc(earlier, func(a string) bool { return sameHostAddress(a, entry.Assigned) }) {
 				entry.Assigned = ""
@@ -88,7 +78,7 @@ func (r *StorageNodeReconciler) assignAddresses(
 			continue
 		}
 
-		address, err := r.chooseAddress(ctx, node, cluster, n, held, configs[n.Name])
+		address, err := r.chooseAddress(ctx, node, cluster, n, held, configs[n.Name()])
 		if err != nil {
 			return err
 		}
@@ -110,18 +100,18 @@ func (r *StorageNodeReconciler) chooseAddress(
 	cluster *simplyblockv1alpha2.StorageCluster, network simplyblockv1alpha2.StorageNetwork,
 	held []string, config inventory.NetworkAttachmentConfig,
 ) (string, error) {
-	if network.AddressPool == nil {
-		return r.readNIC(ctx, node, cluster, network.Name, config)
+	if network.Pool() == nil {
+		return r.readNIC(ctx, node, cluster, network.Name(), config)
 	}
 
-	address, err := allocateAddress(*network.AddressPool, held)
+	address, err := allocateAddress(*network.Pool(), held)
 	switch {
 	case errors.Is(err, errPoolExhausted):
 		return "", r.heldFor(cluster, NetworkAddressPoolExhausted,
 			"the address pool of network %q (%s) has no address left: %d are held by other nodes",
-			network.Name, network.AddressPool.Subnet, len(held))
+			network.Name(), network.Pool().Subnet, len(held))
 	case err != nil:
-		return "", r.heldFor(cluster, NetworkAttachmentFailed, "network %q: %v", network.Name, err)
+		return "", r.heldFor(cluster, NetworkAttachmentFailed, "network %q: %v", network.Name(), err)
 	}
 	return address, nil
 }

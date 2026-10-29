@@ -25,7 +25,7 @@ const gatedPort = 4426
 // out is the node before the control plane has assigned one.
 func aGatedWorld(t *testing.T, host *fakeHost, withPort bool) (*StorageNodeReconciler, client.Client) {
 	t.Helper()
-	r, apiClient := onANetwork(t, viaDefinition(storageNetwork), anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.101")))
+	r, apiClient := onANetwork(t, onDefinition(storageNetwork), anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.101")))
 	if withPort {
 		api := r.API.(*scriptedControlPlane)
 		reading := api.nodes[opsNodeID]

@@ -14,6 +14,8 @@ spec:
     maxSubsystemCount: 30
     minHugePagesSize: 200G
     name: discovered-discover-size-16-cluster
+    network:
+      spdkOnHostNetwork: true
     stripe:
       dataChunks: 2
       parityChunks: 1

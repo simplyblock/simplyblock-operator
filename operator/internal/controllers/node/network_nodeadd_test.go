@@ -21,13 +21,8 @@ import (
 
 const nodeAddDefinition = "storage-data"
 
-func aDataNetwork() simplyblockv1alpha2.StorageNetwork {
-	return simplyblockv1alpha2.StorageNetwork{
-		Name: "fabric",
-		Attachment: simplyblockv1alpha2.NetworkAttachment{
-			NetworkAttachmentRef: &simplyblockv1alpha2.NetworkDefinitionReference{Name: nodeAddDefinition},
-		},
-	}
+func aDataNetwork() *simplyblockv1alpha2.StorageNetworkSpec {
+	return onDefinition(nodeAddDefinition)
 }
 
 func aDefinition() *unstructured.Unstructured {
@@ -153,11 +148,9 @@ func TestTheAddOfAPodNetworkNodeDeclaresTheModeAndNoNetworks(t *testing.T) {
 
 func TestOnlyAPodNetworkDeclarationIsOnThePodNetwork(t *testing.T) {
 	for name, cluster := range map[string]*simplyblockv1alpha2.StorageCluster{
-		"no network":   {},
-		"a definition": clusterDeclaring(aDataNetwork()),
-		"a host interface": clusterDeclaring(simplyblockv1alpha2.StorageNetwork{
-			Name: "lan", Attachment: simplyblockv1alpha2.NetworkAttachment{HostInterface: "eth1"},
-		}),
+		"no network":       {},
+		"a definition":     clusterDeclaring(aDataNetwork()),
+		"the host network": clusterDeclaring(viaHost()),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if onPodNetwork(cluster) {
@@ -170,10 +163,8 @@ func TestOnlyAPodNetworkDeclarationIsOnThePodNetwork(t *testing.T) {
 	}
 }
 
-func clusterDeclaring(network simplyblockv1alpha2.StorageNetwork) *simplyblockv1alpha2.StorageCluster {
+func clusterDeclaring(network *simplyblockv1alpha2.StorageNetworkSpec) *simplyblockv1alpha2.StorageCluster {
 	return &simplyblockv1alpha2.StorageCluster{Spec: simplyblockv1alpha2.StorageClusterSpec{
-		StorageNodes: &simplyblockv1alpha2.StorageNodesSpec{Network: &simplyblockv1alpha2.StorageNetworkSpec{
-			Data: []simplyblockv1alpha2.StorageNetwork{network},
-		}},
+		StorageNodes: &simplyblockv1alpha2.StorageNodesSpec{Network: network},
 	}}
 }

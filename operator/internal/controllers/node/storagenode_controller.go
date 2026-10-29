@@ -1620,10 +1620,10 @@ func (r *StorageNodeReconciler) addParams(
 
 	params := utils.StorageNodeSetAddParams{
 		NodeAddress:      r.Workload.NodeAddress(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode),
-		InterfaceName:    workload.MgmtInterface,
+		InterfaceName:    firstNonEmpty(config.MgmtInterface, workload.MgmtInterface),
 		SPDKImage:        config.SpdkImage,
 		SPDKProxyImage:   config.SpdkProxyImage,
-		DataNics:         workload.DataInterfaces,
+		DataNics:         nicsOf(config.DataInterfaces, workload.DataInterfaces),
 		Namespace:        node.Namespace,
 		JMPercent:        journalPercent(config.JournalManager),
 		Partitions:       partitionsPerDevice(workload),
@@ -1648,6 +1648,23 @@ func (r *StorageNodeReconciler) addParams(
 		params.FailureDomain = index
 	}
 	return params
+}
+
+// firstNonEmpty is the node's own NIC name, or the cluster's for a node created
+// before NICs were stated per node.
+func firstNonEmpty(node, cluster string) string {
+	if node != "" {
+		return node
+	}
+	return cluster
+}
+
+// nicsOf is the node's own data NICs, or the cluster's for a node that names none.
+func nicsOf(node, cluster []string) []string {
+	if len(node) > 0 {
+		return node
+	}
+	return cluster
 }
 
 // domainIndex is the integer the control plane's own field takes for a

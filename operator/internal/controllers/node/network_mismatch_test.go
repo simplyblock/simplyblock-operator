@@ -13,7 +13,7 @@ import (
 
 // I-33
 func TestAMismatchedNodeIsShutDownThroughTheControlPlane(t *testing.T) {
-	r, _ := onANetwork(t, viaDefinition("storage-a"), anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.77")))
+	r, _ := onANetwork(t, onDefinition("storage-a"), anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.77")))
 	api := r.API.(*scriptedControlPlane)
 
 	settle(t, r)
@@ -28,7 +28,7 @@ func TestAMismatchedNodeIsShutDownThroughTheControlPlane(t *testing.T) {
 
 // I-34
 func TestAMismatchedNodeStaysShutDownAndIsNeverRestarted(t *testing.T) {
-	r, _ := onANetwork(t, viaDefinition("storage-a"), anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.77")))
+	r, _ := onANetwork(t, onDefinition("storage-a"), anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.77")))
 	api := r.API.(*scriptedControlPlane)
 
 	settle(t, r)
@@ -46,7 +46,7 @@ func TestAMismatchedNodeStaysShutDownAndIsNeverRestarted(t *testing.T) {
 }
 
 func TestAnInShutdownNodeIsNotShutDownAgain(t *testing.T) {
-	r, _ := onANetwork(t, viaDefinition("storage-a"), anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.77")))
+	r, _ := onANetwork(t, onDefinition("storage-a"), anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.77")))
 	api := r.API.(*scriptedControlPlane)
 	api.reporting(nodeStatusInShutdown)
 
@@ -63,7 +63,7 @@ func TestAnAttachedOrPendingNodeIsNeverShutDown(t *testing.T) {
 		"not running": anSPDKPodHolding(corev1.PodPending, ""),
 	} {
 		t.Run(name, func(t *testing.T) {
-			r, _ := onANetwork(t, viaDefinition("storage-a"), pod)
+			r, _ := onANetwork(t, onDefinition("storage-a"), pod)
 
 			settle(t, r)
 			settle(t, r)

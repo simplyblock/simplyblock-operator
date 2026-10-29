@@ -178,8 +178,8 @@ func TestTheClusterIsCreatedWithTheClassReadOffTheGroups(t *testing.T) {
 	if created.Spec.DeviceClass != simplyblockv1alpha2.StorageClusterDeviceClassNVMe {
 		t.Errorf("deviceClass = %q, want NVMe read off the groups", created.Spec.DeviceClass)
 	}
-	if created.Spec.StorageNodes == nil || created.Spec.StorageNodes.MgmtInterface != "eth1" {
-		t.Errorf("the workload did not take the group's interfaces: %+v", created.Spec.StorageNodes)
+	if wl := created.Spec.StorageNodes; wl != nil && wl.MgmtInterface != "" {
+		t.Errorf("the workload carries the group's interface, want the nodes to: %+v", wl)
 	}
 }
 

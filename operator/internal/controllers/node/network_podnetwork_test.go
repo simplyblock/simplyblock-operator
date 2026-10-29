@@ -52,7 +52,7 @@ func TestAPodNetworkNodeIsAttachedOnceItsPodRunsBehindTheService(t *testing.T) {
 
 	got := podNetworkStatusOf(t, r)
 	want := simplyblockv1alpha2.NodeNetworkStatus{
-		Network: "cni", Interface: "eth0", Address: podNetworkServiceAddress,
+		Network: podNetworkName, Interface: "eth0", Address: podNetworkServiceAddress,
 		Phase: simplyblockv1alpha2.NodeNetworkPhaseAttached,
 	}
 	if !reflect.DeepEqual(got, want) {

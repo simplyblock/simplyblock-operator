@@ -13,6 +13,8 @@ spec:
     enableDriveFormat: true
     maxSubsystemCount: 30
     name: discovered-discover-size-13-cluster
+    network:
+      spdkOnHostNetwork: true
     stripe:
       dataChunks: 1
       parityChunks: 1
