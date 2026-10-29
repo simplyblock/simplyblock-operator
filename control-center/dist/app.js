@@ -13030,13 +13030,19 @@ function UiLayer({
 }) {
   const [menu, setMenu] = useState(null);
   const [dialog, setDialog] = useState(null);
+  // a modal that is not a form (live progress after a dialog): a function
+  // rendering it, given its close
+  const [panel, setPanel] = useState(null);
   const menuRef = useRef(null),
-    dialogRef = useRef(null);
+    dialogRef = useRef(null),
+    panelRef = useRef(null);
   menuRef.current = menu;
   dialogRef.current = dialog;
+  panelRef.current = panel;
   useEffect(() => {
     setMenu(null);
     setDialog(null);
+    setPanel(null);
   }, [routeKey]);
   useEffect(() => {
     window.__ui = {
@@ -13049,10 +13055,12 @@ function UiLayer({
         spec,
         obj
       }),
-      isOpen: () => !!(menuRef.current || dialogRef.current),
+      panel: render => setPanel(() => render),
+      isOpen: () => !!(menuRef.current || dialogRef.current || panelRef.current),
       close: () => {
         setMenu(null);
         setDialog(null);
+        setPanel(null);
       }
     };
   }, []);
@@ -13106,7 +13114,7 @@ function UiLayer({
     obj: dialog.obj,
     removes: dialog.removes,
     onClose: () => setDialog(null)
-  }));
+  }), panel && panel(() => setPanel(null)));
 }
 Object.assign(window, {
   ACTIONS,
@@ -27614,6 +27622,7 @@ Object.assign(window, {
 })();
 // ---- drhub.jsx ----
 (function(){
+function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
 // ---------------------------------------------------------------------------
 // DR HUB VIEWS — the console side of dr-simplyblock.
 //
@@ -30885,9 +30894,149 @@ const quickProtectDialog = (plans, cfg) => {
         namespace: opsNs,
         spec
       }));
+      // the dialog closes after run: the progress opens once it has
+      const pathName = (a, b) => `${qpSite(plan, a)}-to-${qpSite(plan, b)}`.slice(0, 63);
+      const watch = {
+        plan: plan.name,
+        planCreated: !!plan.created,
+        paths: [fwd ? fwd.name : pathName(v.src, v.dst), rev ? rev.name : pathName(v.dst, v.src)],
+        app: v.name.trim(),
+        namespace: opsNs,
+        nets: netsOf(v, P).length > 0
+      };
+      setTimeout(() => window.__ui.panel(close => /*#__PURE__*/React.createElement(ProtectProgress, _extends({}, watch, {
+        onClose: close
+      }))), 0);
     }
   };
 };
+
+// What Quick protect created, read back until the application can move: the
+// plan Ready, its paths Valid, the site mapping resolved, the application
+// bound and protected, a first replication, a Ready path.
+const QP_POLL_MS = 4000;
+function ProtectProgress({
+  plan,
+  planCreated,
+  paths,
+  app,
+  namespace,
+  nets,
+  onClose
+}) {
+  const [st, setSt] = useState(null);
+  useEffect(() => {
+    let alive = true,
+      timer = null;
+    const tick = () => Promise.all([drhub.plans(), drhub.paths(), drhub.apps()]).then(([ps, pa, as]) => alive && setSt({
+      plan: ps.find(p => p.name === plan),
+      paths: paths.map(n => pa.find(p => p.name === n)),
+      app: as.find(a => a.name === app && a.namespace === namespace),
+      err: null
+    }), e => alive && setSt(s => Object.assign({}, s, {
+      err: e && e.message || String(e)
+    }))).then(() => {
+      if (alive) timer = setTimeout(tick, QP_POLL_MS);
+    });
+    tick();
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, []);
+  const p = st && st.plan,
+    a = st && st.app,
+    ps = st && st.paths || [];
+  const yes = x => x === true ? "yes" : x === false ? "no" : "not yet";
+  const steps = [{
+    label: `Plan ${plan}`,
+    note: planCreated ? "created" : "existing",
+    done: !!p && p.status === "Ready",
+    detail: !p ? "not listed yet" : p.status === "Ready" ? "Ready" : p.pairs.some(x => x.peerClassesResolved) ? p.status : "waiting for peer classes, about 8 minutes"
+  },
+  // Inconsistent: valid, the two site profiles differ (shown on the path)
+  {
+    label: "Paths",
+    done: ps.length > 0 && ps.every(x => x && (x.status === "Valid" || x.status === "Inconsistent")),
+    detail: paths.map((n, i) => `${n}: ${(ps[i] || {}).status || "not listed yet"}`).join(" · ")
+  }, nets && {
+    label: "Site mapping",
+    done: !!a && a.siteMapping === "Resolved",
+    detail: !a ? "—" : a.siteMapping === "Open" ? `${a.counts.openFindings} open finding${a.counts.openFindings === 1 ? "" : "s"}` : a.siteMapping
+  }, {
+    label: `Application ${app}`,
+    done: !!a && a.bound === true && a.protected === true,
+    detail: !a ? "not listed yet" : `bound: ${yes(a.bound)} · protected: ${yes(a.protected)}`
+  }, {
+    label: "First replication",
+    done: !!(a && a.replication),
+    detail: a && a.replication ? `last sync ${fmtAgo(a.replication.lastSyncTime)}` : "waiting"
+  }, {
+    label: "Ready to move",
+    done: !!a && (a.verdict === "Ready" || a.verdict === "Degraded"),
+    detail: a ? a.verdict : "—"
+  }].filter(Boolean);
+  const current = steps.findIndex(s => !s.done);
+  const all = current < 0;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "ovl",
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "modal",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mhead"
+  }, /*#__PURE__*/React.createElement("h3", null, all ? `${app} is protected` : `Protecting ${app}`), /*#__PURE__*/React.createElement("button", {
+    className: "tbtn",
+    style: {
+      color: "var(--dim)"
+    },
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "x",
+    s: 13
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "mbody"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "mdesc"
+  }, "Progress also shows on the application's page."), /*#__PURE__*/React.createElement("ol", {
+    className: "qpsteps"
+  }, steps.map((s, i) => /*#__PURE__*/React.createElement("li", {
+    key: s.label,
+    className: s.done ? "done" : i === current ? "cur" : ""
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "qpmark"
+  }, s.done ? /*#__PURE__*/React.createElement(Icon, {
+    n: "check",
+    s: 13
+  }) : i === current ? /*#__PURE__*/React.createElement(Icon, {
+    n: "refresh",
+    s: 12
+  }) : /*#__PURE__*/React.createElement("i", null)), /*#__PURE__*/React.createElement("span", {
+    className: "qptext"
+  }, /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, s.label), s.note && /*#__PURE__*/React.createElement("em", null, " \xB7 ", s.note)), /*#__PURE__*/React.createElement("small", null, s.detail))))), st && st.err && /*#__PURE__*/React.createElement("div", {
+    className: "banner",
+    style: {
+      marginTop: 10,
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 14
+  }), st.err)), /*#__PURE__*/React.createElement("div", {
+    className: "mfoot"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    onClick: onClose
+  }, "Close"), /*#__PURE__*/React.createElement("button", {
+    className: "btn primary",
+    disabled: !a,
+    onClick: () => {
+      onClose();
+      window.__nav && window.__nav.detail(a);
+    }
+  }, "Open the application"))));
+}
 const editTiersDialog = a => {
   const ed = tierEditorRows(a.tiers);
   return {
@@ -34963,6 +35112,7 @@ Object.assign(window, {
   proposePathsDialog,
   protectAppDialogDR,
   quickProtectDialog,
+  ProtectProgress,
   newRPlanDialog,
   editRPlanDialog,
   editTiersDialog,

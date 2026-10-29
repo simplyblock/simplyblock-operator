@@ -1866,15 +1866,19 @@ function Dialog({spec, obj, removes, onClose}) {
 function UiLayer({routeKey}) {
   const [menu, setMenu] = useState(null);
   const [dialog, setDialog] = useState(null);
-  const menuRef = useRef(null), dialogRef = useRef(null);
-  menuRef.current = menu; dialogRef.current = dialog;
-  useEffect(() => { setMenu(null); setDialog(null); }, [routeKey]);
+  // a modal that is not a form (live progress after a dialog): a function
+  // rendering it, given its close
+  const [panel, setPanel] = useState(null);
+  const menuRef = useRef(null), dialogRef = useRef(null), panelRef = useRef(null);
+  menuRef.current = menu; dialogRef.current = dialog; panelRef.current = panel;
+  useEffect(() => { setMenu(null); setDialog(null); setPanel(null); }, [routeKey]);
   useEffect(() => {
     window.__ui = {
       menu: (rect, items, obj) => setMenu({rect, items, obj}),
       dialog: (spec, obj) => setDialog({spec, obj}),
-      isOpen: () => !!(menuRef.current || dialogRef.current),
-      close: () => { setMenu(null); setDialog(null); }
+      panel: render => setPanel(() => render),
+      isOpen: () => !!(menuRef.current || dialogRef.current || panelRef.current),
+      close: () => { setMenu(null); setDialog(null); setPanel(null); }
     };
   }, []);
   const runItem = async it => {
@@ -1899,6 +1903,7 @@ function UiLayer({routeKey}) {
         </div>
       </>}
       {dialog && <Dialog spec={dialog.spec} obj={dialog.obj} removes={dialog.removes} onClose={() => setDialog(null)} />}
+      {panel && panel(() => setPanel(null))}
     </>
   );
 }

@@ -238,6 +238,19 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 .fsection:first-child{margin-top:0;padding-top:0;border-top:0}
 .fsection h4{margin:0;font-size:13px;font-weight:600;color:var(--text)}
 .fsection span{display:block;font-size:11px;color:var(--dim);margin-top:2px}
+.qpsteps{list-style:none;margin:0;padding:0}
+.qpsteps li{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--line)}
+.qpsteps li:last-child{border-bottom:0}
+.qpmark{width:18px;height:18px;flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--dim2)}
+.qpmark i{width:9px;height:9px;border-radius:50%;border:1.5px solid var(--line2)}
+.qpsteps li.done .qpmark{color:var(--ok)}
+.qpsteps li.cur .qpmark{color:var(--accent);animation:qpspin 1.2s linear infinite}
+@keyframes qpspin{to{transform:rotate(360deg)}}
+.qptext{display:flex;flex-direction:column;min-width:0;font-size:12.5px}
+.qptext b{font-weight:500}
+.qptext em{font-style:normal;color:var(--dim)}
+.qptext small{font-size:11.5px;color:var(--dim);margin-top:1px}
+.qpsteps li:not(.done):not(.cur) .qptext b{color:var(--dim)}
 .finput{width:100%;height:32px;padding:0 9px;border:1px solid var(--line2);border-radius:6px;background:var(--panel2);color:var(--text);font:inherit;font-size:12.5px;outline:none}
 .finput:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 /* a placeholder is an example, never a value: dimmer and italic so it is not mistaken for typed text */

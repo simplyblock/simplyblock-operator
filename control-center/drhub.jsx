@@ -1173,9 +1173,74 @@ const quickProtectDialog = (plans, cfg) => {
       asyncMethod ? {method: asyncMethod} : {}, tiers.length ? {tiers} : {}, probes.length ? {health: {probes}} : {},
       {discovered: {protectedNamespaces: nss, pvcSelector: Object.keys(sel.matchLabels || {}).length ? {matchLabels: sel.matchLabels} : {}}});
     await step(`application ${v.name.trim()}`, () => drhub.createApp({name: v.name.trim(), namespace: opsNs, spec}));
+    // the dialog closes after run: the progress opens once it has
+    const pathName = (a, b) => `${qpSite(plan, a)}-to-${qpSite(plan, b)}`.slice(0, 63);
+    const watch = {plan: plan.name, planCreated: !!plan.created, paths: [fwd ? fwd.name : pathName(v.src, v.dst), rev ? rev.name : pathName(v.dst, v.src)],
+      app: v.name.trim(), namespace: opsNs, nets: netsOf(v, P).length > 0};
+    setTimeout(() => window.__ui.panel(close => <ProtectProgress {...watch} onClose={close} />), 0);
   }
   };
 };
+
+// What Quick protect created, read back until the application can move: the
+// plan Ready, its paths Valid, the site mapping resolved, the application
+// bound and protected, a first replication, a Ready path.
+const QP_POLL_MS = 4000;
+function ProtectProgress({plan, planCreated, paths, app, namespace, nets, onClose}) {
+  const [st, setSt] = useState(null);
+  useEffect(() => {
+    let alive = true, timer = null;
+    const tick = () => Promise.all([drhub.plans(), drhub.paths(), drhub.apps()])
+      .then(([ps, pa, as]) => alive && setSt({plan: ps.find(p => p.name === plan), paths: paths.map(n => pa.find(p => p.name === n)),
+        app: as.find(a => a.name === app && a.namespace === namespace), err: null}),
+        e => alive && setSt(s => Object.assign({}, s, {err: (e && e.message) || String(e)})))
+      .then(() => { if (alive) timer = setTimeout(tick, QP_POLL_MS); });
+    tick();
+    return () => { alive = false; clearTimeout(timer); };
+  }, []);
+  const p = st && st.plan, a = st && st.app, ps = (st && st.paths) || [];
+  const yes = x => x === true ? "yes" : x === false ? "no" : "not yet";
+  const steps = [
+    {label: `Plan ${plan}`, note: planCreated ? "created" : "existing", done: !!p && p.status === "Ready",
+      detail: !p ? "not listed yet" : p.status === "Ready" ? "Ready" : p.pairs.some(x => x.peerClassesResolved) ? p.status : "waiting for peer classes, about 8 minutes"},
+    // Inconsistent: valid, the two site profiles differ (shown on the path)
+    {label: "Paths", done: ps.length > 0 && ps.every(x => x && (x.status === "Valid" || x.status === "Inconsistent")),
+      detail: paths.map((n, i) => `${n}: ${(ps[i] || {}).status || "not listed yet"}`).join(" · ")},
+    nets && {label: "Site mapping", done: !!a && a.siteMapping === "Resolved",
+      detail: !a ? "—" : a.siteMapping === "Open" ? `${a.counts.openFindings} open finding${a.counts.openFindings === 1 ? "" : "s"}` : a.siteMapping},
+    {label: `Application ${app}`, done: !!a && a.bound === true && a.protected === true,
+      detail: !a ? "not listed yet" : `bound: ${yes(a.bound)} · protected: ${yes(a.protected)}`},
+    {label: "First replication", done: !!(a && a.replication), detail: a && a.replication ? `last sync ${fmtAgo(a.replication.lastSyncTime)}` : "waiting"},
+    {label: "Ready to move", done: !!a && (a.verdict === "Ready" || a.verdict === "Degraded"), detail: a ? a.verdict : "—"}
+  ].filter(Boolean);
+  const current = steps.findIndex(s => !s.done);
+  const all = current < 0;
+  return (
+    <div className="ovl" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="mhead">
+          <h3>{all ? `${app} is protected` : `Protecting ${app}`}</h3>
+          <button className="tbtn" style={{color: "var(--dim)"}} onClick={onClose}><Icon n="x" s={13} /></button>
+        </div>
+        <div className="mbody">
+          <p className="mdesc">Progress also shows on the application's page.</p>
+          <ol className="qpsteps">
+            {steps.map((s, i) => (
+              <li key={s.label} className={s.done ? "done" : i === current ? "cur" : ""}>
+                <span className="qpmark">{s.done ? <Icon n="check" s={13} /> : i === current ? <Icon n="refresh" s={12} /> : <i></i>}</span>
+                <span className="qptext"><span><b>{s.label}</b>{s.note && <em> · {s.note}</em>}</span><small>{s.detail}</small></span>
+              </li>))}
+          </ol>
+          {st && st.err && <div className="banner" style={{marginTop: 10, marginBottom: 0}}><Icon n="alert" s={14} />{st.err}</div>}
+        </div>
+        <div className="mfoot">
+          <button className="btn" onClick={onClose}>Close</button>
+          <button className="btn primary" disabled={!a} onClick={() => { onClose(); window.__nav && window.__nav.detail(a); }}>Open the application</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const editTiersDialog = a => {
   const ed = tierEditorRows(a.tiers);
@@ -2496,5 +2561,5 @@ function DrHubHome({nav}) {
 Object.assign(window, {DrTable: Table, DrMono: Mono, DrCheckTable: CheckTable, DrConditions: Conditions, VerdictBadge});
 Object.assign(window, {DrHubHome, DRConfigView, PPlanTile, DRPathTile, PAppTile, RPlanTile, RActionTile, TBubbleTile, TSchedTile, RestoreTile, SiteProfileTile, DHCPServerTile, SiteDeployTile, SiteDeployDetail, deploySiteDialog,
   PPlanDetail, DRPathDetail, PAppDetail, RPlanDetail, RActionDetail, TBubbleDetail, TSchedDetail, RestoreDetail, SiteProfileDetail, DHCPServerDetail, MappingPanel,
-  runActionDialog, runTestDialog, restoreDialog, newPPlanDialog: newPlanDialog, newPathDialog, proposePathsDialog, protectAppDialogDR, quickProtectDialog, newRPlanDialog, editRPlanDialog, editTiersDialog, editPlanS3Dialog, newScheduleDialog, newDHCPServerDialog, ACTION_KIND_META, KIND_LABEL_DR,
+  runActionDialog, runTestDialog, restoreDialog, newPPlanDialog: newPlanDialog, newPathDialog, proposePathsDialog, protectAppDialogDR, quickProtectDialog, ProtectProgress, newRPlanDialog, editRPlanDialog, editTiersDialog, editPlanS3Dialog, newScheduleDialog, newDHCPServerDialog, ACTION_KIND_META, KIND_LABEL_DR,
   editPlanS3Dialog, editTiersDialog, editBindingsDialog, sitesSpec, sitesError, overrideError, missingServers});
