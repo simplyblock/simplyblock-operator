@@ -242,6 +242,7 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 		binariesVolume = "fdb-binaries"
 		tmpVolume      = "tmp"
 		logsVolume     = "logs"
+		clientLibrary  = "7.3"
 	)
 	labels := map[string]string{appLabel: ComponentFDBOperator}
 	peerTLS := fdbPeerTLS(cp)
@@ -262,7 +263,7 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 			Name:  "foundationdb-kubernetes-init-7-3",
 			Image: fdbMonitorImage,
 			Args: []string{
-				"--copy-library", "7.3",
+				"--copy-library", clientLibrary,
 				"--copy-binary", "fdbcli",
 				"--copy-binary", "fdbbackup",
 				"--copy-binary", "fdbrestore",
@@ -306,6 +307,16 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 				{Name: tmpVolume, MountPath: "/tmp"},
 				{Name: logsVolume, MountPath: "/var/log/fdb"},
 				{Name: binariesVolume, MountPath: "/usr/bin/fdb"},
+				// HACK: fdbOperatorImage links libfdb_c 7.1, which segfaults when
+				// no coordinator name resolves (apple/foundationdb#12166, fixed in
+				// 7.2 by #8115). This replaces it with the init container's copy.
+				// TestTheDatabaseOperatorHackIsReviewedOnImageBump says when to drop it.
+				{
+					Name:      binariesVolume,
+					MountPath: "/usr/lib64/libfdb_c.so",
+					SubPath:   "libfdb_c_" + clientLibrary + ".so",
+					ReadOnly:  true,
+				},
 			}, peerMountIf(peerTLS)...),
 		}},
 		TerminationGracePeriodSeconds: ptr.To(int64(10)),
