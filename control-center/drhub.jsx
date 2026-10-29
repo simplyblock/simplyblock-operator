@@ -1169,8 +1169,15 @@ const quickProtectDialog = (plans, cfg) => {
         p.gnets.push({role: n.role, cidr: r.cidr, reservedHostIDs: r.reservedHostIDs, dhcpServerRef: dhcp});
       }
     }
+    // a new plan's site profiles are made by the hub after it, so the list
+    // loaded with the form lacks them: read it again until they appear
+    let profs = profiles;
+    for (let t = 0; Object.keys(per).some(s => !qpProfile(profs, s)) && t < 30; t++) {
+      await new Promise(r => setTimeout(r, 2000));
+      profs = await drhub.siteProfiles().catch(() => profs);
+    }
     for (const [site, p] of Object.entries(per)) {
-      const prof = qpProfile(profiles, site);
+      const prof = qpProfile(profs, site);
       if (!prof) throw new Error(`No site profile for ${site}: its dr-agent has not reported yet.${done.length ? ` Created so far: ${done.join(", ")}.` : ""}`);
       const sp = prof.spec || {};
       const lnets = lnetRows(sp).filter(l => !p.roles.includes(l.role)).concat(p.lnets);
