@@ -89,6 +89,11 @@ type ControlPlane interface {
 	// reads a 404 as success.
 	CancelTask(ctx context.Context, clusterID, taskID string) error
 
+	// GrowDevices grows every lblk data device of the cluster to the size of
+	// its block device. It is synchronous and safe to repeat: a device that
+	// has already grown is reported unchanged.
+	GrowDevices(ctx context.Context, clusterID string) (atlascp.ClusterDeviceGrowth, error)
+
 	// Endpoint is the base URL this call would currently reach the control
 	// plane at, resolved the same way every other call resolves it (§3.3).
 	// upsertCSICredentials carries it into the CSI driver's aggregate Secret,
@@ -220,6 +225,42 @@ func (c *httpControlPlane) Activate(ctx context.Context, clusterID string) error
 
 func (c *httpControlPlane) Expand(ctx context.Context, clusterID string) error {
 	return c.post(ctx, fmt.Sprintf("/api/v2/clusters/%s/expand", clusterID), nil)
+}
+
+func (c *httpControlPlane) GrowDevices(
+	ctx context.Context, clusterID string,
+) (atlascp.ClusterDeviceGrowth, error) {
+	body, err := c.call(ctx, http.MethodPost,
+		fmt.Sprintf("/api/v2/clusters/%s/grow-devices", clusterID), nil)
+	if err != nil {
+		return atlascp.ClusterDeviceGrowth{}, err
+	}
+	var wire struct {
+		Devices []struct {
+			DeviceID      string `json:"device_id"`
+			OldSize       int64  `json:"old_size"`
+			NewSize       int64  `json:"new_size"`
+			PlacementSize int64  `json:"placement_size"`
+			Resized       bool   `json:"resized"`
+			Uniform       bool   `json:"uniform"`
+			Warning       string `json:"warning"`
+		} `json:"devices"`
+		Errors  map[string]string `json:"errors"`
+		Uniform bool              `json:"uniform"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		return atlascp.ClusterDeviceGrowth{}, fmt.Errorf("decode the device growth of cluster %s: %w",
+			clusterID, err)
+	}
+	out := atlascp.ClusterDeviceGrowth{Errors: wire.Errors, Uniform: wire.Uniform}
+	for _, d := range wire.Devices {
+		out.Devices = append(out.Devices, atlascp.DeviceGrowth{
+			DeviceID: d.DeviceID, OldSize: d.OldSize, NewSize: d.NewSize,
+			PlacementSize: d.PlacementSize, Resized: d.Resized, Uniform: d.Uniform,
+			Warning: d.Warning,
+		})
+	}
+	return out, nil
 }
 
 func (c *httpControlPlane) Shutdown(ctx context.Context, clusterID string) error {
