@@ -5300,6 +5300,8 @@ const probeS3 = store => runProbe("S3ProbeRequest", DR_NS(), Object.assign({
 // Health probes: of an application where it runs ({app}), or on a plan's site
 // for one not protected yet ({plan, site, namespaces}); probes default to the
 // application's own.
+// The hub finds the cluster through the application or the plan: a plan a
+// form is still creating has neither yet.
 const probeHealth = ({
   app,
   plan,
@@ -5307,7 +5309,7 @@ const probeHealth = ({
   namespaces,
   probes,
   gates
-}) => runProbe("HealthProbeRequest", app ? app.namespace : DR_NS(), Object.assign({}, app ? {
+}) => !app && !plan ? Promise.reject(new Error("Test is available once the plan exists. After saving, test under Tiers & probes.")) : runProbe("HealthProbeRequest", app ? app.namespace : DR_NS(), Object.assign({}, app ? {
   applicationRef: {
     name: app.name
   }
