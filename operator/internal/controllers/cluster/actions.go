@@ -19,7 +19,9 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -149,6 +151,9 @@ func (r *StorageClusterOpsReconciler) request(
 	case simplyblockv1alpha2.StorageClusterOpsActionCancelTask:
 		return r.requestCancel(ctx, ops, clusterID)
 
+	case simplyblockv1alpha2.StorageClusterOpsActionGrowDevices:
+		return r.requestGrowDevices(ctx, ops, clusterID)
+
 	default:
 		return false, fatalf("action %s does not issue a request", ops.Spec.Action)
 	}
@@ -159,6 +164,53 @@ func (r *StorageClusterOpsReconciler) request(
 	}
 	log.Info("the action was accepted by the control plane",
 		"operation", ops.Name, "action", ops.Spec.Action, "cluster", ops.Spec.ClusterRef)
+	return true, nil
+}
+
+// requestGrowDevices grows every lblk data device of the cluster and records the
+// outcome.
+//
+// It is not issued under a claim: the call is synchronous and idempotent, so a
+// pass that died after it and before its record repeats it and finds the
+// devices already grown. A refusal (a cluster that is not in lblk device mode)
+// is final; any other failure is retried.
+func (r *StorageClusterOpsReconciler) requestGrowDevices(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps, clusterID string,
+) (bool, error) {
+	growth, err := r.API.GrowDevices(ctx, clusterID)
+	if err != nil {
+		var refusal *ControlPlaneError
+		if errors.As(err, &refusal) && refusal.Status == http.StatusConflict {
+			return false, fatalf("the control plane refused to grow the devices of cluster %s: %s",
+				ops.Spec.ClusterRef, refusal.Body)
+		}
+		return false, fmt.Errorf("grow the devices of cluster %s: %w", ops.Spec.ClusterRef, err)
+	}
+
+	record := &simplyblockv1alpha2.ClusterDeviceGrowthStatus{
+		Errors: growth.Errors, Uniform: growth.Uniform,
+	}
+	for _, d := range growth.Devices {
+		if d.Resized {
+			record.Grown++
+		} else {
+			record.Unchanged++
+		}
+	}
+	if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageClusterOpsStatus) {
+		status.DeviceGrowth = record
+	}); err != nil {
+		return false, err
+	}
+
+	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, DevicesGrown, DevicesGrown,
+		"%d devices of cluster %s grew, %d had not grown, %d could not be grown",
+		record.Grown, ops.Spec.ClusterRef, record.Unchanged, len(record.Errors))
+	if !growth.Uniform {
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, DeviceGrowthUneven, DeviceGrowthUneven,
+			"the data devices of cluster %s have grown unevenly; the added capacity is only fully "+
+				"usable once all of them have grown by the same factor", ops.Spec.ClusterRef)
+	}
 	return true, nil
 }
 

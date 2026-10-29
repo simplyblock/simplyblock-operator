@@ -233,6 +233,7 @@ type fakeControlPlane struct {
 	restartNode  func(string, string) error
 	tasks        func(string) ([]subscriptions.TaskDTO, error)
 	cancelTask   func(string, string) error
+	growDevices  func(string) (atlascp.ClusterDeviceGrowth, error)
 
 	// The counters the write-ahead tests read. Each is the number of times the
 	// control plane was actually asked to do something, which is the only way
@@ -246,6 +247,7 @@ type fakeControlPlane struct {
 	shutdownNodeCalls int
 	restartNodeCalls  int
 	cancelTaskCalls   int
+	growDevicesCalls  int
 }
 
 func (f *fakeControlPlane) Endpoint(context.Context) string { return f.endpoint }
@@ -386,6 +388,16 @@ func (f *fakeControlPlane) CancelTask(_ context.Context, clusterID, taskID strin
 		return nil
 	}
 	return f.cancelTask(clusterID, taskID)
+}
+
+func (f *fakeControlPlane) GrowDevices(
+	_ context.Context, clusterID string,
+) (atlascp.ClusterDeviceGrowth, error) {
+	f.growDevicesCalls++
+	if f.growDevices == nil {
+		return atlascp.ClusterDeviceGrowth{Uniform: true}, nil
+	}
+	return f.growDevices(clusterID)
 }
 
 var _ ControlPlane = (*fakeControlPlane)(nil)
