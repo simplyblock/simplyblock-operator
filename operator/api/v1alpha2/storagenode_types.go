@@ -251,6 +251,20 @@ type StorageNodeConfig struct {
 	// +k8s:immutable
 	DeviceNames []string `json:"deviceNames,omitempty"`
 
+	// MgmtInterface is the management NIC this node binds. Unset, the cluster's
+	// spec.storageNodes.mgmtInterface applies, which is what a node created before
+	// the interface was stated per node carries.
+	// +optional
+	// +k8s:immutable
+	MgmtInterface string `json:"mgmtInterface,omitempty"`
+
+	// DataInterfaces are the host NICs this node serves data on, for a cluster
+	// whose data network is a hostInterface. Unset, the cluster's
+	// spec.storageNodes.dataInterfaces applies.
+	// +optional
+	// +k8s:immutable
+	DataInterfaces []string `json:"dataInterfaces,omitempty"`
+
 	// PcieAllowList selects devices by PCI address. It is the one device field a
 	// migration writes, merging spec.migrate.newSsdPcie into it so devices added
 	// on the target host survive a later rebuild, so it is guarded by the

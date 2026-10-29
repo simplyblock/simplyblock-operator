@@ -25,6 +25,10 @@ const (
 	// podNetworkInterface is the CNI's interface in the pod, the one the node
 	// serves on.
 	podNetworkInterface = "eth0"
+
+	// podNetworkName is the key the pod network takes in the node's network status,
+	// where a Multus network takes its definition's name.
+	podNetworkName = "pod"
 	// clusterLabel is the label the node agent puts on the Service and on the
 	// SPDK pod with the control plane's full cluster id, which the Service's
 	// selector uses too. The Service's name carries only a short id.
@@ -53,8 +57,6 @@ func podNetworkServiceName(rpcPort int32, clusterUUID string) string {
 func (r *StorageNodeReconciler) syncPodNetwork(
 	ctx context.Context, node *simplyblockv1alpha2.StorageNode, cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
-	network := networkOf(cluster).Data[0]
-
 	_, running, err := r.spdkPodNetworkStatus(ctx, node)
 	if err != nil {
 		return err
@@ -74,7 +76,7 @@ func (r *StorageNodeReconciler) syncPodNetwork(
 
 	previous := node.Status.Network
 	next := []simplyblockv1alpha2.NodeNetworkStatus{{
-		Network: network.Name, Interface: podNetworkInterface, Address: address, Phase: phase,
+		Network: podNetworkName, Interface: podNetworkInterface, Address: address, Phase: phase,
 	}}
 	recordNetworkMetrics(node.Spec.ClusterRef, node.Name, next)
 	if equalNetworkStatus(previous, next) {

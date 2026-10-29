@@ -18,17 +18,7 @@ func networkCluster(network *simplyblockv1alpha2.StorageNetworkSpec) *simplybloc
 
 func definitionNetwork(name string) simplyblockv1alpha2.StorageNetwork {
 	return simplyblockv1alpha2.StorageNetwork{
-		Name: name,
-		Attachment: simplyblockv1alpha2.NetworkAttachment{
-			NetworkAttachmentRef: &simplyblockv1alpha2.NetworkDefinitionReference{Name: name + "-definition"},
-		},
-	}
-}
-
-func hostNetwork(name, iface string) simplyblockv1alpha2.StorageNetwork {
-	return simplyblockv1alpha2.StorageNetwork{
-		Name:       name,
-		Attachment: simplyblockv1alpha2.NetworkAttachment{HostInterface: iface},
+		NetworkAttachmentRef: simplyblockv1alpha2.NetworkDefinitionReference{Name: name + "-definition"},
 	}
 }
 
@@ -38,10 +28,10 @@ func TestANodeOfAPooledClusterIsAdmittedWithoutAnAddress(t *testing.T) {
 	for name, cluster := range map[string]*simplyblockv1alpha2.StorageCluster{
 		"no network group": nodeTestCluster(nil),
 		"host interfaces": networkCluster(&simplyblockv1alpha2.StorageNetworkSpec{
-			Data: []simplyblockv1alpha2.StorageNetwork{hostNetwork("storage-a", "eth1")},
+			SpdkOnHostNetwork: true,
 		}),
 		"definition networks": networkCluster(&simplyblockv1alpha2.StorageNetworkSpec{
-			Management: &[]simplyblockv1alpha2.StorageNetwork{definitionNetwork("management")}[0],
+			PodNetwork: true,
 			Data:       []simplyblockv1alpha2.StorageNetwork{definitionNetwork("storage-a")},
 		}),
 	} {
@@ -49,6 +39,30 @@ func TestANodeOfAPooledClusterIsAdmittedWithoutAnAddress(t *testing.T) {
 			resp := validatorFor(t, cluster).Handle(t.Context(), createReq(t, testNode(nil), operatorUser))
 			if !resp.Allowed {
 				t.Fatalf("expected the node to be admitted, got: %v", resp.Result)
+			}
+		})
+	}
+}
+
+// A node names host NICs only on a cluster whose SPDK pods run on the host network,
+// or on a cluster that states no network, which is the legacy host-network mode.
+func TestANodeNamesDataInterfacesOnlyOnTheHostNetwork(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cluster *simplyblockv1alpha2.StorageCluster
+		allowed bool
+	}{
+		"the host network":     {networkCluster(&simplyblockv1alpha2.StorageNetworkSpec{SpdkOnHostNetwork: true}), true},
+		"no network":           {nodeTestCluster(nil), true},
+		"the pod network":      {networkCluster(&simplyblockv1alpha2.StorageNetworkSpec{PodNetwork: true}), false},
+		"a definition network": {networkCluster(&simplyblockv1alpha2.StorageNetworkSpec{PodNetwork: true, Data: []simplyblockv1alpha2.StorageNetwork{definitionNetwork("storage-a")}}), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			node := testNode(func(n *simplyblockv1alpha2.StorageNode) { n.Spec.Config.DataInterfaces = []string{"eth1"} })
+
+			resp := validatorFor(t, tc.cluster).Handle(t.Context(), createReq(t, node, operatorUser))
+
+			if resp.Allowed != tc.allowed {
+				t.Fatalf("allowed = %v, want %v: %v", resp.Allowed, tc.allowed, resp.Result)
 			}
 		})
 	}

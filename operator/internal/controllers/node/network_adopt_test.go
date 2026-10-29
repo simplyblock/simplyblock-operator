@@ -87,7 +87,7 @@ func aWorkerWithTheNIC(addresses ...string) *fakeHost {
 func aDefinitionConfigured(config string) *unstructured.Unstructured {
 	nad := multus.NewDefinition()
 	nad.SetNamespace(opsNamespace)
-	nad.SetName("storage-a-def")
+	nad.SetName("storage-a")
 	if err := unstructured.SetNestedField(nad.Object, config, "spec", "config"); err != nil {
 		panic(err)
 	}
@@ -98,7 +98,7 @@ func aDefinitionConfigured(config string) *unstructured.Unstructured {
 // configuration, with nothing recorded yet and the host check in place.
 func adoptWorld(t *testing.T, config string, host HostChecker) (*StorageNodeReconciler, client.Client) {
 	t.Helper()
-	r, apiClient := onANetwork(t, viaDefinition(storageNetwork), aDefinitionConfigured(config))
+	r, apiClient := onANetwork(t, onDefinition(storageNetwork), aDefinitionConfigured(config))
 	node := nodeRead(t, apiClient)
 	node.Status.Network = nil
 	if err := apiClient.Status().Update(context.Background(), node); err != nil {

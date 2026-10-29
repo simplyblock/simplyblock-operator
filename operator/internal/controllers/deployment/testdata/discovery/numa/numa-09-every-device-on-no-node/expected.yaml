@@ -13,6 +13,8 @@ spec:
     enableDriveFormat: true
     maxSubsystemCount: 30
     name: discovered-discover-numa-09-cluster
+    network:
+      spdkOnHostNetwork: true
     stripe:
       dataChunks: 2
       parityChunks: 1

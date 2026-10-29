@@ -24,7 +24,7 @@ const spdkRPCPort = int32(8080)
 // onANetwork declares one data network on the node's cluster, records the address
 // the operator assigned the node there, and gives it an RPC port, and returns the reconciler.
 func onANetwork(
-	t *testing.T, network simplyblockv1alpha2.StorageNetwork, objects ...client.Object,
+	t *testing.T, network *simplyblockv1alpha2.StorageNetworkSpec, objects ...client.Object,
 ) (*StorageNodeReconciler, client.Client) {
 	t.Helper()
 	r, apiClient := aSteadyNode(t, aControlPlane(), objects...)
@@ -35,16 +35,16 @@ func onANetwork(
 		t.Fatal(err)
 	}
 	cluster.Spec.StorageNodes = &simplyblockv1alpha2.StorageNodesSpec{
-		Network: &simplyblockv1alpha2.StorageNetworkSpec{Data: []simplyblockv1alpha2.StorageNetwork{network}},
+		Network: network,
 	}
 	if err := apiClient.Update(ctx, cluster); err != nil {
 		t.Fatal(err)
 	}
 
 	node := nodeRead(t, apiClient)
-	if network.Attachment.NetworkAttachmentRef != nil {
+	if len(network.Data) > 0 {
 		node.Status.Network = []simplyblockv1alpha2.NodeNetworkStatus{{
-			Network: network.Name, Phase: simplyblockv1alpha2.NodeNetworkPhasePending, Assigned: "10.10.10.101/24",
+			Network: network.Data[0].Name(), Phase: simplyblockv1alpha2.NodeNetworkPhasePending, Assigned: "10.10.10.101/24",
 		}}
 	}
 	node.Status.Ports = &simplyblockv1alpha2.StorageNodePorts{Rpc: ptr.To(spdkRPCPort)}
@@ -73,7 +73,7 @@ func anSPDKPodHolding(phase corev1.PodPhase, networkStatus string) *corev1.Pod {
 }
 
 func attachedAs(ip string) string {
-	return statusOf(defaultNetworkStatus, dataEntry("simplyblock/storage-a-def", "data0", ip))
+	return statusOf(defaultNetworkStatus, dataEntry("simplyblock/storage-a", "data0", ip))
 }
 
 func recordedEvents(r *StorageNodeReconciler) []string {
@@ -101,7 +101,7 @@ func recordedReason(got []string, reason string) int {
 
 // I-32
 func TestAnSPDKPodHoldingTheDeclaredAddressIsAttachedAndAnnouncedOnce(t *testing.T) {
-	r, apiClient := onANetwork(t, viaDefinition("storage-a"), anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.101")))
+	r, apiClient := onANetwork(t, onDefinition("storage-a"), anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.101")))
 
 	settle(t, r)
 
@@ -121,7 +121,7 @@ func TestAnSPDKPodHoldingTheDeclaredAddressIsAttachedAndAnnouncedOnce(t *testing
 
 // I-36
 func TestAnAttachedNodeReconcilesQuietly(t *testing.T) {
-	r, apiClient := onANetwork(t, viaDefinition("storage-a"), anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.101")))
+	r, apiClient := onANetwork(t, onDefinition("storage-a"), anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.101")))
 	settle(t, r)
 	recordedEvents(r)
 	before := nodeRead(t, apiClient)
@@ -140,7 +140,7 @@ func TestAnAttachedNodeReconcilesQuietly(t *testing.T) {
 // The mismatch is recorded and raised. Taking the node out of service is a
 // separate step, so none is asked of the control plane here.
 func TestAnSPDKPodHoldingAnotherAddressIsMismatchedAndWarnedOnce(t *testing.T) {
-	r, apiClient := onANetwork(t, viaDefinition("storage-a"), anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.77")))
+	r, apiClient := onANetwork(t, onDefinition("storage-a"), anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.77")))
 
 	settle(t, r)
 	settle(t, r)
@@ -155,7 +155,7 @@ func TestAnSPDKPodHoldingAnotherAddressIsMismatchedAndWarnedOnce(t *testing.T) {
 }
 
 func TestAnSPDKPodThatIsNotRunningYetIsPending(t *testing.T) {
-	r, apiClient := onANetwork(t, viaDefinition("storage-a"), anSPDKPodHolding(corev1.PodPending, ""))
+	r, apiClient := onANetwork(t, onDefinition("storage-a"), anSPDKPodHolding(corev1.PodPending, ""))
 
 	settle(t, r)
 
@@ -169,7 +169,7 @@ func TestAnSPDKPodThatIsNotRunningYetIsPending(t *testing.T) {
 }
 
 func TestANodeWithNoSPDKPodYetIsPending(t *testing.T) {
-	r, apiClient := onANetwork(t, viaDefinition("storage-a"))
+	r, apiClient := onANetwork(t, onDefinition("storage-a"))
 
 	settle(t, r)
 
@@ -181,7 +181,7 @@ func TestANodeWithNoSPDKPodYetIsPending(t *testing.T) {
 
 // I-37
 func TestAHostInterfaceNodeHasNoNetworkStatus(t *testing.T) {
-	r, apiClient := onANetwork(t, viaHost("storage-a", "eth1"), anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.101")))
+	r, apiClient := onANetwork(t, viaHost(), anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.101")))
 
 	settle(t, r)
 
@@ -200,7 +200,7 @@ func TestAnotherWorkersPodOnTheSamePortIsNotVerifiedAsTheNodes(t *testing.T) {
 	other := anSPDKPodHolding(corev1.PodRunning, attachedAs("10.10.10.222"))
 	other.Name = "snode-spdk-pod-8080-other"
 	other.Spec.NodeName = "worker-2"
-	r, apiClient := onANetwork(t, viaDefinition("storage-a"), other)
+	r, apiClient := onANetwork(t, onDefinition("storage-a"), other)
 
 	settle(t, r)
 

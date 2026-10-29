@@ -16,3 +16,10 @@ import (
 func onANetwork(config *simplyblockv1alpha2.ClusterDeploymentConfig) bool {
 	return config.Spec.Cluster != nil && config.Spec.Cluster.Network != nil
 }
+
+// onHostNICs reports whether the document's network puts SPDK on the host network,
+// so that each group names the management NIC its nodes bind.
+func onHostNICs(config *simplyblockv1alpha2.ClusterDeploymentConfig) bool {
+	network := config.Spec.Cluster.Network
+	return network != nil && network.SpdkOnHostNetwork
+}

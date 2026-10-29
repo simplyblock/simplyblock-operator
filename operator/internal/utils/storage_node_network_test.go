@@ -22,7 +22,7 @@ func clusterWithNetwork(network *simplyblockv1alpha2.StorageNetworkSpec) *simply
 // I-39
 func TestTheAgentLeavesTheHostNetworkWhenANetworkIsDeclared(t *testing.T) {
 	cluster := clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-		Data: []simplyblockv1alpha2.StorageNetwork{{Name: "fabric"}},
+		PodNetwork: true,
 	})
 
 	ds := BuildStorageNodeDaemonSet(cluster, false, false, "", "", "agent:test")
@@ -32,15 +32,21 @@ func TestTheAgentLeavesTheHostNetworkWhenANetworkIsDeclared(t *testing.T) {
 	}
 }
 
-// I-40
-func TestTheAgentKeepsTheHostNetworkWhenNoNetworkIsDeclared(t *testing.T) {
+// I-40: the agent is never on the host network. It reads the host's interfaces
+// and opens its connections through the host's network namespace instead, which
+// it can enter because it shares the host's PID namespace.
+func TestTheAgentIsOffTheHostNetworkWhateverTheNetwork(t *testing.T) {
 	for name, cluster := range map[string]*simplyblockv1alpha2.StorageCluster{
-		"no storageNodes": {ObjectMeta: metav1.ObjectMeta{Name: "c1"}},
-		"no network":      clusterWithNetwork(nil),
+		"no storageNodes":  {ObjectMeta: metav1.ObjectMeta{Name: "c1"}},
+		"no network":       clusterWithNetwork(nil),
+		"the host network": clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{SpdkOnHostNetwork: true}),
 	} {
-		ds := BuildStorageNodeDaemonSet(cluster, false, false, "", "", "agent:test")
-		if !ds.Spec.Template.Spec.HostNetwork {
-			t.Errorf("%s: the agent lost hostNetwork with no network declared", name)
+		spec := BuildStorageNodeDaemonSet(cluster, false, false, "", "", "agent:test").Spec.Template.Spec
+		if spec.HostNetwork {
+			t.Errorf("%s: the agent is on the host network", name)
+		}
+		if !spec.HostPID {
+			t.Errorf("%s: the agent has no host PID, so it cannot enter the host's network namespace", name)
 		}
 	}
 }
@@ -61,7 +67,7 @@ func envVarOf(cluster *simplyblockv1alpha2.StorageCluster, name string) (corev1.
 // variable, because one would roll every agent when the operator is upgraded.
 func TestTheAgentOfANetworkClusterIsToldItsHostAddress(t *testing.T) {
 	cluster := clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-		Data: []simplyblockv1alpha2.StorageNetwork{{Name: "fabric"}},
+		PodNetwork: true,
 	})
 
 	hostIP, found := envVarOf(cluster, "HOST_IP")
@@ -75,7 +81,7 @@ func TestTheAgentOfANetworkClusterIsToldItsHostAddress(t *testing.T) {
 // address, so the agent states its own for the job.
 func TestTheAgentOfANetworkClusterKnowsItsOwnPodAddress(t *testing.T) {
 	cluster := clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{
-		Data: []simplyblockv1alpha2.StorageNetwork{{Name: "fabric"}},
+		PodNetwork: true,
 	})
 
 	podIP, found := envVarOf(cluster, "POD_IP")
@@ -83,13 +89,13 @@ func TestTheAgentOfANetworkClusterKnowsItsOwnPodAddress(t *testing.T) {
 	if !found || podIP.ValueFrom == nil || podIP.ValueFrom.FieldRef.FieldPath != "status.podIP" {
 		t.Fatalf("POD_IP = %+v, want the downward API's status.podIP", podIP)
 	}
-	if _, found := envVarOf(clusterWithNetwork(nil), "POD_IP"); found {
-		t.Fatal("a host-network cluster's agent gained POD_IP, which rolls it on upgrade")
+	if _, found := envVarOf(clusterWithNetwork(nil), "POD_IP"); !found {
+		t.Fatal("a cluster with no network has an agent with no POD_IP, and the agent is in the pod network")
 	}
 }
 
-func TestTheAgentOfAHostNetworkClusterGetsNoHostAddress(t *testing.T) {
-	if _, found := envVarOf(clusterWithNetwork(nil), "HOST_IP"); found {
-		t.Fatal("a host-network cluster's agent gained HOST_IP, which rolls it on upgrade")
+func TestTheAgentOfAClusterWithNoNetworkIsToldItsHostAddress(t *testing.T) {
+	if _, found := envVarOf(clusterWithNetwork(nil), "HOST_IP"); !found {
+		t.Fatal("the agent has no HOST_IP, and it is in the pod network")
 	}
 }

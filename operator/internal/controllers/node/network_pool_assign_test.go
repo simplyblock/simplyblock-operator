@@ -16,11 +16,11 @@ import (
 
 // viaPool is a network attached through a definition whose addresses come from
 // the pool 10.10.10.101 to 10.10.10.103.
-func viaPool(name string) simplyblockv1alpha2.StorageNetwork {
+func viaPool(name string) *simplyblockv1alpha2.StorageNetworkSpec {
 	network := viaDefinition(name)
 	pool := poolOf("10.10.10.0/24", "10.10.10.101", "10.10.10.103")
-	network.AddressPool = &pool
-	return network
+	network.NetworkAttachmentRef.AddressPool = &pool
+	return &simplyblockv1alpha2.StorageNetworkSpec{Data: []simplyblockv1alpha2.StorageNetwork{network}}
 }
 
 // poolWorld is a node on one pooled macvlan network with nothing recorded yet and

@@ -71,7 +71,7 @@ func (r *StorageNodeReconciler) requireDefinitions(
 ) (map[string]inventory.NetworkAttachmentConfig, error) {
 	configs := map[string]inventory.NetworkAttachmentConfig{}
 	for _, n := range pooledNetworks(network) {
-		ref := n.Attachment.NetworkAttachmentRef
+		ref := n.NetworkAttachmentRef
 		definition, err := multus.GetDefinition(ctx, r.Client, client.ObjectKey{Namespace: node.Namespace, Name: ref.Name})
 		switch {
 		case err == nil:
@@ -81,12 +81,12 @@ func (r *StorageNodeReconciler) requireDefinitions(
 		case apierrors.IsNotFound(err):
 			return nil, r.heldFor(cluster, NetworkAttachmentNotFound,
 				"the NetworkAttachmentDefinition %s/%s for network %q does not exist",
-				node.Namespace, ref.Name, n.Name)
+				node.Namespace, ref.Name, n.Name())
 		default:
 			return nil, fmt.Errorf("reading the definition %q: %w", ref.Name, err)
 		}
 
-		configs[n.Name] = inventory.ParseNetworkAttachmentConfig(definitionConfig(definition))
+		configs[n.Name()] = inventory.ParseNetworkAttachmentConfig(definitionConfig(definition))
 	}
 	return configs, nil
 }

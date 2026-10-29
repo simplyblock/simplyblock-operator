@@ -6,7 +6,6 @@ package deployment
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,16 +29,6 @@ func createDocument(
 	return apiServer(t).Create(context.Background(), config)
 }
 
-func wantRefused(t *testing.T, err error, mentions string) {
-	t.Helper()
-	if err == nil {
-		t.Fatal("the apiserver accepted a document it should refuse")
-	}
-	if !strings.Contains(err.Error(), mentions) {
-		t.Fatalf("refused for the wrong reason: %v (want it to mention %q)", err, mentions)
-	}
-}
-
 func TestADocumentOnANetworkWithItsPoolIsAccepted(t *testing.T) {
 	if err := createDocument(t, "net-ok", withNetwork); err != nil {
 		t.Fatalf("a document with a network and its pool was refused: %v", err)
@@ -52,11 +41,28 @@ func TestADocumentWithoutANetworkIsAcceptedAsBefore(t *testing.T) {
 	}
 }
 
-func TestANetworkBesideAGroupsInterfacesIsRefused(t *testing.T) {
+// A host-interface network states only that the data network is a host NIC, and
+// each group names its own NICs, so the two sit side by side.
+func TestAHostInterfaceNetworkBesideAGroupsDataInterfacesIsAccepted(t *testing.T) {
 	err := createDocument(t, "net-both", func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		withNetwork(c)
+		c.Spec.Cluster.Network = &simplyblockv1alpha2.StorageNetworkSpec{SpdkOnHostNetwork: true}
+		c.Spec.NodeSets[0].Groups[0].MgmtInterface = groupsInterface
+		c.Spec.NodeSets[0].Groups[0].DataInterfaces = []string{"eth2"}
+	})
+
+	if err != nil {
+		t.Fatalf("a host-interface network beside a group's interfaces was refused: %v", err)
+	}
+}
+
+func TestANetworkBesideAGroupsManagementInterfaceIsAccepted(t *testing.T) {
+	err := createDocument(t, "net-mgmt", func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
 		withNetwork(c)
 		c.Spec.NodeSets[0].Groups[0].MgmtInterface = groupsInterface
 	})
 
-	wantRefused(t, err, "network")
+	if err != nil {
+		t.Fatalf("a network beside a management interface was refused: %v", err)
+	}
 }

@@ -115,7 +115,7 @@ func (r *StorageNodeReconciler) networkGateHolds(
 	for _, declared := range pooledNetworks(networkOf(cluster)) {
 		passed := false
 		for _, n := range node.Status.Network {
-			if n.Network == declared.Name {
+			if n.Network == declared.Name() {
 				passed = n.Phase == simplyblockv1alpha2.NodeNetworkPhaseAttached &&
 					n.HostReachable != nil && *n.HostReachable
 			}
