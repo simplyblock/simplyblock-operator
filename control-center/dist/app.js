@@ -12938,10 +12938,22 @@ function Dialog({
   const reprepare = () => Promise.resolve().then(spec.prepare || (() => ({}))).then(p => setPrep(p || {}), () => {});
   // a dialog with a multi-column row editor or priority lanes gets the wide modal
   const wide = !!spec.wide || allFields.some(f => f.type === "rows" && (f.cols || []).length >= 3 || f.type === "lanes");
-  const fields = allFields.filter(f => f.type !== "note");
-  const invalid = !prep || fields.some(f => f.required && (vals[f.k] === undefined || vals[f.k] === "" || Array.isArray(vals[f.k]) && !vals[f.k].length) || f.match && vals[f.k] !== f.match || f.validate && f.validate(vals[f.k], vals)
+  const fields = allFields.filter(f => f.type !== "note" && f.type !== "section");
+  const bad = f => f.required && (vals[f.k] === undefined || vals[f.k] === "" || Array.isArray(vals[f.k]) && !vals[f.k].length) || f.match && vals[f.k] !== f.match || f.validate && f.validate(vals[f.k], vals)
   // a row error blocks saving when the field says so (a selector that matches nothing)
-  || f.rowsBlock && f.rowError && (vals[f.k] || []).some((r, i, rows) => f.rowError(r, i, rows, vals)));
+  || f.rowsBlock && f.rowError && (vals[f.k] || []).some((r, i, rows) => f.rowError(r, i, rows, vals));
+  const invalid = !prep || fields.some(bad);
+  // spec.collapsible: one section open at a time, the others a line with their
+  // summary and whether they still need input; their fields stay mounted (and
+  // keep proposing values), only hidden. A section with f.open stays open.
+  const groups = [];
+  allFields.forEach(f => f.type === "section" || !groups.length ? groups.push({
+    sec: f.type === "section" ? f : null,
+    items: f.type === "section" ? [] : [f]
+  }) : groups[groups.length - 1].items.push(f));
+  const [openSec, setOpenSec] = useState(undefined);
+  const firstSec = (groups.find(g => g.sec) || {}).sec;
+  const shown = openSec === undefined ? firstSec && firstSec.k : openSec;
   const submit = async () => {
     setBusy(true);
     setErr(null);
@@ -12985,20 +12997,58 @@ function Dialog({
     className: "mdesc"
   }, spec.desc), !prep && /*#__PURE__*/React.createElement("div", {
     className: "fskel"
-  }), allFields.map(f => f.type === "note" ? /*#__PURE__*/React.createElement(Field, {
-    key: f.k || f.label,
-    f: f
-  }) : /*#__PURE__*/React.createElement(Field, {
-    key: f.k,
-    f: f,
-    val: vals[f.k],
-    vals: vals,
-    setVal: v => setVals(s => Object.assign({}, s, {
-      [f.k]: v
-    })),
-    setAll: patch => setVals(s => Object.assign({}, s, patch)),
-    reprepare: reprepare
-  })), err && /*#__PURE__*/React.createElement("div", {
+  }), groups.map((g, gi) => {
+    const items = g.items.map(f => f.type === "note" ? /*#__PURE__*/React.createElement(Field, {
+      key: f.k || f.label,
+      f: f
+    }) : /*#__PURE__*/React.createElement(Field, {
+      key: f.k,
+      f: f,
+      val: vals[f.k],
+      vals: vals,
+      setVal: v => setVals(s => Object.assign({}, s, {
+        [f.k]: v
+      })),
+      setAll: patch => setVals(s => Object.assign({}, s, patch)),
+      reprepare: reprepare
+    }));
+    if (!g.sec || !spec.collapsible || g.sec.open) return /*#__PURE__*/React.createElement(React.Fragment, {
+      key: g.sec ? g.sec.k : "_" + gi
+    }, g.sec && /*#__PURE__*/React.createElement(Field, {
+      f: g.sec
+    }), items);
+    const isOpen = shown === g.sec.k;
+    const next = (groups.slice(gi + 1).find(x => x.sec && !x.sec.open) || {}).sec;
+    const needs = g.items.some(f => f.type !== "note" && bad(f));
+    const summary = typeof g.sec.summary === "function" ? g.sec.summary(vals) : g.sec.summary;
+    return /*#__PURE__*/React.createElement("div", {
+      key: g.sec.k,
+      className: "fcollapse" + (isOpen ? " open" : "")
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      className: "fsection fhead",
+      "aria-expanded": isOpen,
+      onClick: () => setOpenSec(isOpen ? null : g.sec.k)
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: isOpen ? "chevd" : "chev",
+      s: 12
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "fhtext"
+    }, /*#__PURE__*/React.createElement("h4", null, g.sec.label), !isOpen && summary && /*#__PURE__*/React.createElement("span", null, summary)), /*#__PURE__*/React.createElement("span", {
+      className: "fhmark" + (needs ? " needs" : "")
+    }, needs ? "needs input" : /*#__PURE__*/React.createElement(Icon, {
+      n: "check",
+      s: 12
+    }))), /*#__PURE__*/React.createElement("div", {
+      style: isOpen ? undefined : {
+        display: "none"
+      }
+    }, items, next && /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      className: "btn fnext",
+      onClick: () => setOpenSec(next.k)
+    }, "Next: ", next.label)));
+  }), err && /*#__PURE__*/React.createElement("div", {
     className: "banner",
     style: {
       marginTop: 10,
@@ -30473,6 +30523,7 @@ const quickProtectDialog = (plans, cfg) => {
     confirm: "Protect",
     done: "Protection created",
     wide: true,
+    collapsible: true,
     desc: "Existing plans, paths and network bindings are reused.",
     prepare: () => Promise.all([drhub.discovery(), drhub.paths().catch(() => []), drhub.apps().catch(() => []), drhub.siteProfiles().catch(() => []), drhub.dhcpServers().catch(() => [])]).then(([disc, paths, apps, profiles, servers]) => P = {
       disc,
@@ -30511,7 +30562,8 @@ const quickProtectDialog = (plans, cfg) => {
       return [{
         k: "sApp",
         type: "section",
-        label: "Application"
+        label: "Application",
+        summary: `${nss.join(", ") || "no namespace"} on ${v.src || "—"}${v.name ? ` · ${v.name}` : ""}`
       }, {
         k: "src",
         label: "Source cluster",
@@ -30560,7 +30612,8 @@ const quickProtectDialog = (plans, cfg) => {
       }, {
         k: "sTo",
         type: "section",
-        label: "Protect to"
+        label: "Protect to",
+        summary: !v.dst ? "choose the target" : `${v.dst} · ${plan && !plan.created ? `plan ${plan.name}` : `new plan, every ${v.interval || "5m"}`}${!fwd || !rev ? ` · ${[fwd, rev].filter(x => !x).length} new path${!fwd && !rev ? "s" : ""}` : ""}`
       }, {
         k: "dst",
         label: "Target cluster",
@@ -30618,7 +30671,8 @@ const quickProtectDialog = (plans, cfg) => {
       }, plan && !fwd && v.dst && qpTestNad(disc, paths, v.dst, `Test failover network on ${v.dst}`, "testFwd"), plan && !rev && v.src && qpTestNad(disc, paths, v.src, `Test failover network on ${v.src}`, "testRev"), {
         k: "sNet",
         type: "section",
-        label: "VM networks"
+        label: "VM networks",
+        summary: !nets.length ? "no VMs" : nets.map(n => n.bound ? `${n.role}: bound` : `${n.role}: ${(v[n.k] || []).map(r => r.nad || "?").join(" → ")}`).join(" · ")
       }, !nets.length && {
         k: "nNoVM",
         type: "note",
@@ -30691,7 +30745,8 @@ const quickProtectDialog = (plans, cfg) => {
       }), {
         k: "sOrder",
         type: "section",
-        label: "Recovery order"
+        label: "Recovery order",
+        summary: `${(v.tiers || []).map(t => t.name).filter(Boolean).join(" → ") || "no tiers"} · ${(v.probes || []).length} health check${(v.probes || []).length === 1 ? "" : "s"}`
       }, ...tierFields(v, disc, v.src, nss, target, siteOf), {
         k: "probes",
         label: "Health checks",
@@ -30717,7 +30772,8 @@ const quickProtectDialog = (plans, cfg) => {
       }, {
         k: "sReview",
         type: "section",
-        label: "Review"
+        label: "Review",
+        open: true
       }, creates.length > 0 && {
         k: "nCreate",
         type: "note",

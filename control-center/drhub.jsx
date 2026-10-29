@@ -1015,7 +1015,7 @@ const quickProtectDialog = (plans, cfg) => {
     return {fwd: find(v.src, v.dst), rev: find(v.dst, v.src)};
   };
   return {
-  title: "Quick protect", confirm: "Protect", done: "Protection created", wide: true,
+  title: "Quick protect", confirm: "Protect", done: "Protection created", wide: true, collapsible: true,
   desc: "Existing plans, paths and network bindings are reused.",
   prepare: () => Promise.all([drhub.discovery(), drhub.paths().catch(() => []), drhub.apps().catch(() => []), drhub.siteProfiles().catch(() => []), drhub.dhcpServers().catch(() => [])])
     .then(([disc, paths, apps, profiles, servers]) => (P = {disc, paths, apps, profiles, servers})),
@@ -1036,7 +1036,7 @@ const quickProtectDialog = (plans, cfg) => {
       v.name && `application ${v.name}`].filter(Boolean);
     const reuses = [plan && !plan.created && `plan ${plan.name}`, fwd && `path ${fwd.name}`, rev && `path ${rev.name}`, ...nets.filter(n => n.bound).map(n => `role ${n.role} bindings`)].filter(Boolean);
     return [
-      {k: "sApp", type: "section", label: "Application"},
+      {k: "sApp", type: "section", label: "Application", summary: `${nss.join(", ") || "no namespace"} on ${v.src || "—"}${v.name ? ` · ${v.name}` : ""}`},
       {k: "src", label: "Source cluster", type: "select", required: true, options: clusters, empty: "No managed cluster reported."},
       {k: "namespaces", label: "Namespaces", type: "chips", required: true, def: [], options: namespaceOptions(disc, v.src, v.src), addLabel: "— add a namespace —",
         empty: v.src ? `dr-agent on ${v.src} has not reported its namespaces` : "choose the source cluster first",
@@ -1049,7 +1049,7 @@ const quickProtectDialog = (plans, cfg) => {
         validate: x => { const m = pvcMatches(disc, v.src, nss, parseSelector(x || "")); return m && !m.length ? `Matches no PVC in ${nss.join(", ")}.` : null; },
         hint: x => { const m = pvcMatches(disc, v.src, nss, parseSelector(x || "")); return m ? `${m.length} PVC${m.length === 1 ? "" : "s"}: ${m.slice(0, 6).join(", ")}${m.length > 6 ? " …" : ""}` : ""; }},
 
-      {k: "sTo", type: "section", label: "Protect to"},
+      {k: "sTo", type: "section", label: "Protect to", summary: !v.dst ? "choose the target" : `${v.dst} · ${plan && !plan.created ? `plan ${plan.name}` : `new plan, every ${v.interval || "5m"}`}${!fwd || !rev ? ` · ${[fwd, rev].filter(x => !x).length} new path${!fwd && !rev ? "s" : ""}` : ""}`},
       {k: "dst", label: "Target cluster", type: "select", required: true, options: clusters.filter(o => o.v !== v.src), empty: "No other managed cluster reported."},
       have.length > 0 && {k: "plan", label: "Plan", type: "select", required: true,
         options: have.map(p => ({v: p.name, l: `${p.name} · ${p.methods.map(m => m.interval ? `${m.type} ${m.interval}` : m.type).join(", ")} · ${p.status}`}))},
@@ -1068,7 +1068,7 @@ const quickProtectDialog = (plans, cfg) => {
       plan && !fwd && v.dst && qpTestNad(disc, paths, v.dst, `Test failover network on ${v.dst}`, "testFwd"),
       plan && !rev && v.src && qpTestNad(disc, paths, v.src, `Test failover network on ${v.src}`, "testRev"),
 
-      {k: "sNet", type: "section", label: "VM networks"},
+      {k: "sNet", type: "section", label: "VM networks", summary: !nets.length ? "no VMs" : nets.map(n => n.bound ? `${n.role}: bound` : `${n.role}: ${(v[n.k] || []).map(r => r.nad || "?").join(" → ")}`).join(" · ")},
       !nets.length && {k: "nNoVM", type: "note", icon: "check", label: nss.length && v.dst ? `No VMs in ${nss.join(", ")}: nothing to map.` : "Choose the namespaces and the target cluster first."},
       ...nets.map(n => n.bound
         ? {k: `n${n.k}`, type: "note", icon: "check", label: `Role ${n.role}: bound on ${v.src} and ${v.dst}.`}
@@ -1091,13 +1091,13 @@ const quickProtectDialog = (plans, cfg) => {
           rowError: r => !r.nad ? "Network required." : !nb(r.cidr) ? "Guest subnet required." : guestRowError(disc, r.site, {cidr: r.cidr, reservedHostIDs: r.reservedHostIDs}, r.nad, null),
           rowsBlock: true, hint: "Subnets prefilled from current VM addresses."}),
 
-      {k: "sOrder", type: "section", label: "Recovery order"},
+      {k: "sOrder", type: "section", label: "Recovery order", summary: `${(v.tiers || []).map(t => t.name).filter(Boolean).join(" → ") || "no tiers"} · ${(v.probes || []).length} health check${(v.probes || []).length === 1 ? "" : "s"}`},
       ...tierFields(v, disc, v.src, nss, target, siteOf),
       {k: "probes", label: "Health checks", type: "rows", cols: PROBE_COLS, max: 8, addLabel: "Add check",
         add: () => ({name: "", type: "http", target: "", timeout: "15s", expectStatus: ""}), hint: "Expects 2xx or 3xx after a move.",
         rowAction: {label: "Test", title: "dr-agent runs this probe on the source cluster now", run: row => drhub.probeHealth(Object.assign(target(), {probes: probeRowSpec(row)})).then(healthAnswer)}},
 
-      {k: "sReview", type: "section", label: "Review"},
+      {k: "sReview", type: "section", label: "Review", open: true},
       creates.length > 0 && {k: "nCreate", type: "note", icon: "plus", label: `Creates: ${creates.join(", ")}.`},
       reuses.length > 0 && {k: "nReuse", type: "note", icon: "check", label: `Reuses: ${reuses.join(", ")}.`}
     ].filter(Boolean);

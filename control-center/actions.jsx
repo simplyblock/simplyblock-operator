@@ -1816,11 +1816,20 @@ function Dialog({spec, obj, removes, onClose}) {
   const reprepare = () => Promise.resolve().then(spec.prepare || (() => ({}))).then(p => setPrep(p || {}), () => {});
   // a dialog with a multi-column row editor or priority lanes gets the wide modal
   const wide = !!spec.wide || allFields.some(f => (f.type === "rows" && (f.cols || []).length >= 3) || f.type === "lanes");
-  const fields = allFields.filter(f => f.type !== "note");
-  const invalid = !prep || fields.some(f => (f.required && (vals[f.k] === undefined || vals[f.k] === "" || (Array.isArray(vals[f.k]) && !vals[f.k].length)))
+  const fields = allFields.filter(f => f.type !== "note" && f.type !== "section");
+  const bad = f => (f.required && (vals[f.k] === undefined || vals[f.k] === "" || (Array.isArray(vals[f.k]) && !vals[f.k].length)))
     || (f.match && vals[f.k] !== f.match) || (f.validate && f.validate(vals[f.k], vals))
     // a row error blocks saving when the field says so (a selector that matches nothing)
-    || (f.rowsBlock && f.rowError && (vals[f.k] || []).some((r, i, rows) => f.rowError(r, i, rows, vals))));
+    || (f.rowsBlock && f.rowError && (vals[f.k] || []).some((r, i, rows) => f.rowError(r, i, rows, vals)));
+  const invalid = !prep || fields.some(bad);
+  // spec.collapsible: one section open at a time, the others a line with their
+  // summary and whether they still need input; their fields stay mounted (and
+  // keep proposing values), only hidden. A section with f.open stays open.
+  const groups = [];
+  allFields.forEach(f => f.type === "section" || !groups.length ? groups.push({sec: f.type === "section" ? f : null, items: f.type === "section" ? [] : [f]}) : groups[groups.length - 1].items.push(f));
+  const [openSec, setOpenSec] = useState(undefined);
+  const firstSec = (groups.find(g => g.sec) || {}).sec;
+  const shown = openSec === undefined ? firstSec && firstSec.k : openSec;
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
@@ -1844,10 +1853,27 @@ function Dialog({spec, obj, removes, onClose}) {
         <div className="mbody">
           {spec.desc && <p className="mdesc">{spec.desc}</p>}
           {!prep && <div className="fskel"></div>}
-          {allFields.map(f => f.type === "note"
-            ? <Field key={f.k || f.label} f={f} />
-            : <Field key={f.k} f={f} val={vals[f.k]} vals={vals} setVal={v => setVals(s => Object.assign({}, s, {[f.k]: v}))}
-                setAll={patch => setVals(s => Object.assign({}, s, patch))} reprepare={reprepare} />)}
+          {groups.map((g, gi) => {
+            const items = g.items.map(f => f.type === "note"
+              ? <Field key={f.k || f.label} f={f} />
+              : <Field key={f.k} f={f} val={vals[f.k]} vals={vals} setVal={v => setVals(s => Object.assign({}, s, {[f.k]: v}))}
+                  setAll={patch => setVals(s => Object.assign({}, s, patch))} reprepare={reprepare} />);
+            if (!g.sec || !spec.collapsible || g.sec.open) return <React.Fragment key={g.sec ? g.sec.k : "_" + gi}>{g.sec && <Field f={g.sec} />}{items}</React.Fragment>;
+            const isOpen = shown === g.sec.k;
+            const next = (groups.slice(gi + 1).find(x => x.sec && !x.sec.open) || {}).sec;
+            const needs = g.items.some(f => f.type !== "note" && bad(f));
+            const summary = typeof g.sec.summary === "function" ? g.sec.summary(vals) : g.sec.summary;
+            return (
+              <div key={g.sec.k} className={"fcollapse" + (isOpen ? " open" : "")}>
+                <button type="button" className="fsection fhead" aria-expanded={isOpen} onClick={() => setOpenSec(isOpen ? null : g.sec.k)}>
+                  <Icon n={isOpen ? "chevd" : "chev"} s={12} />
+                  <span className="fhtext"><h4>{g.sec.label}</h4>{!isOpen && summary && <span>{summary}</span>}</span>
+                  <span className={"fhmark" + (needs ? " needs" : "")}>{needs ? "needs input" : <Icon n="check" s={12} />}</span>
+                </button>
+                <div style={isOpen ? undefined : {display: "none"}}>{items}
+                  {next && <button type="button" className="btn fnext" onClick={() => setOpenSec(next.k)}>Next: {next.label}</button>}</div>
+              </div>);
+          })}
           {err && <div className="banner" style={{marginTop: 10, marginBottom: 0}}><Icon n="alert" s={14} />{err}</div>}
         </div>
         <div className="mfoot">
