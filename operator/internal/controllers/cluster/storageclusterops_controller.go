@@ -28,6 +28,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -888,6 +889,9 @@ func equalOpsStatus(a, b simplyblockv1alpha2.StorageClusterOpsStatus) bool {
 		!equalTime(a.Step.Deadline, b.Step.Deadline) ||
 		!equalTime(a.StartedAt, b.StartedAt) ||
 		!equalTime(a.CompletedAt, b.CompletedAt) {
+		return false
+	}
+	if !reflect.DeepEqual(a.DeviceGrowth, b.DeviceGrowth) {
 		return false
 	}
 	if (a.RollingRestart == nil) != (b.RollingRestart == nil) {

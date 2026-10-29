@@ -184,3 +184,77 @@ func TestDeviceRemovalAndFailureReportARefusal(t *testing.T) {
 		t.Error("a refused failure was reported as performed")
 	}
 }
+
+func TestGrowDeviceReturnsTheGrowth(t *testing.T) {
+	var path, method string
+	c := deviceClient(t, func(w http.ResponseWriter, r *http.Request) {
+		path, method = r.URL.Path, r.Method
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"device_id": testDeviceID, "old_size": 100, "new_size": 200, "placement_size": 100,
+			"resized": true, "uniform": false, "warning": "grown unevenly",
+		})
+	})
+
+	got, err := c.GrowDevice(t.Context(), testDeviceCluster, testDeviceNode, testDeviceID)
+	if err != nil {
+		t.Fatalf("growing the device: %v", err)
+	}
+	if method != http.MethodPost || !strings.HasSuffix(path, "/devices/"+testDeviceID+"/resize") {
+		t.Errorf("request = %s %s, want POST .../devices/{id}/resize", method, path)
+	}
+	want := DeviceGrowth{DeviceID: testDeviceID, OldSize: 100, NewSize: 200, PlacementSize: 100,
+		Resized: true, Uniform: false, Warning: "grown unevenly"}
+	if got != want {
+		t.Errorf("GrowDevice = %+v, want %+v", got, want)
+	}
+}
+
+// A refusal is a conflict the caller can tell apart from a transport failure:
+// it is final, where the other is worth a retry.
+func TestGrowDeviceReportsARefusal(t *testing.T) {
+	c := deviceClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"detail":"The block device shrank"}`))
+	})
+
+	_, err := c.GrowDevice(t.Context(), testDeviceCluster, testDeviceNode, testDeviceID)
+	var status *StatusError
+	if !errors.As(err, &status) || status.StatusCode != http.StatusConflict {
+		t.Fatalf("err = %v, want a 409 StatusError", err)
+	}
+	if !strings.Contains(err.Error(), "shrank") {
+		t.Errorf("err = %v, want the control plane's reason carried", err)
+	}
+}
+
+func TestGrowClusterDevicesReadsEveryDevice(t *testing.T) {
+	var path string
+	c := deviceClient(t, func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"devices": []map[string]any{{
+				"device_id": testDeviceID, "old_size": 100, "new_size": 200,
+				"placement_size": 100, "resized": true, "uniform": true, "warning": "",
+			}},
+			"errors":  map[string]string{"other": "Device must be online"},
+			"uniform": true,
+		})
+	})
+
+	got, err := c.GrowClusterDevices(t.Context(), testDeviceCluster)
+	if err != nil {
+		t.Fatalf("growing the devices: %v", err)
+	}
+	if !strings.HasSuffix(path, "/clusters/"+testDeviceCluster+"/grow-devices") {
+		t.Errorf("path = %s, want .../clusters/{id}/grow-devices", path)
+	}
+	if len(got.Devices) != 1 || got.Devices[0].NewSize != 200 || !got.Devices[0].Resized {
+		t.Errorf("Devices = %+v, want the one grown device", got.Devices)
+	}
+	if got.Errors["other"] != "Device must be online" || !got.Uniform {
+		t.Errorf("growth = %+v, want the errors and the uniform flag carried", got)
+	}
+}

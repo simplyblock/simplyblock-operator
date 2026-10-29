@@ -233,6 +233,7 @@ type fakeControlPlane struct {
 	restartNode  func(string, string) error
 	tasks        func(string) ([]subscriptions.TaskDTO, error)
 	cancelTask   func(string, string) error
+	growDevices  func(string) (atlascp.ClusterDeviceGrowth, error)
 
 	setLeaderSite     func(string, string) error
 	reachability      func(string, []string) ([]WorkerReachability, error)
@@ -254,6 +255,7 @@ type fakeControlPlane struct {
 
 	serviceClassesCalls    int
 	setServiceClassesCalls int
+	growDevicesCalls  int
 }
 
 func (f *fakeControlPlane) Endpoint(context.Context) string { return f.endpoint }
@@ -431,6 +433,16 @@ func (f *fakeControlPlane) SetServiceClasses(
 		f.t.Fatal("the control plane was sent service classes and the test did not script it")
 	}
 	return f.setServiceClasses(clusterID, config)
+}
+
+func (f *fakeControlPlane) GrowDevices(
+	_ context.Context, clusterID string,
+) (atlascp.ClusterDeviceGrowth, error) {
+	f.growDevicesCalls++
+	if f.growDevices == nil {
+		return atlascp.ClusterDeviceGrowth{Uniform: true}, nil
+	}
+	return f.growDevices(clusterID)
 }
 
 var _ ControlPlane = (*fakeControlPlane)(nil)

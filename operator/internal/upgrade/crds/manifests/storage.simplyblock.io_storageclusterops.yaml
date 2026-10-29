@@ -219,6 +219,7 @@ spec:
                     - Restart
                     - RollingRestart
                     - CancelTask
+                    - GrowDevices
                   type: string
                   x-kubernetes-validations:
                     - message: field is immutable
@@ -274,6 +275,34 @@ spec:
                   description: CompletedAt is when it reached a terminal phase.
                   format: date-time
                   type: string
+                deviceGrowth:
+                  description: DeviceGrowth is what a GrowDevices did, set only for that action.
+                  properties:
+                    errors:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Errors maps the control-plane ID of each device that could not be grown
+                        to the reason.
+                      type: object
+                    grown:
+                      description: Grown is how many devices took a new, larger size.
+                      format: int32
+                      type: integer
+                    unchanged:
+                      description: Unchanged is how many devices had not grown on their block device.
+                      format: int32
+                      type: integer
+                    uniform:
+                      description: |-
+                        Uniform reports whether every data device of the cluster has now grown by
+                        the same factor, which is what makes the added capacity fully usable.
+                      type: boolean
+                  required:
+                    - grown
+                    - unchanged
+                    - uniform
+                  type: object
                 message:
                   description: |-
                     Message is the reason the phase is what it is: one sentence, replaced as
