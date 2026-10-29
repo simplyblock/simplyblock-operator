@@ -20,7 +20,7 @@ const configureHostDialog = h => {
     title: `Configure ${h.hostname} as a storage host`, confirm: "Apply configuration",
     desc: "Runs the storage-plane configuration on the inspected node. Only the resources you pick here are handed to simplyblock; everything else stays with the kubelet.",
     fields: [
-      {k: "numa_sockets", label: "NUMA socket(s) to use", type: "multiselect", required: true,
+      {k: "numa_sockets", label: "NUMA sockets", type: "multiselect", required: true,
         options: sockets.map(s => ({v: String(s),
           l: `socket ${s} · ${h.devices.filter(d => d.socket === s).length} device(s) · ${h.nics.filter(n => n.socket === s).length} NIC(s)`}))},
       {k: "memory_per_pod", label: "System memory per storage-plane pod", unit: "GB", type: "number", min: 8,
@@ -97,7 +97,7 @@ const addMethodDialog = plan => ({
     v.type === "snapshot-s3" ? {k: "retention_hourly", label: "Hourly generations", type: "number", def: 24, min: 0} : null,
     v.type === "snapshot-s3" ? {k: "retention_daily", label: "Daily generations", type: "number", def: 14, min: 0} : null,
     v.type === "snapshot-s3" ? {k: "retention_weekly", label: "Weekly generations", type: "number", def: 8, min: 0} : null,
-    v.type === "snapshot-s3" ? {k: "immutable", label: "Object Lock (compliance)", type: "checkbox", def: true,
+    v.type === "snapshot-s3" ? {k: "immutable", label: "Object Lock", desc: "Compliance mode.", type: "checkbox", def: true,
       sub: "generations cannot be deleted before their lock expires — the guarantee the vault exists for"} : null,
     v.type === "sync" ? {k: "n99", type: "note", label: "Synchronous protection needs both sites in one region: it is declared by an equal region on the two DRClusters, and the mirror is inline so every write waits for the peer."} : null,
     v.type === "snapshot-s3" ? {k: "n100", type: "note", label: "There is no failback from a vault restore. The source volume is gone or untrusted and the vault holds generations rather than a live peer, so the original site's pre-compromise state cannot be reconstructed — the restored application is re-protected as a new plan with a full baseline."} : null
@@ -290,7 +290,7 @@ const newRPolicyDialog = ctx => ({
       sync ? null : {k: "consistency_group", label: "Create a consistency group for the member volumes", type: "checkbox", def: true},
       sync ? null : {k: "failback_mode", label: "Failback policy", type: "select", def: "manual",
         options: [{v: "manual", l: "Manual — operator initiates failback"}, {v: "automatic", l: "Automatic — on source recovery"}]},
-      sync ? null : {k: "resync_full", label: "Full resync on failback (instead of delta)", type: "checkbox"},
+      sync ? null : {k: "resync_full", label: "Full resync on failback", desc: "Instead of a delta.", type: "checkbox"},
       {k: "n7", type: "note", label: sync
         ? "Writes are acknowledged only when every listed zone has them — no frequency, no backlog and no consistency group. Volumes can be added to and removed from the policy at any time."
         : "Volumes are attached after the policy exists. A policy can only be deleted once no volumes are attached."}
@@ -520,7 +520,7 @@ const newClusterDialog = () => ({
         options: edge ? [{v: "block", l: "Block devices"}]
           : [{v: "nvme", l: "NVMe (PCIe address)"}, {v: "block", l: "Block devices"}]},
       edge ? {k: "n5", type: "note", label: "Edge clusters are block-device only, do not rebalance, run no task engine, and are managed through the Kubernetes API rather than a separate control plane endpoint."} : null,
-      {k: "ec", label: "Stripe — data + parity chunks", type: "select", def: "2+1",
+      {k: "ec", label: "Stripe", desc: "Data + parity chunks.", type: "select", def: "2+1",
         options: ["1+1", "2+1", "2+2", "4+1", "4+2", "8+2"].map(x => ({v: x, l: `${x} (data+parity chunks)`}))},
       {k: "zone_ids", label: "Zones the cluster spans", type: "multiselect", required: true,
         load: () => api.zones().then(ss => ss.map(x => ({v: x.id, l: `${x.name} · ${x.location}`}))),
@@ -530,7 +530,7 @@ const newClusterDialog = () => ({
         options: [{v: "none", l: "None — free placement"},
           {v: "soft", l: "Soft — prefer to keep volumes in place"},
           {v: "strict", l: "Strict — volumes can be pinned to a node"}]},
-      {k: "pod_affinity_enabled", label: "Pod affinity — front storage follows the workload", type: "checkbox", def: true},
+      {k: "pod_affinity_enabled", label: "Pod affinity", desc: "Front storage follows the workload.", type: "checkbox", def: true},
       {k: "n25", type: "note", label: "With pod affinity a volume's primary is moved by instant migration whenever its workload pod is rescheduled to another node."},
       {k: "multipathing_enabled", label: "Enable multipathing", type: "checkbox", def: true},
       v.multipathing_enabled
@@ -628,7 +628,7 @@ const ACTIONS = {
             .map(h => ({v: h.id, l: `${h.hostname} · ${o.fd.scope} ${fdOf(h)} · ${h.counts.free} free devices`}));
         }),
         empty: "No eligible host. A host must be in one of the cluster's zones, carry a failure-domain taint, and sit in a domain that is not already ahead of the others."},
-        o.fd && o.fd.enabled ? {k: "failure_domain", label: `Failure domain (${o.fd.scope})`, type: "text", required: true,
+        o.fd && o.fd.enabled ? {k: "failure_domain", label: "Failure domain", desc: `Scope: ${o.fd.scope}.`, type: "text", required: true,
           def: (o.fd.domains && o.fd.domains[0] && o.fd.domains[0].name) || "",
           hint: (o.fd.domains || []).length ? "Existing: " + o.fd.domains.map(f => f.name).join(", ") + "." : null} : null,
         o.fd && o.fd.enabled ? {k: "n71", type: "note", label: "The failure domain is assigned once, now. It is fixed for the node's lifetime — moving a node between domains means removing it and adding it again."} : null,
@@ -690,7 +690,7 @@ const ACTIONS = {
     o.status === "online" || o.status === "in_restart" ? {label: "Shut down node", icon: "power", danger: true, dialog: {
       title: `Shut down ${o.hostname}?`, danger: true,
       desc: "The node reports in shutdown and then offline. Nothing is migrated off it — volumes whose primary sits here fail over to their secondaries, and the cluster runs at reduced redundancy until the node is back. A forced shutdown stops the node without waiting for it to close cleanly.",
-      fields: [{k: "force", label: "Force (do not wait for a clean stop)", type: "checkbox"}],
+      fields: [{k: "force", label: "Force", desc: "Does not wait for a clean stop.", type: "checkbox"}],
       confirm: "Shut down", run: v => api.nodeShutdown(o.id, v.force)}} : null,
     o.status !== "online" && o.status !== "in_restart" ? {label: "Restart node", icon: "refresh", dialog: {
       title: `Restart ${o.hostname}?`,
@@ -1365,7 +1365,7 @@ const ACTIONS = {
       title: `Schedule for ${o.name}`,
       desc: "Each row is a tier: how often a snapshot is taken and backed up, how many backup versions of that tier are retained, and how many of those snapshots stay online on the cluster.",
       fields: [{k: "schedule", label: "Schedule", type: "bschedule", def: o.schedule},
-        {k: "consistency_group", label: "Group-consistent — all linked volumes in one consistency group", type: "checkbox", def: o.consistencyGroup},
+        {k: "consistency_group", label: "Group-consistent", desc: "All linked volumes in one consistency group.", type: "checkbox", def: o.consistencyGroup},
         {k: "n60", type: "note", label: "Group-consistent policies are what Ramen applications link for ransomware recovery: any retained version is a point-in-time the application can be restored to."}],
       confirm: "Apply", run: v => api.policyUpdate(o.id, v)}},
     {label: "Delete policy", icon: "trash", danger: true, removes: true,
@@ -1384,7 +1384,7 @@ const newBackupPolicyDialog = cluster => ({
     {k: "name", label: "Policy name", type: "text", required: true},
     {k: "schedule", label: "Schedule", type: "bschedule",
       def: [{interval: "5m", versions: 12, online: 3}, {interval: "1h", versions: 11, online: 0}, {interval: "1d", versions: 6, online: 0}]},
-    {k: "consistency_group", label: "Group-consistent — all linked volumes in one consistency group", type: "checkbox", def: false},
+    {k: "consistency_group", label: "Group-consistent", desc: "All linked volumes in one consistency group.", type: "checkbox", def: false},
     {k: "n12", type: "note", label: "Once a tier holds more versions than it retains, the oldest is merged into its predecessor — so the interval is also the merge cadence. Group-consistent policies snapshot every linked volume atomically per cycle, which is what an application needs to recover from ransomware to one point in time."}
   ],
   run: v => api.policyCreate(cluster.id, v)
@@ -1437,7 +1437,12 @@ const runCheck = (fn, set) => {
   Promise.resolve().then(fn).then(set, e => set({status: "bad", text: (e && e.message) || "the check failed"}));
 };
 
-function Field({f, val, setVal, vals, setAll, reprepare}) {
+// f.desc: what the field is, said once beneath it, before any hint (labels
+// stay terse: "Tiers", not "Tiers — the boot order …")
+const withDesc = f => !f.desc ? f : Object.assign({}, f, {desc: undefined, hint: !f.hint ? f.desc
+  : typeof f.hint === "function" ? (...a) => [f.desc, f.hint(...a)].filter(Boolean).join(" ") : `${f.desc} ${f.hint}`});
+function Field({f: f0, val, setVal, vals, setAll, reprepare}) {
+  const f = withDesc(f0);
   const [opts, setOpts] = useState(f.options || null);
   const [loading, setLoading] = useState(!!f.load);
   const [checks, setChecks] = useState({});

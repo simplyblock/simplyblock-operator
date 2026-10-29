@@ -8490,7 +8490,7 @@ const configureHostDialog = h => {
     desc: "Runs the storage-plane configuration on the inspected node. Only the resources you pick here are handed to simplyblock; everything else stays with the kubelet.",
     fields: [{
       k: "numa_sockets",
-      label: "NUMA socket(s) to use",
+      label: "NUMA sockets",
       type: "multiselect",
       required: true,
       options: sockets.map(s => ({
@@ -8701,7 +8701,8 @@ const addMethodDialog = plan => ({
     min: 0
   } : null, v.type === "snapshot-s3" ? {
     k: "immutable",
-    label: "Object Lock (compliance)",
+    label: "Object Lock",
+    desc: "Compliance mode.",
     type: "checkbox",
     def: true,
     sub: "generations cannot be deleted before their lock expires — the guarantee the vault exists for"
@@ -9126,7 +9127,8 @@ const newRPolicyDialog = ctx => ({
       }]
     }, sync ? null : {
       k: "resync_full",
-      label: "Full resync on failback (instead of delta)",
+      label: "Full resync on failback",
+      desc: "Instead of a delta.",
       type: "checkbox"
     }, {
       k: "n7",
@@ -9841,7 +9843,8 @@ const newClusterDialog = () => ({
       label: "Edge clusters are block-device only, do not rebalance, run no task engine, and are managed through the Kubernetes API rather than a separate control plane endpoint."
     } : null, {
       k: "ec",
-      label: "Stripe — data + parity chunks",
+      label: "Stripe",
+      desc: "Data + parity chunks.",
       type: "select",
       def: "2+1",
       options: ["1+1", "2+1", "2+2", "4+1", "4+2", "8+2"].map(x => ({
@@ -9879,7 +9882,8 @@ const newClusterDialog = () => ({
       }]
     }, {
       k: "pod_affinity_enabled",
-      label: "Pod affinity — front storage follows the workload",
+      label: "Pod affinity",
+      desc: "Front storage follows the workload.",
       type: "checkbox",
       def: true
     }, {
@@ -10136,7 +10140,8 @@ const ACTIONS = {
         empty: "No eligible host. A host must be in one of the cluster's zones, carry a failure-domain taint, and sit in a domain that is not already ahead of the others."
       }, o.fd && o.fd.enabled ? {
         k: "failure_domain",
-        label: `Failure domain (${o.fd.scope})`,
+        label: "Failure domain",
+        desc: `Scope: ${o.fd.scope}.`,
         type: "text",
         required: true,
         def: o.fd.domains && o.fd.domains[0] && o.fd.domains[0].name || "",
@@ -10279,7 +10284,8 @@ const ACTIONS = {
       desc: "The node reports in shutdown and then offline. Nothing is migrated off it — volumes whose primary sits here fail over to their secondaries, and the cluster runs at reduced redundancy until the node is back. A forced shutdown stops the node without waiting for it to close cleanly.",
       fields: [{
         k: "force",
-        label: "Force (do not wait for a clean stop)",
+        label: "Force",
+        desc: "Does not wait for a clean stop.",
         type: "checkbox"
       }],
       confirm: "Shut down",
@@ -11898,7 +11904,8 @@ const ACTIONS = {
         def: o.schedule
       }, {
         k: "consistency_group",
-        label: "Group-consistent — all linked volumes in one consistency group",
+        label: "Group-consistent",
+        desc: "All linked volumes in one consistency group.",
         type: "checkbox",
         def: o.consistencyGroup
       }, {
@@ -11953,7 +11960,8 @@ const newBackupPolicyDialog = cluster => ({
     }]
   }, {
     k: "consistency_group",
-    label: "Group-consistent — all linked volumes in one consistency group",
+    label: "Group-consistent",
+    desc: "All linked volumes in one consistency group.",
     type: "checkbox",
     def: false
   }, {
@@ -12041,14 +12049,22 @@ const runCheck = (fn, set) => {
     text: e && e.message || "the check failed"
   }));
 };
+
+// f.desc: what the field is, said once beneath it, before any hint (labels
+// stay terse: "Tiers", not "Tiers — the boot order …")
+const withDesc = f => !f.desc ? f : Object.assign({}, f, {
+  desc: undefined,
+  hint: !f.hint ? f.desc : typeof f.hint === "function" ? (...a) => [f.desc, f.hint(...a)].filter(Boolean).join(" ") : `${f.desc} ${f.hint}`
+});
 function Field({
-  f,
+  f: f0,
   val,
   setVal,
   vals,
   setAll,
   reprepare
 }) {
+  const f = withDesc(f0);
   const [opts, setOpts] = useState(f.options || null);
   const [loading, setLoading] = useState(!!f.load);
   const [checks, setChecks] = useState({});
@@ -23259,7 +23275,8 @@ const discoveryDialog = (k, prev) => ({
     def: prev && prev.filter.driveSizeRange ? gb(prev.filter.driveSizeRange.min) : 400
   }, {
     k: "size_max",
-    label: "Capacity — largest (0 = no limit)",
+    label: "Capacity — largest",
+    desc: "0 means no limit.",
     unit: "GB",
     type: "number",
     min: 0,
@@ -28472,7 +28489,7 @@ const runActionDialog = (target, kind, ctx) => {
         label: `Readiness on this path is NotReady: ${blockingChecks(target, v.path).join(", ") || "blocking checks failed"}. Running anyway needs a reason and the "override" verb on recoveryactions (dr-admin). The run is audited with the reason.`
       }, !pathless && verdict === "NotReady" && {
         k: "override",
-        label: "Override reason (10–1024 characters)",
+        label: "Override reason",
         type: "text",
         required: true,
         maxLen: OVERRIDE_MAX,
@@ -28590,14 +28607,15 @@ const runTestDialog = target => {
         def: false
       }, v.idOverride ? {
         k: "testID",
-        label: "Test id (4 to 12 lower-case letters and digits)",
+        label: "Test id",
+        desc: "4 to 12 lower-case letters and digits.",
         type: "text",
         required: true,
         def: proposed,
         validate: x => err(x)
       } : {
         k: "testID",
-        label: "Test id (proposed)",
+        label: "Test id",
         type: "select",
         options: [{
           v: proposed,
@@ -28690,7 +28708,8 @@ const holdDialog = t => ({
   done: "Hold updated",
   fields: [{
     k: "holdFor",
-    label: "Hold for (from now)",
+    label: "Hold for",
+    desc: "From now.",
     type: "text",
     def: t.holdFor || "1h",
     required: true
@@ -28772,12 +28791,13 @@ const SITE_COLS = [{
   flex: 1
 }, {
   k: "cluster",
-  label: "Cluster (managed cluster)",
+  label: "Managed cluster",
   note: "empty uses the site name.",
   flex: 1.2
 }, {
   k: "zone",
-  label: "Zone (sync)",
+  label: "Zone",
+  note: "sync plans only.",
   flex: 0.8
 }, {
   k: "region",
@@ -29094,7 +29114,8 @@ const LNET_COLS = [{
   flex: 0.8
 }, {
   k: "nad",
-  label: "NetworkAttachmentDefinition (namespace/name)",
+  label: "NAD",
+  note: "namespace/name of the NetworkAttachmentDefinition.",
   flex: 2.4
 }];
 const GNET_COLS = [{
@@ -29162,7 +29183,8 @@ const bindingsSpec = v => ({
 // hub knows (discovery.jsx); typing is behind an explicit override.
 const siteColsFor = disc => [{
   k: "name",
-  label: "Site (empty: the cluster's name)",
+  label: "Site",
+  note: "empty uses the cluster's name.",
   flex: 1
 }, {
   k: "cluster",
@@ -29256,7 +29278,8 @@ const veleroFields = (v, disc, clusters, def) => {
     validate: x => x && !DNS_LABEL_RE.test(x) ? "A namespace name: lower-case letters, digits and \"-\"." : null
   } : {
     k: "velero",
-    label: "Velero namespace on the sites (found by dr-agent)",
+    label: "Velero namespace",
+    desc: "On the sites, as dr-agent reports it.",
     type: "select",
     options: opts,
     sync: (x, vv) => vv.veleroOverride ? undefined : pr.value || x || def || "velero"
@@ -29306,7 +29329,8 @@ const newPlanDialog = () => ({
       def: false
     }, {
       k: "sites",
-      label: "Sites — the managed cluster each site is",
+      label: "Sites",
+      desc: "The managed cluster each site is.",
       type: "rows",
       cols: v.sitesOverride ? SITE_COLS : siteColsFor(disc),
       max: 8,
@@ -29374,7 +29398,8 @@ const newPlanDialog = () => ({
       def: false
     }, v.scOverride ? {
       k: "sc",
-      label: "Storage class selector (matchLabels)",
+      label: "StorageClass selector",
+      desc: "matchLabels.",
       type: "kv",
       max: 8,
       def: Object.entries(DEFAULT_SC_SELECTOR).map(([k, x]) => ({
@@ -29397,14 +29422,16 @@ const newPlanDialog = () => ({
       def: false
     }, {
       k: "scName",
-      label: missing.length ? `Create the replicated StorageClass on ${missing.join(", ")} (no class there matches), named` : "Create the replicated StorageClass on every site, named (empty: the classes exist already)",
+      label: "New replicated StorageClass",
+      desc: missing.length ? `No class matches on ${missing.join(", ")}: dr-hub creates this one there.` : "Empty uses the existing classes.",
       type: "text",
       sync: (x, vv) => missing.length && x === undefined ? DEFAULT_SC_NAME : undefined,
       validate: x => x && !DNS_LABEL_RE.test(x) ? "A StorageClass name: lower-case letters, digits and \"-\"." : missing.length && !x ? `No StorageClass matches the selector on ${missing.join(", ")}: name the class dr-hub creates there, or choose another selector.` : null,
       hint: "dr-hub writes it on each site with the selector's labels, the site's storage cluster and pool."
     }, v.scName && {
       k: "scPool",
-      label: "…from the pool (empty: the storage cluster's default pool)",
+      label: "Pool",
+      desc: "Empty uses the storage cluster's default pool.",
       type: "text",
       validate: x => x && !DNS_LABEL_RE.test(x) ? "A pool name: lower-case letters, digits and \"-\"." : null
     }, v.scName && {
@@ -29421,7 +29448,8 @@ const newPlanDialog = () => ({
       }]
     }, {
       k: "s3Mode",
-      label: "S3 stores (Ramen's metadata store and Velero's backups)",
+      label: "S3 stores",
+      desc: "Ramen's metadata store and Velero's backups.",
       type: "select",
       def: "site",
       options: S3_MODES
@@ -29653,7 +29681,8 @@ const pathFields = (plan, disc, paths, v, fixedSites, servers) => {
     sync: x => !x && prop && prop.nad ? prop.nad : undefined
   }, ...testDHCPFields(disc, servers, target, v), (v.actions || []).includes("Test") && {
     k: "cap",
-    label: "Test: max clone capacity (empty: no limit)",
+    label: "Test: max clone capacity",
+    desc: "Empty means no limit.",
     type: "text",
     example: "500Gi",
     validate: x => x && !QUANTITY_RE.test(x) ? `${x} is not a quantity (500Gi, 2Ti).` : null
@@ -30065,7 +30094,8 @@ const gateCols = (disc, cluster, nss, tierNames) => [{
   flex: 1.3
 }, {
   k: "command",
-  label: "Command (custom only)",
+  label: "Command",
+  note: "custom checks only.",
   disabled: r => r.template !== "custom",
   flex: 1.4
 }, {
@@ -30146,7 +30176,8 @@ const tierFields = (v, disc, cluster, nss, target, siteOf) => {
     done: "Proposed: review the tiers and checks below before saving."
   }, {
     k: "tiers",
-    label: "Tiers — the boot order the Recipe is generated from",
+    label: "Tiers",
+    desc: "The boot order the Recipe is generated from.",
     type: "rows",
     cols: tierCols(disc, cluster, nss),
     max: 12,
@@ -30172,7 +30203,8 @@ const tierFields = (v, disc, cluster, nss, target, siteOf) => {
     }
   }, {
     k: "gates",
-    label: "Checks — commands a tier waits for (exec gates)",
+    label: "Checks",
+    desc: "Commands a tier waits for (exec gates).",
     type: "rows",
     cols: gateCols(disc, cluster, nss, tierNames),
     max: 16,
@@ -30279,7 +30311,8 @@ const protectAppDialogDR = (plans, cfg) => ({
       label: `Its DR objects are kept in the hub namespace ${opsNs} (Ramen operations namespace).`
     } : {
       k: "namespace",
-      label: "Placement namespace — where the application's OCM Placement lives",
+      label: "Placement namespace",
+      desc: "Where the application's OCM Placement lives.",
       type: "text",
       required: true,
       def: "",
@@ -30315,7 +30348,8 @@ const protectAppDialogDR = (plans, cfg) => ({
       def: false
     }, discovered && (v.nsOverride ? {
       k: "nsText",
-      label: "Protected namespaces (comma-separated)",
+      label: "Protected namespaces",
+      desc: "Comma-separated.",
       type: "text",
       required: true,
       validate: x => csv(x).find(n => !DNS_LABEL_RE.test(n)) ? `${csv(x).find(n => !DNS_LABEL_RE.test(n))} is not a namespace name.` : null
@@ -30347,12 +30381,14 @@ const protectAppDialogDR = (plans, cfg) => ({
       label: `dr-agent on ${cluster} has not reported ${nss.filter(n => !nsReport(disc, cluster, n)).join(", ")}: the selector and tiers cannot be checked.`
     }, v.pvcOverride ? {
       k: "pvc",
-      label: "PVC selector (matchLabels)",
+      label: "PVC selector",
+      desc: "matchLabels.",
       type: "kv",
       max: 8
     } : {
       k: "pvcSel",
-      label: "PVC selector — the volumes Ramen replicates",
+      label: "PVC selector",
+      desc: "The volumes Ramen replicates.",
       type: "select",
       options: pvcOpts,
       sync: x => x !== undefined && !pvcOpts.some(o => o.v === x) ? proposePVCSelector(disc, cluster, nss) : undefined,
@@ -30371,12 +30407,14 @@ const protectAppDialogDR = (plans, cfg) => ({
       def: false
     }, discovered && {
       k: "recipe",
-      label: "Hand-written Recipe (name, optional; replaces the tiers)",
+      label: "Hand-written Recipe",
+      desc: "A Recipe's name. Replaces the tiers.",
       type: "text",
       validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label." : null
     }, ...(discovered && !(v.recipe || "").trim() ? tierFields(v, disc, cluster, nss, target, siteOf) : []), {
       k: "probes",
-      label: "Health probes — what a move waits for on the target",
+      label: "Health probes",
+      desc: "What a move waits for on the target.",
       type: "rows",
       cols: PROBE_COLS,
       max: 8,
@@ -31319,7 +31357,8 @@ const rplanFields = (v, paths, apps, fixedPath) => {
     label: !items.length ? `No protected application is on ${path ? path.name : "the path"} yet: protect applications along it first.` : chosenNs.length === 1 ? `Kept in the hub namespace of the DR objects (Ramen operations namespace): ${chosenNs[0]}` : nss.length === 1 ? `Kept in the hub namespace of the DR objects (Ramen operations namespace): ${nss[0]}` : `The applications on this path are in ${nss.join(", ")}: a recovery plan holds applications of one namespace, which it is created in.`
   }, {
     k: "apps",
-    label: "Applications by priority — lane 1 moves first",
+    label: "Applications by priority",
+    desc: "Lane 1 moves first.",
     type: "lanes",
     required: true,
     def: [],
@@ -31427,7 +31466,8 @@ const newScheduleDialog = (target, nsHint) => ({
     def: target ? `${target.name}-weekly` : ""
   }, {
     k: "schedule",
-    label: "Cron (UTC)",
+    label: "Cron schedule",
+    desc: "In UTC.",
     type: "text",
     required: true,
     def: "0 3 * * 0"
@@ -31598,12 +31638,14 @@ const editBindingsDialog = s => {
         done: "Accepted: the bindings below are filled in; review them before saving."
       }, {
         k: "bindOverride",
-        label: "Bind by hand (roles, NADs and subnets as text)",
+        label: "Bind by hand",
+        desc: "Roles, NADs and subnets as text.",
         type: "checkbox",
         def: false
       }, {
         k: "lnets",
-        label: "Logical networks — role → NAD on this site",
+        label: "Logical networks",
+        desc: "Role to NAD on this site.",
         type: "rows",
         max: 8,
         addLabel: "Add network",
@@ -31635,7 +31677,8 @@ const editBindingsDialog = s => {
         rowsBlock: true
       }, {
         k: "gnets",
-        label: "Guest networks — the subnet of each role here",
+        label: "Guest networks",
+        desc: "The subnet of each role here.",
         type: "rows",
         max: 8,
         addLabel: "Add subnet",
@@ -31829,7 +31872,8 @@ const editBindingsDialog = s => {
         label: `Guest networks without their own server use ${siteDefault}, the site's DHCP server.`
       }, (servers.length > 0 || unregistered(cur)) && (showDefault || unregistered(cur)) && {
         k: "dhcp",
-        label: "DHCP server of the site (default for every guest network)",
+        label: "DHCP server",
+        desc: "The site's default for every guest network.",
         type: "select",
         def: dhcpDef || onlyOne,
         hint: "A role's own DHCP server wins over this default. Registering a server does not use it: select it here or for a role.",
@@ -31861,7 +31905,8 @@ const newDHCPServerDialog = (sites, profiles) => ({
   desc: "A DHCP server of one site that guest addresses are reserved on. dr-hub never talks to it: it renders the reservations (<mac>,<ip>,<vm>) into the server's ConfigMap on the site, and dnsmasq reads them from its --dhcp-hostsdir. A SiteProfile's guestNetworks[role].dhcpServerRef (or spec.dhcpServerRef) names it.",
   fields: [{
     k: "site",
-    label: "Site (managed cluster)",
+    label: "Site",
+    desc: "A managed cluster.",
     type: "select",
     required: true,
     options: sites.map(s => ({
@@ -31890,7 +31935,8 @@ const newDHCPServerDialog = (sites, profiles) => ({
     }]
   }, {
     k: "namespace",
-    label: "ConfigMap namespace (on the site)",
+    label: "ConfigMap namespace",
+    desc: "On the site.",
     type: "text",
     required: true
   }, {
@@ -31900,7 +31946,8 @@ const newDHCPServerDialog = (sites, profiles) => ({
     required: true
   }, {
     k: "bind",
-    label: "Bind it as the site's DHCP server (the site profile's default and every guest network without one)",
+    label: "Bind as the site's DHCP server",
+    desc: "The site profile's default, and every guest network without one.",
     type: "checkbox",
     def: true
   }, {
@@ -31968,7 +32015,8 @@ const sizingFields = z => [{
   min: 0
 }, {
   k: "enableDriveFormat",
-  label: "Format the devices it takes (data on them is lost)",
+  label: "Format the devices it takes",
+  desc: "Data on them is lost.",
   type: "checkbox",
   def: !!(z && z.enableDriveFormat)
 }];
@@ -31994,7 +32042,8 @@ const deploySiteDialog = (sites, taken) => ({
   desc: "The operator on this hub runs a discovery on the site through Open Cluster Management and writes a draft deployment document there. You review the draft here, with the sizing below applied, and approve it; nothing is configured on any node before the approval.",
   fields: [{
     k: "site",
-    label: "Site (managed cluster)",
+    label: "Site",
+    desc: "A managed cluster.",
     type: "select",
     required: true,
     options: sites.filter(s => !taken.includes(s)).map(s => ({
@@ -32010,12 +32059,14 @@ const deploySiteDialog = (sites, taken) => ({
     def: (window.SB_CONFIG || {}).namespace || "simplyblock"
   }, {
     k: "enableControlPlaneNodes",
-    label: "Include control-plane nodes in the discovery (every node of a small site is one)",
+    label: "Include control-plane nodes",
+    desc: "Every node of a small site is one.",
     type: "checkbox",
     def: true
   }, {
     k: "workers",
-    label: "Limit to these nodes (comma-separated; empty = every node)",
+    label: "Limit to these nodes",
+    desc: "Comma-separated. Empty means every node.",
     type: "text"
   }, ...sizingFields(null), {
     k: "n1",
@@ -35960,7 +36011,8 @@ const runDiscoveryDialog = (sites, cfg, preset) => ({
       }))
     }, !(preset && preset.proposal) && {
       k: "namespaces",
-      label: "Namespaces (none: the whole site)",
+      label: "Namespaces",
+      desc: "None means the whole site.",
       type: "multiselect",
       options: (s.namespaces || []).map(n => ({
         v: n,
@@ -35994,11 +36046,11 @@ const runDiscoveryDialog = (sites, cfg, preset) => ({
       }))
     }, ai && v.mode === "AI" && {
       k: "instructions",
-      label: "Instructions for the agent (optional)",
+      label: "Instructions for the agent",
       type: "text"
     }, ai && v.mode === "AI" && {
       k: "maxToolCalls",
-      label: "Tool-call budget (optional)",
+      label: "Tool-call budget",
       type: "number",
       min: 1
     }, ai && v.mode === "AI" && {

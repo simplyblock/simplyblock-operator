@@ -24,7 +24,7 @@ const discoveryDialog = (k, prev) => ({
     {k: "blockdev", label: "Block device name pattern", type: "text", def: ((prev && prev.filter.blockDeviceNames) || []).join(", "), hint: "Globs, comma-separated.", example: "nvme*, sd[b-f]"},
     {k: "models", label: "Device model contains", type: "text", def: ((prev && prev.filter.models) || []).join(", ")},
     {k: "size_min", label: "Capacity — smallest", unit: "GB", type: "number", min: 0, def: prev && prev.filter.driveSizeRange ? gb(prev.filter.driveSizeRange.min) : 400},
-    {k: "size_max", label: "Capacity — largest (0 = no limit)", unit: "GB", type: "number", min: 0, def: prev && prev.filter.driveSizeRange ? gb(prev.filter.driveSizeRange.max) : 0},
+    {k: "size_max", label: "Capacity — largest", desc: "0 means no limit.", unit: "GB", type: "number", min: 0, def: prev && prev.filter.driveSizeRange ? gb(prev.filter.driveSizeRange.max) : 0},
     {k: "n2", type: "note", label: "Leave a filter empty to skip it. All filters combine; a device must pass every one to be reported."}
   ].filter(Boolean),
   run: v => api.discoveryRun(k.id, k.name, {

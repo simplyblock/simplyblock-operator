@@ -258,13 +258,13 @@ const runDiscoveryDialog = (sites, cfg, preset) => ({
     const s = sites.find(x => x.name === site) || {namespaces: []};
     return [
       {k: "site", label: "Site", type: "select", required: true, def: preset && preset.site, options: sites.map(x => ({v: x.name, l: `${x.name}${x.built ? ` · graph ${fmtAgo(x.built)}` : " · no graph yet"}`}))},
-      !(preset && preset.proposal) && {k: "namespaces", label: "Namespaces (none: the whole site)", type: "multiselect", options: (s.namespaces || []).map(n => ({v: n, l: n})), empty: "The site's graph lists no namespaces yet."},
+      !(preset && preset.proposal) && {k: "namespaces", label: "Namespaces", desc: "None means the whole site.", type: "multiselect", options: (s.namespaces || []).map(n => ({v: n, l: n})), empty: "The site's graph lists no namespaces yet."},
       {k: "mode", label: "Mode", type: "select", def: preset && preset.mode, options: (preset && preset.mode === "AI" ? [] : [{v: "Rules", l: "rules (deterministic baseline)"}]).concat(ai ? [{v: "AI", l: "rules + AI refinement"}] : [])},
       !ai && {k: "n1", type: "note", label: "Rules + AI comes with phase 2: no model provider is configured (DRConfig spec.discovery.providers)."},
       ai && v.mode === "AI" && {k: "provider", label: "Model provider", type: "select", def: cfg.defaultProvider,
         options: cfg.providers.map(p => ({v: p.name, l: `${p.name} · ${p.type}${p.model ? ` · ${p.model}` : ""}`}))},
-      ai && v.mode === "AI" && {k: "instructions", label: "Instructions for the agent (optional)", type: "text"},
-      ai && v.mode === "AI" && {k: "maxToolCalls", label: "Tool-call budget (optional)", type: "number", min: 1},
+      ai && v.mode === "AI" && {k: "instructions", label: "Instructions for the agent", type: "text"},
+      ai && v.mode === "AI" && {k: "maxToolCalls", label: "Tool-call budget", type: "number", min: 1},
       ai && v.mode === "AI" && {k: "n2", type: "note", label: "Only metadata leaves the hub, to the provider's model endpoint. The agent can only propose; every bundle still needs approval."}
     ].filter(Boolean);
   },
