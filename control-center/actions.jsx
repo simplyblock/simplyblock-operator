@@ -1467,6 +1467,8 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
     if (f.options.length && !f.options.some(o => o.v === val)) setVal(f.options[0].v);
   }, [f.options && f.options.map(o => o.v + "=" + o.l).join("|")]);
   if (f.type === "note") return <div className={"fnote" + (f.tone ? " " + f.tone : "")}><Icon n={f.icon || "alert"} s={12} />{f.label}</div>;
+  // A heading that groups the fields after it (a long form in sections).
+  if (f.type === "section") return <div className="fsection"><h4>{f.label}</h4>{f.hint && <span>{f.hint}</span>}</div>;
   // A button that fills other fields from a proposal (f.apply returns the
   // values to set); nothing is applied until it is pressed.
   if (f.type === "apply") {
@@ -1506,7 +1508,7 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
     const verr = f.validate && f.validate(val, vals || {});
     return (
       <div className="field">
-        <span className="flabel">{f.label} <em>({sel.length})</em></span>
+        <span className="flabel">{f.label}{f.required && <b className="freq" aria-hidden="true"> *</b>} <em>({sel.length})</em></span>
         <div className="chipbox">
           {sel.map(x => <span key={x} className="chip mono">{x}<button type="button" className="kebab" title={`Remove ${x}`} onClick={() => setVal(sel.filter(y => y !== x))}><Icon n="x" s={10} /></button></span>)}
           {opts2.length > 0
@@ -1617,7 +1619,7 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
     };
     return (
       <label className="field">
-        <span className="flabel">{f.label} <em>({rows.length}{f.max ? ` of ${f.max}` : ""})</em></span>
+        <span className="flabel">{f.label}{f.required && <b className="freq" aria-hidden="true"> *</b>} <em>({rows.length}{f.max ? ` of ${f.max}` : ""})</em></span>
         <div className="schedbox rgridbox" style={off ? {opacity: 0.5} : undefined}><div className="rgridin" style={{minWidth: floor}}>
           <div className="schedrow rgrid head" style={gridRow}>{f.cols.map(c => <span key={c.k} className="sl">{c.label}</span>)}{ra && <span></span>}{f.reorder && <span></span>}{!fixed && <span></span>}</div>
           {rows.map((r, i) => {
@@ -1719,7 +1721,7 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
   const empty = (f.type === "select") && !loading && (!opts || !opts.length);
   return (
     <label className="field">
-      <span className="flabel">{f.label}{f.unit && <em> ({f.unit})</em>}</span>
+      <span className="flabel">{f.label}{f.required && <b className="freq" aria-hidden="true"> *</b>}{f.unit && <em> ({f.unit})</em>}</span>
       {f.type === "select" ? (
         loading ? <div className="fskel"></div>
           : empty ? <div className="fempty">{f.empty || "No options available"}</div>

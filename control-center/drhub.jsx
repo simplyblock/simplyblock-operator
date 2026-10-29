@@ -929,6 +929,254 @@ const protectAppDialogDR = (plans, cfg) => ({
     return drhub.createApp({name: v.name.trim(), namespace: v.appKind === "managed" ? (v.namespace || "").trim() : opsNs, spec});
   }
 });
+// Quick protect: one form for one discovered application. It creates what
+// the separate forms create (plan, paths, DHCP servers, site bindings, the
+// protected application) and reuses whatever exists for the two clusters.
+const QP_INTERVALS = ["1m", "2m", "5m", "10m", "15m", "30m", "1h"].map(x => ({v: x, l: x}));
+// A DHCP server found on a network but not registered yet: "found:<ns>/<configMap>".
+const QP_FOUND = "found:";
+const qpPlans = (plans, src, dst) => (plans || []).filter(p => !p.sync && p.sites.some(s => s.cluster === src) && p.sites.some(s => s.cluster === dst));
+// The plan the form works with: an existing one of the two clusters, else
+// the one it creates (sites named after their clusters).
+const qpPlan = (plans, v) => {
+  const have = qpPlans(plans, v.src, v.dst);
+  if (have.length) return have.find(p => p.name === v.plan) || have[0];
+  return v.src && v.dst ? {name: (v.planName || "").trim(), sites: [{name: v.src, cluster: v.src}, {name: v.dst, cluster: v.dst}], methods: [], created: true} : null;
+};
+const qpSite = (plan, cluster) => ((plan && plan.sites.find(s => s.cluster === cluster)) || {}).name || cluster;
+const qpProfile = (profiles, cluster) => (profiles || []).find(p => p.name === cluster);
+// The NADs the namespaces' VMs use on a cluster.
+const qpVMNads = (disc, cluster, nss) => uniqSorted(((discOf(disc, cluster) || {}).vms || []).filter(vm => nss.includes(vm.namespace))
+  .flatMap(vm => (vm.networks || []).map(n => n.nad)).filter(Boolean));
+// The role a source NAD plays: its binding on the source site, else the one
+// another site's profile suggests, else "app".
+const qpRole = (disc, profiles, src, nad) => {
+  const own = ((qpProfile(profiles, src) || {}).spec || {}).logicalNetworks || [];
+  const bound = own.find(l => l.nad === nad);
+  if (bound) return bound.role;
+  const others = (profiles || []).filter(p => p.name !== src).map(p => ({name: p.name, spec: p.spec}));
+  return (proposeRoles(disc, src, others).find(x => x.nad === nad) || {}).role || "app";
+};
+const qpBound = (profiles, cluster, role) => {
+  const sp = (qpProfile(profiles, cluster) || {}).spec || {};
+  return (sp.logicalNetworks || []).some(l => l.role === role && l.nad) && (sp.guestNetworks || []).some(g => g.role === role && g.cidr);
+};
+// A cluster's row for a role: its NAD, guest subnet, reserved host ids and
+// DHCP server, from the site's profile where bound, else proposed from the NAD.
+const qpNetRow = (disc, profiles, servers, paths, cluster, role, nad) => {
+  const sp = (qpProfile(profiles, cluster) || {}).spec || {};
+  const g = (sp.guestNetworks || []).find(x => x.role === role);
+  const cidr = g ? g.cidr : nad ? nadSubnet(disc, cluster, nad).cidr : "";
+  const mine = (servers || []).filter(x => x.site === cluster);
+  const pr = proposeDHCPServer(disc, cluster, [nad], mine, testNadsOf(disc, cluster, paths));
+  // the cluster's only registered server when none is seen on the NAD
+  const dhcp = srvRef(g && g.dhcpServerRef) || srvRef(sp.dhcpServerRef) || pr.registered ||
+    (pr.discovered ? `${QP_FOUND}${pr.discovered.namespace}/${pr.discovered.hostsConfigMap}` : mine.length === 1 ? mine[0].name : "");
+  return {site: cluster, role, nad: nad || "", _nad: nad || "", cidr, dhcp,
+    reservedHostIDs: g ? (g.reservedHostIDs || []).join(", ") : cidr ? proposedReserved(disc, cluster, nad, cidr).join(", ") : "1"};
+};
+// The source row and the target's, its NAD bound already or proposed from the
+// source site's roles (all of them, so each target NAD pairs with its best match).
+const qpNetRows = (disc, profiles, servers, paths, src, dst, nad, role) => {
+  const dstNad = (((qpProfile(profiles, dst) || {}).spec || {}).logicalNetworks || []).find(l => l.role === role);
+  const srcNets = (((qpProfile(profiles, src) || {}).spec || {}).logicalNetworks || []).filter(l => l.nad !== nad).concat([{role, nad}]);
+  const proposed = proposeRoles(disc, dst, [{name: src, spec: {logicalNetworks: srcNets}}]).find(x => x.role === role);
+  return [qpNetRow(disc, profiles, servers, paths, src, role, nad),
+    qpNetRow(disc, profiles, servers, paths, dst, role, dstNad ? dstNad.nad : proposed ? proposed.nad : "")];
+};
+// The DHCP servers a row can name: the cluster's registered ones, and those
+// found on its networks that can be registered on create.
+const qpDHCPChoices = (disc, servers, paths, cluster) => {
+  const mine = (servers || []).filter(x => x.site === cluster);
+  const found = (((discOf(disc, cluster) || {}).dhcpServers) || []).filter(f => f.hostsConfigMap && !isBubbleServer(disc, cluster, f, testNadsOf(disc, cluster, paths))
+    && !mine.some(x => x.dnsmasq && x.dnsmasq.namespace === f.namespace && x.dnsmasq.configMap === f.hostsConfigMap));
+  return mine.map(x => ({v: x.name, l: x.name})).concat(found.map(f => ({v: `${QP_FOUND}${f.namespace}/${f.hostsConfigMap}`, l: `${f.namespace}/${f.owner || f.pod} (registered on create)`})));
+};
+// The select starts on its first option: the isolated test network when the
+// cluster has one, else none (never a production network).
+const qpTestNad = (disc, paths, cluster, label, k) => {
+  const ch = testNadChoices(disc, cluster, paths).map(c => ({v: c.v, l: c.l, isolated: c.isolated}));
+  const none = {v: "", l: "— none —"};
+  return {k, label, type: "select", options: ch.length && ch[0].isolated ? ch.concat([none]) : [none].concat(ch),
+    validate: x => x ? testNadError(disc, cluster, paths, x) : null,
+    hint: "Isolated network for test failovers. Test VMs keep their production addresses."};
+};
+const quickProtectDialog = (plans, cfg) => {
+  // what prepare loaded, for run
+  let P = {};
+  const opsNs = (cfg && cfg.ramen && cfg.ramen.opsNamespace) || DR_NS();
+  // the source NADs of the form's VMs, each with its role and whether both sites bind it already
+  const netsOf = (v, prep) => qpVMNads(prep.disc, v.src, v.namespaces || []).map((nad, i) => {
+    const role = qpRole(prep.disc, prep.profiles, v.src, nad);
+    return {nad, role, k: `net${i}`, bound: qpBound(prep.profiles, v.src, role) && qpBound(prep.profiles, v.dst, role)};
+  });
+  const pathsOf = (v, prep, plan) => {
+    const find = (a, b) => !plan || plan.created ? null : (prep.paths || []).find(p => p.planName === plan.name && p.from === qpSite(plan, a) && p.to === qpSite(plan, b));
+    return {fwd: find(v.src, v.dst), rev: find(v.dst, v.src)};
+  };
+  return {
+  title: "Quick protect", confirm: "Protect", done: "Protection created", wide: true,
+  desc: "Existing plans, paths and network bindings are reused.",
+  prepare: () => Promise.all([drhub.discovery(), drhub.paths().catch(() => []), drhub.apps().catch(() => []), drhub.siteProfiles().catch(() => []), drhub.dhcpServers().catch(() => [])])
+    .then(([disc, paths, apps, profiles, servers]) => (P = {disc, paths, apps, profiles, servers})),
+  fields: (v, prep) => {
+    const {disc, paths = [], apps = [], servers = []} = prep || {};
+    const nss = v.namespaces || [];
+    const clusters = clusterOptions(disc);
+    const have = qpPlans(plans, v.src, v.dst);
+    const plan = qpPlan(plans, v);
+    const siteOf = c => qpSite(plan, c);
+    const {fwd, rev} = pathsOf(v, prep || {}, plan);
+    const nets = v.src && v.dst && prep ? netsOf(v, prep) : [];
+    const pvcOpts = pvcSelectorOptions(disc, v.src, nss);
+    const target = () => Object.assign({site: siteOf(v.src), namespaces: nss}, plan && !plan.created ? {plan: plan.name} : {});
+    const toRegister = uniqSorted(nets.filter(n => !n.bound).flatMap(n => (v[n.k] || []).filter(r => (r.dhcp || "").startsWith(QP_FOUND)).map(r => `${r.site}: ${r.dhcp.slice(QP_FOUND.length)}`)));
+    const creates = [plan && plan.created && `plan ${plan.name}`, plan && !fwd && `path ${siteOf(v.src)}-to-${siteOf(v.dst)}`, plan && !rev && `path ${siteOf(v.dst)}-to-${siteOf(v.src)}`,
+      ...toRegister.map(x => `DHCP server ${x}`), ...uniqSorted(nets.filter(n => !n.bound).flatMap(n => (v[n.k] || []).map(r => r.site))).map(c => `bindings on ${c}`),
+      v.name && `application ${v.name}`].filter(Boolean);
+    const reuses = [plan && !plan.created && `plan ${plan.name}`, fwd && `path ${fwd.name}`, rev && `path ${rev.name}`, ...nets.filter(n => n.bound).map(n => `role ${n.role} bindings`)].filter(Boolean);
+    return [
+      {k: "sApp", type: "section", label: "Application"},
+      {k: "src", label: "Source cluster", type: "select", required: true, options: clusters, empty: "No managed cluster reported."},
+      {k: "namespaces", label: "Namespaces", type: "chips", required: true, def: [], options: namespaceOptions(disc, v.src, v.src), addLabel: "— add a namespace —",
+        empty: v.src ? `dr-agent on ${v.src} has not reported its namespaces` : "choose the source cluster first",
+        syncAll: vv => { const key = vv.src + ":" + (vv.namespaces || []).join(","); return vv._pvcFor === key ? null : {_pvcFor: key, pvcSel: proposePVCSelector(disc, vv.src, vv.namespaces || [])}; }},
+      {k: "name", label: "Name", type: "text", required: true, placeholder: "shop",
+        sync: (x, vv) => !x && (vv.namespaces || [])[0] ? dns63(vv.namespaces[0]) : undefined,
+        validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label: lower-case letters, digits and \"-\"." : x && apps.some(a => a.name === x && a.namespace === opsNs) ? `${x} is protected already.` : null},
+      {k: "pvcSel", label: "PVC selector", type: "select", options: pvcOpts,
+        sync: x => x !== undefined && !pvcOpts.some(o => o.v === x) ? proposePVCSelector(disc, v.src, nss) : undefined,
+        validate: x => { const m = pvcMatches(disc, v.src, nss, parseSelector(x || "")); return m && !m.length ? `Matches no PVC in ${nss.join(", ")}.` : null; },
+        hint: x => { const m = pvcMatches(disc, v.src, nss, parseSelector(x || "")); return m ? `${m.length} PVC${m.length === 1 ? "" : "s"}: ${m.slice(0, 6).join(", ")}${m.length > 6 ? " …" : ""}` : ""; }},
+
+      {k: "sTo", type: "section", label: "Protect to"},
+      {k: "dst", label: "Target cluster", type: "select", required: true, options: clusters.filter(o => o.v !== v.src), empty: "No other managed cluster reported."},
+      have.length > 0 && {k: "plan", label: "Plan", type: "select", required: true,
+        options: have.map(p => ({v: p.name, l: `${p.name} · ${p.methods.map(m => m.interval ? `${m.type} ${m.interval}` : m.type).join(", ")} · ${p.status}`}))},
+      !have.length && {k: "planName", label: "Plan name", type: "text", required: true,
+        // follows the clusters until changed by hand
+        sync: (x, vv) => { const auto = vv.src && vv.dst && vv.src !== vv.dst ? dns63(`dr-${[vv.src, vv.dst].sort().join("-")}`) : "";
+          return auto && (!x || /^dr-/.test(x)) && x !== auto ? auto : undefined; },
+        validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label: lower-case letters, digits and \"-\"." : x && plans.some(p => p.name === x) ? `A plan named ${x} exists already.` : null,
+        hint: v.src && v.dst ? `New plan for ${v.src} and ${v.dst}, with a path each way.` : null},
+      !have.length && {k: "interval", label: "Replication interval", type: "select", required: true, def: "5m", options: QP_INTERVALS, hint: "Target RPO"},
+      !have.length && {k: "cg", label: "Consistency groups", type: "checkbox", def: true, hint: "Replicates and fails over an application's volumes together."},
+      !have.length && {k: "s3", label: "S3 stores", type: "rows", cols: S3_SITE_COLS, fixed: true, def: [],
+        sync: x => syncStores(x, [v.src, v.dst].filter(Boolean)), rowAction: S3_ROW_TEST, rowsBlock: true,
+        rowError: r => !nb(r.bucket) ? "Bucket required." : !nb(r.endpoint) ? "Endpoint required." : !nb(r.region) ? "Region required." : null,
+        hint: "One per site, for the application's Kubernetes objects."},
+      plan && !fwd && v.dst && qpTestNad(disc, paths, v.dst, `Test failover network on ${v.dst}`, "testFwd"),
+      plan && !rev && v.src && qpTestNad(disc, paths, v.src, `Test failover network on ${v.src}`, "testRev"),
+
+      {k: "sNet", type: "section", label: "VM networks"},
+      !nets.length && {k: "nNoVM", type: "note", icon: "check", label: nss.length && v.dst ? `No VMs in ${nss.join(", ")}: nothing to map.` : "Choose the namespaces and the target cluster first."},
+      ...nets.map(n => n.bound
+        ? {k: `n${n.k}`, type: "note", icon: "check", label: `Role ${n.role}: bound on ${v.src} and ${v.dst}.`}
+        : {k: n.k, label: `Role ${n.role} (${n.nad} on ${v.src})`, type: "rows", fixed: true,
+          // fresh rows for a new pair of clusters; a row whose NAD was changed
+          // gets that NAD's subnet, reserved ids and DHCP server proposed
+          sync: x => {
+            const key = `${v.src}|${v.dst}|${n.nad}`;
+            if (!(x && x.length === 2 && x[0]._key === key))
+              return qpNetRows(disc, prep.profiles, servers, paths, v.src, v.dst, n.nad, n.role).map(r => Object.assign(r, {_key: key}));
+            if (x.every(r => r.nad === r._nad)) return undefined;
+            return x.map(r => r.nad === r._nad ? r : Object.assign({}, r, qpNetRow(disc, [], servers, paths, r.site, n.role, r.nad), {_key: key}));
+          },
+          cols: [{k: "site", label: "Cluster", readonly: true, flex: 0.8},
+            {k: "nad", label: "Network", type: "select", blank: "— network —", flex: 1.6,
+              options: r => r.site === v.src ? [{v: n.nad, l: n.nad}] : testNadChoices(disc, r.site, paths).filter(c => !c.isolated).map(c => ({v: c.v, l: c.v}))},
+            {k: "cidr", label: "Guest subnet", placeholder: "192.168.110.0/24", flex: 1.1},
+            {k: "reservedHostIDs", label: "Reserved host IDs", placeholder: "1, 2", flex: 0.8},
+            {k: "dhcp", label: "DHCP server", type: "select", blank: "— none —", options: r => qpDHCPChoices(disc, servers, paths, r.site), flex: 1.5}],
+          rowError: r => !r.nad ? "Network required." : !nb(r.cidr) ? "Guest subnet required." : guestRowError(disc, r.site, {cidr: r.cidr, reservedHostIDs: r.reservedHostIDs}, r.nad, null),
+          rowsBlock: true, hint: "Subnets prefilled from current VM addresses."}),
+
+      {k: "sOrder", type: "section", label: "Recovery order"},
+      ...tierFields(v, disc, v.src, nss, target, siteOf),
+      {k: "probes", label: "Health checks", type: "rows", cols: PROBE_COLS, max: 8, addLabel: "Add check",
+        add: () => ({name: "", type: "http", target: "", timeout: "15s", expectStatus: ""}), hint: "Expects 2xx or 3xx after a move.",
+        rowAction: {label: "Test", title: "dr-agent runs this probe on the source cluster now", run: row => drhub.probeHealth(Object.assign(target(), {probes: probeRowSpec(row)})).then(healthAnswer)}},
+
+      {k: "sReview", type: "section", label: "Review"},
+      creates.length > 0 && {k: "nCreate", type: "note", icon: "plus", label: `Creates: ${creates.join(", ")}.`},
+      reuses.length > 0 && {k: "nReuse", type: "note", icon: "check", label: `Reuses: ${reuses.join(", ")}.`}
+    ].filter(Boolean);
+  },
+  run: async v => {
+    const {disc, paths = [], profiles = [], servers = []} = P;
+    const plan = qpPlan(plans, v);
+    if (!plan) throw new Error("Choose the source and target clusters.");
+    const nss = v.namespaces || [];
+    const done = [];
+    const step = async (what, fn) => {
+      try { const r = await fn(); done.push(what); return r; }
+      catch (e) { throw new Error(`${what}: ${(e && e.message) || e}${done.length ? `. Created so far: ${done.join(", ")}.` : ""}`); }
+    };
+    if (plan.created) {
+      const sites = plan.sites.map(s => ({name: s.name, cluster: s.cluster}));
+      const vel = veleroProposal(disc, sites.map(s => s.cluster));
+      const stores = s3Profiles(v.s3);
+      checkStores(sites, stores);
+      const missing = scMissing(disc, sites, DEFAULT_SC_SELECTOR);
+      const spec = {sites: vel.disagree ? sites.map(s => vel.perCluster[s.cluster] && vel.perCluster[s.cluster] !== vel.value ? Object.assign({}, s, {veleroNamespace: vel.perCluster[s.cluster]}) : s) : sites,
+        methods: [{name: `async-${v.interval}`, type: "async", schedulingInterval: v.interval}],
+        storageProfile: Object.assign({storageClassSelector: {matchLabels: DEFAULT_SC_SELECTOR}, consistencyGroups: v.cg ? "Enabled" : "Disabled"},
+          missing.length ? {provision: {name: DEFAULT_SC_NAME}} : {}),
+        s3Profiles: stores, veleroNamespace: vel.value || "velero"};
+      await step(`plan ${plan.name}`, () => drhub.createPlan({name: plan.name, spec}));
+    }
+    // DHCP servers found on the networks, each registered once; then each
+    // site's bindings: the form's roles replace the profile's rows for them
+    const regs = {}, per = {};
+    for (const n of netsOf(v, P).filter(x => !x.bound)) {
+      for (const r of v[n.k] || []) {
+        let dhcp = r.dhcp || "";
+        if (dhcp.startsWith(QP_FOUND)) {
+          const key = `${r.site}|${dhcp}`;
+          if (!regs[key]) {
+            const [ns, cm] = dhcp.slice(QP_FOUND.length).split("/");
+            const f = (((discOf(disc, r.site) || {}).dhcpServers) || []).find(x => x.namespace === ns && x.hostsConfigMap === cm);
+            if (!f) throw new Error(`The DHCP server ${ns}/${cm} is no longer reported on ${r.site}.`);
+            const name = dhcpServerName(r.site, f);
+            await step(`DHCP server ${name}`, () => drhub.createDHCPServer({name, site: r.site, namespace: ns, configMap: cm}));
+            regs[key] = name;
+          }
+          dhcp = regs[key];
+        }
+        const p = per[r.site] || (per[r.site] = {roles: [], lnets: [], gnets: []});
+        p.roles.push(n.role);
+        p.lnets.push({role: n.role, nad: r.nad});
+        p.gnets.push({role: n.role, cidr: r.cidr, reservedHostIDs: r.reservedHostIDs, dhcpServerRef: dhcp});
+      }
+    }
+    for (const [site, p] of Object.entries(per)) {
+      const prof = qpProfile(profiles, site);
+      if (!prof) throw new Error(`No site profile for ${site}: its dr-agent has not reported yet.${done.length ? ` Created so far: ${done.join(", ")}.` : ""}`);
+      const sp = prof.spec || {};
+      const lnets = lnetRows(sp).filter(l => !p.roles.includes(l.role)).concat(p.lnets);
+      const gnets = gnetRows(sp).filter(g => !p.roles.includes(g.role)).concat(p.gnets);
+      const dhcp = srvRef(sp.dhcpServerRef) || (p.gnets.find(g => g.dhcpServerRef) || {}).dhcpServerRef || "";
+      await step(`bindings on ${site}`, () => drhub.patchSiteProfile(prof, bindingsSpec({lnets, gnets, dhcp})));
+    }
+    const {fwd, rev} = pathsOf(v, P, plan);
+    const path = async (a, b, nad) => {
+      const from = qpSite(plan, a), to = qpSite(plan, b), name = `${from}-to-${to}`.slice(0, 63);
+      const dhcp = nad ? testDHCPChoice(disc, servers, b, nad).recommended : "";
+      await step(`path ${name}`, () => drhub.createPath({name, spec: pathBody(plan, {from, to, actions: ["Failover", "Relocate"].concat(nad ? ["Test"] : []), nad, dhcp, recent: "720h"})}));
+    };
+    if (!fwd) await path(v.src, v.dst, v.testFwd);
+    if (!rev) await path(v.dst, v.src, v.testRev);
+    const sel = parseSelector(v.pvcSel || "");
+    const tiers = tierEditorSpec(v.tiers, v.gates), probes = probesSpec(v.probes);
+    const asyncMethod = plan.methods.length > 1 ? (plan.methods.find(m => /^async/.test(m.type)) || {}).name : "";
+    const spec = Object.assign({planRef: plan.name, source: qpSite(plan, v.src), target: qpSite(plan, v.dst), kind: "discovered"},
+      asyncMethod ? {method: asyncMethod} : {}, tiers.length ? {tiers} : {}, probes.length ? {health: {probes}} : {},
+      {discovered: {protectedNamespaces: nss, pvcSelector: Object.keys(sel.matchLabels || {}).length ? {matchLabels: sel.matchLabels} : {}}});
+    await step(`application ${v.name.trim()}`, () => drhub.createApp({name: v.name.trim(), namespace: opsNs, spec}));
+  }
+  };
+};
+
 const editTiersDialog = a => {
   const ed = tierEditorRows(a.tiers);
   return {
@@ -2173,10 +2421,11 @@ function DrHubHome({nav}) {
         <div className="dsub">Plans declare sites and replication; DR paths declare directions; applications are protected along them. Every screen is a CR on the hub, every write a CR write with your RBAC.</div>
       </div>
         <div style={{display: "flex", gap: 8, flexWrap: "wrap"}}>
+          {gate(mayApp, <button className="btn primary" onClick={() => window.__ui.dialog(quickProtectDialog(ps, c), {kind: "papp", id: "new"})}><Icon n="shield" s={12} />Quick protect</button>, acc.why("create", "drhub", {kind: "papp", namespace: DR_NS()}))}
           {gate(mayApp, <button className="btn" onClick={() => window.__ui.dialog(protectAppDialogDR(ps, c), {kind: "papp", id: "new"})}><Icon n="shield" s={12} />Protect application</button>, acc.why("create", "drhub", {kind: "papp", namespace: DR_NS()}))}
           {gate(mayPath, <button className="btn" onClick={() => window.__ui.dialog(newPathDialog(ps), {kind: "drpath", id: "new"})}><Icon n="swap" s={12} />Declare path</button>, acc.why("create", "drhub", {kind: "drpath"}))}
           {gate(mayPath, <button className="btn proposepaths" onClick={() => window.__ui.dialog(proposePathsDialog(ps), {kind: "drpath", id: "new"})}><Icon n="swap" s={12} />Propose paths</button>, acc.why("create", "drhub", {kind: "drpath"}))}
-          {gate(mayPlan, <button className="btn primary" onClick={() => window.__ui.dialog(newPlanDialog(), {kind: "pplan", id: "new"})}><Icon n="plus" s={12} />New plan</button>, acc.why("create", "drhub", {kind: "pplan"}))}
+          {gate(mayPlan, <button className="btn" onClick={() => window.__ui.dialog(newPlanDialog(), {kind: "pplan", id: "new"})}><Icon n="plus" s={12} />New plan</button>, acc.why("create", "drhub", {kind: "pplan"}))}
         </div></div>
       {err && <div className="banner"><Icon n="alert" s={15} /><span><b>Cannot read the DR hub.</b> {err.message}{err.status === 404 ? " — the dr.simplyblock.io CRDs are not installed on this cluster." : err.status === 403 ? " — the console's identity lacks list on dr.simplyblock.io; bind dr-viewer or a wider role." : ""}</span></div>}
       {c && c.counts.agents > 0 && c.counts.agentsAvailable < c.counts.agents && <div className="banner"><Icon n="alert" s={15} /><span><b>{c.counts.agents - c.counts.agentsAvailable} site{c.counts.agents - c.counts.agentsAvailable === 1 ? "" : "s"} without dr-agent.</b> {c.agents.filter(a => !a.available).map(a => a.cluster).join(", ")} — hooks, probes, tests and zone moves cannot run there.</span></div>}
@@ -2247,5 +2496,5 @@ function DrHubHome({nav}) {
 Object.assign(window, {DrTable: Table, DrMono: Mono, DrCheckTable: CheckTable, DrConditions: Conditions, VerdictBadge});
 Object.assign(window, {DrHubHome, DRConfigView, PPlanTile, DRPathTile, PAppTile, RPlanTile, RActionTile, TBubbleTile, TSchedTile, RestoreTile, SiteProfileTile, DHCPServerTile, SiteDeployTile, SiteDeployDetail, deploySiteDialog,
   PPlanDetail, DRPathDetail, PAppDetail, RPlanDetail, RActionDetail, TBubbleDetail, TSchedDetail, RestoreDetail, SiteProfileDetail, DHCPServerDetail, MappingPanel,
-  runActionDialog, runTestDialog, restoreDialog, newPPlanDialog: newPlanDialog, newPathDialog, proposePathsDialog, protectAppDialogDR, newRPlanDialog, editRPlanDialog, editTiersDialog, editPlanS3Dialog, newScheduleDialog, newDHCPServerDialog, ACTION_KIND_META, KIND_LABEL_DR,
+  runActionDialog, runTestDialog, restoreDialog, newPPlanDialog: newPlanDialog, newPathDialog, proposePathsDialog, protectAppDialogDR, quickProtectDialog, newRPlanDialog, editRPlanDialog, editTiersDialog, editPlanS3Dialog, newScheduleDialog, newDHCPServerDialog, ACTION_KIND_META, KIND_LABEL_DR,
   editPlanS3Dialog, editTiersDialog, editBindingsDialog, sitesSpec, sitesError, overrideError, missingServers});
