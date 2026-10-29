@@ -206,7 +206,7 @@ const runActionDialog = (target, kind, ctx) => {
           empty: `No declared DRPath offers ${m.label} for this ${target.kind === "rplan" ? "plan" : "application"}. Declaring a direction is a dr-admin decision, not an override.`},
         !pathless && verdict === "NotReady" && {k: "n1", type: "note", label: `Readiness on this path is NotReady: ${blockingChecks(target, v.path).join(", ") || "blocking checks failed"}. Running anyway needs a reason and the "override" verb on recoveryactions (dr-admin). The run is audited with the reason.`},
         !pathless && verdict === "NotReady" && {k: "override", label: "Override reason (10–1024 characters)", type: "text", required: true, maxLen: OVERRIDE_MAX,
-          placeholder: "why this action must run despite the verdict", validate: overrideError,
+          validate: overrideError,
           hint: x => `${(x || "").trim().length} characters; 10 to ${OVERRIDE_MAX}. Kept with the run in the audit record.`},
         !pathless && verdict === "Degraded" && {k: "n2", type: "note", label: "Readiness is Degraded: only advisory checks failed. The action runs without an override."},
         kind === "Restart" && target.kind === "papp" && (target.probes.length
@@ -214,7 +214,7 @@ const runActionDialog = (target, kind, ctx) => {
             hint: `dr-agent evaluates them on ${target.currentCluster || "the application's site"} now; the restart waits for the same probes.`,
             run: () => drhub.probeHealth({app: target}).then(healthAnswer)}
           : {k: "pnone", type: "note", label: "The application has no health probes: the restart reports it up once its tiers are ready. Add probes under Edit tiers & probes."}),
-        {k: "timeout", label: "Timeout", type: "text", def: "30m", placeholder: "30m"},
+        {k: "timeout", label: "Timeout", type: "text", def: "30m"},
         // only when the chosen path does not start where the application runs:
         // shown for every path, it read as if this move would be refused (UI walkthrough #24)
         opposite && (sel => sel && !sel.active && {k: "n3", type: "note", label: `The application runs on ${target.currentCluster}, but ${sel.name} starts at ${sel.from}: the hub refuses a Relocate along it. Choose the path that starts where the application runs.`})(target.paths.find(p => p.name === v.path))
@@ -319,10 +319,10 @@ const parseSites = txt => String(txt || "")
     return Object.assign({name, cluster: cluster || name}, zone ? {zone} : {}, region ? {region} : {});
   });
 const SITE_COLS = [
-  {k: "name", label: "Site", placeholder: "site-a", flex: 1},
-  {k: "cluster", label: "Cluster (managed cluster)", placeholder: "same as the site", flex: 1.2},
-  {k: "zone", label: "Zone (sync)", placeholder: "", flex: 0.8},
-  {k: "region", label: "Region", placeholder: "eu-central", flex: 0.8}
+  {k: "name", label: "Site", flex: 1},
+  {k: "cluster", label: "Cluster (managed cluster)", note: "empty uses the site name.", flex: 1.2},
+  {k: "zone", label: "Zone (sync)", flex: 0.8},
+  {k: "region", label: "Region", flex: 0.8}
 ];
 const SITE_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
 const emptySite = () => ({name: "", cluster: "", zone: "", region: ""});
@@ -390,16 +390,17 @@ const checkStores = (sites, stores) => {
 };
 // ---- form <-> spec helpers for the editable parts of the DR objects --------
 // The secret a store names when the row leaves it empty: the one the DR hub
-// chart creates in Ramen's namespace. Pre-filling it in the row looked like a
-// placeholder and was typed a second time ("ramen-s3-secretramen-s3-secret").
+// chart creates in Ramen's namespace. A new row starts with it as its value
+// (once it showed as a placeholder and was typed after it a second time:
+// "ramen-s3-secretramen-s3-secret"; forms carry no placeholders now).
 const DEFAULT_S3_SECRET = "ramen-s3-secret";
 const S3_COLS = [
-  {k: "site", label: "Site", placeholder: "site-a", flex: 1},
-  {k: "bucket", label: "Bucket", placeholder: "dr-site-a", flex: 1.4},
-  {k: "endpoint", label: "Endpoint", placeholder: "https://s3.eu-central-1.amazonaws.com", flex: 2},
+  {k: "site", label: "Site", flex: 1},
+  {k: "bucket", label: "Bucket", required: true, flex: 1.4},
+  {k: "endpoint", label: "Endpoint", required: true, note: "for example https://s3.eu-central-1.amazonaws.com.", flex: 2},
   // required: Ramen's S3 client needs it, and the hub refuses a store without one (UI walkthrough #16)
-  {k: "region", label: "Region (required; us-east-1 for MinIO)", placeholder: "e.g. eu-central-1", flex: 1},
-  {k: "secretRef", label: "Secret (empty: ramen-s3-secret)", placeholder: "ramen-s3-secret", flex: 1}
+  {k: "region", label: "Region", required: true, note: "the bucket's region on AWS; us-east-1 for MinIO.", flex: 1},
+  {k: "secretRef", label: "Secret", required: true, note: "in Ramen's namespace on the hub.", flex: 1}
 ];
 const s3Rows = profiles => (profiles || []).map(p => ({site: p.site || "", bucket: p.bucket || "", endpoint: p.endpoint || "", region: p.region || "", secretRef: typeof p.secretRef === "string" ? p.secretRef : (p.secretRef || {}).name || ""}));
 const s3Profiles = rows => (rows || []).filter(r => (r.site || "").trim() && (r.bucket || "").trim()).map(r => Object.assign(
@@ -437,33 +438,52 @@ const tiersSpec = rows => (rows || []).filter(r => (r.name || "").trim()).map(r 
   return Object.assign({name: r.name.trim(), selector}, ready.length ? {ready} : {});
 });
 const TIER_COLS = [
-  {k: "name", label: "Tier", placeholder: "db", flex: 0.8},
+  {k: "name", label: "Tier", flex: 0.8},
   {k: "by", label: "Select by", type: "select", options: [{v: "labels", l: "labels"}, {v: "resources", l: "resource types"}], flex: 0.9},
-  {k: "selector", label: "Selector", placeholder: "dr.simplyblock.io/tier=db  |  configmaps, secrets", flex: 2},
-  {k: "ready", label: "Ready when", placeholder: "vmRunning, exec(app=shop-tools; nc -z -w 3 db 3306; 900)", flex: 2.4}
+  {k: "selector", label: "Selector", note: "labels (k=v) or resource types, comma-separated.", flex: 2},
+  {k: "ready", label: "Ready when", flex: 2.4}
 ];
-const probeRows = probes => (probes || []).map(p => ({name: p.name || "", type: p.type || "http", target: p.target || "", timeout: p.timeout || "", expectStatus: p.expectStatus || ""}));
-const probesSpec = rows => (rows || []).filter(r => (r.target || "").trim() || r.type === "vmRunning").map(r => Object.assign(
-  {name: (r.name || "").trim() || r.type, type: r.type || "http"}, r.target && r.target.trim() ? {target: r.target.trim()} : {},
-  r.timeout && String(r.timeout).trim() ? {timeout: String(r.timeout).trim()} : {}, Number(r.expectStatus) ? {expectStatus: Number(r.expectStatus)} : {}));
+// A probe's type and name follow from its target: a URL is http, host:port
+// is tcp, and the name is the target's host (wp-web for
+// http://wp-web.wordpress.svc/). A probe saved with a name keeps it; a
+// vmRunning probe (no target) keeps its type.
+const probeType = r => r.type === "vmRunning" ? "vmRunning" : /^https?:\/\//i.test((r.target || "").trim()) ? "http" : "tcp";
+const probeHost = t => (t || "").trim().replace(/^https?:\/\//i, "").split(/[/:?#]/)[0].split(".")[0];
+const probeRowError = r => {
+  const t = (r.target || "").trim();
+  if (!t) return r.type === "vmRunning" ? null : "Target required.";
+  return probeType(r) === "tcp" && !/^[^\s:/]+:\d{1,5}$/.test(t) ? "A URL (http://…) or host:port." : null;
+};
+const probeRows = probes => (probes || []).map(p => ({name: p.name || "", type: p.type || "", target: p.target || "", timeout: p.timeout || "", expectStatus: p.expectStatus || ""}));
+const probesSpec = rows => {
+  const used = {};
+  return (rows || []).filter(r => (r.target || "").trim() || r.type === "vmRunning").map(r => {
+    const type = probeType(r);
+    let name = (r.name || "").trim() || probeHost(r.target) || type;
+    // two checks on one host stay apart: wp-web, wp-web-2
+    used[name] = (used[name] || 0) + 1;
+    if (used[name] > 1 && !(r.name || "").trim()) name = `${name}-${used[name]}`;
+    return Object.assign({name, type}, r.target && r.target.trim() ? {target: r.target.trim()} : {},
+      r.timeout && String(r.timeout).trim() ? {timeout: String(r.timeout).trim()} : {}, type === "http" && Number(r.expectStatus) ? {expectStatus: Number(r.expectStatus)} : {});
+  });
+};
 const PROBE_COLS = [
-  {k: "name", label: "Probe", placeholder: "web", flex: 0.8},
-  {k: "type", label: "Type", type: "select", options: [{v: "http", l: "http"}, {v: "tcp", l: "tcp"}], flex: 0.7},
-  {k: "target", label: "Target (URL / host:port)", placeholder: "http://web.shop.svc.cluster.local/", flex: 2.4},
-  {k: "timeout", label: "Timeout", placeholder: "15s", flex: 0.7},
-  {k: "expectStatus", label: "HTTP status", type: "number", placeholder: "any 2xx or 3xx", flex: 0.8}
+  {k: "target", label: "Target", required: true, note: "a URL for an HTTP check, host:port for a TCP check.", flex: 3},
+  {k: "timeout", label: "Timeout", required: true, flex: 0.7},
+  {k: "expectStatus", label: "HTTP status", type: "number", disabled: r => probeType(r) !== "http", note: "empty accepts any 2xx or 3xx.", flex: 0.8}
 ];
+const newProbe = () => ({target: "", timeout: "15s", expectStatus: ""});
 const TIER_HINT = "Ready gates: vmRunning, deploymentsReady, podsReady, or exec(<pod labels k=v>; <command>; <timeout seconds>) run in a pod of the tier's namespace. Tiers restore in order; the next starts when every gate of the previous holds.";
 
 // Site profile bindings (ADR 0020)
 const LNET_COLS = [
-  {k: "role", label: "Role", placeholder: "app", flex: 0.8},
-  {k: "nad", label: "NetworkAttachmentDefinition (namespace/name)", placeholder: "app-net/vlan110", flex: 2.4}
+  {k: "role", label: "Role", flex: 0.8},
+  {k: "nad", label: "NetworkAttachmentDefinition (namespace/name)", flex: 2.4}
 ];
 const GNET_COLS = [
-  {k: "role", label: "Role", placeholder: "app", flex: 0.7},
-  {k: "cidr", label: "Guest subnet", placeholder: "192.168.110.0/24", flex: 1.3},
-  {k: "reservedHostIDs", label: "Reserved host ids", placeholder: "1, 2", flex: 0.9},
+  {k: "role", label: "Role", flex: 0.7},
+  {k: "cidr", label: "Guest subnet", flex: 1.3},
+  {k: "reservedHostIDs", label: "Reserved host ids", note: "comma-separated host numbers, for example 1, 2.", flex: 0.9},
   {k: "dhcpServerRef", label: "DHCP server", flex: 1.1}
 ];
 // The guest-network DHCP server is one of the site's registered DHCPServers;
@@ -489,7 +509,7 @@ const bindingsSpec = v => ({
 // Sites, Velero, storage classes and S3 stores are offered from what the
 // hub knows (discovery.jsx); typing is behind an explicit override.
 const siteColsFor = disc => [
-  {k: "name", label: "Site (empty: the cluster's name)", placeholder: "site-a", flex: 1},
+  {k: "name", label: "Site (empty: the cluster's name)", flex: 1},
   {k: "cluster", label: "Cluster", type: "select", blank: "— cluster —", options: clusterOptions(disc), unknown: v => `${v} (not a managed cluster)`, flex: 1.2},
   {k: "zone", label: "Zone", type: "select", blank: r => zoneOptions(disc, r.cluster).length ? "— none —" : "— no zone reported —", options: r => zoneOptions(disc, r.cluster), unknown: v => `${v} (not reported)`, flex: 0.9},
   {k: "region", label: "Region", type: "select", blank: r => regionOptions(disc, r.cluster).length ? "— none —" : "— no region reported —", options: r => regionOptions(disc, r.cluster), unknown: v => `${v} (not reported)`, flex: 0.9}
@@ -500,7 +520,7 @@ const isMethodName = x => /^(a?sync|async-s3-backup|sync-s3-backup|s3-backup)(-[
 const S3_SITE_COLS = S3_COLS.map(c => c.k === "site" ? Object.assign({}, c, {readonly: true}) : c);
 const S3_ALL_COLS = S3_COLS.filter(c => c.k !== "site");
 const S3_MODES = [{v: "site", l: "one store per site"}, {v: "all", l: "one store for all sites"}, {v: "profile", l: "an existing Ramen S3 profile"}];
-const blankStore = (site, prev) => ({site, bucket: "", endpoint: prev ? prev.endpoint : "", region: prev ? prev.region : "", secretRef: prev ? prev.secretRef : ""});
+const blankStore = (site, prev) => ({site, bucket: "", endpoint: prev ? prev.endpoint : "", region: prev ? prev.region : "", secretRef: prev && prev.secretRef ? prev.secretRef : DEFAULT_S3_SECRET});
 // One store row per declared site, in the sites' order, keeping what was typed.
 const syncStores = (rows, siteNames) => siteNames.map((n, i) => (rows || []).find(r => r.site === n) || blankStore(n, (rows || [])[i - 1] || (rows || [])[0]));
 const storesOf = (v, sites) => v.s3Mode === "all" ? s3Profiles(sites.map(s => Object.assign({}, (v.s3all || [])[0] || {}, {site: s.name})))
@@ -545,7 +565,7 @@ const newPlanDialog = () => ({
     const sel = scSelectorOf(v);
     const missing = scMissing(disc, sites, sel);
     return [
-      {k: "name", label: "Name", type: "text", required: true, placeholder: "fra",
+      {k: "name", label: "Name", type: "text", required: true,
         validate: x => x && !DNS_LABEL_RE.test(x) ? "A plan's name is a DNS label: lower-case letters, digits and \"-\"." : x && ((prep || {}).plans || []).some(p => p.name === x) ? `A plan named ${x} exists already.` : null},
       {k: "sitesOverride", label: "Enter clusters, zones and regions by hand", type: "checkbox", def: false},
       {k: "sites", label: "Sites — the managed cluster each site is", type: "rows", cols: v.sitesOverride ? SITE_COLS : siteColsFor(disc), max: 8, addLabel: "Add site", required: true,
@@ -554,7 +574,7 @@ const newPlanDialog = () => ({
         hint: "A cross-cluster plan names one cluster per site; a sync plan (stretch cluster) names the same cluster on every site, each with its own zone."},
       {k: "type", label: "Replication method", type: "select", required: true, options: METHOD_TYPES},
       // named after what it does unless changed: "primary" said nothing (UI walkthrough #10)
-      {k: "method", label: "Method name", type: "text", required: true, placeholder: "async-5m",
+      {k: "method", label: "Method name", type: "text", required: true,
         sync: (x, vv) => { const auto = methodName(vv); return auto && (!x || x === "primary" || isMethodName(x)) && x !== auto ? auto : undefined; },
         validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label." : null},
       /^async/.test(v.type || "") && {k: "interval", label: "Scheduling interval", type: "select", required: true, def: "5m",
@@ -569,10 +589,10 @@ const newPlanDialog = () => ({
         : {k: "nSc", type: "note", icon: "check", label: `StorageClass selector ${selectorText({matchLabels: DEFAULT_SC_SELECTOR})}${siteNames.length ? ` — ${scSummary(disc, sites, sel)}` : ""}.`},
       {k: "cg", label: "Consistency groups", type: "checkbox", def: false},
       {k: "scName", label: missing.length ? `Create the replicated StorageClass on ${missing.join(", ")} (no class there matches), named` : "Create the replicated StorageClass on every site, named (empty: the classes exist already)",
-        type: "text", placeholder: missing.length ? DEFAULT_SC_NAME : "leave empty: the classes exist already", sync: (x, vv) => missing.length && x === undefined ? DEFAULT_SC_NAME : undefined,
+        type: "text", sync:(x, vv) => missing.length && x === undefined ? DEFAULT_SC_NAME : undefined,
         validate: x => x && !DNS_LABEL_RE.test(x) ? "A StorageClass name: lower-case letters, digits and \"-\"." : missing.length && !x ? `No StorageClass matches the selector on ${missing.join(", ")}: name the class dr-hub creates there, or choose another selector.` : null,
         hint: "dr-hub writes it on each site with the selector's labels, the site's storage cluster and pool."},
-      v.scName && {k: "scPool", label: "…from the pool (empty: the storage cluster's default pool)", type: "text", placeholder: "", validate: x => x && !DNS_LABEL_RE.test(x) ? "A pool name: lower-case letters, digits and \"-\"." : null},
+      v.scName && {k: "scPool", label: "…from the pool (empty: the storage cluster's default pool)", type: "text", validate: x => x && !DNS_LABEL_RE.test(x) ? "A pool name: lower-case letters, digits and \"-\"." : null},
       v.scName && {k: "scFs", label: "…with the filesystem", type: "select", def: "xfs", options: [{v: "xfs", l: "xfs"}, {v: "ext4", l: "ext4"}]},
       {k: "s3Mode", label: "S3 stores (Ramen's metadata store and Velero's backups)", type: "select", def: "site", options: S3_MODES},
       v.s3Mode === "all" && {k: "s3all", label: "The store every site uses", type: "rows", cols: S3_ALL_COLS, fixed: true, sync: x => x && x.length ? undefined : [blankStore("")], rowAction: S3_ALL_TEST, rowError: r => nb(r.bucket) && !nb(r.region) ? "Name the store's region (the bucket's region on AWS, us-east-1 for MinIO): Ramen needs it, although the store test passes without it." : null,
@@ -581,7 +601,7 @@ const newPlanDialog = () => ({
         def: [], sync: x => syncStores(x, siteNames), disabled: vv => vv.s3Mode === "all", rowAction: S3_ROW_TEST,
         rowError: (r, i, rows, vv) => vv.s3Mode !== "site" ? null : !nb(r.bucket) ? `Name ${r.site}'s bucket.` : !nb(r.region) ? `Name ${r.site}'s region (the bucket's region on AWS, us-east-1 for MinIO): Ramen needs it, although the store test passes without it.` : null, rowsBlock: v.s3Mode === "site",
         hint: siteNames.length ? "Test probes a store from the hub before the plan is saved." : "Declare the sites first: one row opens per site."},
-      v.s3Mode === "profile" && {k: "s3Profile", label: "Ramen S3 profile", type: "text", required: true, placeholder: "existing profile name",
+      v.s3Mode === "profile" && {k: "s3Profile", label: "Ramen S3 profile", type: "text", required: true,
         validate: x => x && !/^[A-Za-z0-9][-A-Za-z0-9_.]*$/.test(x) ? "A profile name." : null},
       ...veleroFields(v, disc, sites.map(s => s.cluster).filter(Boolean), "velero"),
       {k: "autoRestart", label: "Restart applications in place after a storage recovery", type: "checkbox", def: false},
@@ -648,7 +668,7 @@ const pathFields = (plan, disc, paths, v, fixedSites, servers) => {
   return [
     !fixedSites && {k: "from", label: "From site", type: "select", required: true, options: sites.map(s => ({v: s.name, l: `${s.name} (${s.cluster}${s.zone ? "/" + s.zone : ""})`}))},
     !fixedSites && {k: "to", label: "To site", type: "select", required: true, options: sites.filter(s => s.name !== v.from).map(s => ({v: s.name, l: `${s.name} (${s.cluster}${s.zone ? "/" + s.zone : ""})`}))},
-    {k: "name", label: "Path name", type: "text", required: true, placeholder: "site-a-to-site-b",
+    {k: "name", label: "Path name", type: "text", required: true,
       sync: x => (!x || /-to-/.test(x)) && auto && x !== auto && !(paths || []).some(p => p.name === x && x !== auto) ? auto : undefined,
       validate: (x, vv) => pathError(plan, paths, Object.assign({}, vv, {name: x}))},
     prop && {k: "nMeth", type: "note", icon: "check", label: `${prop.sync ? "Sync (zones of one stretch cluster)" : "Async"}: replicates by the plan's ${prop.method ? `${prop.method.name} (${prop.method.type}${prop.method.interval ? ` every ${prop.method.interval}` : ""})` : "method"}; the plan's StorageClass and replication classes apply.`},
@@ -659,7 +679,7 @@ const pathFields = (plan, disc, paths, v, fixedSites, servers) => {
       validate: x => target ? testNadError(disc, target.cluster, paths, x) : null,
       sync: x => !x && prop && prop.nad ? prop.nad : undefined},
     ...testDHCPFields(disc, servers, target, v),
-    (v.actions || []).includes("Test") && {k: "cap", label: "Test: max clone capacity (empty: no limit)", type: "text", placeholder: "500Gi",
+    (v.actions || []).includes("Test") && {k: "cap", label: "Test: max clone capacity (empty: no limit)", type: "text", example: "500Gi",
       validate: x => x && !QUANTITY_RE.test(x) ? `${x} is not a quantity (500Gi, 2Ti).` : null},
     (v.actions || []).includes("Test") && {k: "recent", label: "Test: a passed test counts as recent for", type: "select", def: "720h", options: RECENT_OPTIONS},
     // explained here: the runbook and the form never said what it does (UI walkthrough #6)
@@ -776,7 +796,7 @@ const proposePathsDialog = plans => ({
 // chosen from what the source site reports, with match counts.
 const TIER_EDITOR_HINT = "Tiers restore in order (↑↓ to reorder); the next starts when every gate of the previous holds. Labels and gates are chosen from what the site reports.";
 const tierCols = (disc, cluster, nss) => [
-  {k: "name", label: "Tier", placeholder: "db", flex: 0.6, min: 70},
+  {k: "name", label: "Tier", flex: 0.6, min: 70},
   {k: "kinds", label: "Resource types", type: "multi", options: RESOURCE_TYPE_OPTIONS, addLabel: "+ type", flex: 1.5},
   {k: "labels", label: "Labels", type: "multi", options: r => tierLabelOptions(disc, cluster, nss, r), addLabel: "+ label", empty: "no labels reported", flex: 1.6},
   {k: "ready", label: "Ready when", type: "multi", options: GATE_TYPE_OPTIONS, addLabel: "+ gate", flex: 1.3}
@@ -787,8 +807,8 @@ const gateCols = (disc, cluster, nss, tierNames) => [
   {k: "template", label: "Check", type: "select", options: GATE_TEMPLATES, flex: 1},
   {k: "target", label: "Service:port", type: "select", blank: r => r.template === "custom" ? "— n/a —" : "— service —", options: r => r.template === "custom" ? [] : serviceTargets(disc, cluster, nss), unknown: x => `${x} (not reported)`, flex: 1.3},
   {k: "pod", label: "Runs in pods", type: "select", blank: "— pods —", options: podPairOptions(disc, cluster, nss), unknown: x => `${x} (not reported)`, flex: 1.3},
-  {k: "command", label: "Command (custom only)", placeholder: "pg_isready -h db", disabled: r => r.template !== "custom", flex: 1.4},
-  {k: "timeout", label: "Timeout s", type: "number", placeholder: "900", flex: 0.6}
+  {k: "command", label: "Command (custom only)", disabled: r => r.template !== "custom", flex: 1.4},
+  {k: "timeout", label: "Timeout s", type: "number", flex: 0.6}
 ];
 const gateSpecOf = g => Object.assign({type: "exec", selector: parseSelector(g.pod || "", {exists: false}).matchLabels || {}, command: gateCommand(g)}, Number(g.timeout) ? {timeoutSeconds: Number(g.timeout)} : {});
 const testTierRow = (target, r) => {
@@ -870,7 +890,7 @@ const protectAppDialogDR = (plans, cfg) => ({
     return [
       {k: "plan", label: "Protection plan", type: "select", required: true, options: plans.map(p => ({v: p.name, l: p.name})), empty: "Create a protection plan first."},
       {k: "appKind", label: "Application kind", type: "select", required: true, options: [{v: "discovered", l: "discovered — no OCM Placement, protected by namespace + PVC selector"}, {v: "managed", l: "managed — deployed through an OCM Placement"}]},
-      {k: "name", label: "Name", type: "text", required: true, placeholder: "shop",
+      {k: "name", label: "Name", type: "text", required: true,
         validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label: lower-case letters, digits and \"-\"." : x && (apps || []).some(a => a.name === x && a.namespace === (v.appKind === "managed" ? v.namespace : opsNs)) ? `${x} is protected already.` : null},
       // A discovered application's DR objects (ProtectedApplication, DRPC) live
       // in the hub's Ramen operations namespace, which the hub's configuration
@@ -878,7 +898,7 @@ const protectAppDialogDR = (plans, cfg) => ({
       // OCM Placement.
       discovered
         ? {k: "nOps", type: "note", icon: "check", label: `Its DR objects are kept in the hub namespace ${opsNs} (Ramen operations namespace).`}
-        : {k: "namespace", label: "Placement namespace — where the application's OCM Placement lives", type: "text", required: true, def: "", placeholder: "the Placement's namespace",
+        : {k: "namespace", label: "Placement namespace — where the application's OCM Placement lives", type: "text", required: true, def: "",
           validate: x => x && !DNS_LABEL_RE.test(x) ? "A namespace name." : null},
       {k: "source", label: "Source site", type: "select", required: true, options: sites},
       {k: "target", label: "Target site", type: "select", required: true, options: sites.filter(s => s.v !== v.source)},
@@ -901,11 +921,11 @@ const protectAppDialogDR = (plans, cfg) => ({
           validate: x => { const m = pvcMatches(disc, cluster, nss, parseSelector(x || "")); return m && !m.length ? `${x || "The selector"} matches no PVC in ${nss.join(", ")}: nothing would be replicated.` : null; },
           hint: x => { const m = pvcMatches(disc, cluster, nss, parseSelector(x || "")); return m ? `Replicates ${m.length}: ${m.slice(0, 6).join(", ")}${m.length > 6 ? " …" : ""}` : ""; }},
       (!reported(disc, cluster, nss) || v.pvcOverride) && {k: "pvcOverride", label: "Write the PVC selector by hand", type: "checkbox", def: false},
-      discovered && {k: "recipe", label: "Hand-written Recipe (name, optional; replaces the tiers)", type: "text", placeholder: "leave empty to let the hub generate one from tiers",
+      discovered && {k: "recipe", label: "Hand-written Recipe (name, optional; replaces the tiers)", type: "text",
         validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label." : null},
       ...(discovered && !(v.recipe || "").trim() ? tierFields(v, disc, cluster, nss, target, siteOf) : []),
       {k: "probes", label: "Health probes — what a move waits for on the target", type: "rows", cols: PROBE_COLS, max: 8, addLabel: "Add probe",
-        add: () => ({name: "", type: "http", target: "", timeout: "15s", expectStatus: ""}),
+        add: newProbe, rowError: probeRowError, rowsBlock: true,
         hint: "Test runs a probe now, by dr-agent on the source site, against the running application.",
         rowAction: {label: "Test", title: "dr-agent runs this probe on the source site now", run: (row, fv) => {
           if (!fv.plan || !fv.source) throw new Error("Choose the plan and the source site first.");
@@ -1015,7 +1035,7 @@ const quickProtectDialog = (plans, cfg) => {
     return {fwd: find(v.src, v.dst), rev: find(v.dst, v.src)};
   };
   return {
-  title: "Quick protect", confirm: "Protect", done: "Protection created", wide: true, collapsible: true,
+  title: "Quick protect", confirm: "Protect", done: "Protection created", wide: true,
   desc: "Existing plans, paths and network bindings are reused.",
   prepare: () => Promise.all([drhub.discovery(), drhub.paths().catch(() => []), drhub.apps().catch(() => []), drhub.siteProfiles().catch(() => []), drhub.dhcpServers().catch(() => [])])
     .then(([disc, paths, apps, profiles, servers]) => (P = {disc, paths, apps, profiles, servers})),
@@ -1041,7 +1061,7 @@ const quickProtectDialog = (plans, cfg) => {
       {k: "namespaces", label: "Namespaces", type: "chips", required: true, def: [], options: namespaceOptions(disc, v.src, v.src), addLabel: "— add a namespace —",
         empty: v.src ? `dr-agent on ${v.src} has not reported its namespaces` : "choose the source cluster first",
         syncAll: vv => { const key = vv.src + ":" + (vv.namespaces || []).join(","); return vv._pvcFor === key ? null : {_pvcFor: key, pvcSel: proposePVCSelector(disc, vv.src, vv.namespaces || [])}; }},
-      {k: "name", label: "Name", type: "text", required: true, placeholder: "shop",
+      {k: "name", label: "Name", type: "text", required: true,
         sync: (x, vv) => !x && (vv.namespaces || [])[0] ? dns63(vv.namespaces[0]) : undefined,
         validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label: lower-case letters, digits and \"-\"." : x && apps.some(a => a.name === x && a.namespace === opsNs) ? `${x} is protected already.` : null},
       {k: "pvcSel", label: "PVC selector", type: "select", options: pvcOpts,
@@ -1085,8 +1105,8 @@ const quickProtectDialog = (plans, cfg) => {
           cols: [{k: "site", label: "Cluster", readonly: true, flex: 0.8},
             {k: "nad", label: "Network", type: "select", blank: "— network —", flex: 1.6,
               options: r => r.site === v.src ? [{v: n.nad, l: n.nad}] : testNadChoices(disc, r.site, paths).filter(c => !c.isolated).map(c => ({v: c.v, l: c.v}))},
-            {k: "cidr", label: "Guest subnet", placeholder: "192.168.110.0/24", flex: 1.1},
-            {k: "reservedHostIDs", label: "Reserved host IDs", placeholder: "1, 2", flex: 0.8},
+            {k: "cidr", label: "Guest subnet", flex: 1.1},
+            {k: "reservedHostIDs", label: "Reserved host IDs", note: "comma-separated host numbers, for example 1, 2.", flex: 0.8},
             {k: "dhcp", label: "DHCP server", type: "select", blank: "— none —", options: r => qpDHCPChoices(disc, servers, paths, r.site), flex: 1.5}],
           rowError: r => !r.nad ? "Network required." : !nb(r.cidr) ? "Guest subnet required." : guestRowError(disc, r.site, {cidr: r.cidr, reservedHostIDs: r.reservedHostIDs}, r.nad, null),
           rowsBlock: true, hint: "Subnets prefilled from current VM addresses."}),
@@ -1094,7 +1114,7 @@ const quickProtectDialog = (plans, cfg) => {
       {k: "sOrder", type: "section", label: "Recovery order", summary: `${(v.tiers || []).map(t => t.name).filter(Boolean).join(" → ") || "no tiers"} · ${(v.probes || []).length} health check${(v.probes || []).length === 1 ? "" : "s"}`},
       ...tierFields(v, disc, v.src, nss, target, siteOf),
       {k: "probes", label: "Health checks", type: "rows", cols: PROBE_COLS, max: 8, addLabel: "Add check",
-        add: () => ({name: "", type: "http", target: "", timeout: "15s", expectStatus: ""}), hint: "Expects 2xx or 3xx after a move.",
+        add: newProbe, rowError: probeRowError, rowsBlock: true,
         rowAction: {label: "Test", title: "dr-agent runs this probe on the source cluster now", run: row => drhub.probeHealth(Object.assign(target(), {probes: probeRowSpec(row)})).then(healthAnswer)}},
 
       {k: "sReview", type: "section", label: "Review", open: true},
@@ -1173,20 +1193,36 @@ const quickProtectDialog = (plans, cfg) => {
       asyncMethod ? {method: asyncMethod} : {}, tiers.length ? {tiers} : {}, probes.length ? {health: {probes}} : {},
       {discovered: {protectedNamespaces: nss, pvcSelector: Object.keys(sel.matchLabels || {}).length ? {matchLabels: sel.matchLabels} : {}}});
     await step(`application ${v.name.trim()}`, () => drhub.createApp({name: v.name.trim(), namespace: opsNs, spec}));
-    // the dialog closes after run: the progress opens once it has
+    // the page shows the progress in place of the form (spec.result)
     const pathName = (a, b) => `${qpSite(plan, a)}-to-${qpSite(plan, b)}`.slice(0, 63);
     const watch = {plan: plan.name, planCreated: !!plan.created, paths: [fwd ? fwd.name : pathName(v.src, v.dst), rev ? rev.name : pathName(v.dst, v.src)],
       app: v.name.trim(), namespace: opsNs, nets: netsOf(v, P).length > 0};
-    setTimeout(() => window.__ui.panel(close => <ProtectProgress {...watch} onClose={close} />), 0);
-  }
+    return watch;
+  },
+  result: (watch, close) => <ProtectProgress {...watch} inline onClose={close} />
   };
 };
+
+// Quick protect as a page of its own under Disaster recovery: the form, then
+// its progress in the same place.
+function QuickProtectPage({nav}) {
+  const [spec, setSpec] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    Promise.all([drhub.plans(), drhub.config().catch(() => null)])
+      .then(([ps, c]) => setSpec(quickProtectDialog(ps, c)), e => setErr((e && e.message) || String(e)));
+  }, []);
+  if (err) return <div className="scroll"><div className="empty"><Icon n="alert" s={22} c="var(--bad)" /><b>Cannot read the protection plans</b><span>{err}</span></div></div>;
+  if (!spec) return <div className="scroll"><div className="fskel" style={{marginTop: 18}}></div></div>;
+  return <Dialog page spec={spec} obj={{kind: "papp", id: "new"}} onClose={() => nav.dr()} />;
+}
 
 // What Quick protect created, read back until the application can move: the
 // plan Ready, its paths Valid, the site mapping resolved, the application
 // bound and protected, a first replication, a Ready path.
 const QP_POLL_MS = 4000;
-function ProtectProgress({plan, planCreated, paths, app, namespace, nets, onClose}) {
+// inline: on the Quick protect page, where the form was; otherwise a modal.
+function ProtectProgress({plan, planCreated, paths, app, namespace, nets, onClose, inline}) {
   const [st, setSt] = useState(null);
   useEffect(() => {
     let alive = true, timer = null;
@@ -1215,6 +1251,27 @@ function ProtectProgress({plan, planCreated, paths, app, namespace, nets, onClos
   ].filter(Boolean);
   const current = steps.findIndex(s => !s.done);
   const all = current < 0;
+  const body = <>
+    <ol className="qpsteps">
+      {steps.map((s, i) => (
+        <li key={s.label} className={s.done ? "done" : i === current ? "cur" : ""}>
+          <span className="qpmark">{s.done ? <Icon n="check" s={13} /> : i === current ? <Icon n="refresh" s={12} /> : <i></i>}</span>
+          <span className="qptext"><span><b>{s.label}</b>{s.note && <em> · {s.note}</em>}</span><small>{s.detail}</small></span>
+        </li>))}
+    </ol>
+    {st && st.err && <div className="banner" style={{marginTop: 10, marginBottom: 0}}><Icon n="alert" s={14} />{st.err}</div>}
+  </>;
+  const open = () => { onClose(); window.__nav && window.__nav.detail(a); };
+  if (inline) return (
+    <div className="fpdone">
+      <h2>{all ? `${app} is protected` : `Protecting ${app}`}</h2>
+      {body}
+      <div className="fpdonebtns">
+        <button className="btn" onClick={onClose}>Back to disaster recovery</button>
+        <button className="btn primary" disabled={!a} onClick={open}>Open the application</button>
+      </div>
+    </div>
+  );
   return (
     <div className="ovl" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
@@ -1224,18 +1281,11 @@ function ProtectProgress({plan, planCreated, paths, app, namespace, nets, onClos
         </div>
         <div className="mbody">
           <p className="mdesc">Progress also shows on the application's page.</p>
-          <ol className="qpsteps">
-            {steps.map((s, i) => (
-              <li key={s.label} className={s.done ? "done" : i === current ? "cur" : ""}>
-                <span className="qpmark">{s.done ? <Icon n="check" s={13} /> : i === current ? <Icon n="refresh" s={12} /> : <i></i>}</span>
-                <span className="qptext"><span><b>{s.label}</b>{s.note && <em> · {s.note}</em>}</span><small>{s.detail}</small></span>
-              </li>))}
-          </ol>
-          {st && st.err && <div className="banner" style={{marginTop: 10, marginBottom: 0}}><Icon n="alert" s={14} />{st.err}</div>}
+          {body}
         </div>
         <div className="mfoot">
           <button className="btn" onClick={onClose}>Close</button>
-          <button className="btn primary" disabled={!a} onClick={() => { onClose(); window.__nav && window.__nav.detail(a); }}>Open the application</button>
+          <button className="btn primary" disabled={!a} onClick={open}>Open the application</button>
         </div>
       </div>
     </div>
@@ -1258,7 +1308,7 @@ const editTiersDialog = a => {
         ...tierFields(v, disc, cluster, nss, target).map(f => f.k === "tiers" ? Object.assign({}, f, {def: ed.rows, sync: undefined})
           : f.k === "gates" ? Object.assign({}, f, {def: ed.gates, sync: undefined}) : f),
         {k: "probes", label: "Health probes", type: "rows", cols: PROBE_COLS, max: 8, addLabel: "Add probe", def: probeRows(a.probes),
-          add: () => ({name: "", type: "http", target: "", timeout: "15s", expectStatus: ""}),
+          add: newProbe, rowError: probeRowError, rowsBlock: true,
           rowAction: {label: "Test", title: "dr-agent runs this probe where the application runs, now", run: row => drhub.probeHealth({app: a, probes: probeRowSpec(row)}).then(healthAnswer)}},
         {k: "ptest", type: "check", label: "All probes as edited", button: "Test all probes",
           hint: `dr-agent evaluates them on ${a.currentCluster || "the application's site"} now; nothing is saved.`,
@@ -1300,7 +1350,7 @@ const rplanApps = v => (v.apps || []).map(c => ({name: c.v.split("/")[1], priori
 const newRPlanDialog = (paths, apps) => ({
   title: "New recovery plan", confirm: "Create plan", done: "RecoveryPlan created",
   desc: "An ordered set of applications moved together along one DR path: priorities run in sequence, applications of one priority in parallel. A plan action fans out one RecoveryAction per application.",
-  fields: v => [{k: "name", label: "Name", type: "text", required: true, placeholder: "tier-1", validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label." : null}]
+  fields: v => [{k: "name", label: "Name", type: "text", required: true, validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label." : null}]
     .concat(rplanFields(v, paths, apps)),
   run: v => {
     const nss = uniqSorted((v.apps || []).map(c => c.v.split("/")[0]));
@@ -1325,10 +1375,10 @@ const newScheduleDialog = (target, nsHint) => ({
   fields: v => [
     !target && {k: "n0", type: "note", label: "Open an application or recovery plan and use its Actions menu to schedule tests against it."},
     {k: "name", label: "Name", type: "text", required: true, def: target ? `${target.name}-weekly` : ""},
-    {k: "schedule", label: "Cron (UTC)", type: "text", required: true, def: "0 3 * * 0", placeholder: "0 3 * * 0"},
+    {k: "schedule", label: "Cron (UTC)", type: "text", required: true, def: "0 3 * * 0"},
     target && {k: "path", label: "DR path", type: "select", required: true, options: (target.kind === "rplan" ? [target.pathName] : target.paths.filter(p => p.actions.includes("Test")).map(p => p.name)).map(p => ({v: p, l: p}))},
     {k: "keepLast", label: "Keep last N test bubbles", type: "number", min: 1, def: 10},
-    {k: "keepFor", label: "Keep for", type: "text", placeholder: "720h"},
+    {k: "keepFor", label: "Keep for", type: "text", example: "720h"},
     {k: "suspend", label: "Create suspended", type: "checkbox", def: false}
   ].filter(Boolean),
   run: v => drhub.createSchedule({name: v.name, namespace: target ? target.namespace : nsHint, schedule: v.schedule.trim(), target, path: v.path, keepLast: v.keepLast, keepFor: v.keepFor && v.keepFor.trim(), suspend: v.suspend})
@@ -1419,7 +1469,7 @@ const editBindingsDialog = s => {
         rowsBlock: true},
       {k: "gnets", label: "Guest networks — the subnet of each role here", type: "rows", max: 8, addLabel: "Add subnet", def: gnetRows(s.spec || {}),
         cols: v.bindOverride ? gnetCols(servers) : [{k: "role", label: "Role", type: "select", blank: "— role —", options: (v.lnets || []).map(l => ({v: l.role, l: l.role})), flex: 0.7},
-          {k: "cidr", label: "Guest subnet", placeholder: "proposed from the NAD", flex: 1.3}, {k: "reservedHostIDs", label: "Reserved host ids", placeholder: "1, 2", flex: 0.9},
+          {k: "cidr", label: "Guest subnet", flex: 1.3}, {k: "reservedHostIDs", label: "Reserved host ids", note: "comma-separated host numbers, for example 1, 2.", flex: 0.9},
           servers.length > 0 && {k: "dhcpServerRef", label: "DHCP server", type: "select", blank: `site default (${siteDefault || "none"})`,
             options: servers.filter(x => !(servers.length === 1 && x.name === siteDefault)).map(x => ({v: x.name, l: x.name})),
             unknown: x => `${x} (not registered)`, flex: 1.1}].filter(Boolean),
@@ -1501,13 +1551,13 @@ const newDHCPServerDialog = (sites, profiles) => ({
     {k: "site", label: "Site (managed cluster)", type: "select", required: true, options: sites.map(s => ({v: s, l: s})), empty: "No site profile reported yet."},
     // named after the site unless changed: a typed name let a typo through
     // (sita-a for site-a; UI walkthrough #12)
-    {k: "name", label: "Name", type: "text", required: true, placeholder: "dhcp-site-a",
+    {k: "name", label: "Name", type: "text", required: true,
       sync: (x, vv) => vv.site && (!x || /^dhcp-/.test(x)) && x !== dns63(`dhcp-${vv.site}`) ? dns63(`dhcp-${vv.site}`) : undefined,
       validate: x => x && !DNS_LABEL_RE.test(x.trim()) ? "A DHCP server's name is a DNS label: lower-case letters, digits and \"-\"." : null,
       hint: (x, vv) => vv && vv.site && x && !x.includes(vv.site) ? `The name does not mention ${vv.site}; site profiles and paths refer to it by name.` : null},
     {k: "type", label: "Type", type: "select", options: [{v: "dnsmasq", l: "dnsmasq — reservations ConfigMap mounted as --dhcp-hostsdir"}]},
-    {k: "namespace", label: "ConfigMap namespace (on the site)", type: "text", required: true, placeholder: "dhcp"},
-    {k: "configMap", label: "ConfigMap name", type: "text", required: true, placeholder: "sitemap-hosts"},
+    {k: "namespace", label: "ConfigMap namespace (on the site)", type: "text", required: true},
+    {k: "configMap", label: "ConfigMap name", type: "text", required: true},
     {k: "bind", label: "Bind it as the site's DHCP server (the site profile's default and every guest network without one)", type: "checkbox", def: true},
     {k: "n1", type: "note", label: "Guests need a pinned MAC and an address inside the role's guest subnet to get a reservation; the subnets are the site profile's bindings."}
   ],
@@ -1525,12 +1575,12 @@ const newDHCPServerDialog = (sites, profiles) => ({
 // carries the request there through OCM. The console writes the request, the
 // sizing and the approval, and reads back the projected draft and cluster.
 const sizingFields = z => [
-  {k: "name", label: "Storage cluster name", type: "text", def: (z && z.name) || "", placeholder: "sb-site-a"},
-  {k: "vcpuCount", label: "vCPUs per storage node", type: "number", def: z && z.vcpuCount != null ? z.vcpuCount : "", min: 1, placeholder: "8"},
-  {k: "minHugePagesSize", label: "Hugepages per storage node", type: "text", def: (z && z.minHugePagesSize) || "", placeholder: "8G"},
-  {k: "maxSubsystemCount", label: "NVMe-oF subsystems per node", type: "number", def: z && z.maxSubsystemCount != null ? z.maxSubsystemCount : "", min: 1, placeholder: "30"},
-  {k: "dataChunks", label: "Erasure coding: data chunks", type: "number", def: z && z.stripe && z.stripe.dataChunks != null ? z.stripe.dataChunks : "", min: 1, placeholder: "1"},
-  {k: "parityChunks", label: "Erasure coding: parity chunks", type: "number", def: z && z.stripe && z.stripe.parityChunks != null ? z.stripe.parityChunks : "", min: 0, placeholder: "1"},
+  {k: "name", label: "Storage cluster name", type: "text", def: (z && z.name) || ""},
+  {k: "vcpuCount", label: "vCPUs per storage node", type: "number", def: z && z.vcpuCount != null ? z.vcpuCount : "", min: 1},
+  {k: "minHugePagesSize", label: "Hugepages per storage node", type: "text", def: (z && z.minHugePagesSize) || "", example: "8G"},
+  {k: "maxSubsystemCount", label: "NVMe-oF subsystems per node", type: "number", def: z && z.maxSubsystemCount != null ? z.maxSubsystemCount : "", min: 1},
+  {k: "dataChunks", label: "Erasure coding: data chunks", type: "number", def: z && z.stripe && z.stripe.dataChunks != null ? z.stripe.dataChunks : "", min: 1},
+  {k: "parityChunks", label: "Erasure coding: parity chunks", type: "number", def: z && z.stripe && z.stripe.parityChunks != null ? z.stripe.parityChunks : "", min: 0},
   {k: "enableDriveFormat", label: "Format the devices it takes (data on them is lost)", type: "checkbox", def: !!(z && z.enableDriveFormat)}
 ];
 const num = v => v === "" || v == null ? null : Number(v);
@@ -1552,7 +1602,7 @@ const deploySiteDialog = (sites, taken) => ({
     {k: "site", label: "Site (managed cluster)", type: "select", required: true, options: sites.filter(s => !taken.includes(s)).map(s => ({v: s, l: s})), empty: "Every managed cluster has a storage deployment already, or none has joined the hub."},
     {k: "namespace", label: "Namespace of the request on the hub", type: "text", required: true, def: (window.SB_CONFIG || {}).namespace || "simplyblock"},
     {k: "enableControlPlaneNodes", label: "Include control-plane nodes in the discovery (every node of a small site is one)", type: "checkbox", def: true},
-    {k: "workers", label: "Limit to these nodes (comma-separated; empty = every node)", type: "text", placeholder: ""},
+    {k: "workers", label: "Limit to these nodes (comma-separated; empty = every node)", type: "text"},
     ...sizingFields(null),
     {k: "n1", type: "note", label: "Approval is one-way and reboots the site's storage nodes to set hugepages and core isolation."}
   ],
@@ -2486,7 +2536,7 @@ function DrHubHome({nav}) {
         <div className="dsub">Plans declare sites and replication; DR paths declare directions; applications are protected along them. Every screen is a CR on the hub, every write a CR write with your RBAC.</div>
       </div>
         <div style={{display: "flex", gap: 8, flexWrap: "wrap"}}>
-          {gate(mayApp, <button className="btn primary" onClick={() => window.__ui.dialog(quickProtectDialog(ps, c), {kind: "papp", id: "new"})}><Icon n="shield" s={12} />Quick protect</button>, acc.why("create", "drhub", {kind: "papp", namespace: DR_NS()}))}
+          {gate(mayApp, <button className="btn primary" onClick={() => nav.quickProtect()}><Icon n="shield" s={12} />Quick protect</button>, acc.why("create", "drhub", {kind: "papp", namespace: DR_NS()}))}
           {gate(mayApp, <button className="btn" onClick={() => window.__ui.dialog(protectAppDialogDR(ps, c), {kind: "papp", id: "new"})}><Icon n="shield" s={12} />Protect application</button>, acc.why("create", "drhub", {kind: "papp", namespace: DR_NS()}))}
           {gate(mayPath, <button className="btn" onClick={() => window.__ui.dialog(newPathDialog(ps), {kind: "drpath", id: "new"})}><Icon n="swap" s={12} />Declare path</button>, acc.why("create", "drhub", {kind: "drpath"}))}
           {gate(mayPath, <button className="btn proposepaths" onClick={() => window.__ui.dialog(proposePathsDialog(ps), {kind: "drpath", id: "new"})}><Icon n="swap" s={12} />Propose paths</button>, acc.why("create", "drhub", {kind: "drpath"}))}
@@ -2559,7 +2609,7 @@ function DrHubHome({nav}) {
 
 // shared with discover.jsx (AI-assisted discovery)
 Object.assign(window, {DrTable: Table, DrMono: Mono, DrCheckTable: CheckTable, DrConditions: Conditions, VerdictBadge});
-Object.assign(window, {DrHubHome, DRConfigView, PPlanTile, DRPathTile, PAppTile, RPlanTile, RActionTile, TBubbleTile, TSchedTile, RestoreTile, SiteProfileTile, DHCPServerTile, SiteDeployTile, SiteDeployDetail, deploySiteDialog,
+Object.assign(window, {QuickProtectPage, DrHubHome, DRConfigView, PPlanTile, DRPathTile, PAppTile, RPlanTile, RActionTile, TBubbleTile, TSchedTile, RestoreTile, SiteProfileTile, DHCPServerTile, SiteDeployTile, SiteDeployDetail, deploySiteDialog,
   PPlanDetail, DRPathDetail, PAppDetail, RPlanDetail, RActionDetail, TBubbleDetail, TSchedDetail, RestoreDetail, SiteProfileDetail, DHCPServerDetail, MappingPanel,
   runActionDialog, runTestDialog, restoreDialog, newPPlanDialog: newPlanDialog, newPathDialog, proposePathsDialog, protectAppDialogDR, quickProtectDialog, ProtectProgress, newRPlanDialog, editRPlanDialog, editTiersDialog, editPlanS3Dialog, newScheduleDialog, newDHCPServerDialog, ACTION_KIND_META, KIND_LABEL_DR,
   editPlanS3Dialog, editTiersDialog, editBindingsDialog, sitesSpec, sitesError, overrideError, missingServers});

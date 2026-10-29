@@ -101,9 +101,9 @@ function RecipeField({f, val, setVal}) {
   return (
     <div className="field">
       <div className="frow" style={{marginBottom: 6}}>
-        <label className="fl sm">Recipe name<input className="finput sm" value={r.name || ""} onChange={e => set({name: e.target.value})} placeholder="postgres-recipe" /></label>
+        <label className="fl sm">Recipe name<input className="finput sm" value={r.name || ""} onChange={e => set({name: e.target.value})} /></label>
         <label className="fl sm">Namespace<input className="finput sm" value={f.namespace} disabled /></label>
-        <label className="fl sm">appType<input className="finput sm" value={r.appType || ""} onChange={e => set({appType: e.target.value})} placeholder="postgres" /></label>
+        <label className="fl sm">appType<input className="finput sm" value={r.appType || ""} onChange={e => set({appType: e.target.value})} /></label>
       </div>
 
       <div className="rcph"><span className="flabel">Resources in {f.namespace}</span>
@@ -124,9 +124,9 @@ function RecipeField({f, val, setVal}) {
       <div className="schedbox">
         <Row><span className="sl">name</span><span className="sl">resource kinds</span><span className="sl">label selector</span><span></span></Row>
         {groups.map((g, i) => <Row key={i}>
-          <input className="finput sm" placeholder="config" value={g.name} onChange={e => setG(i, {name: e.target.value})} />
-          <input className="finput sm" placeholder="Secret, ConfigMap" value={(g.includedResourceTypes || []).join(", ")} onChange={e => setG(i, {includedResourceTypes: e.target.value.split(",").map(x => x.trim()).filter(Boolean)})} />
-          <input className="finput sm mono" placeholder="app.kubernetes.io/name=postgres" value={selText((g.labelSelector || {}).matchLabels)} onChange={e => setG(i, {labelSelector: {matchLabels: parseSel(e.target.value)}})} />
+          <input className="finput sm" value={g.name} onChange={e => setG(i, {name: e.target.value})} />
+          <input className="finput sm" value={(g.includedResourceTypes || []).join(", ")} onChange={e => setG(i, {includedResourceTypes: e.target.value.split(",").map(x => x.trim()).filter(Boolean)})} />
+          <input className="finput sm mono" value={selText((g.labelSelector || {}).matchLabels)} onChange={e => setG(i, {labelSelector: {matchLabels: parseSel(e.target.value)}})} />
           <Del onClick={() => set({groups: groups.filter((_, j) => j !== i)})} />
         </Row>)}
         {!groups.length && <span className="fhint">No groups: every object in the namespace is one implicit group.</span>}
@@ -137,12 +137,12 @@ function RecipeField({f, val, setVal}) {
       <div className="schedbox">
         <Row className="hk"><span className="sl">name</span><span className="sl">type</span><span className="sl">on</span><span className="sl">label selector</span><span className="sl">command / condition</span><span className="sl">timeout s</span><span className="sl">on error</span><span></span></Row>
         {hooks.map((h, i) => { const op = opOf(h); return <div className="schedrow rcp hk" key={i}>
-          <input className="finput sm" placeholder="quiesce" value={h.name} onChange={e => setH(i, {name: e.target.value})} />
+          <input className="finput sm" value={h.name} onChange={e => setH(i, {name: e.target.value})} />
           <select className="finput sm" value={h.type} onChange={e => { const t = e.target.value; setH(i, {type: t, ops: t === "exec" ? [Object.assign({name: "run", timeout: 300, onError: "fail"}, op, {condition: undefined})] : [], chks: t === "check" ? [Object.assign({name: "ready", timeout: 300, onError: "fail"}, op, {command: undefined})] : []}); }}>
             <option value="exec">exec</option><option value="check">check</option></select>
           <select className="finput sm" value={h.selectResource || "pod"} onChange={e => setH(i, {selectResource: e.target.value})}>{HOOK_RES.map(x => <option key={x}>{x}</option>)}</select>
-          <input className="finput sm mono" placeholder="app=postgres" value={selText((h.labelSelector || {}).matchLabels)} onChange={e => setH(i, {labelSelector: {matchLabels: parseSel(e.target.value)}})} />
-          <input className="finput sm mono" placeholder={h.type === "exec" ? "psql -c CHECKPOINT" : "{$.status.readyReplicas} == {$.spec.replicas}"} value={h.type === "exec" ? (op.command || "") : (op.condition || "")} onChange={e => setOp(i, h.type === "exec" ? {command: e.target.value} : {condition: e.target.value})} />
+          <input className="finput sm mono" value={selText((h.labelSelector || {}).matchLabels)} onChange={e => setH(i, {labelSelector: {matchLabels: parseSel(e.target.value)}})} />
+          <input className="finput sm mono" value={h.type === "exec" ? (op.command || "") : (op.condition || "")} onChange={e => setOp(i, h.type === "exec" ? {command: e.target.value} : {condition: e.target.value})} />
           <input className="finput sm" type="number" min="1" value={op.timeout || 300} onChange={e => setOp(i, {timeout: Number(e.target.value)})} />
           <select className="finput sm" value={op.onError || "fail"} onChange={e => setOp(i, {onError: e.target.value})}><option value="fail">fail</option><option value="continue">continue</option></select>
           <Del onClick={() => set({hooks: hooks.filter((_, j) => j !== i)})} />

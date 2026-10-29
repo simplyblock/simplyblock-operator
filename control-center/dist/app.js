@@ -8452,7 +8452,7 @@ const qosFields = q => [{
   type: "number",
   min: 0,
   def: q && q.rw_ios_per_sec || 0,
-  placeholder: "0 = unlimited"
+  hint: "0 is unlimited."
 }, {
   k: "rw_mbytes_per_sec",
   label: "Max read+write throughput",
@@ -8562,8 +8562,7 @@ const newPoolDialog = cluster => ({
     k: "name",
     label: "Pool name",
     type: "text",
-    required: true,
-    placeholder: "prod-oltp"
+    required: true
   }, {
     k: "dhchap_bidirectional",
     label: "Bi-directional DH-CHAP",
@@ -8603,7 +8602,6 @@ const newPlanDialog = sites => ({
     label: "Plan name",
     type: "text",
     required: true,
-    placeholder: "gold",
     sub: "becomes the storageID suffix and the vault bucket name"
   }, {
     k: "site_names",
@@ -8644,8 +8642,7 @@ const addMethodDialog = plan => ({
     k: "name",
     label: "Method name",
     type: "text",
-    required: true,
-    placeholder: "regional"
+    required: true
   }, {
     k: "type",
     label: "Type",
@@ -8678,7 +8675,6 @@ const addMethodDialog = plan => ({
     type: "text",
     required: true,
     def: v.type === "snapshot-s3" ? "1h" : "5m",
-    placeholder: "5m",
     sub: "the target RPO. Emitted to the policy and to the class parameters as one value"
   } : null, v.type === "snapshot-s3" ? {
     k: "bucket",
@@ -8754,7 +8750,6 @@ const newPairDialog = () => ({
     label: "Name",
     type: "text",
     required: true,
-    placeholder: "prod-to-dr",
     sub: "metadata.name, DNS-1123"
   }, {
     k: "sourceCluster",
@@ -8792,8 +8787,7 @@ const newReplPolicyDialog = pair => ({
     k: "name",
     label: "Name",
     type: "text",
-    required: true,
-    placeholder: "prod-to-dr-5m"
+    required: true
   }, pair ? null : {
     k: "pairRef",
     label: "Replication pair",
@@ -8914,7 +8908,6 @@ const replOpsDialog = ({
       k: "sourceClusterID",
       label: "Recover into a different cluster",
       type: "text",
-      placeholder: "leave empty for the original source",
       sub: "spec.sourceClusterID — omit to recover to the original source"
     } : null, action === "failback" ? {
       k: "n75",
@@ -9037,7 +9030,6 @@ const newRPolicyDialog = ctx => ({
       k: "name",
       label: "Policy name",
       type: "text",
-      placeholder: "dr-prod-eu-to-us-east",
       required: true
     }, {
       k: "mode",
@@ -9154,7 +9146,6 @@ const newMigrationDialog = cluster => ({
       k: "name",
       label: "Migration name",
       type: "text",
-      placeholder: "move-prod-to-dc2",
       required: true
     }, {
       k: "mode",
@@ -9284,13 +9275,11 @@ const protectAppDialog = () => ({
     k: "app_name",
     label: "Application name",
     type: "text",
-    placeholder: "postgres-ha",
     required: true
   }, {
     k: "namespace",
     label: "Namespace",
     type: "text",
-    placeholder: "db-prod",
     required: true
   }, {
     k: "app_kind",
@@ -9317,7 +9306,6 @@ const protectAppDialog = () => ({
     k: "pvc_selector_value",
     label: "Selector value",
     type: "text",
-    placeholder: "postgres",
     required: true,
     sub: "never leave the selector empty — an empty selector claims every PVC in the namespace"
   }, {
@@ -9340,7 +9328,6 @@ const newCgroupDialog = cluster => ({
     k: "name",
     label: "Group name",
     type: "text",
-    placeholder: "sap-hana-prod",
     required: true
   }, {
     k: "lvol_ids",
@@ -9398,14 +9385,14 @@ const kmsDialog = c => {
         label: "Vault address",
         type: "text",
         def: k.address || "",
-        placeholder: "https://vault.internal:8200",
+        example: "https://vault.internal:8200",
         required: true
       }, {
         k: "namespace",
         label: "Namespace",
         type: "text",
         def: k.namespace || "",
-        placeholder: "admin/storage (Enterprise)"
+        hint: "Vault Enterprise only."
       }, {
         k: "auth_method",
         label: "Auth method",
@@ -9705,7 +9692,6 @@ const newBucketDialog = c => ({
     k: "name",
     label: "Bucket name",
     type: "text",
-    placeholder: "media-assets",
     required: true
   }, {
     k: "pool_id",
@@ -9741,8 +9727,7 @@ const newBucketDialog = c => ({
   }, {
     k: "service_account",
     label: "Service account",
-    type: "text",
-    placeholder: "sb-s3-media-assets"
+    type: "text"
   }, {
     k: "policy",
     label: "Policy",
@@ -9791,8 +9776,7 @@ const newBucketDialog = c => ({
   }, {
     k: "owner",
     label: "Owner",
-    type: "text",
-    placeholder: "platform-team"
+    type: "text"
   }, {
     k: "tags",
     label: "Bucket tags",
@@ -9823,7 +9807,6 @@ const newClusterDialog = () => ({
       k: "name",
       label: "Cluster label",
       type: "text",
-      placeholder: "prod-eu-central-2",
       required: true
     }, {
       k: "location_type",
@@ -9957,36 +9940,33 @@ const newClusterDialog = () => ({
       k: "s3_endpoint",
       label: "S3 endpoint",
       type: "text",
-      placeholder: "https://s3.eu-central-1.amazonaws.com",
+      example: "https://s3.eu-central-1.amazonaws.com",
       required: true
     } : null, v.backup_enabled ? {
       k: "s3_region",
       label: "S3 region",
       type: "text",
-      placeholder: "eu-central-1",
+      example: "eu-central-1",
       required: true
     } : null, v.backup_enabled ? {
       k: "s3_bucket",
       label: "Bucket",
       type: "text",
-      placeholder: "sb-backup-prod",
       required: true
     } : null, v.backup_enabled ? {
       k: "s3_path_prefix",
       label: "Path prefix",
       type: "text",
-      placeholder: "clusters/prod/"
+      example: "clusters/prod/"
     } : null, v.backup_enabled ? {
       k: "s3_access_key_id",
       label: "Access key id",
       type: "text",
-      placeholder: "AKIA…",
       required: true
     } : null, v.backup_enabled ? {
       k: "s3_secret_access_key",
       label: "Secret access key",
       type: "text",
-      placeholder: "••••",
       required: true
     } : null, v.backup_enabled ? {
       k: "s3_addressing",
@@ -10159,8 +10139,8 @@ const ACTIONS = {
         label: `Failure domain (${o.fd.scope})`,
         type: "text",
         required: true,
-        placeholder: o.fd.domains && o.fd.domains[0] && o.fd.domains[0].name || "rack-1",
-        sub: (o.fd.domains || []).length ? "existing: " + o.fd.domains.map(f => f.name).join(", ") : null
+        def: o.fd.domains && o.fd.domains[0] && o.fd.domains[0].name || "",
+        hint: (o.fd.domains || []).length ? "Existing: " + o.fd.domains.map(f => f.name).join(", ") + "." : null
       } : null, o.fd && o.fd.enabled ? {
         k: "n71",
         type: "note",
@@ -10269,14 +10249,12 @@ const ACTIONS = {
         k: "rack_id",
         label: "Rack",
         type: "text",
-        def: o.rack || "",
-        placeholder: "r14 (optional)"
+        def: o.rack || ""
       }, {
         k: "cabinet_id",
         label: "Cabinet",
         type: "text",
-        def: o.cabinet || "",
-        placeholder: "c03 (optional)"
+        def: o.cabinet || ""
       }, {
         k: "n9",
         type: "note",
@@ -10346,13 +10324,13 @@ const ACTIONS = {
         k: "pcie_address",
         label: "PCIe address",
         type: "text",
-        placeholder: "0000:5e:00.0",
+        example: "0000:5e:00.0",
         required: true
       }] : [{
         k: "device_name",
         label: "Block device",
         type: "text",
-        placeholder: "/dev/sdb",
+        example: "/dev/sdb",
         required: true
       }],
       confirm: "Add device",
@@ -11325,7 +11303,7 @@ const ACTIONS = {
         label: "Interval",
         type: "text",
         required: true,
-        placeholder: "5m",
+        example: "5m",
         sub: "written to DRPolicy.spec.schedulingInterval and parameters.schedulingInterval at once"
       }],
       confirm: "Set interval",
@@ -11359,7 +11337,7 @@ const ACTIONS = {
         type: "text",
         required: true,
         def: o.interval,
-        placeholder: "5m"
+        example: "5m"
       }, !o.intervalConsistent ? {
         k: "n97",
         type: "note",
@@ -11955,7 +11933,6 @@ const newBackupPolicyDialog = cluster => ({
     k: "name",
     label: "Policy name",
     type: "text",
-    placeholder: "5m-tiered",
     required: true
   }, {
     k: "schedule",
@@ -12094,13 +12071,15 @@ function Field({
       setOpts(o);
       setLoading(false);
       if (o.length && f.type !== "multiselect" && (val === undefined || val === "")) setVal(o[0].v);
-    }).catch(() => setLoading(false));else if (f.options && f.options.length && f.type === "select" && val === undefined && !f.sync) setVal(f.options[0].v);
+    }).catch(() => setLoading(false));
+    // a select that appears after the form opened takes its own default, else the first option
+    else if (f.options && f.options.length && f.type === "select" && val === undefined && !f.sync) setVal(f.def !== undefined && f.options.some(o => o.v === f.def) ? f.def : f.options[0].v);
   }, []);
   // conditional forms can swap the option set out from under a chosen value
   useEffect(() => {
     if (!f.options || f.type !== "select") return;
     setOpts(f.options);
-    if (f.options.length && !f.options.some(o => o.v === val)) setVal(f.options[0].v);
+    if (f.options.length && !f.options.some(o => o.v === val)) setVal(val === undefined && f.def !== undefined && f.options.some(o => o.v === f.def) ? f.def : f.options[0].v);
   }, [f.options && f.options.map(o => o.v + "=" + o.l).join("|")]);
   if (f.type === "note") return /*#__PURE__*/React.createElement("div", {
     className: "fnote" + (f.tone ? " " + f.tone : "")
@@ -12208,7 +12187,7 @@ function Field({
       n: "x",
       s: 10
     })))), opts2.length > 0 ? /*#__PURE__*/React.createElement("select", {
-      className: "finput sm chipadd",
+      className: "finput sm chipadd unset",
       value: "",
       onChange: e => e.target.value && setVal(sel.concat(e.target.value))
     }, /*#__PURE__*/React.createElement("option", {
@@ -12289,12 +12268,20 @@ function Field({
       style: off ? {
         opacity: 0.5
       } : undefined
-    }, rows.map((r, i) => /*#__PURE__*/React.createElement("div", {
+    }, rows.length > 0 && /*#__PURE__*/React.createElement("div", {
+      className: "schedrow kvrow head"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "sl"
+    }, "Key"), /*#__PURE__*/React.createElement("span", {
+      className: "sl"
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "sl"
+    }, "Value"), /*#__PURE__*/React.createElement("span", null)), rows.map((r, i) => /*#__PURE__*/React.createElement("div", {
       className: "schedrow kvrow",
       key: i
     }, /*#__PURE__*/React.createElement("input", {
       className: "finput sm",
-      placeholder: "key",
+      "aria-label": "Key",
       value: r.k,
       disabled: off,
       onChange: e => set(i, "k", e.target.value)
@@ -12302,7 +12289,7 @@ function Field({
       className: "sl"
     }, "="), /*#__PURE__*/React.createElement("input", {
       className: "finput sm",
-      placeholder: "value",
+      "aria-label": "Value",
       value: r.v,
       disabled: off,
       onChange: e => set(i, "v", e.target.value)
@@ -12424,9 +12411,10 @@ function Field({
         const known = opts.some(o => o.v === cur);
         return /*#__PURE__*/React.createElement("select", {
           key: c.k,
-          className: "finput sm",
+          className: "finput sm" + (cur ? "" : " unset"),
           style: w,
           value: cur,
+          "aria-label": c.label,
           disabled: off,
           onChange: e => set(i, c.k, e.target.value)
         }, c.blank !== undefined && /*#__PURE__*/React.createElement("option", {
@@ -12446,7 +12434,7 @@ function Field({
         className: "finput sm",
         style: w,
         type: c.type === "number" ? "number" : "text",
-        placeholder: c.placeholder || "",
+        "aria-label": c.label,
         value: r[c.k] == null ? "" : r[c.k],
         disabled: off || !!(c.disabled && c.disabled(r)),
         list: listId,
@@ -12481,7 +12469,10 @@ function Field({
     }, f.cols.map(c => /*#__PURE__*/React.createElement("span", {
       key: c.k,
       className: "sl"
-    }, c.label)), ra && /*#__PURE__*/React.createElement("span", null), f.reorder && /*#__PURE__*/React.createElement("span", null), !fixed && /*#__PURE__*/React.createElement("span", null)), rows.map((r, i) => {
+    }, c.label, c.required && /*#__PURE__*/React.createElement("b", {
+      className: "freq",
+      "aria-hidden": "true"
+    }, " *"))), ra && /*#__PURE__*/React.createElement("span", null), f.reorder && /*#__PURE__*/React.createElement("span", null), !fixed && /*#__PURE__*/React.createElement("span", null)), rows.map((r, i) => {
       const rerr = f.rowError && f.rowError(r, i, rows, vals || {});
       const rinfo = !rerr && f.rowInfo && f.rowInfo(r, i, rows, vals || {});
       return /*#__PURE__*/React.createElement(React.Fragment, {
@@ -12556,7 +12547,10 @@ function Field({
       }
     }, f.validate(val, vals || {})), f.hint && /*#__PURE__*/React.createElement("span", {
       className: "fhint"
-    }, typeof f.hint === "function" ? f.hint(val, vals || {}) : f.hint));
+    }, typeof f.hint === "function" ? f.hint(val, vals || {}) : f.hint), f.cols.filter(c => c.note).map(c => /*#__PURE__*/React.createElement("span", {
+      key: c.k,
+      className: "fhint fcolnote"
+    }, /*#__PURE__*/React.createElement("b", null, c.label, ":"), " ", c.note)));
   }
   if (f.type === "bschedule") {
     const rows = val || [];
@@ -12712,6 +12706,15 @@ function Field({
     }, o.l)))));
   }
   const empty = f.type === "select" && !loading && (!opts || !opts.length);
+  // A box holds a value or nothing, never a placeholder: a format example is
+  // said beneath the box (f.example), with the description.
+  const err = f.validate && f.validate(val, vals || {});
+  const hint = [typeof f.hint === "function" ? f.hint(val, vals || {}) : f.hint, f.example ? `For example ${f.example}.` : ""].filter(Boolean).join(" ");
+  // dim only while a select shows its blank ("— none —"); "" can also be a real choice
+  const blank = f.type === "select" && (val === undefined || val === "") && /^—/.test(((opts || []).find(o => o.v === "") || {
+    l: "—"
+  }).l);
+  const cls = "finput" + (err ? " bad" : "") + (blank ? " unset" : "");
   return /*#__PURE__*/React.createElement("label", {
     className: "field"
   }, /*#__PURE__*/React.createElement("span", {
@@ -12724,8 +12727,9 @@ function Field({
   }) : empty ? /*#__PURE__*/React.createElement("div", {
     className: "fempty"
   }, f.empty || "No options available") : /*#__PURE__*/React.createElement("select", {
-    className: "finput",
+    className: cls,
     value: val === undefined ? "" : val,
+    "aria-invalid": !!err,
     onChange: e => setVal(e.target.value)
   }, opts.map(o => /*#__PURE__*/React.createElement("option", {
     key: o.v,
@@ -12735,29 +12739,29 @@ function Field({
     className: "toggle" + (val ? " on" : ""),
     onClick: () => setVal(!val)
   }, /*#__PURE__*/React.createElement("i", null)) : /*#__PURE__*/React.createElement("input", {
-    className: "finput",
+    className: cls,
     type: f.type === "number" ? "number" : "text",
     min: f.min,
     maxLength: f.maxLen,
     value: val === undefined ? "" : val,
-    placeholder: f.placeholder,
+    "aria-invalid": !!err,
     onChange: e => setVal(e.target.value)
   }), f.match && val && val !== f.match && /*#__PURE__*/React.createElement("span", {
     className: "fhint",
     style: {
       color: "var(--bad)"
     }
-  }, "must match \u201C", f.match, "\u201D"), f.validate && f.validate(val, vals || {}) ? /*#__PURE__*/React.createElement("span", {
+  }, "must match \u201C", f.match, "\u201D"), err ? /*#__PURE__*/React.createElement("span", {
     className: "fhint",
     style: {
       color: "var(--bad)"
     }
-  }, f.validate(val, vals || {})) : f.hint && /*#__PURE__*/React.createElement("span", {
+  }, err) : hint && /*#__PURE__*/React.createElement("span", {
     className: "fhint",
     style: {
       color: "var(--dim)"
     }
-  }, typeof f.hint === "function" ? f.hint(val, vals || {}) : f.hint));
+  }, hint));
 }
 function LanesField({
   f,
@@ -12905,13 +12909,21 @@ function LanesField({
 
 // spec.prepare, when set, loads what the fields need first (the DHCP servers
 // a binding may name, say); the fields are then fields(values, prepared).
+// page: the form fills a view instead of a modal (Quick protect): every
+// section open, a section list beside it, the buttons at the bottom of the
+// window. spec.result(value of run, close) replaces the form after a
+// successful run.
 function Dialog({
   spec,
   obj,
   removes,
-  onClose
+  onClose,
+  page
 }) {
   const [prep, setPrep] = useState(spec.prepare ? null : {});
+  const [result, setResult] = useState(undefined);
+  const [active, setActive] = useState(null);
+  const scrollRef = useRef(null);
   const resolve = (v, p) => typeof spec.fields === "function" ? spec.fields(v, p) : spec.fields || [];
   const defaults = p => {
     const v = {};
@@ -12960,22 +12972,130 @@ function Dialog({
     setBusy(true);
     setErr(null);
     try {
-      await spec.run(vals);
+      const res = await spec.run(vals);
       window.__toast(spec.done || `${spec.confirm} — accepted by the control plane`);
       if (removes) window.__removed(obj);else window.__refresh();
-      onClose();
+      if (page && spec.result) {
+        setResult(res === undefined ? null : res);
+        setBusy(false);
+        if (scrollRef.current) scrollRef.current.scrollTop = 0;
+      } else onClose();
     } catch (e) {
       setErr(e.message || "Request failed");
       setBusy(false);
     }
   };
   useEffect(() => {
+    // a page leaves through the app's own Escape (one level up)
+    if (page) return;
     const h = e => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", h, true);
     return () => window.removeEventListener("keydown", h, true);
   }, []);
+  const fieldsOf = items => items.map(f => f.type === "note" ? /*#__PURE__*/React.createElement(Field, {
+    key: f.k || f.label,
+    f: f
+  }) : /*#__PURE__*/React.createElement(Field, {
+    key: f.k,
+    f: f,
+    val: vals[f.k],
+    vals: vals,
+    setVal: v => setVals(s => Object.assign({}, s, {
+      [f.k]: v
+    })),
+    setAll: patch => setVals(s => Object.assign({}, s, patch)),
+    reprepare: reprepare
+  }));
+  if (page) {
+    const secs = groups.filter(g => g.sec);
+    const secId = k => `fp-${k}`;
+    const go = k => {
+      const el = document.getElementById(secId(k));
+      if (el && scrollRef.current) {
+        scrollRef.current.scrollTo({
+          top: el.offsetTop - 12,
+          behavior: "smooth"
+        });
+        setActive(k);
+      }
+    };
+    // the section list follows the scroll: the last section whose top has passed
+    const onScroll = () => {
+      const box = scrollRef.current;
+      if (!box) return;
+      const top = box.scrollTop + 40;
+      const cur = secs.filter(g => {
+        const el = document.getElementById(secId(g.sec.k));
+        return el && el.offsetTop <= top;
+      }).pop();
+      const end = box.scrollTop + box.clientHeight >= box.scrollHeight - 4;
+      setActive(end && secs.length ? secs[secs.length - 1].sec.k : cur ? cur.sec.k : null);
+    };
+    const on = active || secs[0] && secs[0].sec.k;
+    return /*#__PURE__*/React.createElement("div", {
+      className: "scroll fpscroll",
+      ref: scrollRef,
+      onScroll: onScroll
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "dhead"
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, /*#__PURE__*/React.createElement("h1", null, spec.title), spec.desc && /*#__PURE__*/React.createElement("div", {
+      className: "dsub"
+    }, spec.desc))), result !== undefined ? spec.result(result, onClose) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      className: "fpgrid"
+    }, secs.length > 0 && /*#__PURE__*/React.createElement("nav", {
+      className: "fpnav",
+      "aria-label": "Sections"
+    }, secs.map(g => {
+      const needs = g.items.some(f => f.type !== "note" && bad(f));
+      const fieldsIn = g.items.some(f => f.type !== "note");
+      return /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        key: g.sec.k,
+        className: on === g.sec.k ? "on" : "",
+        onClick: () => go(g.sec.k)
+      }, /*#__PURE__*/React.createElement("span", null, g.sec.label), prep && fieldsIn && /*#__PURE__*/React.createElement("span", {
+        className: "fhmark" + (needs ? " needs" : "")
+      }, needs ? "needs input" : /*#__PURE__*/React.createElement(Icon, {
+        n: "check",
+        s: 12
+      })));
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "fpmain"
+    }, !prep && /*#__PURE__*/React.createElement("div", {
+      className: "fskel"
+    }), groups.map((g, gi) => /*#__PURE__*/React.createElement("section", {
+      key: g.sec ? g.sec.k : "_" + gi,
+      id: g.sec ? secId(g.sec.k) : undefined,
+      className: "fpsec"
+    }, g.sec && /*#__PURE__*/React.createElement("h2", null, g.sec.label), g.sec && g.sec.hint && /*#__PURE__*/React.createElement("p", {
+      className: "fpsechint"
+    }, g.sec.hint), fieldsOf(g.items))), err && /*#__PURE__*/React.createElement("div", {
+      className: "banner",
+      style: {
+        marginTop: 10,
+        marginBottom: 0
+      }
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "alert",
+      s: 14
+    }), err))), /*#__PURE__*/React.createElement("div", {
+      className: "fpfoot"
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn",
+      onClick: onClose
+    }, "Cancel"), /*#__PURE__*/React.createElement("button", {
+      className: "btn primary" + (spec.danger ? " danger" : ""),
+      disabled: invalid || busy,
+      onClick: submit
+    }, busy ? "Working…" : spec.confirm || "Confirm"))));
+  }
   return /*#__PURE__*/React.createElement("div", {
     className: "ovl",
     onClick: onClose
@@ -13000,20 +13120,7 @@ function Dialog({
   }, spec.desc), !prep && /*#__PURE__*/React.createElement("div", {
     className: "fskel"
   }), groups.map((g, gi) => {
-    const items = g.items.map(f => f.type === "note" ? /*#__PURE__*/React.createElement(Field, {
-      key: f.k || f.label,
-      f: f
-    }) : /*#__PURE__*/React.createElement(Field, {
-      key: f.k,
-      f: f,
-      val: vals[f.k],
-      vals: vals,
-      setVal: v => setVals(s => Object.assign({}, s, {
-        [f.k]: v
-      })),
-      setAll: patch => setVals(s => Object.assign({}, s, patch)),
-      reprepare: reprepare
-    }));
+    const items = fieldsOf(g.items);
     if (!g.sec || !spec.collapsible || g.sec.open) return /*#__PURE__*/React.createElement(React.Fragment, {
       key: g.sec ? g.sec.k : "_" + gi
     }, g.sec && /*#__PURE__*/React.createElement(Field, {
@@ -16199,10 +16306,11 @@ function GrantForm({
     style: {
       flex: 2
     }
-  }, `${f.kind} name`, /*#__PURE__*/React.createElement("input", {
+  }, `${f.kind} name`, /*#__PURE__*/React.createElement("span", {
+    className: "sub"
+  }, f.kind === "User" ? "for example oidc:alice@corp.example" : "for example oidc:team-a-oncall"), /*#__PURE__*/React.createElement("input", {
     className: "finput mono",
     value: f.name,
-    placeholder: f.kind === "User" ? "oidc:alice@corp.example" : "oidc:team-a-oncall",
     onChange: e => setF({
       ...f,
       name: e.target.value
@@ -16336,7 +16444,6 @@ function GrantForm({
   }, "Reason", /*#__PURE__*/React.createElement("input", {
     className: "finput",
     value: f.reason,
-    placeholder: "OPS-4821 on-call rotation",
     onChange: e => setF({
       ...f,
       reason: e.target.value
@@ -16506,11 +16613,12 @@ function EffectivePanel() {
     style: {
       flex: 1
     }
-  }, "Namespace", /*#__PURE__*/React.createElement("input", {
+  }, "Namespace", /*#__PURE__*/React.createElement("span", {
+    className: "sub"
+  }, "empty: cluster scope"), /*#__PURE__*/React.createElement("input", {
     className: "finput mono",
     list: "ac-ns",
     value: chk.namespace,
-    placeholder: "empty = cluster scope",
     onChange: ev => setChk({
       ...chk,
       namespace: ev.target.value
@@ -23111,8 +23219,7 @@ const discoveryDialog = (k, prev) => ({
     k: "tag_key",
     label: "Only nodes with this label",
     type: "text",
-    def: prev && Object.keys(prev.nodeSelector || {})[0] || "",
-    placeholder: "simplyblock.io/storage-node-candidate"
+    def: prev && Object.keys(prev.nodeSelector || {})[0] || ""
   }, v.tag_key ? {
     k: "tag_value",
     label: "Label value",
@@ -23123,25 +23230,26 @@ const discoveryDialog = (k, prev) => ({
     label: "PCIe addresses — allow",
     type: "text",
     def: (prev && prev.filter.pcieAllowList || []).join(", "),
-    placeholder: "0000:5e:, 0000:5f:  (prefixes, comma-separated)"
+    hint: "Prefixes, comma-separated.",
+    example: "0000:5e:, 0000:5f:"
   }, {
     k: "pcie_deny",
     label: "PCIe addresses — deny",
     type: "text",
     def: (prev && prev.filter.pcieDenyList || []).join(", "),
-    placeholder: "0000:00:04.0"
+    example: "0000:00:04.0"
   }, {
     k: "blockdev",
     label: "Block device name pattern",
     type: "text",
     def: (prev && prev.filter.blockDeviceNames || []).join(", "),
-    placeholder: "nvme*, sd[b-f]  (glob, comma-separated)"
+    hint: "Globs, comma-separated.",
+    example: "nvme*, sd[b-f]"
   }, {
     k: "models",
     label: "Device model contains",
     type: "text",
-    def: (prev && prev.filter.models || []).join(", "),
-    placeholder: "PM9A3, CD8"
+    def: (prev && prev.filter.models || []).join(", ")
   }, {
     k: "size_min",
     label: "Capacity — smallest",
@@ -23742,8 +23850,7 @@ function DeployWizard({
     v: c.name,
     set: v => up(setC, {
       name: v
-    }),
-    placeholder: "prod-eu-central-2"
+    })
   })), /*#__PURE__*/React.createElement(Fl, {
     l: "Device type",
     sm: true
@@ -23810,7 +23917,7 @@ function DeployWizard({
     })
   })), /*#__PURE__*/React.createElement(Fl, {
     l: "Hugepage memory override",
-    sub: "GB \u2014 empty = derived",
+    sub: `GB; empty uses ${gb(hugepagesFor(Number(c.maxSubsystems) || 0))}`,
     sm: true
   }, /*#__PURE__*/React.createElement(Inp, {
     type: "number",
@@ -23819,8 +23926,7 @@ function DeployWizard({
     v: c.hugepagesGb,
     set: v => up(setC, {
       hugepagesGb: v
-    }),
-    placeholder: String(gb(hugepagesFor(Number(c.maxSubsystems) || 0)))
+    })
   })), /*#__PURE__*/React.createElement(Fl, {
     l: "System memory per node",
     sub: "GB",
@@ -23917,38 +24023,35 @@ function DeployWizard({
     className: "frow"
   }, nvme ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Fl, {
     l: "PCIe allow",
-    sub: "prefixes, comma-separated"
+    sub: "prefixes, comma-separated; for example 0000:5e:, 0000:5f:"
   }, /*#__PURE__*/React.createElement(Inp, {
     v: c.pcieAllow,
     set: v => up(setC, {
       pcieAllow: v
-    }),
-    placeholder: "0000:5e:, 0000:5f:"
+    })
   })), /*#__PURE__*/React.createElement(Fl, {
-    l: "PCIe deny"
+    l: "PCIe deny",
+    sub: "for example 0000:00:04.0"
   }, /*#__PURE__*/React.createElement(Inp, {
     v: c.pcieDeny,
     set: v => up(setC, {
       pcieDeny: v
-    }),
-    placeholder: "0000:00:04.0"
+    })
   })), /*#__PURE__*/React.createElement(Fl, {
     l: "SSD model contains"
   }, /*#__PURE__*/React.createElement(Inp, {
     v: c.models,
     set: v => up(setC, {
       models: v
-    }),
-    placeholder: "PM9A3, CD8"
+    })
   }))) : /*#__PURE__*/React.createElement(Fl, {
     l: "Block device name pattern",
-    sub: "glob, comma-separated"
+    sub: "glob, comma-separated; for example /dev/sd*, /dev/nvme?n1"
   }, /*#__PURE__*/React.createElement(Inp, {
     v: c.namePattern,
     set: v => up(setC, {
       namePattern: v
-    }),
-    placeholder: "/dev/sd*, /dev/nvme?n1"
+    })
   })), /*#__PURE__*/React.createElement(Fl, {
     l: "Capacity min",
     sub: "GB",
@@ -24008,8 +24111,7 @@ function DeployWizard({
     v: tag.key,
     set: v => up(setTag, {
       key: v
-    }),
-    placeholder: "simplyblock.io/storage-node-candidate"
+    })
   })), /*#__PURE__*/React.createElement(Fl, {
     l: "Value",
     sm: true
@@ -24091,7 +24193,6 @@ function DeployWizard({
       className: "inp",
       list: "fdlist",
       value: fdOf(h),
-      placeholder: "rack-1",
       onChange: e => setFd(f => Object.assign({}, f, {
         [h.id]: e.target.value
       }))
@@ -24199,8 +24300,7 @@ function DeployWizard({
     v: c.s3Endpoint,
     set: v => up(setC, {
       s3Endpoint: v
-    }),
-    placeholder: "https://s3.eu-central-1.amazonaws.com"
+    })
   })), /*#__PURE__*/React.createElement(Fl, {
     l: "Bucket",
     sm: true
@@ -24208,17 +24308,16 @@ function DeployWizard({
     v: c.s3Bucket,
     set: v => up(setC, {
       s3Bucket: v
-    }),
-    placeholder: "sb-backups-prod"
+    })
   })), /*#__PURE__*/React.createElement(Fl, {
     l: "Region",
+    sub: "for example eu-central-1",
     sm: true
   }, /*#__PURE__*/React.createElement(Inp, {
     v: c.s3Region,
     set: v => up(setC, {
       s3Region: v
-    }),
-    placeholder: "eu-central-1"
+    })
   }))), /*#__PURE__*/React.createElement("div", {
     className: "frow"
   }, /*#__PURE__*/React.createElement(Fl, {
@@ -24291,8 +24390,7 @@ function DeployWizard({
     v: c.kmsAddress,
     set: v => up(setC, {
       kmsAddress: v
-    }),
-    placeholder: "https://vault.internal:8200"
+    })
   })), /*#__PURE__*/React.createElement(Fl, {
     l: "Key name",
     sm: true
@@ -24300,8 +24398,7 @@ function DeployWizard({
     v: c.kmsKeyName,
     set: v => up(setC, {
       kmsKeyName: v
-    }),
-    placeholder: "simplyblock-prod"
+    })
   }))), /*#__PURE__*/React.createElement("div", {
     className: "frow"
   }, /*#__PURE__*/React.createElement(Fl, {
@@ -25684,8 +25781,7 @@ function RecipeField({
     value: r.name || "",
     onChange: e => set({
       name: e.target.value
-    }),
-    placeholder: "postgres-recipe"
+    })
   })), /*#__PURE__*/React.createElement("label", {
     className: "fl sm"
   }, "Namespace", /*#__PURE__*/React.createElement("input", {
@@ -25699,8 +25795,7 @@ function RecipeField({
     value: r.appType || "",
     onChange: e => set({
       appType: e.target.value
-    }),
-    placeholder: "postgres"
+    })
   }))), /*#__PURE__*/React.createElement("div", {
     className: "rcph"
   }, /*#__PURE__*/React.createElement("span", {
@@ -25781,21 +25876,18 @@ function RecipeField({
     key: i
   }, /*#__PURE__*/React.createElement("input", {
     className: "finput sm",
-    placeholder: "config",
     value: g.name,
     onChange: e => setG(i, {
       name: e.target.value
     })
   }), /*#__PURE__*/React.createElement("input", {
     className: "finput sm",
-    placeholder: "Secret, ConfigMap",
     value: (g.includedResourceTypes || []).join(", "),
     onChange: e => setG(i, {
       includedResourceTypes: e.target.value.split(",").map(x => x.trim()).filter(Boolean)
     })
   }), /*#__PURE__*/React.createElement("input", {
     className: "finput sm mono",
-    placeholder: "app.kubernetes.io/name=postgres",
     value: selText((g.labelSelector || {}).matchLabels),
     onChange: e => setG(i, {
       labelSelector: {
@@ -25860,7 +25952,6 @@ function RecipeField({
       key: i
     }, /*#__PURE__*/React.createElement("input", {
       className: "finput sm",
-      placeholder: "quiesce",
       value: h.name,
       onChange: e => setH(i, {
         name: e.target.value
@@ -25902,7 +25993,6 @@ function RecipeField({
       key: x
     }, x))), /*#__PURE__*/React.createElement("input", {
       className: "finput sm mono",
-      placeholder: "app=postgres",
       value: selText((h.labelSelector || {}).matchLabels),
       onChange: e => setH(i, {
         labelSelector: {
@@ -25911,7 +26001,6 @@ function RecipeField({
       })
     }), /*#__PURE__*/React.createElement("input", {
       className: "finput sm mono",
-      placeholder: h.type === "exec" ? "psql -c CHECKPOINT" : "{$.status.readyReplicas} == {$.spec.replicas}",
       value: h.type === "exec" ? op.command || "" : op.condition || "",
       onChange: e => setOp(i, h.type === "exec" ? {
         command: e.target.value
@@ -26096,8 +26185,7 @@ const newMPathDialog = () => ({
     k: "name",
     label: "Name",
     type: "text",
-    required: true,
-    placeholder: "site-a-to-site-b"
+    required: true
   }, {
     k: "k8s_cluster_id",
     label: "Stretched Kubernetes cluster",
@@ -26147,8 +26235,7 @@ const newAppGroupDialog = p => ({
     k: "name",
     label: "Group name",
     type: "text",
-    required: true,
-    placeholder: "payments"
+    required: true
   }, {
     k: "members",
     type: "members",
@@ -28389,7 +28476,6 @@ const runActionDialog = (target, kind, ctx) => {
         type: "text",
         required: true,
         maxLen: OVERRIDE_MAX,
-        placeholder: "why this action must run despite the verdict",
         validate: overrideError,
         hint: x => `${(x || "").trim().length} characters; 10 to ${OVERRIDE_MAX}. Kept with the run in the audit record.`
       }, !pathless && verdict === "Degraded" && {
@@ -28413,8 +28499,7 @@ const runActionDialog = (target, kind, ctx) => {
         k: "timeout",
         label: "Timeout",
         type: "text",
-        def: "30m",
-        placeholder: "30m"
+        def: "30m"
       },
       // only when the chosen path does not start where the application runs:
       // shown for every path, it read as if this move would be refused (UI walkthrough #24)
@@ -28684,22 +28769,19 @@ const parseSites = txt => String(txt || "").replace(/\s*([=/@])\s*/g, "$1").spli
 const SITE_COLS = [{
   k: "name",
   label: "Site",
-  placeholder: "site-a",
   flex: 1
 }, {
   k: "cluster",
   label: "Cluster (managed cluster)",
-  placeholder: "same as the site",
+  note: "empty uses the site name.",
   flex: 1.2
 }, {
   k: "zone",
   label: "Zone (sync)",
-  placeholder: "",
   flex: 0.8
 }, {
   k: "region",
   label: "Region",
-  placeholder: "eu-central",
   flex: 0.8
 }];
 const SITE_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
@@ -28813,35 +28895,38 @@ const checkStores = (sites, stores) => {
 };
 // ---- form <-> spec helpers for the editable parts of the DR objects --------
 // The secret a store names when the row leaves it empty: the one the DR hub
-// chart creates in Ramen's namespace. Pre-filling it in the row looked like a
-// placeholder and was typed a second time ("ramen-s3-secretramen-s3-secret").
+// chart creates in Ramen's namespace. A new row starts with it as its value
+// (once it showed as a placeholder and was typed after it a second time:
+// "ramen-s3-secretramen-s3-secret"; forms carry no placeholders now).
 const DEFAULT_S3_SECRET = "ramen-s3-secret";
 const S3_COLS = [{
   k: "site",
   label: "Site",
-  placeholder: "site-a",
   flex: 1
 }, {
   k: "bucket",
   label: "Bucket",
-  placeholder: "dr-site-a",
+  required: true,
   flex: 1.4
 }, {
   k: "endpoint",
   label: "Endpoint",
-  placeholder: "https://s3.eu-central-1.amazonaws.com",
+  required: true,
+  note: "for example https://s3.eu-central-1.amazonaws.com.",
   flex: 2
 },
 // required: Ramen's S3 client needs it, and the hub refuses a store without one (UI walkthrough #16)
 {
   k: "region",
-  label: "Region (required; us-east-1 for MinIO)",
-  placeholder: "e.g. eu-central-1",
+  label: "Region",
+  required: true,
+  note: "the bucket's region on AWS; us-east-1 for MinIO.",
   flex: 1
 }, {
   k: "secretRef",
-  label: "Secret (empty: ramen-s3-secret)",
-  placeholder: "ramen-s3-secret",
+  label: "Secret",
+  required: true,
+  note: "in Ramen's namespace on the hub.",
   flex: 1
 }];
 const s3Rows = profiles => (profiles || []).map(p => ({
@@ -28915,7 +29000,6 @@ const tiersSpec = rows => (rows || []).filter(r => (r.name || "").trim()).map(r 
 const TIER_COLS = [{
   k: "name",
   label: "Tier",
-  placeholder: "db",
   flex: 0.8
 }, {
   k: "by",
@@ -28932,93 +29016,99 @@ const TIER_COLS = [{
 }, {
   k: "selector",
   label: "Selector",
-  placeholder: "dr.simplyblock.io/tier=db  |  configmaps, secrets",
+  note: "labels (k=v) or resource types, comma-separated.",
   flex: 2
 }, {
   k: "ready",
   label: "Ready when",
-  placeholder: "vmRunning, exec(app=shop-tools; nc -z -w 3 db 3306; 900)",
   flex: 2.4
 }];
+// A probe's type and name follow from its target: a URL is http, host:port
+// is tcp, and the name is the target's host (wp-web for
+// http://wp-web.wordpress.svc/). A probe saved with a name keeps it; a
+// vmRunning probe (no target) keeps its type.
+const probeType = r => r.type === "vmRunning" ? "vmRunning" : /^https?:\/\//i.test((r.target || "").trim()) ? "http" : "tcp";
+const probeHost = t => (t || "").trim().replace(/^https?:\/\//i, "").split(/[/:?#]/)[0].split(".")[0];
+const probeRowError = r => {
+  const t = (r.target || "").trim();
+  if (!t) return r.type === "vmRunning" ? null : "Target required.";
+  return probeType(r) === "tcp" && !/^[^\s:/]+:\d{1,5}$/.test(t) ? "A URL (http://…) or host:port." : null;
+};
 const probeRows = probes => (probes || []).map(p => ({
   name: p.name || "",
-  type: p.type || "http",
+  type: p.type || "",
   target: p.target || "",
   timeout: p.timeout || "",
   expectStatus: p.expectStatus || ""
 }));
-const probesSpec = rows => (rows || []).filter(r => (r.target || "").trim() || r.type === "vmRunning").map(r => Object.assign({
-  name: (r.name || "").trim() || r.type,
-  type: r.type || "http"
-}, r.target && r.target.trim() ? {
-  target: r.target.trim()
-} : {}, r.timeout && String(r.timeout).trim() ? {
-  timeout: String(r.timeout).trim()
-} : {}, Number(r.expectStatus) ? {
-  expectStatus: Number(r.expectStatus)
-} : {}));
+const probesSpec = rows => {
+  const used = {};
+  return (rows || []).filter(r => (r.target || "").trim() || r.type === "vmRunning").map(r => {
+    const type = probeType(r);
+    let name = (r.name || "").trim() || probeHost(r.target) || type;
+    // two checks on one host stay apart: wp-web, wp-web-2
+    used[name] = (used[name] || 0) + 1;
+    if (used[name] > 1 && !(r.name || "").trim()) name = `${name}-${used[name]}`;
+    return Object.assign({
+      name,
+      type
+    }, r.target && r.target.trim() ? {
+      target: r.target.trim()
+    } : {}, r.timeout && String(r.timeout).trim() ? {
+      timeout: String(r.timeout).trim()
+    } : {}, type === "http" && Number(r.expectStatus) ? {
+      expectStatus: Number(r.expectStatus)
+    } : {});
+  });
+};
 const PROBE_COLS = [{
-  k: "name",
-  label: "Probe",
-  placeholder: "web",
-  flex: 0.8
-}, {
-  k: "type",
-  label: "Type",
-  type: "select",
-  options: [{
-    v: "http",
-    l: "http"
-  }, {
-    v: "tcp",
-    l: "tcp"
-  }],
-  flex: 0.7
-}, {
   k: "target",
-  label: "Target (URL / host:port)",
-  placeholder: "http://web.shop.svc.cluster.local/",
-  flex: 2.4
+  label: "Target",
+  required: true,
+  note: "a URL for an HTTP check, host:port for a TCP check.",
+  flex: 3
 }, {
   k: "timeout",
   label: "Timeout",
-  placeholder: "15s",
+  required: true,
   flex: 0.7
 }, {
   k: "expectStatus",
   label: "HTTP status",
   type: "number",
-  placeholder: "any 2xx or 3xx",
+  disabled: r => probeType(r) !== "http",
+  note: "empty accepts any 2xx or 3xx.",
   flex: 0.8
 }];
+const newProbe = () => ({
+  target: "",
+  timeout: "15s",
+  expectStatus: ""
+});
 const TIER_HINT = "Ready gates: vmRunning, deploymentsReady, podsReady, or exec(<pod labels k=v>; <command>; <timeout seconds>) run in a pod of the tier's namespace. Tiers restore in order; the next starts when every gate of the previous holds.";
 
 // Site profile bindings (ADR 0020)
 const LNET_COLS = [{
   k: "role",
   label: "Role",
-  placeholder: "app",
   flex: 0.8
 }, {
   k: "nad",
   label: "NetworkAttachmentDefinition (namespace/name)",
-  placeholder: "app-net/vlan110",
   flex: 2.4
 }];
 const GNET_COLS = [{
   k: "role",
   label: "Role",
-  placeholder: "app",
   flex: 0.7
 }, {
   k: "cidr",
   label: "Guest subnet",
-  placeholder: "192.168.110.0/24",
   flex: 1.3
 }, {
   k: "reservedHostIDs",
   label: "Reserved host ids",
-  placeholder: "1, 2",
+  note: "comma-separated host numbers, for example 1, 2.",
   flex: 0.9
 }, {
   k: "dhcpServerRef",
@@ -29073,7 +29163,6 @@ const bindingsSpec = v => ({
 const siteColsFor = disc => [{
   k: "name",
   label: "Site (empty: the cluster's name)",
-  placeholder: "site-a",
   flex: 1
 }, {
   k: "cluster",
@@ -29122,7 +29211,7 @@ const blankStore = (site, prev) => ({
   bucket: "",
   endpoint: prev ? prev.endpoint : "",
   region: prev ? prev.region : "",
-  secretRef: prev ? prev.secretRef : ""
+  secretRef: prev && prev.secretRef ? prev.secretRef : DEFAULT_S3_SECRET
 });
 // One store row per declared site, in the sites' order, keeping what was typed.
 const syncStores = (rows, siteNames) => siteNames.map((n, i) => (rows || []).find(r => r.site === n) || blankStore(n, (rows || [])[i - 1] || (rows || [])[0]));
@@ -29209,7 +29298,6 @@ const newPlanDialog = () => ({
       label: "Name",
       type: "text",
       required: true,
-      placeholder: "fra",
       validate: x => x && !DNS_LABEL_RE.test(x) ? "A plan's name is a DNS label: lower-case letters, digits and \"-\"." : x && ((prep || {}).plans || []).some(p => p.name === x) ? `A plan named ${x} exists already.` : null
     }, {
       k: "sitesOverride",
@@ -29243,7 +29331,6 @@ const newPlanDialog = () => ({
       label: "Method name",
       type: "text",
       required: true,
-      placeholder: "async-5m",
       sync: (x, vv) => {
         const auto = methodName(vv);
         return auto && (!x || x === "primary" || isMethodName(x)) && x !== auto ? auto : undefined;
@@ -29312,7 +29399,6 @@ const newPlanDialog = () => ({
       k: "scName",
       label: missing.length ? `Create the replicated StorageClass on ${missing.join(", ")} (no class there matches), named` : "Create the replicated StorageClass on every site, named (empty: the classes exist already)",
       type: "text",
-      placeholder: missing.length ? DEFAULT_SC_NAME : "leave empty: the classes exist already",
       sync: (x, vv) => missing.length && x === undefined ? DEFAULT_SC_NAME : undefined,
       validate: x => x && !DNS_LABEL_RE.test(x) ? "A StorageClass name: lower-case letters, digits and \"-\"." : missing.length && !x ? `No StorageClass matches the selector on ${missing.join(", ")}: name the class dr-hub creates there, or choose another selector.` : null,
       hint: "dr-hub writes it on each site with the selector's labels, the site's storage cluster and pool."
@@ -29320,7 +29406,6 @@ const newPlanDialog = () => ({
       k: "scPool",
       label: "…from the pool (empty: the storage cluster's default pool)",
       type: "text",
-      placeholder: "",
       validate: x => x && !DNS_LABEL_RE.test(x) ? "A pool name: lower-case letters, digits and \"-\"." : null
     }, v.scName && {
       k: "scFs",
@@ -29368,7 +29453,6 @@ const newPlanDialog = () => ({
       label: "Ramen S3 profile",
       type: "text",
       required: true,
-      placeholder: "existing profile name",
       validate: x => x && !/^[A-Za-z0-9][-A-Za-z0-9_.]*$/.test(x) ? "A profile name." : null
     }, ...veleroFields(v, disc, sites.map(s => s.cluster).filter(Boolean), "velero"), {
       k: "autoRestart",
@@ -29532,7 +29616,6 @@ const pathFields = (plan, disc, paths, v, fixedSites, servers) => {
     label: "Path name",
     type: "text",
     required: true,
-    placeholder: "site-a-to-site-b",
     sync: x => (!x || /-to-/.test(x)) && auto && x !== auto && !(paths || []).some(p => p.name === x && x !== auto) ? auto : undefined,
     validate: (x, vv) => pathError(plan, paths, Object.assign({}, vv, {
       name: x
@@ -29572,7 +29655,7 @@ const pathFields = (plan, disc, paths, v, fixedSites, servers) => {
     k: "cap",
     label: "Test: max clone capacity (empty: no limit)",
     type: "text",
-    placeholder: "500Gi",
+    example: "500Gi",
     validate: x => x && !QUANTITY_RE.test(x) ? `${x} is not a quantity (500Gi, 2Ti).` : null
   }, (v.actions || []).includes("Test") && {
     k: "recent",
@@ -29912,7 +29995,6 @@ const TIER_EDITOR_HINT = "Tiers restore in order (↑↓ to reorder); the next s
 const tierCols = (disc, cluster, nss) => [{
   k: "name",
   label: "Tier",
-  placeholder: "db",
   flex: 0.6,
   min: 70
 }, {
@@ -29984,14 +30066,12 @@ const gateCols = (disc, cluster, nss, tierNames) => [{
 }, {
   k: "command",
   label: "Command (custom only)",
-  placeholder: "pg_isready -h db",
   disabled: r => r.template !== "custom",
   flex: 1.4
 }, {
   k: "timeout",
   label: "Timeout s",
   type: "number",
-  placeholder: "900",
   flex: 0.6
 }];
 const gateSpecOf = g => Object.assign({
@@ -30186,7 +30266,6 @@ const protectAppDialogDR = (plans, cfg) => ({
       label: "Name",
       type: "text",
       required: true,
-      placeholder: "shop",
       validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label: lower-case letters, digits and \"-\"." : x && (apps || []).some(a => a.name === x && a.namespace === (v.appKind === "managed" ? v.namespace : opsNs)) ? `${x} is protected already.` : null
     },
     // A discovered application's DR objects (ProtectedApplication, DRPC) live
@@ -30204,7 +30283,6 @@ const protectAppDialogDR = (plans, cfg) => ({
       type: "text",
       required: true,
       def: "",
-      placeholder: "the Placement's namespace",
       validate: x => x && !DNS_LABEL_RE.test(x) ? "A namespace name." : null
     }, {
       k: "source",
@@ -30295,7 +30373,6 @@ const protectAppDialogDR = (plans, cfg) => ({
       k: "recipe",
       label: "Hand-written Recipe (name, optional; replaces the tiers)",
       type: "text",
-      placeholder: "leave empty to let the hub generate one from tiers",
       validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label." : null
     }, ...(discovered && !(v.recipe || "").trim() ? tierFields(v, disc, cluster, nss, target, siteOf) : []), {
       k: "probes",
@@ -30304,13 +30381,9 @@ const protectAppDialogDR = (plans, cfg) => ({
       cols: PROBE_COLS,
       max: 8,
       addLabel: "Add probe",
-      add: () => ({
-        name: "",
-        type: "http",
-        target: "",
-        timeout: "15s",
-        expectStatus: ""
-      }),
+      add: newProbe,
+      rowError: probeRowError,
+      rowsBlock: true,
       hint: "Test runs a probe now, by dr-agent on the source site, against the running application.",
       rowAction: {
         label: "Test",
@@ -30525,7 +30598,6 @@ const quickProtectDialog = (plans, cfg) => {
     confirm: "Protect",
     done: "Protection created",
     wide: true,
-    collapsible: true,
     desc: "Existing plans, paths and network bindings are reused.",
     prepare: () => Promise.all([drhub.discovery(), drhub.paths().catch(() => []), drhub.apps().catch(() => []), drhub.siteProfiles().catch(() => []), drhub.dhcpServers().catch(() => [])]).then(([disc, paths, apps, profiles, servers]) => P = {
       disc,
@@ -30594,7 +30666,6 @@ const quickProtectDialog = (plans, cfg) => {
         label: "Name",
         type: "text",
         required: true,
-        placeholder: "shop",
         sync: (x, vv) => !x && (vv.namespaces || [])[0] ? dns63(vv.namespaces[0]) : undefined,
         validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label: lower-case letters, digits and \"-\"." : x && apps.some(a => a.name === x && a.namespace === opsNs) ? `${x} is protected already.` : null
       }, {
@@ -30723,12 +30794,11 @@ const quickProtectDialog = (plans, cfg) => {
         }, {
           k: "cidr",
           label: "Guest subnet",
-          placeholder: "192.168.110.0/24",
           flex: 1.1
         }, {
           k: "reservedHostIDs",
           label: "Reserved host IDs",
-          placeholder: "1, 2",
+          note: "comma-separated host numbers, for example 1, 2.",
           flex: 0.8
         }, {
           k: "dhcp",
@@ -30756,14 +30826,9 @@ const quickProtectDialog = (plans, cfg) => {
         cols: PROBE_COLS,
         max: 8,
         addLabel: "Add check",
-        add: () => ({
-          name: "",
-          type: "http",
-          target: "",
-          timeout: "15s",
-          expectStatus: ""
-        }),
-        hint: "Expects 2xx or 3xx after a move.",
+        add: newProbe,
+        rowError: probeRowError,
+        rowsBlock: true,
         rowAction: {
           label: "Test",
           title: "dr-agent runs this probe on the source cluster now",
@@ -30952,7 +31017,7 @@ const quickProtectDialog = (plans, cfg) => {
         namespace: opsNs,
         spec
       }));
-      // the dialog closes after run: the progress opens once it has
+      // the page shows the progress in place of the form (spec.result)
       const pathName = (a, b) => `${qpSite(plan, a)}-to-${qpSite(plan, b)}`.slice(0, 63);
       const watch = {
         plan: plan.name,
@@ -30962,17 +31027,58 @@ const quickProtectDialog = (plans, cfg) => {
         namespace: opsNs,
         nets: netsOf(v, P).length > 0
       };
-      setTimeout(() => window.__ui.panel(close => /*#__PURE__*/React.createElement(ProtectProgress, _extends({}, watch, {
-        onClose: close
-      }))), 0);
-    }
+      return watch;
+    },
+    result: (watch, close) => /*#__PURE__*/React.createElement(ProtectProgress, _extends({}, watch, {
+      inline: true,
+      onClose: close
+    }))
   };
 };
+
+// Quick protect as a page of its own under Disaster recovery: the form, then
+// its progress in the same place.
+function QuickProtectPage({
+  nav
+}) {
+  const [spec, setSpec] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    Promise.all([drhub.plans(), drhub.config().catch(() => null)]).then(([ps, c]) => setSpec(quickProtectDialog(ps, c)), e => setErr(e && e.message || String(e)));
+  }, []);
+  if (err) return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 22,
+    c: "var(--bad)"
+  }), /*#__PURE__*/React.createElement("b", null, "Cannot read the protection plans"), /*#__PURE__*/React.createElement("span", null, err)));
+  if (!spec) return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "fskel",
+    style: {
+      marginTop: 18
+    }
+  }));
+  return /*#__PURE__*/React.createElement(Dialog, {
+    page: true,
+    spec: spec,
+    obj: {
+      kind: "papp",
+      id: "new"
+    },
+    onClose: () => nav.dr()
+  });
+}
 
 // What Quick protect created, read back until the application can move: the
 // plan Ready, its paths Valid, the site mapping resolved, the application
 // bound and protected, a first replication, a Ready path.
 const QP_POLL_MS = 4000;
+// inline: on the Quick protect page, where the form was; otherwise a modal.
 function ProtectProgress({
   plan,
   planCreated,
@@ -30980,7 +31086,8 @@ function ProtectProgress({
   app,
   namespace,
   nets,
-  onClose
+  onClose,
+  inline
 }) {
   const [st, setSt] = useState(null);
   useEffect(() => {
@@ -31036,28 +31143,7 @@ function ProtectProgress({
   }].filter(Boolean);
   const current = steps.findIndex(s => !s.done);
   const all = current < 0;
-  return /*#__PURE__*/React.createElement("div", {
-    className: "ovl",
-    onClick: onClose
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "modal",
-    onClick: e => e.stopPropagation()
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "mhead"
-  }, /*#__PURE__*/React.createElement("h3", null, all ? `${app} is protected` : `Protecting ${app}`), /*#__PURE__*/React.createElement("button", {
-    className: "tbtn",
-    style: {
-      color: "var(--dim)"
-    },
-    onClick: onClose
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "x",
-    s: 13
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "mbody"
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "mdesc"
-  }, "Progress also shows on the application's page."), /*#__PURE__*/React.createElement("ol", {
+  const body = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("ol", {
     className: "qpsteps"
   }, steps.map((s, i) => /*#__PURE__*/React.createElement("li", {
     key: s.label,
@@ -31081,7 +31167,45 @@ function ProtectProgress({
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "alert",
     s: 14
-  }), st.err)), /*#__PURE__*/React.createElement("div", {
+  }), st.err));
+  const open = () => {
+    onClose();
+    window.__nav && window.__nav.detail(a);
+  };
+  if (inline) return /*#__PURE__*/React.createElement("div", {
+    className: "fpdone"
+  }, /*#__PURE__*/React.createElement("h2", null, all ? `${app} is protected` : `Protecting ${app}`), body, /*#__PURE__*/React.createElement("div", {
+    className: "fpdonebtns"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    onClick: onClose
+  }, "Back to disaster recovery"), /*#__PURE__*/React.createElement("button", {
+    className: "btn primary",
+    disabled: !a,
+    onClick: open
+  }, "Open the application")));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "ovl",
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "modal",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mhead"
+  }, /*#__PURE__*/React.createElement("h3", null, all ? `${app} is protected` : `Protecting ${app}`), /*#__PURE__*/React.createElement("button", {
+    className: "tbtn",
+    style: {
+      color: "var(--dim)"
+    },
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "x",
+    s: 13
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "mbody"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "mdesc"
+  }, "Progress also shows on the application's page."), body), /*#__PURE__*/React.createElement("div", {
     className: "mfoot"
   }, /*#__PURE__*/React.createElement("button", {
     className: "btn",
@@ -31089,10 +31213,7 @@ function ProtectProgress({
   }, "Close"), /*#__PURE__*/React.createElement("button", {
     className: "btn primary",
     disabled: !a,
-    onClick: () => {
-      onClose();
-      window.__nav && window.__nav.detail(a);
-    }
+    onClick: open
   }, "Open the application"))));
 }
 const editTiersDialog = a => {
@@ -31130,13 +31251,9 @@ const editTiersDialog = a => {
         max: 8,
         addLabel: "Add probe",
         def: probeRows(a.probes),
-        add: () => ({
-          name: "",
-          type: "http",
-          target: "",
-          timeout: "15s",
-          expectStatus: ""
-        }),
+        add: newProbe,
+        rowError: probeRowError,
+        rowsBlock: true,
         rowAction: {
           label: "Test",
           title: "dr-agent runs this probe where the application runs, now",
@@ -31247,7 +31364,6 @@ const newRPlanDialog = (paths, apps) => ({
     label: "Name",
     type: "text",
     required: true,
-    placeholder: "tier-1",
     validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label." : null
   }].concat(rplanFields(v, paths, apps)),
   run: v => {
@@ -31314,8 +31430,7 @@ const newScheduleDialog = (target, nsHint) => ({
     label: "Cron (UTC)",
     type: "text",
     required: true,
-    def: "0 3 * * 0",
-    placeholder: "0 3 * * 0"
+    def: "0 3 * * 0"
   }, target && {
     k: "path",
     label: "DR path",
@@ -31335,7 +31450,7 @@ const newScheduleDialog = (target, nsHint) => ({
     k: "keepFor",
     label: "Keep for",
     type: "text",
-    placeholder: "720h"
+    example: "720h"
   }, {
     k: "suspend",
     label: "Create suspended",
@@ -31538,12 +31653,11 @@ const editBindingsDialog = s => {
         }, {
           k: "cidr",
           label: "Guest subnet",
-          placeholder: "proposed from the NAD",
           flex: 1.3
         }, {
           k: "reservedHostIDs",
           label: "Reserved host ids",
-          placeholder: "1, 2",
+          note: "comma-separated host numbers, for example 1, 2.",
           flex: 0.9
         }, servers.length > 0 && {
           k: "dhcpServerRef",
@@ -31763,7 +31877,6 @@ const newDHCPServerDialog = (sites, profiles) => ({
     label: "Name",
     type: "text",
     required: true,
-    placeholder: "dhcp-site-a",
     sync: (x, vv) => vv.site && (!x || /^dhcp-/.test(x)) && x !== dns63(`dhcp-${vv.site}`) ? dns63(`dhcp-${vv.site}`) : undefined,
     validate: x => x && !DNS_LABEL_RE.test(x.trim()) ? "A DHCP server's name is a DNS label: lower-case letters, digits and \"-\"." : null,
     hint: (x, vv) => vv && vv.site && x && !x.includes(vv.site) ? `The name does not mention ${vv.site}; site profiles and paths refer to it by name.` : null
@@ -31779,14 +31892,12 @@ const newDHCPServerDialog = (sites, profiles) => ({
     k: "namespace",
     label: "ConfigMap namespace (on the site)",
     type: "text",
-    required: true,
-    placeholder: "dhcp"
+    required: true
   }, {
     k: "configMap",
     label: "ConfigMap name",
     type: "text",
-    required: true,
-    placeholder: "sitemap-hosts"
+    required: true
   }, {
     k: "bind",
     label: "Bind it as the site's DHCP server (the site profile's default and every guest network without one)",
@@ -31824,42 +31935,37 @@ const sizingFields = z => [{
   k: "name",
   label: "Storage cluster name",
   type: "text",
-  def: z && z.name || "",
-  placeholder: "sb-site-a"
+  def: z && z.name || ""
 }, {
   k: "vcpuCount",
   label: "vCPUs per storage node",
   type: "number",
   def: z && z.vcpuCount != null ? z.vcpuCount : "",
-  min: 1,
-  placeholder: "8"
+  min: 1
 }, {
   k: "minHugePagesSize",
   label: "Hugepages per storage node",
   type: "text",
   def: z && z.minHugePagesSize || "",
-  placeholder: "8G"
+  example: "8G"
 }, {
   k: "maxSubsystemCount",
   label: "NVMe-oF subsystems per node",
   type: "number",
   def: z && z.maxSubsystemCount != null ? z.maxSubsystemCount : "",
-  min: 1,
-  placeholder: "30"
+  min: 1
 }, {
   k: "dataChunks",
   label: "Erasure coding: data chunks",
   type: "number",
   def: z && z.stripe && z.stripe.dataChunks != null ? z.stripe.dataChunks : "",
-  min: 1,
-  placeholder: "1"
+  min: 1
 }, {
   k: "parityChunks",
   label: "Erasure coding: parity chunks",
   type: "number",
   def: z && z.stripe && z.stripe.parityChunks != null ? z.stripe.parityChunks : "",
-  min: 0,
-  placeholder: "1"
+  min: 0
 }, {
   k: "enableDriveFormat",
   label: "Format the devices it takes (data on them is lost)",
@@ -31910,8 +32016,7 @@ const deploySiteDialog = (sites, taken) => ({
   }, {
     k: "workers",
     label: "Limit to these nodes (comma-separated; empty = every node)",
-    type: "text",
-    placeholder: ""
+    type: "text"
   }, ...sizingFields(null), {
     k: "n1",
     type: "note",
@@ -34806,10 +34911,7 @@ function DrHubHome({
     }
   }, gate(mayApp, /*#__PURE__*/React.createElement("button", {
     className: "btn primary",
-    onClick: () => window.__ui.dialog(quickProtectDialog(ps, c), {
-      kind: "papp",
-      id: "new"
-    })
+    onClick: () => nav.quickProtect()
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "shield",
     s: 12
@@ -35136,6 +35238,7 @@ Object.assign(window, {
   VerdictBadge
 });
 Object.assign(window, {
+  QuickProtectPage,
   DrHubHome,
   DRConfigView,
   PPlanTile,
@@ -35892,8 +35995,7 @@ const runDiscoveryDialog = (sites, cfg, preset) => ({
     }, ai && v.mode === "AI" && {
       k: "instructions",
       label: "Instructions for the agent (optional)",
-      type: "text",
-      placeholder: "e.g. treat the reporting namespace as part of the shop"
+      type: "text"
     }, ai && v.mode === "AI" && {
       k: "maxToolCalls",
       label: "Tool-call budget (optional)",
@@ -35926,7 +36028,6 @@ const rejectDialog = p => ({
     label: "Reason",
     type: "text",
     required: true,
-    placeholder: "why this bundle is wrong",
     validate: x => x && x.trim().length < 10 ? "at least 10 characters" : null
   }],
   run: v => discovery.request(p, "reject", v.reason.trim())
@@ -37987,6 +38088,10 @@ const LAYER_META = {
   },
   dr: {
     label: "Disaster recovery",
+    icon: "shield"
+  },
+  quickprotect: {
+    label: "Quick protect",
     icon: "shield"
   },
   // DR hub (dr.simplyblock.io) — the detail layer name is the view-model kind
@@ -40188,6 +40293,11 @@ function App() {
     dr: () => go([{
       t: "dr"
     }]),
+    quickProtect: () => go([{
+      t: "dr"
+    }, {
+      t: "quickprotect"
+    }]),
     cp: () => go([{
       t: "cp"
     }]),
@@ -40466,6 +40576,9 @@ function App() {
     key: viewKey,
     nav: nav
   }) : cur.t === "drconfig" ? /*#__PURE__*/React.createElement(DRConfigView, {
+    key: viewKey,
+    nav: nav
+  }) : cur.t === "quickprotect" ? /*#__PURE__*/React.createElement(QuickProtectPage, {
     key: viewKey,
     nav: nav
   }) : cur.t === "cp" ? /*#__PURE__*/React.createElement(ControlPlaneView, {

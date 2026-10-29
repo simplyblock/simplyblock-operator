@@ -6,7 +6,7 @@
 const GBn = 1e9;
 const gb = n => Math.round((n || 0) / GBn);
 const qosFields = q => [
-  {k: "rw_ios_per_sec", label: "Max read+write IOPS", type: "number", min: 0, def: (q && q.rw_ios_per_sec) || 0, placeholder: "0 = unlimited"},
+  {k: "rw_ios_per_sec", label: "Max read+write IOPS", type: "number", min: 0, def: (q && q.rw_ios_per_sec) || 0, hint: "0 is unlimited."},
   {k: "rw_mbytes_per_sec", label: "Max read+write throughput", unit: "MB/s", type: "number", min: 0, def: (q && q.rw_mbytes_per_sec) || 0},
   {k: "r_mbytes_per_sec", label: "Max read throughput", unit: "MB/s", type: "number", min: 0, def: (q && q.r_mbytes_per_sec) || 0},
   {k: "w_mbytes_per_sec", label: "Max write throughput", unit: "MB/s", type: "number", min: 0, def: (q && q.w_mbytes_per_sec) || 0},
@@ -48,7 +48,7 @@ const newPoolDialog = cluster => ({
   title: `New pool on ${cluster.name}`, confirm: "Create pool", done: "Pool created",
   desc: "A pool groups volumes and carries their QoS ceiling. Bi-directional DH-CHAP is decided here and cannot be changed afterwards.",
   fields: [
-    {k: "name", label: "Pool name", type: "text", required: true, placeholder: "prod-oltp"},
+    {k: "name", label: "Pool name", type: "text", required: true},
     {k: "dhchap_bidirectional", label: "Bi-directional DH-CHAP", type: "checkbox", def: false},
     {k: "n70", type: "note", label: "With DH-CHAP the host and the subsystem authenticate each other on every connection. It applies to every volume in the pool, is fixed for the pool's lifetime, and cannot be added later — create a second pool if you need both."},
     {k: "max_rw_iops", label: "Max IOPS", type: "number", min: 0, def: 0, sub: "0 = unlimited"},
@@ -63,7 +63,7 @@ const newPlanDialog = sites => ({
   title: "New protection plan", confirm: "Create plan", done: "Plan created",
   desc: "A plan names the sites it spans and the storage profile its volumes come from. Methods are added afterwards — each one declares a protection relationship and derives its own policy and replication class.",
   fields: [
-    {k: "name", label: "Plan name", type: "text", required: true, placeholder: "gold",
+    {k: "name", label: "Plan name", type: "text", required: true,
       sub: "becomes the storageID suffix and the vault bucket name"},
     {k: "site_names", label: "Sites", type: "multiselect", required: true,
       options: (sites || []).map(s => ({v: s.name, l: `${s.name} · ${s.region}`})),
@@ -80,7 +80,7 @@ const addMethodDialog = plan => ({
   title: `Add a method to ${plan.name}`, confirm: "Add method", done: "Method added",
   desc: "A method is one declared protection relationship. All three types are configured identically and travel the same path to the driver; what differs is the parameters the class carries and therefore what the driver does with the data.",
   fields: v => [
-    {k: "name", label: "Method name", type: "text", required: true, placeholder: "regional"},
+    {k: "name", label: "Method name", type: "text", required: true},
     {k: "type", label: "Type", type: "select", required: true, def: "async", options: [
       {v: "sync", l: "synchronous — inline mirror to a peer, RPO 0, failback yes"},
       {v: "async", l: "asynchronous — block delta per epoch to a peer, RPO = interval, failback yes"},
@@ -91,7 +91,7 @@ const addMethodDialog = plan => ({
       sub: v.type === "sync" ? "must be in the same region as the source site"
         : v.type === "snapshot-s3" ? "the site a restore materialises on — the bucket itself is not a site" : "the peer that holds the replica"},
     v.type !== "sync" ? {k: "interval", label: "Interval", type: "text", required: true,
-      def: v.type === "snapshot-s3" ? "1h" : "5m", placeholder: "5m",
+      def: v.type === "snapshot-s3" ? "1h" : "5m",
       sub: "the target RPO. Emitted to the policy and to the class parameters as one value"} : null,
     v.type === "snapshot-s3" ? {k: "bucket", label: "Bucket", type: "text", def: `sb-vault-${plan.name}`} : null,
     v.type === "snapshot-s3" ? {k: "retention_hourly", label: "Hourly generations", type: "number", def: 24, min: 0} : null,
@@ -123,7 +123,7 @@ const newPairDialog = () => ({
   title: "New replication pair", confirm: "Create pair", done: "ReplicationPair created",
   desc: "A pair names a source and a target cluster and is reusable: several policies can replicate between the same two clusters on different schedules. Both clusters must be attached to this control plane — cross-namespace references are not supported.",
   fields: [
-    {k: "name", label: "Name", type: "text", required: true, placeholder: "prod-to-dr",
+    {k: "name", label: "Name", type: "text", required: true,
       sub: "metadata.name, DNS-1123"},
     {k: "sourceCluster", label: "Source cluster", type: "select", required: true,
       load: () => api.clusters().then(cs => cs.filter(c => c.status !== "unready")
@@ -142,7 +142,7 @@ const newReplPolicyDialog = pair => ({
   confirm: "Create policy", done: "ReplicationPolicy created",
   desc: "One interval and one snapshot count. There is no tiered retention schedule and no synchronous mode — mode is exactly failover or migration.",
   fields: v => [
-    {k: "name", label: "Name", type: "text", required: true, placeholder: "prod-to-dr-5m"},
+    {k: "name", label: "Name", type: "text", required: true},
     pair ? null : {k: "pairRef", label: "Replication pair", type: "select", required: true,
       load: () => api.pairs().then(ps => ps.map(p => ({v: p.name,
         l: `${p.name} · ${p.sourceCluster} → ${p.targetCluster}${p.ready ? "" : " · not ready"}`}))),
@@ -202,7 +202,6 @@ const replOpsDialog = ({action, scope, ref, obj}) => {
       action === "migration" ? {k: "deleteSource", label: "Delete the source volume after the cutover",
         type: "checkbox", def: false, sub: "spec.deleteSource — only meaningful for a migration"} : null,
       action === "failback" ? {k: "sourceClusterID", label: "Recover into a different cluster", type: "text",
-        placeholder: "leave empty for the original source",
         sub: "spec.sourceClusterID — omit to recover to the original source"} : null,
       action === "failback" ? {k: "n75", type: "note",
         label: "A short write freeze holds while the final delta transfers. Plan a maintenance window."} : null,
@@ -264,7 +263,7 @@ const newRPolicyDialog = ctx => ({
   fields: v => {
     const sync = v.mode === "synchronous";
     return [
-      {k: "name", label: "Policy name", type: "text", placeholder: "dr-prod-eu-to-us-east", required: true},
+      {k: "name", label: "Policy name", type: "text", required: true},
       {k: "mode", label: "Mode", type: "select", def: ctx && ctx.mode ? ctx.mode : "asynchronous",
         options: [{v: "asynchronous", l: "Asynchronous — between two clusters"}, {v: "synchronous", l: "Synchronous — across zones of one cluster"}]},
       sync ? {k: "source_cluster_id", label: "Stretched cluster", type: "select", required: true,
@@ -306,7 +305,7 @@ const newMigrationDialog = cluster => ({
   fields: v => {
     const cross = v.mode === "cross_cluster";
     return [
-      {k: "name", label: "Migration name", type: "text", placeholder: "move-prod-to-dc2", required: true},
+      {k: "name", label: "Migration name", type: "text", required: true},
       {k: "mode", label: "Mechanism", type: "select", def: "intra_cluster",
         options: [{v: "intra_cluster", l: "Within the cluster — instant volume migration"},
           {v: "cross_cluster", l: "Between clusters / zones — replicate, then roll over"}]},
@@ -353,12 +352,12 @@ const protectAppDialog = () => ({
       sub: "the one method Ramen drives through this application's single placement control",
       empty: "This plan declares only a vault method, so that is what Ramen will drive."},
     {k: "n89", type: "note", label: "A placement control selects PVCs by label, so two over the same PVCs would both claim them — the documented outcome is data corruption. One application therefore names one orchestrated method; the others still replicate, and report their lag out of band."},
-    {k: "app_name", label: "Application name", type: "text", placeholder: "postgres-ha", required: true},
-    {k: "namespace", label: "Namespace", type: "text", placeholder: "db-prod", required: true},
+    {k: "app_name", label: "Application name", type: "text", required: true},
+    {k: "namespace", label: "Namespace", type: "text", required: true},
     {k: "app_kind", label: "Deployed as", type: "select", def: "ApplicationSet",
       options: [{v: "ApplicationSet", l: "ApplicationSet"}, {v: "Subscription", l: "Subscription"}, {v: "VirtualMachine", l: "VirtualMachine"}]},
     {k: "pvc_selector_key", label: "PVC selector label", type: "text", def: "app.kubernetes.io/name", required: true},
-    {k: "pvc_selector_value", label: "Selector value", type: "text", placeholder: "postgres", required: true,
+    {k: "pvc_selector_value", label: "Selector value", type: "text", required: true,
       sub: "never leave the selector empty — an empty selector claims every PVC in the namespace"},
     {k: "kube_object_protection", label: "Also protect Kubernetes objects", type: "checkbox", def: true},
     {k: "n28", type: "note", label: "Without Kubernetes object protection a failover moves the volumes only: the workload has to be recreated by hand and the application parks in WaitForUser."}
@@ -371,7 +370,7 @@ const newCgroupDialog = cluster => ({
   title: "Create a consistency group", confirm: "Create group",
   desc: "A consistency group is a named set of volumes. Group snapshots capture every member at the same instant so they restore to one common point in time.",
   fields: [
-    {k: "name", label: "Group name", type: "text", placeholder: "sap-hana-prod", required: true},
+    {k: "name", label: "Group name", type: "text", required: true},
     {k: "lvol_ids", label: "Member volumes", type: "multiselect", required: true,
       load: () => api.clusterVolumes(cluster.id).then(vs => vs.filter(v => v.status === "online")
         .map(v => ({v: v.id, l: `${v.name} · ${v.poolName} · ${fmtBytes(v.capacity.total)}`
@@ -395,8 +394,8 @@ const kmsDialog = c => {
           {v: "azure_key_vault", l: "Azure Key Vault"}, {v: "gcp_kms", l: "Google Cloud KMS"},
           {v: "kmip", l: "KMIP appliance"}]}];
       const perProvider = p === "hashicorp_vault" ? [
-        {k: "address", label: "Vault address", type: "text", def: k.address || "", placeholder: "https://vault.internal:8200", required: true},
-        {k: "namespace", label: "Namespace", type: "text", def: k.namespace || "", placeholder: "admin/storage (Enterprise)"},
+        {k: "address", label: "Vault address", type: "text", def: k.address || "", example: "https://vault.internal:8200", required: true},
+        {k: "namespace", label: "Namespace", type: "text", def: k.namespace || "", hint: "Vault Enterprise only."},
         {k: "auth_method", label: "Auth method", type: "select", def: k.auth_method || "kubernetes",
           options: [{v: "kubernetes", l: "Kubernetes service account"}, {v: "approle", l: "AppRole"}, {v: "token", l: "Token"}]},
         {k: "auth_role", label: "Role", type: "text", def: k.auth_role || "simplyblock-storage"},
@@ -484,14 +483,14 @@ const newBucketDialog = c => ({
   title: "Create a bucket", confirm: "Create bucket",
   desc: "A bucket is provisioned as one logical volume. Access is Kubernetes-native: a service account and a secret holding the access key.",
   fields: [
-    {k: "name", label: "Bucket name", type: "text", placeholder: "media-assets", required: true},
+    {k: "name", label: "Bucket name", type: "text", required: true},
     {k: "pool_id", label: "Pool", type: "select", required: true,
       load: () => api.pools(c.id).then(ps => ps.filter(p => p.enabled).map(p => ({v: p.id, l: p.name}))),
       empty: "No enabled pool in this cluster."},
     {k: "size", label: "Filesystem size", unit: "GB", type: "number", min: 10, def: 1000, required: true},
     {k: "quota", label: "Quota", unit: "GB, 0 = none", type: "number", min: 0, def: 0},
     {k: "namespace", label: "Kubernetes namespace", type: "text", def: "default", required: true},
-    {k: "service_account", label: "Service account", type: "text", placeholder: "sb-s3-media-assets"},
+    {k: "service_account", label: "Service account", type: "text"},
     {k: "policy", label: "Policy", type: "select", def: "read-write",
       options: [{v: "read-write", l: "Read / write"}, {v: "read-only", l: "Read only"}, {v: "write-only", l: "Write only"}]},
     {k: "versioning", label: "Enable versioning", type: "checkbox", def: !!(c.objectStorage || {}).versioning_default},
@@ -500,7 +499,7 @@ const newBucketDialog = c => ({
     {k: "encryption", label: "Encrypt with the cluster KMS key", type: "checkbox", def: true},
     {k: "storage_class", label: "Default storage class", type: "select", def: "standard",
       options: [{v: "standard", l: "Standard"}, {v: "infrequent-access", l: "Infrequent access"}]},
-    {k: "owner", label: "Owner", type: "text", placeholder: "platform-team"},
+    {k: "owner", label: "Owner", type: "text"},
     {k: "tags", label: "Bucket tags", type: "kv", max: 50, def: [{k: "env", v: "prod"}, {k: "team", v: ""}],
       hint: "S3 bucket tagging — searchable in the bucket list as key or key=value."}
   ],
@@ -514,7 +513,7 @@ const newClusterDialog = () => ({
   fields: v => {
     const edge = v.location_type === "edge";
     return [
-      {k: "name", label: "Cluster label", type: "text", placeholder: "prod-eu-central-2", required: true},
+      {k: "name", label: "Cluster label", type: "text", required: true},
       {k: "location_type", label: "Siting", type: "select", def: "datacenter",
         options: [{v: "datacenter", l: "Data center"}, {v: "edge", l: "Edge"}]},
       {k: "device_class", label: "Device class", type: "select", def: "nvme",
@@ -547,12 +546,12 @@ const newClusterDialog = () => ({
       v.failure_domain_enabled ? {k: "n15", type: "note",
         label: "Every node must sit in a failure domain, and node counts per domain may differ by at most one. Hosts without the matching taint cannot take a node."} : null,
       {k: "backup_enabled", label: "Enable backups", type: "checkbox", def: true},
-      v.backup_enabled ? {k: "s3_endpoint", label: "S3 endpoint", type: "text", placeholder: "https://s3.eu-central-1.amazonaws.com", required: true} : null,
-      v.backup_enabled ? {k: "s3_region", label: "S3 region", type: "text", placeholder: "eu-central-1", required: true} : null,
-      v.backup_enabled ? {k: "s3_bucket", label: "Bucket", type: "text", placeholder: "sb-backup-prod", required: true} : null,
-      v.backup_enabled ? {k: "s3_path_prefix", label: "Path prefix", type: "text", placeholder: "clusters/prod/"} : null,
-      v.backup_enabled ? {k: "s3_access_key_id", label: "Access key id", type: "text", placeholder: "AKIA…", required: true} : null,
-      v.backup_enabled ? {k: "s3_secret_access_key", label: "Secret access key", type: "text", placeholder: "••••", required: true} : null,
+      v.backup_enabled ? {k: "s3_endpoint", label: "S3 endpoint", type: "text", example: "https://s3.eu-central-1.amazonaws.com", required: true} : null,
+      v.backup_enabled ? {k: "s3_region", label: "S3 region", type: "text", example: "eu-central-1", required: true} : null,
+      v.backup_enabled ? {k: "s3_bucket", label: "Bucket", type: "text", required: true} : null,
+      v.backup_enabled ? {k: "s3_path_prefix", label: "Path prefix", type: "text", example: "clusters/prod/"} : null,
+      v.backup_enabled ? {k: "s3_access_key_id", label: "Access key id", type: "text", required: true} : null,
+      v.backup_enabled ? {k: "s3_secret_access_key", label: "Secret access key", type: "text", required: true} : null,
       v.backup_enabled ? {k: "s3_addressing", label: "Addressing style", type: "select", def: "virtual-hosted",
         options: [{v: "virtual-hosted", l: "Virtual-hosted"}, {v: "path", l: "Path"}]} : null,
       v.backup_enabled ? {k: "s3_verify_tls", label: "Verify TLS certificate", type: "checkbox", def: true} : null,
@@ -630,8 +629,8 @@ const ACTIONS = {
         }),
         empty: "No eligible host. A host must be in one of the cluster's zones, carry a failure-domain taint, and sit in a domain that is not already ahead of the others."},
         o.fd && o.fd.enabled ? {k: "failure_domain", label: `Failure domain (${o.fd.scope})`, type: "text", required: true,
-          placeholder: (o.fd.domains && o.fd.domains[0] && o.fd.domains[0].name) || "rack-1",
-          sub: (o.fd.domains || []).length ? "existing: " + o.fd.domains.map(f => f.name).join(", ") : null} : null,
+          def: (o.fd.domains && o.fd.domains[0] && o.fd.domains[0].name) || "",
+          hint: (o.fd.domains || []).length ? "Existing: " + o.fd.domains.map(f => f.name).join(", ") + "." : null} : null,
         o.fd && o.fd.enabled ? {k: "n71", type: "note", label: "The failure domain is assigned once, now. It is fixed for the node's lifetime — moving a node between domains means removing it and adding it again."} : null,
         {k: "n13", type: "note", label: o.fd && o.fd.enabled
           ? `Nodes can only be started on hosts in the cluster's zones. Each ${o.fd.scope} must carry at least two storage nodes and counts may differ by at most one, so expand in pairs` + ((o.fd.domains || []).length ? ` — currently ${o.fd.domains.filter(f => f.name !== "unassigned").map(f => f.name + ": " + f.nodes).join(", ")}.` : ".")
@@ -678,8 +677,8 @@ const ACTIONS = {
       desc: "A host is racked in exactly one zone. The rack and cabinet labels are how operators find it on the floor.",
       fields: [
         {k: "n28", type: "note", label: `Zone and region come from the node labels topology.kubernetes.io/zone and /region — this host reports ${o.zone || "no zone"}${o.region ? " in " + o.region : ""}. They cannot be set here.`},
-        {k: "rack_id", label: "Rack", type: "text", def: o.rack || "", placeholder: "r14 (optional)"},
-        {k: "cabinet_id", label: "Cabinet", type: "text", def: o.cabinet || "", placeholder: "c03 (optional)"},
+        {k: "rack_id", label: "Rack", type: "text", def: o.rack || ""},
+        {k: "cabinet_id", label: "Cabinet", type: "text", def: o.cabinet || ""},
         {k: "n9", type: "note", label: `Rack and cabinet come from the worker node's taints and may be absent. Device class is derived from the installed hardware: this host is ${o.hostClass || "not yet inspected"}.`}
       ],
       confirm: "Apply", run: v => api.hostSetPlacement(o.id, v)}}
@@ -711,8 +710,8 @@ const ACTIONS = {
       title: "Add a device to this node",
       desc: (REG[o.clusterId] || {}).mode === "nvme" ? "NVMe cluster — identify the drive by PCIe address." : "Block device cluster — identify the drive by block device name.",
       fields: (REG[o.clusterId] || {}).mode === "nvme"
-        ? [{k: "pcie_address", label: "PCIe address", type: "text", placeholder: "0000:5e:00.0", required: true}]
-        : [{k: "device_name", label: "Block device", type: "text", placeholder: "/dev/sdb", required: true}],
+        ? [{k: "pcie_address", label: "PCIe address", type: "text", example: "0000:5e:00.0", required: true}]
+        : [{k: "device_name", label: "Block device", type: "text", example: "/dev/sdb", required: true}],
       confirm: "Add device", run: v => api.nodeAddDevice(o.id, v)}},
     {label: "Remove node", icon: "trash", danger: true, removes: true, dialog: {
       title: `Remove ${o.hostname}?`, danger: true,
@@ -1136,7 +1135,7 @@ const ACTIONS = {
       fields: [
         {k: "method", label: "Method", type: "select", required: true,
           options: o.methods.filter(m => !m.intervalConsistent).map(m => ({v: m.name, l: `${m.name} · policy ${m.interval} vs class ${m.classInterval}`}))},
-        {k: "interval", label: "Interval", type: "text", required: true, placeholder: "5m",
+        {k: "interval", label: "Interval", type: "text", required: true, example: "5m",
           sub: "written to DRPolicy.spec.schedulingInterval and parameters.schedulingInterval at once"}
       ],
       confirm: "Set interval", run: v => api.planSetInterval(o.id, v.method, v.interval),
@@ -1156,7 +1155,7 @@ const ACTIONS = {
         title: `Interval for ${o.name}`,
         desc: "One field, written to two places: the policy's schedulingInterval and the class's parameters.schedulingInterval. They must agree exactly — a difference of formatting alone leaves the application protected by nothing.",
         fields: [
-          {k: "interval", label: "Interval", type: "text", required: true, def: o.interval, placeholder: "5m"},
+          {k: "interval", label: "Interval", type: "text", required: true, def: o.interval, example: "5m"},
           !o.intervalConsistent ? {k: "n97", type: "note", label: `Currently the policy carries ${o.interval} and the class carries ${o.classInterval}, so no class resolves for this method.`} : null
         ].filter(Boolean),
         confirm: "Set interval", run: v => api.planSetInterval(o.planId, o.name, v.interval)}},
@@ -1382,7 +1381,7 @@ const newBackupPolicyDialog = cluster => ({
   title: "Create a backup policy", confirm: "Create policy",
   desc: "A policy triggers background snapshot-and-backup cycles. Each schedule row carries the cadence, how many backup versions are retained, and how many snapshots stay online.",
   fields: [
-    {k: "name", label: "Policy name", type: "text", placeholder: "5m-tiered", required: true},
+    {k: "name", label: "Policy name", type: "text", required: true},
     {k: "schedule", label: "Schedule", type: "bschedule",
       def: [{interval: "5m", versions: 12, online: 3}, {interval: "1h", versions: 11, online: 0}, {interval: "1d", versions: 6, online: 0}]},
     {k: "consistency_group", label: "Group-consistent — all linked volumes in one consistency group", type: "checkbox", def: false},
@@ -1458,13 +1457,16 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
   });
   useEffect(() => {
     if (f.load) f.load().then(o => { setOpts(o); setLoading(false); if (o.length && f.type !== "multiselect" && (val === undefined || val === "")) setVal(o[0].v); }).catch(() => setLoading(false));
-    else if (f.options && f.options.length && f.type === "select" && val === undefined && !f.sync) setVal(f.options[0].v);
+    // a select that appears after the form opened takes its own default, else the first option
+    else if (f.options && f.options.length && f.type === "select" && val === undefined && !f.sync)
+      setVal(f.def !== undefined && f.options.some(o => o.v === f.def) ? f.def : f.options[0].v);
   }, []);
   // conditional forms can swap the option set out from under a chosen value
   useEffect(() => {
     if (!f.options || f.type !== "select") return;
     setOpts(f.options);
-    if (f.options.length && !f.options.some(o => o.v === val)) setVal(f.options[0].v);
+    if (f.options.length && !f.options.some(o => o.v === val))
+      setVal(val === undefined && f.def !== undefined && f.options.some(o => o.v === f.def) ? f.def : f.options[0].v);
   }, [f.options && f.options.map(o => o.v + "=" + o.l).join("|")]);
   if (f.type === "note") return <div className={"fnote" + (f.tone ? " " + f.tone : "")}><Icon n={f.icon || "alert"} s={12} />{f.label}</div>;
   // A heading that groups the fields after it (a long form in sections).
@@ -1512,7 +1514,7 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
         <div className="chipbox">
           {sel.map(x => <span key={x} className="chip mono">{x}<button type="button" className="kebab" title={`Remove ${x}`} onClick={() => setVal(sel.filter(y => y !== x))}><Icon n="x" s={10} /></button></span>)}
           {opts2.length > 0
-            ? <select className="finput sm chipadd" value="" onChange={e => e.target.value && setVal(sel.concat(e.target.value))}>
+            ? <select className="finput sm chipadd unset" value="" onChange={e => e.target.value && setVal(sel.concat(e.target.value))}>
               <option value="">{f.addLabel || "— add —"}</option>
               {opts2.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
             </select>
@@ -1549,11 +1551,12 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
       <label className="field">
         <span className="flabel">{f.label} <em>({rows.length} of {f.max || 50})</em></span>
         <div className="schedbox" style={off ? {opacity: 0.5} : undefined}>
+          {rows.length > 0 && <div className="schedrow kvrow head"><span className="sl">Key</span><span className="sl"></span><span className="sl">Value</span><span></span></div>}
           {rows.map((r, i) => (
             <div className="schedrow kvrow" key={i}>
-              <input className="finput sm" placeholder="key" value={r.k} disabled={off} onChange={e => set(i, "k", e.target.value)} />
+              <input className="finput sm" aria-label="Key" value={r.k} disabled={off} onChange={e => set(i, "k", e.target.value)} />
               <span className="sl">=</span>
-              <input className="finput sm" placeholder="value" value={r.v} disabled={off} onChange={e => set(i, "v", e.target.value)} />
+              <input className="finput sm" aria-label="Value" value={r.v} disabled={off} onChange={e => set(i, "v", e.target.value)} />
               <button type="button" className="kebab" title="Remove tag" disabled={off} onClick={() => setVal(rows.filter((_, j) => j !== i))}><Icon n="x" s={11} /></button>
             </div>
           ))}
@@ -1604,7 +1607,7 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
         }
         const cur = r[c.k] || "";
         const known = opts.some(o => o.v === cur);
-        return <select key={c.k} className="finput sm" style={w} value={cur} disabled={off} onChange={e => set(i, c.k, e.target.value)}>
+        return <select key={c.k} className={"finput sm" + (cur ? "" : " unset")} style={w} value={cur} aria-label={c.label} disabled={off} onChange={e => set(i, c.k, e.target.value)}>
           {c.blank !== undefined && <option value="">{typeof c.blank === "function" ? c.blank(r) : c.blank}</option>}
           {!known && cur && <option value={cur}>{c.unknown ? c.unknown(cur) : cur}</option>}
           {opts.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}</select>;
@@ -1612,7 +1615,7 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
       const sug = c.suggest ? c.suggest(r, i, vals || {}) || [] : [];
       const listId = sug.length ? `sug-${f.k}-${i}-${c.k}` : undefined;
       return <React.Fragment key={c.k}>
-        <input className="finput sm" style={w} type={c.type === "number" ? "number" : "text"} placeholder={c.placeholder || ""} value={r[c.k] == null ? "" : r[c.k]}
+        <input className="finput sm" style={w} type={c.type === "number" ? "number" : "text"} aria-label={c.label} value={r[c.k] == null ? "" : r[c.k]}
           disabled={off || !!(c.disabled && c.disabled(r))} list={listId} onChange={e => set(i, c.k, e.target.value)} />
         {listId && <datalist id={listId}>{sug.map(x => <option key={x} value={x} />)}</datalist>}
       </React.Fragment>;
@@ -1621,7 +1624,7 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
       <label className="field">
         <span className="flabel">{f.label}{f.required && <b className="freq" aria-hidden="true"> *</b>} <em>({rows.length}{f.max ? ` of ${f.max}` : ""})</em></span>
         <div className="schedbox rgridbox" style={off ? {opacity: 0.5} : undefined}><div className="rgridin" style={{minWidth: floor}}>
-          <div className="schedrow rgrid head" style={gridRow}>{f.cols.map(c => <span key={c.k} className="sl">{c.label}</span>)}{ra && <span></span>}{f.reorder && <span></span>}{!fixed && <span></span>}</div>
+          <div className="schedrow rgrid head" style={gridRow}>{f.cols.map(c => <span key={c.k} className="sl">{c.label}{c.required && <b className="freq" aria-hidden="true"> *</b>}</span>)}{ra && <span></span>}{f.reorder && <span></span>}{!fixed && <span></span>}</div>
           {rows.map((r, i) => {
             const rerr = f.rowError && f.rowError(r, i, rows, vals || {});
             const rinfo = !rerr && f.rowInfo && f.rowInfo(r, i, rows, vals || {});
@@ -1647,6 +1650,8 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
         </div></div>
         {f.validate && f.validate(val, vals || {}) && <span className="fhint" style={{color: "var(--bad)"}}>{f.validate(val, vals || {})}</span>}
         {f.hint && <span className="fhint">{typeof f.hint === "function" ? f.hint(val, vals || {}) : f.hint}</span>}
+        {/* what a column's empty value means, or its format: beneath the table, not in the cells */}
+        {f.cols.filter(c => c.note).map(c => <span key={c.k} className="fhint fcolnote"><b>{c.label}:</b> {c.note}</span>)}
       </label>
     );
   }
@@ -1719,25 +1724,31 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
     );
   }
   const empty = (f.type === "select") && !loading && (!opts || !opts.length);
+  // A box holds a value or nothing, never a placeholder: a format example is
+  // said beneath the box (f.example), with the description.
+  const err = f.validate && f.validate(val, vals || {});
+  const hint = [typeof f.hint === "function" ? f.hint(val, vals || {}) : f.hint, f.example ? `For example ${f.example}.` : ""].filter(Boolean).join(" ");
+  // dim only while a select shows its blank ("— none —"); "" can also be a real choice
+  const blank = f.type === "select" && (val === undefined || val === "") && /^—/.test(((opts || []).find(o => o.v === "") || {l: "—"}).l);
+  const cls = "finput" + (err ? " bad" : "") + (blank ? " unset" : "");
   return (
     <label className="field">
       <span className="flabel">{f.label}{f.required && <b className="freq" aria-hidden="true"> *</b>}{f.unit && <em> ({f.unit})</em>}</span>
       {f.type === "select" ? (
         loading ? <div className="fskel"></div>
           : empty ? <div className="fempty">{f.empty || "No options available"}</div>
-          : <select className="finput" value={val === undefined ? "" : val} onChange={e => setVal(e.target.value)}>
+          : <select className={cls} value={val === undefined ? "" : val} aria-invalid={!!err} onChange={e => setVal(e.target.value)}>
               {opts.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
             </select>
       ) : f.type === "checkbox" ? (
         <button type="button" className={"toggle" + (val ? " on" : "")} onClick={() => setVal(!val)}><i></i></button>
       ) : (
-        <input className="finput" type={f.type === "number" ? "number" : "text"} min={f.min} maxLength={f.maxLen} value={val === undefined ? "" : val}
-          placeholder={f.placeholder} onChange={e => setVal(e.target.value)} />
+        <input className={cls} type={f.type === "number" ? "number" : "text"} min={f.min} maxLength={f.maxLen} value={val === undefined ? "" : val}
+          aria-invalid={!!err} onChange={e => setVal(e.target.value)} />
       )}
       {f.match && val && val !== f.match && <span className="fhint" style={{color: "var(--bad)"}}>must match “{f.match}”</span>}
-      {f.validate && f.validate(val, vals || {})
-        ? <span className="fhint" style={{color: "var(--bad)"}}>{f.validate(val, vals || {})}</span>
-        : f.hint && <span className="fhint" style={{color: "var(--dim)"}}>{typeof f.hint === "function" ? f.hint(val, vals || {}) : f.hint}</span>}
+      {err ? <span className="fhint" style={{color: "var(--bad)"}}>{err}</span>
+        : hint && <span className="fhint" style={{color: "var(--dim)"}}>{hint}</span>}
     </label>
   );
 }
@@ -1795,8 +1806,15 @@ function LanesField({f, val, setVal, vals}) {
 
 // spec.prepare, when set, loads what the fields need first (the DHCP servers
 // a binding may name, say); the fields are then fields(values, prepared).
-function Dialog({spec, obj, removes, onClose}) {
+// page: the form fills a view instead of a modal (Quick protect): every
+// section open, a section list beside it, the buttons at the bottom of the
+// window. spec.result(value of run, close) replaces the form after a
+// successful run.
+function Dialog({spec, obj, removes, onClose, page}) {
   const [prep, setPrep] = useState(spec.prepare ? null : {});
+  const [result, setResult] = useState(undefined);
+  const [active, setActive] = useState(null);
+  const scrollRef = useRef(null);
   const resolve = (v, p) => typeof spec.fields === "function" ? spec.fields(v, p) : (spec.fields || []);
   const defaults = p => {
     const v = {}; resolve({}, p).forEach(f => { if (f.def !== undefined) v[f.k] = f.def; if (f.type === "checkbox") v[f.k] = !!f.def; });
@@ -1833,16 +1851,75 @@ function Dialog({spec, obj, removes, onClose}) {
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
-      await spec.run(vals);
+      const res = await spec.run(vals);
       window.__toast(spec.done || `${spec.confirm} — accepted by the control plane`);
       if (removes) window.__removed(obj); else window.__refresh();
-      onClose();
+      if (page && spec.result) { setResult(res === undefined ? null : res); setBusy(false); if (scrollRef.current) scrollRef.current.scrollTop = 0; }
+      else onClose();
     } catch (e) { setErr(e.message || "Request failed"); setBusy(false); }
   };
   useEffect(() => {
+    // a page leaves through the app's own Escape (one level up)
+    if (page) return;
     const h = e => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", h, true); return () => window.removeEventListener("keydown", h, true);
   }, []);
+  const fieldsOf = items => items.map(f => f.type === "note"
+    ? <Field key={f.k || f.label} f={f} />
+    : <Field key={f.k} f={f} val={vals[f.k]} vals={vals} setVal={v => setVals(s => Object.assign({}, s, {[f.k]: v}))}
+        setAll={patch => setVals(s => Object.assign({}, s, patch))} reprepare={reprepare} />);
+  if (page) {
+    const secs = groups.filter(g => g.sec);
+    const secId = k => `fp-${k}`;
+    const go = k => { const el = document.getElementById(secId(k)); if (el && scrollRef.current) { scrollRef.current.scrollTo({top: el.offsetTop - 12, behavior: "smooth"}); setActive(k); } };
+    // the section list follows the scroll: the last section whose top has passed
+    const onScroll = () => {
+      const box = scrollRef.current; if (!box) return;
+      const top = box.scrollTop + 40;
+      const cur = secs.filter(g => { const el = document.getElementById(secId(g.sec.k)); return el && el.offsetTop <= top; }).pop();
+      const end = box.scrollTop + box.clientHeight >= box.scrollHeight - 4;
+      setActive(end && secs.length ? secs[secs.length - 1].sec.k : cur ? cur.sec.k : null);
+    };
+    const on = active || (secs[0] && secs[0].sec.k);
+    return (
+      <div className="scroll fpscroll" ref={scrollRef} onScroll={onScroll}>
+        <div className="dhead"><div style={{minWidth: 0, flex: 1}}>
+          <h1>{spec.title}</h1>
+          {spec.desc && <div className="dsub">{spec.desc}</div>}
+        </div></div>
+        {result !== undefined ? spec.result(result, onClose) : <>
+          <div className="fpgrid">
+            {secs.length > 0 && <nav className="fpnav" aria-label="Sections">
+              {secs.map(g => {
+                const needs = g.items.some(f => f.type !== "note" && bad(f));
+                const fieldsIn = g.items.some(f => f.type !== "note");
+                return <button type="button" key={g.sec.k} className={on === g.sec.k ? "on" : ""} onClick={() => go(g.sec.k)}>
+                  <span>{g.sec.label}</span>
+                  {prep && fieldsIn && <span className={"fhmark" + (needs ? " needs" : "")}>{needs ? "needs input" : <Icon n="check" s={12} />}</span>}
+                </button>;
+              })}
+            </nav>}
+            <div className="fpmain">
+              {!prep && <div className="fskel"></div>}
+              {groups.map((g, gi) => (
+                <section key={g.sec ? g.sec.k : "_" + gi} id={g.sec ? secId(g.sec.k) : undefined} className="fpsec">
+                  {g.sec && <h2>{g.sec.label}</h2>}
+                  {g.sec && g.sec.hint && <p className="fpsechint">{g.sec.hint}</p>}
+                  {fieldsOf(g.items)}
+                </section>))}
+              {err && <div className="banner" style={{marginTop: 10, marginBottom: 0}}><Icon n="alert" s={14} />{err}</div>}
+            </div>
+          </div>
+          <div className="fpfoot">
+            <button className="btn" onClick={onClose}>Cancel</button>
+            <button className={"btn primary" + (spec.danger ? " danger" : "")} disabled={invalid || busy} onClick={submit}>
+              {busy ? "Working…" : (spec.confirm || "Confirm")}
+            </button>
+          </div>
+        </>}
+      </div>
+    );
+  }
   return (
     <div className="ovl" onClick={onClose}>
       <div className={"modal" + (wide ? " wide" : "")} onClick={e => e.stopPropagation()}>
@@ -1854,10 +1931,7 @@ function Dialog({spec, obj, removes, onClose}) {
           {spec.desc && <p className="mdesc">{spec.desc}</p>}
           {!prep && <div className="fskel"></div>}
           {groups.map((g, gi) => {
-            const items = g.items.map(f => f.type === "note"
-              ? <Field key={f.k || f.label} f={f} />
-              : <Field key={f.k} f={f} val={vals[f.k]} vals={vals} setVal={v => setVals(s => Object.assign({}, s, {[f.k]: v}))}
-                  setAll={patch => setVals(s => Object.assign({}, s, patch))} reprepare={reprepare} />);
+            const items = fieldsOf(g.items);
             if (!g.sec || !spec.collapsible || g.sec.open) return <React.Fragment key={g.sec ? g.sec.k : "_" + gi}>{g.sec && <Field f={g.sec} />}{items}</React.Fragment>;
             const isOpen = shown === g.sec.k;
             const next = (groups.slice(gi + 1).find(x => x.sec && !x.sec.open) || {}).sec;
