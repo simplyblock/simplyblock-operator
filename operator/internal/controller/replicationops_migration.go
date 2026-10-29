@@ -365,6 +365,7 @@ func (r *ReplicationOpsReconciler) trackMigrationPlan(
 	}
 	results := mergePlanResults(keptResults(ops.Status.Results), &plan, known)
 	forecast := forecastFromPlan(plan.Forecast)
+	r.markMigratedVolumes(ctx, ops, apiClient, results)
 
 	switch plan.Status {
 	case migrationPlanDone:
