@@ -59,7 +59,15 @@ type adaptiveTransport struct {
 }
 
 func (t *adaptiveTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.URL.Scheme != schemeHTTP || req.URL.Host != defaultHost || !wantsTLS(req.Context()) {
+	if req.URL.Host != defaultHost {
+		return t.plain.RoundTrip(req)
+	}
+	// An https request to the default address is a redirect the control plane
+	// sent over TLS (the API answers a path without its trailing slash with a
+	// 307 to the https URL), so it is followed over the verified connection too:
+	// the plain transport knows only the system roots, not the installation's CA.
+	upgrade := req.URL.Scheme == schemeHTTP && wantsTLS(req.Context())
+	if !upgrade && req.URL.Scheme != schemeHTTPS {
 		return t.plain.RoundTrip(req)
 	}
 
@@ -68,6 +76,9 @@ func (t *adaptiveTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	secure, err := t.secure()
 	if err != nil {
 		return nil, fmt.Errorf("webapi client init: %w", err)
+	}
+	if !upgrade {
+		return secure.RoundTrip(req)
 	}
 	upgraded := req.Clone(req.Context())
 	upgraded.URL.Scheme = schemeHTTPS
