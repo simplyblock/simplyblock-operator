@@ -711,7 +711,7 @@
                 "maxSubsystemCount": {
                   "type": "integer",
                   "minimum": 10,
-                  "maximum": 75
+                  "maximum": 500
                 },
                 "enableDriveFormat": {
                   "type": "boolean"
