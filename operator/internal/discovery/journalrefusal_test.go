@@ -1,17 +1,13 @@
 // What a logical block-device run does when the fleet does not say which disk
 // the journal goes on.
 //
-// It refuses, where an NVMe run stays quiet. The two classes differ because the
-// fallback differs: an NVMe cluster with no dedicated journal device carves a
-// journal partition out of every device, so "left unset" is a layout the backend
-// builds. A block cluster has no such fallback, because the control plane
-// refuses partitioned-journal mode for the class outright, so a block draft with
-// the flag unset is a document that cannot deploy: every worker's node_add fails
-// on it after the cluster has already been created and the drives formatted.
-//
-// The refusal is therefore the point of this file, and so is what it does not
-// refuse: a fleet the run can read is still drafted, and a fleet whose shape is
-// merely ambiguous is drafted when the run was told to force it.
+// It drafts the journal split. With enableJournalDevice unset, the journal of a
+// block-device node is a partition carved from its worker's smallest disk when
+// the node is configured, so every disk keeps carrying data. That is the layout
+// for a worker with a single disk, such as one RAID-protected storage-array LUN,
+// and for workers of equal disks. A fleet with a sole smallest disk still gets
+// the dedicated journal device, and a run told to force one dedicates one of the
+// equal disks.
 
 package discovery
 
@@ -45,24 +41,43 @@ const (
 	twoTerabytes = 2 * oneTerabyte
 )
 
-// A block fleet whose disks do not name a journal device is refused, and the
-// refusal names the worker and what it found. Drafting it anyway produces a
-// document whose every node_add fails, after the cluster exists and the drives
-// have been formatted, which is the failure this replaces.
-func TestABlockFleetWithNoJournalDiskIsRefused(t *testing.T) {
+// A block fleet whose disks do not name a journal device is drafted with the
+// journal split: the flag is left unset, and the note says where the journal
+// goes and how to dedicate a disk instead.
+func TestABlockFleetWithNoJournalDiskGetsTheJournalSplit(t *testing.T) {
 	plan := blockFleetWithDisks(
 		[]uint64{twoTerabytes, twoTerabytes},
 		[]uint64{twoTerabytes, twoTerabytes},
 	)
 
-	_, err := ClusterTemplateFor("a-cluster", plan, TemplateOptions{})
-	if err == nil {
-		t.Fatal("the run drafted a block cluster with no journal device, which cannot deploy")
+	template, err := ClusterTemplateFor("a-cluster", plan, TemplateOptions{})
+	if err != nil {
+		t.Fatalf("a block fleet of equal disks was refused: %v", err)
 	}
-	for _, want := range []string{"worker-1", "forceJournalDevice"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal reads %q, and it has to name %q", err, want)
+	if template.Template.EnableJournalDevice != nil {
+		t.Errorf("enableJournalDevice is %v, and the journal split leaves it unset",
+			*template.Template.EnableJournalDevice)
+	}
+	notes := strings.Join(template.Notes, " ")
+	for _, want := range []string{"worker-1", "partition carved from its smallest disk", "forceJournalDevice"} {
+		if !strings.Contains(notes, want) {
+			t.Errorf("the notes read %q, and they have to name %q", notes, want)
 		}
+	}
+}
+
+// A worker with a single disk, such as one storage-array LUN, is drafted with
+// the journal split as well, since there is no second disk to dedicate.
+func TestABlockWorkerWithASingleDiskGetsTheJournalSplit(t *testing.T) {
+	plan := blockFleetWithDisks([]uint64{twoTerabytes}, []uint64{twoTerabytes})
+
+	template, err := ClusterTemplateFor("a-cluster", plan, TemplateOptions{})
+	if err != nil {
+		t.Fatalf("a fleet of single-disk workers was refused: %v", err)
+	}
+	if template.Template.EnableJournalDevice != nil {
+		t.Errorf("enableJournalDevice is %v, and a single disk cannot be dedicated",
+			*template.Template.EnableJournalDevice)
 	}
 }
 
@@ -109,19 +124,23 @@ func TestABlockFleetWithAJournalDiskIsDraftedUnforced(t *testing.T) {
 
 // Forcing does not buy a worker that hands over one disk. That is impossible
 // rather than ambiguous: dedicating the disk leaves the worker nothing to store
-// on, and no flag should produce a node that stores nothing.
+// on, and no flag should produce a node that stores nothing. The fleet gets the
+// journal split instead, and the note names the worker with one disk.
 func TestForcingDoesNotTakeAWorkersOnlyDisk(t *testing.T) {
 	plan := blockFleetWithDisks(
 		[]uint64{twoTerabytes, twoTerabytes},
 		[]uint64{twoTerabytes},
 	)
 
-	_, err := ClusterTemplateFor("a-cluster", plan, TemplateOptions{ForceJournalDevice: true})
-	if err == nil {
+	template, err := ClusterTemplateFor("a-cluster", plan, TemplateOptions{ForceJournalDevice: true})
+	if err != nil {
+		t.Fatalf("a forced run over a worker with one disk was refused: %v", err)
+	}
+	if template.Template.EnableJournalDevice != nil {
 		t.Fatal("a forced run took a worker's only disk, leaving it nothing to store on")
 	}
-	if !strings.Contains(err.Error(), "worker-2") {
-		t.Errorf("the refusal reads %q, and it has to name the worker with one disk", err)
+	if !strings.Contains(strings.Join(template.Notes, " "), "worker-2") {
+		t.Errorf("the notes %v have to name the worker with one disk", template.Notes)
 	}
 }
 

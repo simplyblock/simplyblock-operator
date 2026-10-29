@@ -91,8 +91,10 @@ const (
 	MemberSpansRegions         = "MemberSpansRegions"
 	MemberMissingFailureDomain = "MemberMissingFailureDomain"
 
-	// JournalDeviceRequired reports logical block devices without a dedicated
-	// journal device, which the control plane refuses at every node add.
+	// JournalDeviceRequired reports logical block devices whose journal has no
+	// layout: without a dedicated journal device the journal is a partition
+	// carved from each worker's smallest device, which needs one storage node
+	// per worker.
 	JournalDeviceRequired = "JournalDeviceRequired"
 
 	// What the expansion produced.

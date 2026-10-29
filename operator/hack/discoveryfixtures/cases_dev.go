@@ -216,18 +216,16 @@ func devCases() map[string]Case {
 		"DEV-20": {
 			Family: "dev", Slug: "equal-block-disks-with-no-journal-decision",
 			// The one block case that does not force, which is what makes it
-			// about the refusal. DEV-02 is the same four disks and drafts,
-			// because its run decided.
+			// about the journal split. DEV-02 is the same four disks and
+			// dedicates one, because its run decided.
 			Discover: blockClassUndecided(),
 			Reports:  []nodeprobe.Report{host("worker-01", single, disks(virtioDisks(4)...))},
 			Note: "The ordinary fleet: four disks of one size, which is how machines are " +
 				"bought. Nothing about them says which carries the journal, and taking " +
-				"one spends a disk the fleet did not set aside. An NVMe run in this shape " +
-				"leaves enableJournalDevice unset and the backend carves a journal " +
-				"partition out of every device; a block cluster has no such layout, so a " +
-				"document written here would create the cluster, format its drives, and " +
-				"then fail every node_add. The run refuses instead, and names the field " +
-				"that decides it.",
+				"one spends a disk the fleet did not set aside. The run leaves " +
+				"enableJournalDevice unset, and the node's configure carves the journal " +
+				"partition out of the smallest disk, so every disk keeps carrying data. " +
+				"The note names forceJournalDevice for a run that wants a disk dedicated.",
 		},
 		"DEV-16": {
 			Family: "dev", Slug: "a-fabric-namespace-of-another-product",

@@ -239,6 +239,13 @@ func renderNodeConfig(
 			ptr.BoolFromOrFalse(workload.EnableBlockFormat) {
 			entry.WriteString("LBLK_FORCE_FORMAT=true\n")
 		}
+		// Without a dedicated journal device, the configure carves the journal
+		// partition from the worker's smallest device (the journal split). A
+		// worker with a single device is split either way.
+		if workload := cluster.Spec.StorageNodes; workload == nil ||
+			!ptr.BoolFromOrFalse(workload.EnableJournalDevice) {
+			entry.WriteString("LBLK_JOURNAL_SPLIT=true\n")
+		}
 	} else {
 		fmt.Fprintf(&entry, "NVME_DEVICES=%s\n", utils.ShellQuote(strings.Join(names, ",")))
 	}

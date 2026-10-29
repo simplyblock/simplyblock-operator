@@ -609,9 +609,14 @@ func (r *ClusterDeploymentConfigReconciler) growthLimit(
 }
 
 // blockDevicesWithoutJournalDevice reports a cluster of logical block devices
-// whose template does not put the journal on a device of its own. The control
-// plane refuses every node add of such a cluster ("lblk device mode requires
-// --enable-journal-device"), which lands after the cluster exists. A growth
+// whose journal cannot be laid out.
+//
+// Without enableJournalDevice, the journal of a block-device node is a
+// partition carved from the smallest of its worker's devices at configure
+// time (the journal split), which is the layout for a worker with a single
+// RAID-protected LUN. The split hands the journal partition and the data
+// partitions to one storage node, so the control plane refuses it when a
+// worker runs more than one, which lands after the cluster exists. A growth
 // document carries no template, and its cluster's setting already holds.
 func blockDevicesWithoutJournalDevice(config *simplyblockv1alpha2.ClusterDeploymentConfig) string {
 	template := config.Spec.Cluster
@@ -622,9 +627,15 @@ func blockDevicesWithoutJournalDevice(config *simplyblockv1alpha2.ClusterDeploym
 	if template.EnableJournalDevice != nil && *template.EnableJournalDevice {
 		return ""
 	}
-	return "the groups name logical block devices, and the control plane runs those only with " +
-		"the journal on a device of its own: set spec.cluster.enableJournalDevice, which takes " +
-		"one of each worker's devices, and choose a stripe the rest carry"
+	if slots := slotsOf(template.SocketsToUse, template.NodesPerSocket); slots > 1 {
+		return fmt.Sprintf(
+			"the groups name logical block devices without spec.cluster.enableJournalDevice, so "+
+				"each worker's journal is a partition carved from its smallest device, and that "+
+				"layout needs one storage node per worker, not %d: set enableJournalDevice, "+
+				"which takes one of each worker's devices, or run one storage node per worker",
+			slots)
+	}
+	return ""
 }
 
 // groupsWithNetworkAttachments names the groups that attach their storage nodes

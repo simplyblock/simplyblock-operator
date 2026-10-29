@@ -47,9 +47,22 @@ func TestThePartitionCountMatchesWhatFleetsWereBuiltWith(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			workload := &simplyblockv1alpha2.StorageNodesSpec{EnableJournalDevice: tc.journal}
-			if got := partitionsPerDevice(workload); got != tc.want {
+			if got := partitionsPerDevice(workload, simplyblockv1alpha2.StorageClusterDeviceClassNVMe); got != tc.want {
 				t.Errorf("partitionsPerDevice = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// A logical block-device node never asks for a journal partition per device:
+// its journal is the dedicated device, or the partition its configure carved
+// from the worker's smallest device, and the control plane refuses per-device
+// journal partitions for the class.
+func TestABlockDeviceNodeIsAddedWithoutPerDevicePartitions(t *testing.T) {
+	for _, journal := range []*bool{nil, ptr.To(false), ptr.To(true)} {
+		workload := &simplyblockv1alpha2.StorageNodesSpec{EnableJournalDevice: journal}
+		if got := partitionsPerDevice(workload, simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock); got != 0 {
+			t.Errorf("partitionsPerDevice(enableJournalDevice=%v) = %d, want 0", journal, got)
+		}
 	}
 }
