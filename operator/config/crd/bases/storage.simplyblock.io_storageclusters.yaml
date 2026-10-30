@@ -173,7 +173,7 @@ spec:
                     pages, and a node that receives no value fails config generation outright
                     rather than falling back to a default.
                   format: int32
-                  maximum: 75
+                  maximum: 500
                   minimum: 10
                   type: integer
                 nvmfBasePort:
@@ -927,7 +927,7 @@ spec:
                     a node that receives no value fails config generation outright rather
                     than falling back to a default.
                   format: int32
-                  maximum: 75
+                  maximum: 500
                   minimum: 10
                   type: integer
                 minHugePagesSize:

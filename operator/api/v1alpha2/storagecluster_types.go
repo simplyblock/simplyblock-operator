@@ -685,7 +685,7 @@ type StorageClusterSpec struct {
 	// a node that receives no value fails config generation outright rather
 	// than falling back to a default.
 	// +kubebuilder:validation:Minimum=10
-	// +kubebuilder:validation:Maximum=75
+	// +kubebuilder:validation:Maximum=500
 	// +optional
 	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
 

@@ -372,7 +372,7 @@ type NodeSetClusterOverrides struct {
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
 	// node of this member serves.
 	// +kubebuilder:validation:Minimum=10
-	// +kubebuilder:validation:Maximum=75
+	// +kubebuilder:validation:Maximum=500
 	// +optional
 	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
 
@@ -428,7 +428,7 @@ type ClusterTemplate struct {
 	// field is, and no StorageNode carries a copy of it.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=10
-	// +kubebuilder:validation:Maximum=75
+	// +kubebuilder:validation:Maximum=500
 	MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
 
 	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node of

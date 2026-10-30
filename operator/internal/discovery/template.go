@@ -45,10 +45,11 @@ const (
 	//
 	// Nothing a probe reports bears on it: it is a function of how many volumes
 	// the deployment expects to serve and how they are spread, which is a
-	// question about the workload rather than about the hardware. The API's
-	// range is 10 to 75, and this is the middle of it, chosen so that a
-	// reviewer who has not thought about it gets a working cluster and one who
-	// has can see the number was not derived.
+	// question about the workload rather than about the hardware. The API
+	// accepts 10 to 500, and this is a modest value within it, chosen so that
+	// a reviewer who has not thought about it gets a working cluster without
+	// the huge pages of a large one, and one who has can see the number was
+	// not derived.
 	DefaultMaxSubsystemCount int32 = 30
 )
 

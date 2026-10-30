@@ -1163,7 +1163,7 @@ spec:
                       node of this cluster serves. Required, because the StorageCluster's own
                       field is, and no StorageNode carries a copy of it.
                     format: int32
-                    maximum: 75
+                    maximum: 500
                     minimum: 10
                     type: integer
                   minHugePagesSize:
@@ -1680,7 +1680,7 @@ spec:
                             MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
                             node of this member serves.
                           format: int32
-                          maximum: 75
+                          maximum: 500
                           minimum: 10
                           type: integer
                         minHugePagesSize:
@@ -7587,7 +7587,7 @@ spec:
                   pages, and a node that receives no value fails config generation outright
                   rather than falling back to a default.
                 format: int32
-                maximum: 75
+                maximum: 500
                 minimum: 10
                 type: integer
               nvmfBasePort:
@@ -8373,7 +8373,7 @@ spec:
                   a node that receives no value fails config generation outright rather
                   than falling back to a default.
                 format: int32
-                maximum: 75
+                maximum: 500
                 minimum: 10
                 type: integer
               minHugePagesSize:
@@ -14723,7 +14723,7 @@ spec:
                           node of this cluster serves. Required, because the StorageCluster's own
                           field is, and no StorageNode carries a copy of it.
                         format: int32
-                        maximum: 75
+                        maximum: 500
                         minimum: 10
                         type: integer
                       minHugePagesSize:
@@ -15086,7 +15086,7 @@ spec:
                                 MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
                                 node of this member serves.
                               format: int32
-                              maximum: 75
+                              maximum: 500
                               minimum: 10
                               type: integer
                             minHugePagesSize:

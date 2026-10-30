@@ -359,7 +359,7 @@ Files: `operator/internal/controllers/cluster/cel_validation_test.go`,
 | I-05 | `spec.enableNodeAffinity` set at creation, changed later: rejected                                       | Negative | —                                                                     |
 | I-06 | `spec.maxSubsystemCount` omitted: creation rejected as `Required`                                        | Negative | —                                                                     |
 | I-07 | `spec.maxSubsystemCount` of 9 and of 76: both rejected by the range                                      | Boundary | —                                                                     |
-| I-08 | `spec.maxSubsystemCount` of 10 and of 75: both accepted                                                  | Boundary | —                                                                     |
+| I-08 | `spec.maxSubsystemCount` of 10 and of 500: both accepted                                                 | Boundary | —                                                                     |
 | I-09 | `spec.vcpuCount` of 3 rejected, of 4 accepted                                                            | Boundary | `TestStorageClusterVCPUCountMinimum`                                  |
 | I-10 | `spec.maxConcurrentWorkerRestarts` of 0: rejected by the minimum                                         | Boundary | —                                                                     |
 | I-11 | `spec.volumeMigrationSettings.dataRealignment.minMoves` of 0: rejected                                   | Boundary | —                                                                     |
