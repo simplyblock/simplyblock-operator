@@ -535,6 +535,10 @@ func (r *StorageNodeOpsReconciler) finish(
 		status.Phase = phase
 		status.Message = message
 		status.CompletedAt = &now
+		// A failed or aborted operation keeps the step it stopped in.
+		if phase == simplyblockv1alpha2.StorageNodeOpsPhaseSucceeded {
+			status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.StorageNodeOpsStepCompleted)}
+		}
 	})
 	if err != nil {
 		return ctrl.Result{}, err

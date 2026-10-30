@@ -516,4 +516,8 @@ func TestARefusedAbortDoesNotSuspendTheStepDeadline(t *testing.T) {
 	if got.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseFailed {
 		t.Errorf("phase = %q, want Failed: the step is past its deadline", got.Status.Phase)
 	}
+	// A failed operation keeps the step it broke at.
+	if got.Status.Step.State != string(stepShuttingDownNode) {
+		t.Errorf("step = %q, want ShuttingDownNode kept on a failed operation", got.Status.Step.State)
+	}
 }

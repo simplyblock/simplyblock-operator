@@ -270,9 +270,8 @@ func (r *ControlPlaneReconciler) install(
 
 	next, ok := nextStep(machine)
 	if !ok {
-		// AwaitingAPI is terminal, and reaching it is what makes the control
-		// plane Available. The step is left on the object as the record of how
-		// the install finished.
+		// AwaitingAPI is the last install step, and finishing it is what makes
+		// the control plane Available. Steady state records the step Installed.
 		return r.steadyState(ctx, cp)
 	}
 	if err := machine.TransitionTo(ctx, next); err != nil {
@@ -367,6 +366,7 @@ func (r *ControlPlaneReconciler) steadyState(
 		version:    r.version(ctx, access),
 		components: components,
 		probed:     true,
+		installed:  true,
 	})
 }
 
@@ -437,6 +437,10 @@ type statusUpdate struct {
 	// probed says whether this pass ran the readiness probe, which is what makes
 	// status.lastChecked mean what it says.
 	probed bool
+
+	// installed marks the installation complete, which a local control plane
+	// in steady state is.
+	installed bool
 }
 
 // publish writes the conclusion of one pass.
@@ -454,6 +458,11 @@ func (r *ControlPlaneReconciler) publish(
 		if update.probed {
 			now := metav1.Now()
 			status.LastChecked = &now
+		}
+		if update.installed {
+			status.Step = statemachine.KubeSnapshot{
+				State: string(simplyblockv1alpha2.ControlPlaneStepInstalled),
+			}
 		}
 	})
 }

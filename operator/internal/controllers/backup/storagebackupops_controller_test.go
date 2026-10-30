@@ -170,6 +170,10 @@ func TestRestoreRefusesAClaimThatAlreadyExists(t *testing.T) {
 	if ops.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhaseFailed {
 		t.Fatalf("phase = %q, want Failed", ops.Status.Phase)
 	}
+	// A failed operation keeps the step it broke in.
+	if got := ops.Status.Step.State; got == "" || got == string(simplyblockv1alpha2.StorageBackupOpsStepCompleted) {
+		t.Errorf("step = %q, want the step the operation failed in", got)
+	}
 	if !strings.Contains(ops.Status.Message, "already exists") {
 		t.Errorf("message = %q, want it to say the claim already exists", ops.Status.Message)
 	}
@@ -215,6 +219,9 @@ func TestRestoreRunsTheWholeGraphAndProducesAClaim(t *testing.T) {
 
 	if ops.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhaseSucceeded {
 		t.Fatalf("phase = %q (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
+	}
+	if got := ops.Status.Step.State; got != string(simplyblockv1alpha2.StorageBackupOpsStepCompleted) {
+		t.Errorf("step = %q, want %q on a succeeded operation", got, simplyblockv1alpha2.StorageBackupOpsStepCompleted)
 	}
 	if api.restores != 1 {
 		t.Errorf("the control plane was asked for %d restores, want exactly 1", api.restores)

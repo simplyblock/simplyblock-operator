@@ -69,7 +69,7 @@ const (
 // ControlPlaneOpsStep is one step of a running control-plane operation. Which
 // steps belong to which action is declared by that action's graph rather than by
 // this type, which is why the enum stays flat as actions are added.
-// +kubebuilder:validation:Enum=Draining;Restarting;Awaiting;Preflight;Applying;Verifying;Requesting
+// +kubebuilder:validation:Enum=Draining;Restarting;Awaiting;Preflight;Applying;Verifying;Requesting;Completed
 type ControlPlaneOpsStep string
 
 const (
@@ -99,6 +99,8 @@ const (
 	// ControlPlaneOpsStepRequesting creates or triggers the FoundationDBBackup.
 	// Awaiting is shared with Restart.
 	ControlPlaneOpsStepRequesting ControlPlaneOpsStep = "Requesting"
+	// ControlPlaneOpsStepCompleted is the terminal step of an operation that succeeded.
+	ControlPlaneOpsStepCompleted ControlPlaneOpsStep = "Completed"
 )
 
 // UpgradeSpec parameterizes the Upgrade action and is ignored by the others.
@@ -194,7 +196,7 @@ type ControlPlaneOpsStatus struct {
 	// Step is the position of the running action's state machine. It is
 	// persisted before the side effect that step performs, so a step reported
 	// here is a step that started.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Draining','Restarting','Awaiting','Preflight','Applying','Verifying','Requesting']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Draining','Restarting','Awaiting','Preflight','Applying','Verifying','Requesting','Completed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

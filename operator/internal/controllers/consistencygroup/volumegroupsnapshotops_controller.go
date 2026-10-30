@@ -294,6 +294,9 @@ func (r *VolumeGroupSnapshotOpsReconciler) waitForBind(
 			status.Phase = simplyblockv1alpha2.VolumeGroupSnapshotOpsPhaseSucceeded
 			status.Message = fmt.Sprintf("restored %d member(s)", bound)
 			status.CompletedAt = &metav1.Time{Time: time.Now()}
+			status.Step = simplyblockv1alpha2.VolumeGroupSnapshotOpsStepSnapshot{
+				State: simplyblockv1alpha2.VolumeGroupSnapshotOpsStepCompleted,
+			}
 		} else {
 			status.Message = fmt.Sprintf("%d of %d claim(s) bound", bound, len(members))
 		}

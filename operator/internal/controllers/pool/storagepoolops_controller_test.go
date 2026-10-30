@@ -338,3 +338,32 @@ func TestTheStepEnumAndTheCELRuleAgree(t *testing.T) {
 		}
 	}
 }
+
+// A succeeded operation reads the terminal step Completed; a failed one keeps
+// the step it broke at.
+func TestFinishSetsCompletedOnlyOnSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		phase simplyblockv1alpha2.StoragePoolOpsPhase
+		want  string
+	}{
+		{simplyblockv1alpha2.StoragePoolOpsPhaseSucceeded, string(simplyblockv1alpha2.StoragePoolOpsStepCompleted)},
+		{simplyblockv1alpha2.StoragePoolOpsPhaseFailed, string(simplyblockv1alpha2.StoragePoolOpsStepValidating)},
+	} {
+		t.Run(string(tc.phase), func(t *testing.T) {
+			ops := newOps("tenant-a", func(o *simplyblockv1alpha2.StoragePoolOps) {
+				o.Status.Phase = simplyblockv1alpha2.StoragePoolOpsPhaseRunning
+				o.Status.Step = statemachine.KubeSnapshot{
+					State: string(simplyblockv1alpha2.StoragePoolOpsStepValidating),
+				}
+			})
+			r := newOpsReconciler(t, &recorder{}, ops)
+			if _, err := r.finish(context.Background(), ops, nil, tc.phase, "done"); err != nil {
+				t.Fatalf("finish: %v", err)
+			}
+			got, _ := reconcileOps(t, r, "tenant-a", 0)
+			if got.Status.Step.State != tc.want {
+				t.Errorf("step = %q, want %q", got.Status.Step.State, tc.want)
+			}
+		})
+	}
+}

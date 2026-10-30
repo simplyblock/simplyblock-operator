@@ -79,7 +79,7 @@ const (
 // StorageBackupOpsStep is one step of a running backup operation. The enum stays
 // flat as actions are added, because which steps belong to which action is
 // declared by the graph rather than by this type.
-// +kubebuilder:validation:Enum=Validating;Restoring;AwaitingVolume;AwaitingVolumes;Binding
+// +kubebuilder:validation:Enum=Validating;Restoring;AwaitingVolume;AwaitingVolumes;Binding;Completed
 type StorageBackupOpsStep string
 
 const (
@@ -98,6 +98,8 @@ const (
 	StorageBackupOpsStepAwaitingVolume  StorageBackupOpsStep = "AwaitingVolume"
 	StorageBackupOpsStepAwaitingVolumes StorageBackupOpsStep = "AwaitingVolumes"
 	StorageBackupOpsStepBinding         StorageBackupOpsStep = "Binding"
+	// StorageBackupOpsStepCompleted is the terminal step of an operation that succeeded.
+	StorageBackupOpsStepCompleted StorageBackupOpsStep = "Completed"
 )
 
 // RestoreSpec parameterizes the Restore action.
@@ -285,7 +287,7 @@ type StorageBackupOpsStatus struct {
 	// Step is the position of the running action's state machine. It is
 	// persisted before the side effect that step performs, so a step reported
 	// here is a step that started.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Restoring','AwaitingVolume','AwaitingVolumes','Binding']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Restoring','AwaitingVolume','AwaitingVolumes','Binding','Completed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

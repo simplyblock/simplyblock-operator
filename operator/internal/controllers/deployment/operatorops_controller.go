@@ -338,6 +338,8 @@ func (r *OperatorOpsReconciler) succeed(
 	ops.Status.CompletedAt = &now
 	ops.Status.Step.Deadline = nil
 	r.event(ops, corev1.EventTypeNormal, OperationSucceeded, ops.Status.Message)
+	// After the event, which names the step that finished the run.
+	ops.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.OperatorOpsStepCompleted)}
 	observeRun(ops, ops.Status.Phase)
 	return r.status(ctx, ops)
 }

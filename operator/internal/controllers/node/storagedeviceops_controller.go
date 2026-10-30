@@ -731,7 +731,7 @@ func (r *StorageDeviceOpsReconciler) succeed(
 	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageDeviceOpsStatus) {
 		status.Phase = simplyblockv1alpha2.StorageDeviceOpsPhaseSucceeded
 		status.CompletedAt = &now
-		status.Step.Deadline = nil
+		status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.StorageDeviceOpsStepCompleted)}
 		status.Message = message
 	})
 }

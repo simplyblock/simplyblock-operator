@@ -274,6 +274,10 @@ func TestGroupRestore_ClaimCollisionFails(t *testing.T) {
 	if ops.Status.Phase != simplyblockv1alpha2.VolumeGroupSnapshotOpsPhaseFailed {
 		t.Fatalf("phase = %q, want Failed", ops.Status.Phase)
 	}
+	// A failed operation keeps the step it broke in.
+	if got := ops.Status.Step.State; got == "" || got == simplyblockv1alpha2.VolumeGroupSnapshotOpsStepCompleted {
+		t.Errorf("step = %q, want the step the operation failed in", got)
+	}
 	if !strings.Contains(ops.Status.Message, "op1-pvc-b") {
 		t.Errorf("message %q does not name the colliding claim", ops.Status.Message)
 	}
@@ -351,6 +355,9 @@ func TestGroupRestore_SucceedsWhenAllClaimsBind(t *testing.T) {
 	}
 	if ops.Status.CompletedAt == nil {
 		t.Error("completedAt not set on success")
+	}
+	if got := ops.Status.Step.State; got != simplyblockv1alpha2.VolumeGroupSnapshotOpsStepCompleted {
+		t.Errorf("step = %q, want %q on a succeeded operation", got, simplyblockv1alpha2.VolumeGroupSnapshotOpsStepCompleted)
 	}
 
 	// Terminal contract: another pass changes nothing.
