@@ -11,6 +11,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -356,5 +357,22 @@ func TestStageFormatsOnlyABlankDeviceWithNoRecord(t *testing.T) {
 	}
 	if len(fm.MountPoints) != 1 {
 		t.Errorf("the formatted device was not mounted: %v", fm.MountPoints)
+	}
+}
+
+func TestNoEndpointErrorQuotesTheControlPlane(t *testing.T) {
+	cause := errors.New("the control plane refused to publish the volume: " +
+		"GET 403: Host NQN w4 not found in allowed hosts for volume v")
+	err := noEndpointError("c:p:v", cause)
+	if !errors.Is(err, cause) {
+		t.Fatalf("err = %v, want it to wrap the cause", err)
+	}
+	for _, want := range []string{"c:p:v", "403", "not found in allowed hosts", "nothing to attach"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %q, want it to contain %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "did not answer") {
+		t.Fatalf("err = %q, must not claim the control plane did not answer", err)
 	}
 }

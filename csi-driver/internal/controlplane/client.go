@@ -615,8 +615,9 @@ func (client APIClient) getLvolConnections(
 	}
 	raw, err := client.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		if isHTTPStatus(err, http.StatusNotFound) {
-			return nil, ErrVolumeNotFound
+		var httpErr *HTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("%w: %s", ErrVolumeNotFound, httpErr.Message)
 		}
 		return nil, err
 	}
