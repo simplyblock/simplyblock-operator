@@ -372,21 +372,23 @@ func (cs *Server) prepareCreateVolumeReq(
 	}
 
 	createVolReq := controlplane.CreateLVolData{
-		LvolName:     req.GetName(),
-		Size:         strconv.FormatInt(capacityBytes, 10),
-		LvsName:      params["pool_name"],
-		Fabric:       params["fabric"],
-		MaxRWIOPS:    maxRWIOPS,
-		MaxRWmBytes:  maxRWmBytes,
-		MaxRmBytes:   maxRmBytes,
-		MaxWmBytes:   maxWmBytes,
-		MaxSize:      params["max_size"],
-		MaxNamespace: maxNamespace,
-		Encryption:   encryption,
-		HostID:       hostID,
-		LvolID:       lvolID,
-		Namespaced:   maxNamespace > 1,
-		PvcName:      pvcFullName,
+		LvolName:    req.GetName(),
+		Size:        strconv.FormatInt(capacityBytes, 10),
+		LvsName:     params["pool_name"],
+		Fabric:      params["fabric"],
+		MaxRWIOPS:   maxRWIOPS,
+		MaxRWmBytes: maxRWmBytes,
+		MaxRmBytes:  maxRmBytes,
+		MaxWmBytes:  maxWmBytes,
+		MaxSize:     params["max_size"],
+		// The service class the pool's volumeDefaults.priorityClass names.
+		PriorityClass: params[kube.ParamPriorityClass],
+		MaxNamespace:  maxNamespace,
+		Encryption:    encryption,
+		HostID:        hostID,
+		LvolID:        lvolID,
+		Namespaced:    maxNamespace > 1,
+		PvcName:       pvcFullName,
 		// Join the volume to its consistency group at creation (design §4.1):
 		// the PVC's storage.simplyblock.io/consistency-group label, forwarded so
 		// the control plane pins placement and opens the member's epoch.

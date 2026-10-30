@@ -953,6 +953,82 @@ type StorageClusterSpec struct {
 	// member.
 	// +optional
 	DisablePlacement *bool `json:"disablePlacement,omitempty"`
+
+	// ServiceClasses are the I/O service classes volumes are placed in, and the
+	// share of I/O scheduling snapshot replication gets. A volume selects a
+	// class by name through its StoragePool's volumeDefaults.priorityClass.
+	// Omitted, the cluster's classes are left as they are. Mutable: classes can
+	// be added, reweighted, and removed on a live cluster, except that a class a
+	// volume still uses cannot be removed.
+	// +optional
+	ServiceClasses *ServiceClassesSpec `json:"serviceClasses,omitempty"`
+}
+
+// ServiceClassesSpec configures the cluster's I/O service classes.
+//
+// Every volume runs in one class. Default is always there, and up to five more
+// can be defined. The weights of Default and the defined classes are relative
+// to each other and divide what remains after the share reserved for internal
+// metadata I/O and the replicationShare.
+type ServiceClassesSpec struct {
+	// DefaultWeight is the relative weight of the Default class, which every
+	// volume without a class runs in.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1000
+	// +kubebuilder:default=100
+	// +optional
+	DefaultWeight *int32 `json:"defaultWeight,omitempty"`
+
+	// Classes are the service classes besides Default. A class keeps the
+	// number the control plane gave it for as long as it exists, and a class a
+	// volume still uses cannot be removed.
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=5
+	// +optional
+	Classes []ServiceClass `json:"classes,omitempty"`
+
+	// ReplicationShare is the percentage of I/O scheduling given to snapshot
+	// replication traffic, which runs in a class of its own: the source
+	// snapshot while it is read, and the receiving copy while it is written. A
+	// share is a weight rather than a cap: replication uses more when nothing
+	// else competes. Zero leaves it only the scheduler's minimum.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=74
+	// +kubebuilder:default=10
+	// +optional
+	ReplicationShare *int32 `json:"replicationShare,omitempty"`
+}
+
+// ServiceClass is one user-defined I/O service class.
+type ServiceClass struct {
+	// Name is how a StoragePool's volumeDefaults.priorityClass selects the
+	// class. Default is reserved.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[A-Za-z][A-Za-z0-9_.-]*$`
+	// +kubebuilder:validation:XValidation:rule="self != 'Default'",message="Default is the built-in class, whose weight is set with defaultWeight"
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Weight is the class's weight relative to Default and the other classes.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1000
+	// +kubebuilder:validation:Required
+	Weight int32 `json:"weight"`
+}
+
+// ServiceClassStatus is one service class as the control plane holds it.
+type ServiceClassStatus struct {
+	// Name is the class's name.
+	Name string `json:"name"`
+
+	// ID is the control plane's number for the class, which is what its
+	// command-line tools show and accept.
+	ID int32 `json:"id"`
+
+	// Weight is the class's relative weight.
+	Weight int32 `json:"weight"`
 }
 
 // StorageClusterStatus is the observed state of one backend cluster.
@@ -1100,6 +1176,15 @@ type StorageClusterStatus struct {
 	// cycle.
 	// +optional
 	RebalancingMetrics *RebalancingMetrics `json:"rebalancingMetrics,omitempty"`
+
+	// ServiceClasses are the cluster's service classes besides Default as the
+	// control plane last reported them. Written only while spec.serviceClasses
+	// is set.
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=8
+	// +optional
+	ServiceClasses []ServiceClassStatus `json:"serviceClasses,omitempty"`
 
 	// Message is the reason the phase is what it is: one sentence, replaced as
 	// the cluster moves, and never a log.

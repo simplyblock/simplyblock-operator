@@ -775,6 +775,7 @@ func (r *StorageClusterReconciler) sync(
 	}
 
 	tasks := r.readTasks(readCtx, cluster)
+	serviceClasses, serviceClassesRead := r.applyServiceClasses(readCtx, cluster)
 
 	ftt := int32(reading.MaxFaultTolerance) //nolint:gosec // a fault tolerance is a small count
 	err = r.writeStatus(ctx, cluster, func(status *simplyblockv1alpha2.StorageClusterStatus) {
@@ -787,6 +788,9 @@ func (r *StorageClusterReconciler) sync(
 			cluster.Spec.MaxConcurrentWorkerRestarts, &ftt)
 		status.Phase = phaseFor(reading.Status, reading.Rebalancing, reading.Shrinking)
 		status.Tasks = tasks
+		if serviceClassesRead {
+			status.ServiceClasses = serviceClasses
+		}
 	})
 	if err != nil {
 		return ctrl.Result{}, err

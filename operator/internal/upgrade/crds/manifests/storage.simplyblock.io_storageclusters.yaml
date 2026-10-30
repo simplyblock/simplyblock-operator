@@ -966,6 +966,71 @@ spec:
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
+                serviceClasses:
+                  description: |-
+                    ServiceClasses are the I/O service classes volumes are placed in, and the
+                    share of I/O scheduling snapshot replication gets. A volume selects a
+                    class by name through its StoragePool's volumeDefaults.priorityClass.
+                    Omitted, the cluster's classes are left as they are. Mutable: classes can
+                    be added, reweighted, and removed on a live cluster, except that a class a
+                    volume still uses cannot be removed.
+                  properties:
+                    classes:
+                      description: |-
+                        Classes are the service classes besides Default. A class keeps the
+                        number the control plane gave it for as long as it exists, and a class a
+                        volume still uses cannot be removed.
+                      items:
+                        description: ServiceClass is one user-defined I/O service class.
+                        properties:
+                          name:
+                            description: |-
+                              Name is how a StoragePool's volumeDefaults.priorityClass selects the
+                              class. Default is reserved.
+                            maxLength: 64
+                            minLength: 1
+                            pattern: ^[A-Za-z][A-Za-z0-9_.-]*$
+                            type: string
+                            x-kubernetes-validations:
+                              - message: Default is the built-in class, whose weight is set with defaultWeight
+                                rule: self != 'Default'
+                          weight:
+                            description: Weight is the class's weight relative to Default and the other classes.
+                            format: int32
+                            maximum: 1000
+                            minimum: 1
+                            type: integer
+                        required:
+                          - name
+                          - weight
+                        type: object
+                      maxItems: 5
+                      type: array
+                      x-kubernetes-list-map-keys:
+                        - name
+                      x-kubernetes-list-type: map
+                    defaultWeight:
+                      default: 100
+                      description: |-
+                        DefaultWeight is the relative weight of the Default class, which every
+                        volume without a class runs in.
+                      format: int32
+                      maximum: 1000
+                      minimum: 1
+                      type: integer
+                    replicationShare:
+                      default: 10
+                      description: |-
+                        ReplicationShare is the percentage of I/O scheduling given to snapshot
+                        replication traffic, which runs in a class of its own: the source
+                        snapshot while it is read, and the receiving copy while it is written. A
+                        share is a weight rather than a cap: replication uses more when nothing
+                        else competes. Zero leaves it only the scheduler's minimum.
+                      format: int32
+                      maximum: 74
+                      minimum: 0
+                      type: integer
+                  type: object
                 snodeApiPort:
                   default: 50001
                   description: |-
@@ -2050,6 +2115,37 @@ spec:
                     - Supercluster
                     - PlacementGroup
                   type: string
+                serviceClasses:
+                  description: |-
+                    ServiceClasses are the cluster's service classes besides Default as the
+                    control plane last reported them. Written only while spec.serviceClasses
+                    is set.
+                  items:
+                    description: ServiceClassStatus is one service class as the control plane holds it.
+                    properties:
+                      id:
+                        description: |-
+                          ID is the control plane's number for the class, which is what its
+                          command-line tools show and accept.
+                        format: int32
+                        type: integer
+                      name:
+                        description: Name is the class's name.
+                        type: string
+                      weight:
+                        description: Weight is the class's relative weight.
+                        format: int32
+                        type: integer
+                    required:
+                      - id
+                      - name
+                      - weight
+                    type: object
+                  maxItems: 8
+                  type: array
+                  x-kubernetes-list-map-keys:
+                    - name
+                  x-kubernetes-list-type: map
                 status:
                   description: |-
                     Status is the lifecycle the control plane reports, and its values are the
