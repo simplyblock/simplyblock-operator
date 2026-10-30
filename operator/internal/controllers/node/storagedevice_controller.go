@@ -356,11 +356,15 @@ func nodeIsDown(node *simplyblockv1alpha2.StorageNode) bool {
 	}
 }
 
+// unknownValue is the label value, and the control-plane spelling, of a state
+// or verdict nobody has established yet.
+const unknownValue = "unknown"
+
 // nodeState is the node's control-plane status folded to lower case, or
 // "unknown" when it has none yet.
 func nodeState(node *simplyblockv1alpha2.StorageNode) string {
 	if node.Status.Status == "" {
-		return "unknown"
+		return unknownValue
 	}
 	return strings.ToLower(node.Status.Status)
 }

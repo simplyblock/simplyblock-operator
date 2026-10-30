@@ -633,7 +633,7 @@ func cpPerformanceVerdict(v simplyblockv1alpha2.DevicePerformanceVerdict) string
 	case simplyblockv1alpha2.DevicePerformanceSlow:
 		return "slow"
 	default:
-		return "unknown"
+		return unknownValue
 	}
 }
 
@@ -648,7 +648,7 @@ func cpSMARTVerdict(v simplyblockv1alpha2.DeviceSMARTVerdict) string {
 	case simplyblockv1alpha2.DeviceSMARTUnsupported:
 		return "unsupported"
 	default:
-		return "unknown"
+		return unknownValue
 	}
 }
 
