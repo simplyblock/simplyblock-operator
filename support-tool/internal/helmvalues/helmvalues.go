@@ -37,8 +37,8 @@ var chartYAML []byte
 type Field struct {
 	Key string `json:"key"`
 	// Path is the value's dotted path, for reading, and Segments its keys,
-	// for addressing it: a key may hold dots of its own, such as an annotation
-	// named reloader.stakater.com/auto.
+	// for addressing it: a key may hold dots of its own, such as a Prometheus
+	// argument named storage.tsdb.min-block-duration.
 	Path     string   `json:"path"`
 	Segments []string `json:"segments"`
 	// Kind is bool, string, int, number, list (of scalars), map (of

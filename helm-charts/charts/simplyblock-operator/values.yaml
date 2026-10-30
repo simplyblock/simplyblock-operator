@@ -1076,33 +1076,6 @@ opensearch:
     # -- Enables the OpenSearch security configuration.
     enabled: false
 
-reloader:
-  # Rolls the workloads mounting the FoundationDB cluster file when coordinators
-  # move. Off means they pick the change up on their next restart instead.
-  # -- Rolls the workloads mounting the FoundationDB cluster file when the coordinators move. With
-  # `false`, they pick up the change on their next restart.
-  enabled: true
-  # -- Name override.
-  nameOverride: simplyblock-reloader
-  # -- Full name override.
-  fullnameOverride: simplyblock-reloader
-  reloader:
-    deployment:
-      image:
-        # -- Reloader image.
-        name: quay.io/simplyblock-io/reloader
-        # -- Reloader image tag.
-        tag: v1.3.0
-      pod:
-        # Ships the pod's logs to Graylog through the chart's fluent-bit.
-        # -- Reloader pod annotations. The default ships the pod logs to Graylog.
-        annotations:
-          log-collector/enabled: "true"
-      # -- Node selector for Reloader.
-      nodeSelector: {}
-      # -- Tolerations for Reloader.
-      tolerations: []
-
 prometheus:
   # Where the control plane pushes what it measures. A managed deployment
   # reports to the control plane administering it, so it can turn this off.
@@ -1136,11 +1109,9 @@ prometheus:
     # -- Prometheus pod labels.
     podLabels:
       app: simplyblock-prometheus
-    # -- Prometheus pod annotations, for log collection and Reloader triggers.
+    # -- Prometheus pod annotations, for log collection.
     podAnnotations:
       log-collector/enabled: "true"
-      reloader.stakater.com/auto: "true"
-      reloader.stakater.com/configmap: "simplyblock-prometheus-config"
     # -- Node selector for the Prometheus server.
     nodeSelector: {}
     # -- Tolerations for the Prometheus server.
@@ -1280,6 +1251,17 @@ prometheus:
         repository: quay.io/simplyblock-io/prometheus-config-reloader
         # -- Configuration reloader image tag.
         tag: v0.72.0
+      # The scrape configuration is not the subchart's own ConfigMap: it is
+      # `simplyblock-prometheus-config`, mounted at `configPath`. Without this
+      # the sidecar watches a directory nothing writes to.
+      # -- Mounts of the reloader sidecar. The scrape configuration, so that a change reloads it.
+      extraVolumeMounts:
+        - name: simplyblock-prometheus-config
+          mountPath: /etc/simplyblock-config
+          readOnly: true
+      # -- Directories the reloader sidecar watches, beside the subchart's own.
+      extraVolumeDirs:
+        - /etc/simplyblock-config
 
   defaultBackend:
     # -- Deploys the default backend.

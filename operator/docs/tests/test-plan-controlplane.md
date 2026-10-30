@@ -267,6 +267,12 @@ File: `operator/internal/controllers/controlplane/controlplaneops_controller_uni
 | U-109 | `Backup` with no `blobStore` and no existing backup: `Failed` with the reason                                                                      | Negative   | —                                                 |
 | U-110 | `status.backupRef` names what the run created or triggered                                                                                         | Positive   | —                                                 |
 | U-188 | A `Restart` is not finished while old pods still serve beside replacements that are not ready (2026-10-12-restart-succeeds-while-surge-pod-starts) | Regression | `TestARestartIsNotFinishedWhileOldPodsStillServe` |
+| U-189 | Every workload that mounts the cluster file carries a hash of it on its pod template (2026-10-29-drop-reloader) | Regression | `TestEveryWorkloadMountingTheClusterFileCarriesItsHash` |
+| U-190 | A changed cluster file changes the hash; an unchanged one leaves it alone | Regression | `TestAChangedClusterFileChangesTheStampAndAnUnchangedOneDoesNot` |
+| U-191 | A cluster file that does not exist yet is not an error and stamps nothing | Negative | `TestAMissingClusterFileIsNotAnErrorAndStampsNothing` |
+| U-192 | No workload carries a `reloader.stakater.com` annotation | Regression | `TestNoWorkloadCarriesAReloaderAnnotation` |
+| U-193 | A change to the cluster file wakes the ControlPlane in its namespace and nothing else | Positive | `TestAClusterFileChangeWakesTheControlPlaneInItsNamespaceOnly` |
+| U-194 | A cluster file that vanishes leaves the stamp the workloads carry, and its return with the same data changes nothing | Regression | `TestAFileThatVanishesLeavesTheStampItsWorkloadsCarry` |
 | U-57  | `Upgrade`: the image is applied and `Verifying` waits for the rollout                                                                              | Positive   | —                                                 |
 | U-58  | `Upgrade` whose rollout stalls: `ProgressDeadlineExceeded` fails it                                                                                | Negative   | —                                                 |
 | U-59  | `Upgrade` succeeding: `spec.source.managed.image` is updated to match                                                                              | Positive   | —                                                 |

@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -311,7 +312,11 @@ func (r *ControlPlaneReconciler) performInstallStep(
 		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, datastoreObjects(cp))
 
 	case stepApplyingAPI:
-		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, managementAPIObjects(cp))
+		objects, err := r.managementAPIStamped(ctx, cp)
+		if err != nil {
+			return false, "", err
+		}
+		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, objects)
 
 	case stepAwaitingAPI:
 		access, err := localAccess(cp)
@@ -376,10 +381,14 @@ func (r *ControlPlaneReconciler) steadyState(
 func (r *ControlPlaneReconciler) applyEverything(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) error {
+	api, err := r.managementAPIStamped(ctx, cp)
+	if err != nil {
+		return err
+	}
 	for _, set := range [][]client.Object{
 		datastoreObjects(cp),
 		foundationDBObjects(cp),
-		managementAPIObjects(cp),
+		api,
 	} {
 		if err := applyAll(ctx, r.Client, cp, r.Scheme, set); err != nil {
 			return err
@@ -757,6 +766,9 @@ func errorsAs[T error](err error, target *T) bool {
 // its completion advances the installation rather than the retry interval doing
 // it.
 //
+// The cluster-file ConfigMap is watched too, so a coordinator move restamps the
+// workloads that mount it.
+//
 // The ControlPlane's own watch is filtered to generation changes. Every probe
 // stamps status.lastChecked, and an unfiltered watch turns that write into
 // another reconcile, which probes and stamps again.
@@ -767,6 +779,10 @@ func (r *ControlPlaneReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&batchv1.Job{}).
+		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.clusterFileRequests),
+			builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
+				return o.GetName() == clusterFileConfigMapName
+			}))).
 		Named("controlplane").
 		Complete(r)
 }
