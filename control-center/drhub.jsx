@@ -1021,53 +1021,58 @@ const qpTestNad = (disc, paths, cluster, label, k) => {
     validate: x => x ? testNadError(disc, cluster, paths, x) : null,
     hint: "Isolated network for test failovers. Test VMs keep their production addresses."};
 };
-const quickProtectDialog = (plans, cfg) => {
+// Quick protect in two steps. Step 1 sets the pair up: the plan, a path each
+// way (with Test where a test network is chosen), the DHCP servers and the VM
+// network bindings; it then waits for the plan to be Ready and the paths
+// Valid, so the paths can be checked and tested before anything is protected.
+// Step 2 protects the application on that plan.
+// The source NADs of the namespaces' VMs, each with its role and whether both sites bind it already.
+const qpNetsOf = (v, prep) => qpVMNads(prep.disc, v.src, v.namespaces || []).map((nad, i) => {
+  const role = qpRole(prep.disc, prep.profiles, v.src, nad);
+  return {nad, role, k: `net${i}`, bound: qpBound(prep.profiles, v.src, role) && qpBound(prep.profiles, v.dst, role)};
+});
+const qpPathsOf = (v, prep, plan) => {
+  const find = (a, b) => !plan || plan.created ? null : (prep.paths || []).find(p => p.planName === plan.name && p.from === qpSite(plan, a) && p.to === qpSite(plan, b));
+  return {fwd: find(v.src, v.dst), rev: find(v.dst, v.src)};
+};
+const qpPathName = (plan, a, b) => `${qpSite(plan, a)}-to-${qpSite(plan, b)}`.slice(0, 63);
+// Runs one creation; a failure names what was created before it.
+const qpStepper = () => {
+  const done = [];
+  const step = async (what, fn) => {
+    try { const r = await fn(); done.push(what); return r; }
+    catch (e) { throw new Error(`${what}: ${(e && e.message) || e}${done.length ? `. Created so far: ${done.join(", ")}.` : ""}`); }
+  };
+  return {step, done};
+};
+
+const quickSetupDialog = plans => {
   // what prepare loaded, for run
   let P = {};
-  const opsNs = (cfg && cfg.ramen && cfg.ramen.opsNamespace) || DR_NS();
-  // the source NADs of the form's VMs, each with its role and whether both sites bind it already
-  const netsOf = (v, prep) => qpVMNads(prep.disc, v.src, v.namespaces || []).map((nad, i) => {
-    const role = qpRole(prep.disc, prep.profiles, v.src, nad);
-    return {nad, role, k: `net${i}`, bound: qpBound(prep.profiles, v.src, role) && qpBound(prep.profiles, v.dst, role)};
-  });
-  const pathsOf = (v, prep, plan) => {
-    const find = (a, b) => !plan || plan.created ? null : (prep.paths || []).find(p => p.planName === plan.name && p.from === qpSite(plan, a) && p.to === qpSite(plan, b));
-    return {fwd: find(v.src, v.dst), rev: find(v.dst, v.src)};
-  };
   return {
-  title: "Quick protect", confirm: "Protect", done: "Protection created", wide: true,
-  desc: "Existing plans, paths and network bindings are reused.",
-  prepare: () => Promise.all([drhub.discovery(), drhub.paths().catch(() => []), drhub.apps().catch(() => []), drhub.siteProfiles().catch(() => []), drhub.dhcpServers().catch(() => [])])
-    .then(([disc, paths, apps, profiles, servers]) => (P = {disc, paths, apps, profiles, servers})),
+  title: "Quick protect", confirm: "Set up", wide: true,
+  desc: "Step 1 of 2: the plan, its paths and the VM networks. Existing ones are reused.",
+  prepare: () => Promise.all([drhub.discovery(), drhub.paths().catch(() => []), drhub.siteProfiles().catch(() => []), drhub.dhcpServers().catch(() => [])])
+    .then(([disc, paths, profiles, servers]) => (P = {disc, paths, profiles, servers})),
   fields: (v, prep) => {
-    const {disc, paths = [], apps = [], servers = []} = prep || {};
+    const {disc, paths = [], servers = []} = prep || {};
     const nss = v.namespaces || [];
     const clusters = clusterOptions(disc);
     const have = qpPlans(plans, v.src, v.dst);
     const plan = qpPlan(plans, v);
     const siteOf = c => qpSite(plan, c);
-    const {fwd, rev} = pathsOf(v, prep || {}, plan);
-    const nets = v.src && v.dst && prep ? netsOf(v, prep) : [];
-    const pvcOpts = pvcSelectorOptions(disc, v.src, nss);
-    const target = () => Object.assign({site: siteOf(v.src), namespaces: nss}, plan && !plan.created ? {plan: plan.name} : {});
+    const {fwd, rev} = qpPathsOf(v, prep || {}, plan);
+    const nets = v.src && v.dst && prep ? qpNetsOf(v, prep) : [];
     const toRegister = uniqSorted(nets.filter(n => !n.bound).flatMap(n => (v[n.k] || []).filter(r => (r.dhcp || "").startsWith(QP_FOUND)).map(r => `${r.site}: ${r.dhcp.slice(QP_FOUND.length)}`)));
     const creates = [plan && plan.created && `plan ${plan.name}`, plan && !fwd && `path ${siteOf(v.src)}-to-${siteOf(v.dst)}`, plan && !rev && `path ${siteOf(v.dst)}-to-${siteOf(v.src)}`,
-      ...toRegister.map(x => `DHCP server ${x}`), ...uniqSorted(nets.filter(n => !n.bound).flatMap(n => (v[n.k] || []).map(r => r.site))).map(c => `bindings on ${c}`),
-      v.name && `application ${v.name}`].filter(Boolean);
+      ...toRegister.map(x => `DHCP server ${x}`), ...uniqSorted(nets.filter(n => !n.bound).flatMap(n => (v[n.k] || []).map(r => r.site))).map(c => `bindings on ${c}`)].filter(Boolean);
     const reuses = [plan && !plan.created && `plan ${plan.name}`, fwd && `path ${fwd.name}`, rev && `path ${rev.name}`, ...nets.filter(n => n.bound).map(n => `role ${n.role} bindings`)].filter(Boolean);
     return [
-      {k: "sApp", type: "section", label: "Application", summary: `${nss.join(", ") || "no namespace"} on ${v.src || "—"}${v.name ? ` · ${v.name}` : ""}`},
+      {k: "sApp", type: "section", label: "Application", summary: `${nss.join(", ") || "no namespace"} on ${v.src || "—"}`},
       {k: "src", label: "Source cluster", type: "select", required: true, options: clusters, empty: "No managed cluster reported."},
       {k: "namespaces", label: "Namespaces", type: "chips", required: true, def: [], options: namespaceOptions(disc, v.src, v.src), addLabel: "— add a namespace —",
-        empty: v.src ? `dr-agent on ${v.src} has not reported its namespaces` : "choose the source cluster first",
-        syncAll: vv => { const key = vv.src + ":" + (vv.namespaces || []).join(","); return vv._pvcFor === key ? null : {_pvcFor: key, pvcSel: proposePVCSelector(disc, vv.src, vv.namespaces || [])}; }},
-      {k: "name", label: "Name", type: "text", required: true,
-        sync: (x, vv) => !x && (vv.namespaces || [])[0] ? dns63(vv.namespaces[0]) : undefined,
-        validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label: lower-case letters, digits and \"-\"." : x && apps.some(a => a.name === x && a.namespace === opsNs) ? `${x} is protected already.` : null},
-      {k: "pvcSel", label: "PVC selector", type: "select", options: pvcOpts,
-        sync: x => x !== undefined && !pvcOpts.some(o => o.v === x) ? proposePVCSelector(disc, v.src, nss) : undefined,
-        validate: x => { const m = pvcMatches(disc, v.src, nss, parseSelector(x || "")); return m && !m.length ? `Matches no PVC in ${nss.join(", ")}.` : null; },
-        hint: x => { const m = pvcMatches(disc, v.src, nss, parseSelector(x || "")); return m ? `${m.length} PVC${m.length === 1 ? "" : "s"}: ${m.slice(0, 6).join(", ")}${m.length > 6 ? " …" : ""}` : ""; }},
+        desc: "The networks of their VMs are mapped in this step; the application is protected in step 2.",
+        empty: v.src ? `dr-agent on ${v.src} has not reported its namespaces` : "choose the source cluster first"},
 
       {k: "sTo", type: "section", label: "Protect to", summary: !v.dst ? "choose the target" : `${v.dst} · ${plan && !plan.created ? `plan ${plan.name}` : `new plan, every ${v.interval || "5m"}`}${!fwd || !rev ? ` · ${[fwd, rev].filter(x => !x).length} new path${!fwd && !rev ? "s" : ""}` : ""}`},
       {k: "dst", label: "Target cluster", type: "select", required: true, options: clusters.filter(o => o.v !== v.src), empty: "No other managed cluster reported."},
@@ -1111,27 +1116,16 @@ const quickProtectDialog = (plans, cfg) => {
           rowError: r => !r.nad ? "Network required." : !nb(r.cidr) ? "Guest subnet required." : guestRowError(disc, r.site, {cidr: r.cidr, reservedHostIDs: r.reservedHostIDs}, r.nad, null),
           rowsBlock: true, hint: "Subnets prefilled from current VM addresses."}),
 
-      {k: "sOrder", type: "section", label: "Recovery order", summary: `${(v.tiers || []).map(t => t.name).filter(Boolean).join(" → ") || "no tiers"} · ${(v.probes || []).length} health check${(v.probes || []).length === 1 ? "" : "s"}`},
-      ...tierFields(v, disc, v.src, nss, target, siteOf),
-      {k: "probes", label: "Health checks", type: "rows", cols: PROBE_COLS, max: 8, addLabel: "Add check",
-        add: newProbe, rowError: probeRowError, rowsBlock: true,
-        rowAction: {label: "Test", title: "dr-agent runs this probe on the source cluster now", run: row => drhub.probeHealth(Object.assign(target(), {probes: probeRowSpec(row)})).then(healthAnswer)}},
-
       {k: "sReview", type: "section", label: "Review", open: true},
       creates.length > 0 && {k: "nCreate", type: "note", icon: "plus", label: `Creates: ${creates.join(", ")}.`},
       reuses.length > 0 && {k: "nReuse", type: "note", icon: "check", label: `Reuses: ${reuses.join(", ")}.`}
     ].filter(Boolean);
   },
   run: async v => {
-    const {disc, paths = [], profiles = [], servers = []} = P;
+    const {disc, profiles = [], servers = []} = P;
     const plan = qpPlan(plans, v);
     if (!plan) throw new Error("Choose the source and target clusters.");
-    const nss = v.namespaces || [];
-    const done = [];
-    const step = async (what, fn) => {
-      try { const r = await fn(); done.push(what); return r; }
-      catch (e) { throw new Error(`${what}: ${(e && e.message) || e}${done.length ? `. Created so far: ${done.join(", ")}.` : ""}`); }
-    };
+    const {step, done} = qpStepper();
     if (plan.created) {
       const sites = plan.sites.map(s => ({name: s.name, cluster: s.cluster}));
       const vel = veleroProposal(disc, sites.map(s => s.cluster));
@@ -1148,7 +1142,7 @@ const quickProtectDialog = (plans, cfg) => {
     // DHCP servers found on the networks, each registered once; then each
     // site's bindings: the form's roles replace the profile's rows for them
     const regs = {}, per = {};
-    for (const n of netsOf(v, P).filter(x => !x.bound)) {
+    for (const n of qpNetsOf(v, P).filter(x => !x.bound)) {
       for (const r of v[n.k] || []) {
         let dhcp = r.dhcp || "";
         if (dhcp.startsWith(QP_FOUND)) {
@@ -1185,43 +1179,87 @@ const quickProtectDialog = (plans, cfg) => {
       const dhcp = srvRef(sp.dhcpServerRef) || (p.gnets.find(g => g.dhcpServerRef) || {}).dhcpServerRef || "";
       await step(`bindings on ${site}`, () => drhub.patchSiteProfile(prof, bindingsSpec({lnets, gnets, dhcp})));
     }
-    const {fwd, rev} = pathsOf(v, P, plan);
+    const {fwd, rev} = qpPathsOf(v, P, plan);
     const path = async (a, b, nad) => {
-      const from = qpSite(plan, a), to = qpSite(plan, b), name = `${from}-to-${to}`.slice(0, 63);
+      const from = qpSite(plan, a), to = qpSite(plan, b), name = qpPathName(plan, a, b);
       const dhcp = nad ? testDHCPChoice(disc, servers, b, nad).recommended : "";
       await step(`path ${name}`, () => drhub.createPath({name, spec: pathBody(plan, {from, to, actions: ["Failover", "Relocate"].concat(nad ? ["Test"] : []), nad, dhcp, recent: "720h"})}));
     };
     if (!fwd) await path(v.src, v.dst, v.testFwd);
     if (!rev) await path(v.dst, v.src, v.testRev);
+    // what step 2 starts from; the page shows the setup's progress (spec.result)
+    return {plan: plan.name, planCreated: !!plan.created, paths: [fwd ? fwd.name : qpPathName(plan, v.src, v.dst), rev ? rev.name : qpPathName(plan, v.dst, v.src)],
+      src: v.src, dst: v.dst, namespaces: v.namespaces || [], nets: qpNetsOf(v, P).length > 0};
+  }
+  };
+};
+
+// Step 2: the application on the plan step 1 set up (setup: what it returned).
+const quickAppDialog = (plans, cfg, setup) => {
+  const opsNs = (cfg && cfg.ramen && cfg.ramen.opsNamespace) || DR_NS();
+  const plan = plans.find(p => p.name === setup.plan);
+  const nss = setup.namespaces, src = setup.src;
+  const siteOf = c => qpSite(plan, c);
+  return {
+  title: "Quick protect", confirm: "Protect", done: "Protection created", wide: true,
+  desc: `Step 2 of 2: the application, on plan ${setup.plan} from ${setup.src} to ${setup.dst}.`,
+  prepare: () => Promise.all([drhub.discovery(), drhub.apps().catch(() => [])]).then(([disc, apps]) => ({disc, apps})),
+  fields: (v, prep) => {
+    const {disc, apps = []} = prep || {};
+    const pvcOpts = pvcSelectorOptions(disc, src, nss);
+    const target = () => ({site: siteOf(src), namespaces: nss, plan: setup.plan});
+    return [
+      {k: "sApp", type: "section", label: "Application", summary: `${nss.join(", ")} on ${src}${v.name ? ` · ${v.name}` : ""}`},
+      {k: "nSetup", type: "note", icon: "check", label: `Plan ${setup.plan} and paths ${setup.paths.join(", ")} are set up. Namespaces: ${nss.join(", ")}.`},
+      {k: "name", label: "Name", type: "text", required: true, def: dns63(nss[0] || ""),
+        validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label: lower-case letters, digits and \"-\"." : x && apps.some(a => a.name === x && a.namespace === opsNs) ? `${x} is protected already.` : null},
+      {k: "pvcSel", label: "PVC selector", type: "select", options: pvcOpts,
+        sync: x => disc && (x === undefined || !pvcOpts.some(o => o.v === x)) ? proposePVCSelector(disc, src, nss) : undefined,
+        validate: x => { const m = pvcMatches(disc, src, nss, parseSelector(x || "")); return m && !m.length ? `Matches no PVC in ${nss.join(", ")}.` : null; },
+        hint: x => { const m = pvcMatches(disc, src, nss, parseSelector(x || "")); return m ? `${m.length} PVC${m.length === 1 ? "" : "s"}: ${m.slice(0, 6).join(", ")}${m.length > 6 ? " …" : ""}` : ""; }},
+
+      {k: "sOrder", type: "section", label: "Recovery order", summary: `${(v.tiers || []).map(t => t.name).filter(Boolean).join(" → ") || "no tiers"} · ${(v.probes || []).length} health check${(v.probes || []).length === 1 ? "" : "s"}`},
+      ...tierFields(v, disc, src, nss, target, siteOf),
+      {k: "probes", label: "Health checks", type: "rows", cols: PROBE_COLS, max: 8, addLabel: "Add check",
+        add: newProbe, rowError: probeRowError, rowsBlock: true,
+        rowAction: {label: "Test", title: "dr-agent runs this probe on the source cluster now", run: row => drhub.probeHealth(Object.assign(target(), {probes: probeRowSpec(row)})).then(healthAnswer)}},
+
+      {k: "sReview", type: "section", label: "Review", open: true},
+      v.name && {k: "nCreate", type: "note", icon: "plus", label: `Creates: application ${v.name}.`}
+    ].filter(Boolean);
+  },
+  run: async v => {
+    if (!plan) throw new Error(`Plan ${setup.plan} is no longer listed.`);
+    const {step} = qpStepper();
     const sel = parseSelector(v.pvcSel || "");
     const tiers = tierEditorSpec(v.tiers, v.gates), probes = probesSpec(v.probes);
     const asyncMethod = plan.methods.length > 1 ? (plan.methods.find(m => /^async/.test(m.type)) || {}).name : "";
-    const spec = Object.assign({planRef: plan.name, source: qpSite(plan, v.src), target: qpSite(plan, v.dst), kind: "discovered"},
+    const spec = Object.assign({planRef: plan.name, source: siteOf(src), target: siteOf(setup.dst), kind: "discovered"},
       asyncMethod ? {method: asyncMethod} : {}, tiers.length ? {tiers} : {}, probes.length ? {health: {probes}} : {},
       {discovered: {protectedNamespaces: nss, pvcSelector: Object.keys(sel.matchLabels || {}).length ? {matchLabels: sel.matchLabels} : {}}});
     await step(`application ${v.name.trim()}`, () => drhub.createApp({name: v.name.trim(), namespace: opsNs, spec}));
-    // the page shows the progress in place of the form (spec.result)
-    const pathName = (a, b) => `${qpSite(plan, a)}-to-${qpSite(plan, b)}`.slice(0, 63);
-    const watch = {plan: plan.name, planCreated: !!plan.created, paths: [fwd ? fwd.name : pathName(v.src, v.dst), rev ? rev.name : pathName(v.dst, v.src)],
-      app: v.name.trim(), namespace: opsNs, nets: netsOf(v, P).length > 0};
-    return watch;
+    return {plan: setup.plan, planCreated: setup.planCreated, paths: setup.paths, app: v.name.trim(), namespace: opsNs, nets: setup.nets};
   },
   result: (watch, close) => <ProtectProgress {...watch} inline onClose={close} />
   };
 };
 
-// Quick protect as a page of its own under Disaster recovery: the form, then
-// its progress in the same place.
+// Quick protect as a page of its own under Disaster recovery: step 1's form,
+// then its progress in the same place, then step 2's form and its progress.
 function QuickProtectPage({nav}) {
-  const [spec, setSpec] = useState(null);
+  const [load, setLoad] = useState(null);
+  const [setup, setSetup] = useState(null);
   const [err, setErr] = useState(null);
-  useEffect(() => {
-    Promise.all([drhub.plans(), drhub.config().catch(() => null)])
-      .then(([ps, c]) => setSpec(quickProtectDialog(ps, c)), e => setErr((e && e.message) || String(e)));
-  }, []);
+  const read = () => Promise.all([drhub.plans(), drhub.config().catch(() => null)])
+    .then(([plans, cfg]) => ({plans, cfg}), e => { setErr((e && e.message) || String(e)); return null; });
+  useEffect(() => { read().then(x => x && setLoad(x)); }, []);
+  // step 2 reads the plans again: step 1 may have created the plan
+  const next = s => read().then(x => { if (x) { setLoad(x); setSetup(s); } });
   if (err) return <div className="scroll"><div className="empty"><Icon n="alert" s={22} c="var(--bad)" /><b>Cannot read the protection plans</b><span>{err}</span></div></div>;
-  if (!spec) return <div className="scroll"><div className="fskel" style={{marginTop: 18}}></div></div>;
-  return <Dialog page spec={spec} obj={{kind: "papp", id: "new"}} onClose={() => nav.dr()} />;
+  if (!load) return <div className="scroll"><div className="fskel" style={{marginTop: 18}}></div></div>;
+  if (setup) return <Dialog key="app" page spec={quickAppDialog(load.plans, load.cfg, setup)} obj={{kind: "papp", id: "new"}} onClose={() => nav.dr()} />;
+  const spec = Object.assign(quickSetupDialog(load.plans), {result: (s, close) => <ProtectProgress {...s} inline setupOnly onClose={close} onNext={() => next(s)} />});
+  return <Dialog key="setup" page spec={spec} obj={{kind: "pplan", id: "new"}} onClose={() => nav.dr()} />;
 }
 
 // What Quick protect created, read back until the application can move: the
@@ -1229,7 +1267,8 @@ function QuickProtectPage({nav}) {
 // bound and protected, a first replication, a Ready path.
 const QP_POLL_MS = 4000;
 // inline: on the Quick protect page, where the form was; otherwise a modal.
-function ProtectProgress({plan, planCreated, paths, app, namespace, nets, onClose, inline}) {
+// setupOnly: Quick protect's step 1, the plan and its paths, then onNext.
+function ProtectProgress({plan, planCreated, paths, app, namespace, nets, onClose, inline, setupOnly, onNext}) {
   const [st, setSt] = useState(null);
   useEffect(() => {
     let alive = true, timer = null;
@@ -1255,7 +1294,7 @@ function ProtectProgress({plan, planCreated, paths, app, namespace, nets, onClos
       detail: !a ? "not listed yet" : `bound: ${yes(a.bound)} · protected: ${yes(a.protected)}`},
     {label: "First replication", done: !!(a && a.replication), detail: a && a.replication ? `last sync ${fmtAgo(a.replication.lastSyncTime)}` : "waiting"},
     {label: "Ready to move", done: !!a && (a.verdict === "Ready" || a.verdict === "Degraded"), detail: a ? a.verdict : "—"}
-  ].filter(Boolean);
+  ].filter(Boolean).slice(0, setupOnly ? 2 : undefined);
   const current = steps.findIndex(s => !s.done);
   const all = current < 0;
   const body = <>
@@ -1269,6 +1308,17 @@ function ProtectProgress({plan, planCreated, paths, app, namespace, nets, onClos
     {st && st.err && <div className="banner" style={{marginTop: 10, marginBottom: 0}}><Icon n="alert" s={14} />{st.err}</div>}
   </>;
   const open = () => { onClose(); window.__nav && window.__nav.detail(a); };
+  if (setupOnly) return (
+    <div className="fpdone">
+      <h2>{all ? `Plan ${plan} and its paths are ready` : `Setting up plan ${plan}`}</h2>
+      {body}
+      <div className="fpdonebtns">
+        <button className="btn" onClick={onClose}>Back to disaster recovery</button>
+        <button className="btn" disabled={!p} onClick={() => { onClose(); window.__nav && window.__nav.detail(p); }}>Open the plan</button>
+        <button className="btn primary" disabled={!all} onClick={onNext}>Continue to the application</button>
+      </div>
+    </div>
+  );
   if (inline) return (
     <div className="fpdone">
       <h2>{all ? `${app} is protected` : `Protecting ${app}`}</h2>
@@ -2618,5 +2668,5 @@ function DrHubHome({nav}) {
 Object.assign(window, {DrTable: Table, DrMono: Mono, DrCheckTable: CheckTable, DrConditions: Conditions, VerdictBadge});
 Object.assign(window, {QuickProtectPage, DrHubHome, DRConfigView, PPlanTile, DRPathTile, PAppTile, RPlanTile, RActionTile, TBubbleTile, TSchedTile, RestoreTile, SiteProfileTile, DHCPServerTile, SiteDeployTile, SiteDeployDetail, deploySiteDialog,
   PPlanDetail, DRPathDetail, PAppDetail, RPlanDetail, RActionDetail, TBubbleDetail, TSchedDetail, RestoreDetail, SiteProfileDetail, DHCPServerDetail, MappingPanel,
-  runActionDialog, runTestDialog, restoreDialog, newPPlanDialog: newPlanDialog, newPathDialog, proposePathsDialog, protectAppDialogDR, quickProtectDialog, ProtectProgress, newRPlanDialog, editRPlanDialog, editTiersDialog, editPlanS3Dialog, newScheduleDialog, newDHCPServerDialog, ACTION_KIND_META, KIND_LABEL_DR,
+  runActionDialog, runTestDialog, restoreDialog, newPPlanDialog: newPlanDialog, newPathDialog, proposePathsDialog, protectAppDialogDR, quickSetupDialog, quickAppDialog, ProtectProgress, newRPlanDialog, editRPlanDialog, editTiersDialog, editPlanS3Dialog, newScheduleDialog, newDHCPServerDialog, ACTION_KIND_META, KIND_LABEL_DR,
   editPlanS3Dialog, editTiersDialog, editBindingsDialog, sitesSpec, sitesError, overrideError, missingServers});
