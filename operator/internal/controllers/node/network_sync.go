@@ -208,7 +208,7 @@ func equalNetworkStatus(a, b []simplyblockv1alpha2.NodeNetworkStatus) bool {
 	}
 	for i := range a {
 		if a[i].Network != b[i].Network || a[i].Interface != b[i].Interface ||
-			a[i].Address != b[i].Address || a[i].Assigned != b[i].Assigned ||
+			a[i].Address != b[i].Address || a[i].Assigned != b[i].Assigned || a[i].Resource != b[i].Resource ||
 			a[i].Phase != b[i].Phase || !equalBool(a[i].HostReachable, b[i].HostReachable) {
 			return false
 		}

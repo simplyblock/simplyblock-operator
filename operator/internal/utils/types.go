@@ -97,4 +97,10 @@ type NodeNetworkParams struct {
 	Namespace string   `json:"namespace,omitempty"`
 	Interface string   `json:"interface"`
 	IPs       []string `json:"ips,omitempty"`
+	// Resource is the extended resource a device plugin hands the interface's
+	// device out under, from the definition's k8s.v1.cni.cncf.io/resourceName
+	// annotation (an SR-IOV VF pool, for example). The SPDK pod requests one of
+	// it, without which the plugin allocates nothing and Multus has no device to
+	// attach. Not part of the Multus network selection element.
+	Resource string `json:"resource,omitempty"`
 }
