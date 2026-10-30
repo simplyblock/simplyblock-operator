@@ -18,7 +18,7 @@ spec:
     stripe:
       dataChunks: 1
       parityChunks: 1
-    vcpuCount: 16
+    vcpuCount: 30
   environment: OpenShift
   hostOS:
     distro: ubuntu

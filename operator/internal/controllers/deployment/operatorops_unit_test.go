@@ -126,8 +126,8 @@ func reportConfigMap(t *testing.T, node string, addresses ...string) *corev1.Con
 		CPU: nodeprobe.CPU{
 			OnlineCPUs: 32, PhysicalCores: 16, Sockets: 2, ThreadsPerCore: 2, HyperThreading: true,
 			NUMANodes: []nodeprobe.NUMACPUs{
-				{Node: 0, OnlineCPUs: []int{0, 1, 2, 3}, PhysicalCores: 8},
-				{Node: 1, OnlineCPUs: []int{4, 5, 6, 7}, PhysicalCores: 8},
+				{Node: 0, OnlineCPUs: []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}, PhysicalCores: 8},
+				{Node: 1, OnlineCPUs: []int{16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}, PhysicalCores: 8},
 			},
 		},
 		HugePages: []nodeprobe.HugePagePool{{
@@ -510,8 +510,8 @@ func TestDiscoverWritesADraftFromTheReports(t *testing.T) {
 	if config.Spec.Cluster == nil {
 		t.Fatal("the document proposes no cluster")
 	}
-	if config.Spec.Cluster.VCPUCount == nil || *config.Spec.Cluster.VCPUCount != 8 {
-		t.Errorf("the cluster asks for %v vCPUs, want the 8 cores of the chosen node",
+	if config.Spec.Cluster.VCPUCount == nil || *config.Spec.Cluster.VCPUCount != 14 {
+		t.Errorf("the cluster asks for %v vCPUs, want the 16 logical CPUs of the chosen node less the two kept for the system",
 			config.Spec.Cluster.VCPUCount)
 	}
 	if config.Spec.Cluster.MaxSubsystemCount == nil {

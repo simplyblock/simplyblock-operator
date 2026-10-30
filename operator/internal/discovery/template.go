@@ -31,6 +31,15 @@ const (
 	// the schema rather than reviewed.
 	MinimumVCPUCount int32 = 4
 
+	// SystemReservedCPUs is what the draft keeps back from a memory node's
+	// logical CPUs: the two the node preparation reserves for the kubelet and
+	// the system (reservedSystemCPUs "0,1") where CPU topology is on. The SPDK
+	// pod requests its whole core count, so a draft that keeps back less than
+	// the reserve asks for more than the node's allocatable CPU and the pod
+	// never schedules. It is also past the control plane's own floor of one
+	// CPU beyond the count.
+	SystemReservedCPUs = 2
+
 	// DefaultMaxSubsystemCount is what a draft proposes for the number of
 	// NVMe-oF subsystems each storage node serves.
 	//
@@ -513,21 +522,26 @@ func fleetSize(plan Plan) int {
 	return len(workers)
 }
 
-// vcpuCountFor is the smallest chosen memory node's core count across the
-// fleet, floored at the API's minimum.
+// vcpuCountFor is the smallest chosen memory node's logical CPU count across the
+// fleet less the system reserve, floored at the API's minimum. The control plane
+// counts logical CPUs, refuses a node without one CPU beyond the cluster's vCPU
+// count, and schedules the SPDK pod only within the node's allocatable CPU.
 func vcpuCountFor(plan Plan) (int32, string) {
 	smallest, smallestWorker := 0, ""
 	for _, worker := range plan.Workers {
-		cores := chosenNodeCores(worker)
-		if cores == 0 {
+		cpus := chosenNodeCPUs(worker)
+		if cpus == 0 {
 			continue
 		}
-		if smallest == 0 || cores < smallest {
+		// A worker too small for the reserve still counts: it is the smallest
+		// placement, and the note names it rather than claiming no report.
+		cores := cpus - SystemReservedCPUs
+		if smallestWorker == "" || cores < smallest {
 			smallest, smallestWorker = cores, worker.Name
 		}
 	}
 
-	if smallest == 0 {
+	if smallestWorker == "" {
 		return MinimumVCPUCount, fmt.Sprintf(
 			"vcpuCount is the API's minimum of %d, because no worker reported the cores of "+
 				"the memory node it was placed on", MinimumVCPUCount)
@@ -535,26 +549,26 @@ func vcpuCountFor(plan Plan) (int32, string) {
 	if int32(smallest) < MinimumVCPUCount {
 		return MinimumVCPUCount, fmt.Sprintf(
 			"vcpuCount is the API's minimum of %d, and the smallest placement (%s) has only "+
-				"%d cores, so this cluster asks for more than that worker has",
-			MinimumVCPUCount, smallestWorker, smallest)
+				"%d CPUs to spare for SPDK, so this cluster asks for more than that worker has",
+			MinimumVCPUCount, smallestWorker, max(smallest, 0))
 	}
 	return int32(smallest), fmt.Sprintf(
-		"vcpuCount is %d, the cores of the memory node chosen on %s, which is the smallest "+
-			"of the fleet: the control plane assumes this uniform across a cluster's nodes",
-		smallest, smallestWorker)
+		"vcpuCount is %d, the logical CPUs of the memory node chosen on %s less the %d the kubelet "+
+			"keeps for the system, the smallest of the fleet: the control plane assumes this uniform across a cluster's nodes",
+		smallest, smallestWorker, SystemReservedCPUs)
 }
 
-// chosenNodeCores is the physical cores of the memory node a worker's chosen
+// chosenNodeCPUs is the logical CPUs of the memory node a worker's chosen
 // devices hang off. A worker whose devices span nodes, which AllDevices
 // produces, has no single answer and reports none.
-func chosenNodeCores(worker Worker) int {
+func chosenNodeCPUs(worker Worker) int {
 	node, single := chosenNode(worker)
 	if !single {
 		return 0
 	}
 	for _, cpus := range worker.Report.CPU.NUMANodes {
 		if cpus.Node == node {
-			return cpus.PhysicalCores
+			return len(cpus.OnlineCPUs)
 		}
 	}
 	return 0
