@@ -16237,6 +16237,16 @@ metadata:
   name: simplyblock-operator-controller-manager
   namespace: simplyblock-operator-system
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-operator
+    storage.simplyblock.io/component: nodeprobe
+  name: simplyblock-operator-nodeprobe
+  namespace: simplyblock-operator-system
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -16277,6 +16287,24 @@ rules:
   verbs:
   - create
   - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-operator
+    storage.simplyblock.io/component: nodeprobe
+  name: simplyblock-operator-nodeprobe
+  namespace: simplyblock-operator-system
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - create
+  - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -17253,6 +17281,24 @@ subjects:
   namespace: simplyblock-operator-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-operator
+    storage.simplyblock.io/component: nodeprobe
+  name: simplyblock-operator-nodeprobe
+  namespace: simplyblock-operator-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: simplyblock-operator-nodeprobe
+subjects:
+- kind: ServiceAccount
+  name: simplyblock-operator-nodeprobe
+  namespace: simplyblock-operator-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   labels:
@@ -17398,6 +17444,14 @@ spec:
           value: quay.io/simplyblock-io/simplyblock-operator:0.1.0
         - name: SB_NODEPROBE_IMAGE
           value: quay.io/simplyblock-io/simplyblock-operator:0.1.0
+        - name: SB_NODEPROBE_SERVICE_ACCOUNT
+          value: simplyblock-operator-nodeprobe
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: SB_EXTRA_ADMIN_SERVICE_ACCOUNTS
+          value: system:serviceaccount:$(POD_NAMESPACE):simplyblock-operator-controller-manager
         image: quay.io/simplyblock-io/simplyblock-operator:0.1.0
         livenessProbe:
           httpGet:
