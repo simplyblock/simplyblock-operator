@@ -9,6 +9,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+// testWorkerNodeName is the node the test workload pods run on.
+const testWorkerNodeName = "worker-1"
+
 // A migrated volume: the PV's handle still names the volume the PVC was
 // created with, the slot names the volume where it lives now.
 func migratedConsumer(t *testing.T) *fake.ClientBuilder {
@@ -25,7 +28,7 @@ func migratedConsumer(t *testing.T) *fake.ClientBuilder {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "app-pod", Namespace: "default"},
 		Spec: corev1.PodSpec{
-			NodeName: "worker-1",
+			NodeName: testWorkerNodeName,
 			Volumes: []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{
 				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "pvc1"},
 			}}},
@@ -47,7 +50,7 @@ func TestFindSlotConsumerNode_FindsTheConsumerOfAMigratedVolume(t *testing.T) {
 	}
 
 	node, err := findSlotConsumerNode(ctx, cl, "default", "pvc1", "moved-id")
-	if err != nil || node != "worker-1" {
+	if err != nil || node != testWorkerNodeName {
 		t.Fatalf("findSlotConsumerNode = %q, %v; want worker-1", node, err)
 	}
 }
@@ -56,7 +59,7 @@ func TestFindSlotConsumerNode_FallsBackToTheVolumeHandle(t *testing.T) {
 	cl := migratedConsumer(t).Build()
 
 	node, err := findSlotConsumerNode(context.Background(), cl, "default", "", "original-id")
-	if err != nil || node != "worker-1" {
+	if err != nil || node != testWorkerNodeName {
 		t.Fatalf("findSlotConsumerNode without PVC = %q, %v; want worker-1", node, err)
 	}
 }

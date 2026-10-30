@@ -72,7 +72,7 @@ const (
 	// success says nothing about this cutover's target paths and must not
 	// release it (2026-10-28 back-and-forth bed: the return trip proceeded on
 	// such a Job, the client never got its target paths, fio-1/fio-6 EIO).
-	annotPreconnectKind  = "replication.simplyblock.io/preconnect-kind"
+	annotPreconnectKind   = "replication.simplyblock.io/preconnect-kind"
 	preconnectKindCutover = "cutover"
 	preconnectKindLate    = "late"
 

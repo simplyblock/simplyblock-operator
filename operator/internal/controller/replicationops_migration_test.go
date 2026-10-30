@@ -23,6 +23,16 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
+// Names the migration tests share: the plan the fake control plane creates,
+// the migration policy an operation follows, and a second pair and policy for
+// tests that move volumes onward.
+const (
+	testPlanID         = "plan-1"
+	testMigPolicyName  = "mig"
+	testPairBName      = "pair-b"
+	testMigPolicyBName = "mig-b"
+)
+
 // planServer is a fake control plane serving the migration-plans API. It
 // records every request body and serves the plan the test sets.
 type planServer struct {
@@ -85,7 +95,7 @@ func planVolumeJSON(lvolID, state string, eta float64) string {
 func migrationOps(scope, ref string) *simplyblockv1alpha1.ReplicationOps {
 	return &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
+			Name: testReplOpsName, Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec: simplyblockv1alpha1.ReplicationOpsSpec{Action: "migration", Scope: scope, Ref: ref},
@@ -103,7 +113,7 @@ func migGetSlot(t *testing.T, cl client.Client, name string) *simplyblockv1alpha
 
 func reconcileOps(t *testing.T, r *ReplicationOpsReconciler) {
 	t.Helper()
-	if _, err := r.Reconcile(context.Background(), opsRequest("ops1")); err != nil {
+	if _, err := r.Reconcile(context.Background(), opsRequest(testReplOpsName)); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 }
@@ -112,9 +122,9 @@ func reconcileOps(t *testing.T, r *ReplicationOpsReconciler) {
 
 func TestMigration_CreatesOnePlanAndKeepsRunning(t *testing.T) {
 	ps := &planServer{postReply: func() (int, string) {
-		return http.StatusCreated, planJSON("plan-1", migrationPlanRunning, planVolumeJSON("vol-u", "replicating", 600))
+		return http.StatusCreated, planJSON(testPlanID, migrationPlanRunning, planVolumeJSON("vol-u", "replicating", 600))
 	}}
-	ps.planBody = planJSON("plan-1", migrationPlanRunning, planVolumeJSON("vol-u", "converging", 30))
+	ps.planBody = planJSON(testPlanID, migrationPlanRunning, planVolumeJSON("vol-u", "converging", 30))
 	ops := migrationOps(utils.ReplicationOpsScopePolicy, "pol")
 	ops.Spec.DeleteSource = true
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps("pol"), slotForPolicy(), ops)
@@ -142,14 +152,14 @@ func TestMigration_CreatesOnePlanAndKeepsRunning(t *testing.T) {
 	if got.Status.Phase != string(simplyblockv1alpha1.ReplicationOpsPhaseRunning) {
 		t.Fatalf("phase = %q, want Running while the plan runs", got.Status.Phase)
 	}
-	if got.Status.PlanID != "plan-1" || got.Status.Subphase != replOpsSubphaseTrackingPlan {
+	if got.Status.PlanID != testPlanID || got.Status.Subphase != replOpsSubphaseTrackingPlan {
 		t.Errorf("planID/subphase = %q/%q, want plan-1/%s", got.Status.PlanID, got.Status.Subphase, replOpsSubphaseTrackingPlan)
 	}
 	if len(got.Status.Results) != 1 {
 		t.Fatalf("results = %+v, want 1", got.Status.Results)
 	}
 	res := got.Status.Results[0]
-	if res.SlotRef != "pol-pvc1" || res.PVCRef != "pvc1" || res.State != "converging" ||
+	if res.SlotRef != testPolicySlotPVC1 || res.PVCRef != "pvc1" || res.State != "converging" ||
 		res.Status != string(simplyblockv1alpha1.ReplicationOpsResultPending) || res.ETASeconds != 30 ||
 		res.BytesRemaining != 1024 || res.TargetNodeID != "tnode-1" {
 		t.Errorf("result = %+v, want the plan's progress for pol-pvc1", res)
@@ -161,16 +171,16 @@ func TestMigration_CreatesOnePlanAndKeepsRunning(t *testing.T) {
 	}
 
 	// The slot state machine stays the slot reconciler's: no pre-marking.
-	if s := migGetSlot(t, cl, "pol-pvc1"); s.Status.State != string(simplyblockv1alpha1.ReplicationSlotStateReplicating) {
+	if s := migGetSlot(t, cl, testPolicySlotPVC1); s.Status.State != string(simplyblockv1alpha1.ReplicationSlotStateReplicating) {
 		t.Errorf("slot state = %q, want it left at replicating", s.Status.State)
 	}
 }
 
 func TestMigration_PlanDone_Succeeds(t *testing.T) {
 	ps := &planServer{postReply: func() (int, string) {
-		return http.StatusCreated, planJSON("plan-1", migrationPlanRunning, planVolumeJSON("vol-u", "replicating", 600))
+		return http.StatusCreated, planJSON(testPlanID, migrationPlanRunning, planVolumeJSON("vol-u", "replicating", 600))
 	}}
-	ps.planBody = planJSON("plan-1", migrationPlanDone, planVolumeJSON("vol-u", "done", 0))
+	ps.planBody = planJSON(testPlanID, migrationPlanDone, planVolumeJSON("vol-u", "done", 0))
 	pol := readyPolicyForOps("pol")
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), pol, slotForPolicy(), migrationOps(utils.ReplicationOpsScopePolicy, "pol"))
 	srv := newAPIServer(t, ps.handler)
@@ -195,9 +205,9 @@ func TestMigration_PlanDone_Succeeds(t *testing.T) {
 
 func TestMigration_PlanPartial_FailsWithResults(t *testing.T) {
 	ps := &planServer{postReply: func() (int, string) {
-		return http.StatusCreated, planJSON("plan-1", migrationPlanRunning, planVolumeJSON("vol-u", "replicating", 600))
+		return http.StatusCreated, planJSON(testPlanID, migrationPlanRunning, planVolumeJSON("vol-u", "replicating", 600))
 	}}
-	ps.planBody = planJSON("plan-1", migrationPlanPartial, planVolumeJSON("vol-u", "failed", 0))
+	ps.planBody = planJSON(testPlanID, migrationPlanPartial, planVolumeJSON("vol-u", "failed", 0))
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps("pol"), slotForPolicy(),
 		migrationOps(utils.ReplicationOpsScopePolicy, "pol"))
 	srv := newAPIServer(t, ps.handler)
@@ -219,14 +229,14 @@ func TestMigration_PlanPartial_FailsWithResults(t *testing.T) {
 }
 
 func TestMigration_WaitsForSlotsToReplicateBeforeThePlan(t *testing.T) {
-	ps := &planServer{postReply: func() (int, string) { return http.StatusCreated, planJSON("plan-1", migrationPlanRunning) }}
+	ps := &planServer{postReply: func() (int, string) { return http.StatusCreated, planJSON(testPlanID, migrationPlanRunning) }}
 	slot := slotForPolicy()
 	slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateAttaching)
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps("pol"), slot, migrationOps(utils.ReplicationOpsScopePolicy, "pol"))
 	srv := newAPIServer(t, ps.handler)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
-	res, err := r.Reconcile(context.Background(), opsRequest("ops1"))
+	res, err := r.Reconcile(context.Background(), opsRequest(testReplOpsName))
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -247,9 +257,9 @@ func TestMigration_AdoptsAPlanCreatedByADeadPass(t *testing.T) {
 	ops := migrationOps(utils.ReplicationOpsScopePolicy, "pol")
 	ops.Status.Phase = string(simplyblockv1alpha1.ReplicationOpsPhaseRunning)
 	ops.Status.Subphase = replOpsSubphaseCreatingPlan
-	ps.listBody = `[{"id":"plan-1","name":"` + migrationPlanName(ops) + `","status":"running","volumes":[]}]`
+	ps.listBody = `[{"id":"` + testPlanID + `","name":"` + migrationPlanName(ops) + `","status":"running","volumes":[]}]`
 	pol := readyPolicyForOps("pol")
-	pol.Status.ActiveOpsRef = "ops1"
+	pol.Status.ActiveOpsRef = testReplOpsName
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), pol, slotForPolicy(), ops)
 	srv := newAPIServer(t, ps.handler)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
@@ -259,7 +269,7 @@ func TestMigration_AdoptsAPlanCreatedByADeadPass(t *testing.T) {
 	if len(ps.posts) != 0 {
 		t.Fatalf("created a second plan instead of adopting plan-1")
 	}
-	if got := getOps(t, cl); got.Status.PlanID != "plan-1" {
+	if got := getOps(t, cl); got.Status.PlanID != testPlanID {
 		t.Errorf("planID = %q, want the adopted plan-1", got.Status.PlanID)
 	}
 }
@@ -318,7 +328,7 @@ func TestMigration_BackendWithoutPlans_CommitsPerVolumeAndTracksSlots(t *testing
 		t.Fatalf("phase/subphase = %q/%q, want Running/%s until the slot cuts over",
 			got.Status.Phase, got.Status.Subphase, replOpsSubphaseAwaitingCutover)
 	}
-	slot := migGetSlot(t, cl, "pol-pvc1")
+	slot := migGetSlot(t, cl, testPolicySlotPVC1)
 	if slot.Status.State != string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending) {
 		t.Fatalf("slot state = %q, want cutover_pending on the commit path", slot.Status.State)
 	}
@@ -342,7 +352,7 @@ func TestMigration_BackendWithoutPlans_CommitsPerVolumeAndTracksSlots(t *testing
 
 func TestMigration_TargetScopeUsesAPlan(t *testing.T) {
 	ps := &planServer{postReply: func() (int, string) {
-		return http.StatusCreated, planJSON("plan-1", migrationPlanRunning, planVolumeJSON("vol-u", "replicating", 60))
+		return http.StatusCreated, planJSON(testPlanID, migrationPlanRunning, planVolumeJSON("vol-u", "replicating", 60))
 	}}
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps("pol"), slotForPolicy(),
 		migrationOps(utils.ReplicationOpsScopeTarget, "pair1"))
@@ -354,7 +364,7 @@ func TestMigration_TargetScopeUsesAPlan(t *testing.T) {
 	if len(ps.posts) != 1 {
 		t.Fatalf("posts = %d, want 1", len(ps.posts))
 	}
-	if got := getOps(t, cl); got.Status.PlanID != "plan-1" {
+	if got := getOps(t, cl); got.Status.PlanID != testPlanID {
 		t.Errorf("planID = %q, want plan-1 (status %+v)", got.Status.PlanID, got.Status)
 	}
 }
@@ -379,22 +389,22 @@ func csiPV(name, handle string) *corev1.PersistentVolume {
 }
 
 func migrationPolicy() *simplyblockv1alpha1.ReplicationPolicy {
-	p := readyPolicyForOps("mig")
+	p := readyPolicyForOps(testMigPolicyName)
 	p.Spec.Mode = utils.ReplicationPolicyModeMigration
 	return p
 }
 
 func TestMigration_ClusterScope_EnrollsSkipsAndThenPlans(t *testing.T) {
 	ps := &planServer{postReply: func() (int, string) {
-		return http.StatusCreated, planJSON("plan-1", migrationPlanRunning,
+		return http.StatusCreated, planJSON(testPlanID, migrationPlanRunning,
 			planVolumeJSON("vol-a", "replicating", 100), planVolumeJSON("vol-d", "queued", 200))
 	}}
 	ops := migrationOps(utils.ReplicationOpsScopeCluster, testClusterName)
-	ops.Spec.PolicyRef = "mig"
+	ops.Spec.PolicyRef = testMigPolicyName
 	src := testClusterUUID + ":pool:"
 	slotD := &simplyblockv1alpha1.ReplicationSlot{
 		ObjectMeta: metav1.ObjectMeta{Name: "mig-pvc-d", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.ReplicationSlotSpec{PolicyRef: "mig", PVCRef: "pvc-d", VolumeID: src + "vol-d"},
+		Spec:       simplyblockv1alpha1.ReplicationSlotSpec{PolicyRef: testMigPolicyName, PVCRef: "pvc-d", VolumeID: src + "vol-d"},
 		Status:     simplyblockv1alpha1.ReplicationSlotStatus{State: string(simplyblockv1alpha1.ReplicationSlotStateReplicating)},
 	}
 	slotE := &simplyblockv1alpha1.ReplicationSlot{
@@ -406,7 +416,7 @@ func TestMigration_ClusterScope_EnrollsSkipsAndThenPlans(t *testing.T) {
 		migBoundPVC("pvc-a", "pv-a", nil), csiPV("pv-a", src+"vol-a"), // to enroll
 		migBoundPVC("pvc-b", "pv-b", nil), csiPV("pv-b", "other-cluster:pool:vol-b"), // another cluster
 		migBoundPVC("pvc-c", "pv-c", map[string]string{utils.AnnotationReplicationPolicy: "dr"}), csiPV("pv-c", src+"vol-c"),
-		migBoundPVC("pvc-d", "pv-d", map[string]string{utils.AnnotationReplicationPolicy: "mig"}), csiPV("pv-d", src+"vol-d"), slotD,
+		migBoundPVC("pvc-d", "pv-d", map[string]string{utils.AnnotationReplicationPolicy: testMigPolicyName}), csiPV("pv-d", src+"vol-d"), slotD,
 		migBoundPVC("pvc-e", "pv-e", nil), csiPV("pv-e", src+"vol-e"), slotE,
 	)
 	srv := newAPIServer(t, ps.handler)
@@ -419,7 +429,7 @@ func TestMigration_ClusterScope_EnrollsSkipsAndThenPlans(t *testing.T) {
 	}
 	pvcA := &corev1.PersistentVolumeClaim{}
 	_ = cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "pvc-a"}, pvcA)
-	if pvcA.Annotations[utils.AnnotationReplicationPolicy] != "mig" {
+	if pvcA.Annotations[utils.AnnotationReplicationPolicy] != testMigPolicyName {
 		t.Errorf("pvc-a annotations = %v, want enrolled under mig", pvcA.Annotations)
 	}
 	pvcB := &corev1.PersistentVolumeClaim{}
@@ -449,7 +459,7 @@ func TestMigration_ClusterScope_EnrollsSkipsAndThenPlans(t *testing.T) {
 	// The PVC watcher creates pvc-a's slot and the slot reconciler attaches it.
 	slotA := &simplyblockv1alpha1.ReplicationSlot{
 		ObjectMeta: metav1.ObjectMeta{Name: "mig-pvc-a", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.ReplicationSlotSpec{PolicyRef: "mig", PVCRef: "pvc-a", VolumeID: src + "vol-a"},
+		Spec:       simplyblockv1alpha1.ReplicationSlotSpec{PolicyRef: testMigPolicyName, PVCRef: "pvc-a", VolumeID: src + "vol-a"},
 	}
 	if err := cl.Create(context.Background(), slotA); err != nil {
 		t.Fatalf("create slot: %v", err)
@@ -474,7 +484,7 @@ func TestMigration_ClusterScope_EnrollsSkipsAndThenPlans(t *testing.T) {
 		t.Errorf("plan lvol_ids = %v, want vol-a and vol-d", ids)
 	}
 	got = getOps(t, cl)
-	if got.Status.PlanID != "plan-1" {
+	if got.Status.PlanID != testPlanID {
 		t.Fatalf("planID = %q, want plan-1", got.Status.PlanID)
 	}
 	// The skips from enrollment stay next to the plan's volumes.
@@ -518,13 +528,13 @@ func TestMigration_ClusterScope_SelectsVolumesByWhereTheyLiveNow(t *testing.T) {
 	)
 	siteB := testCluster("default", "site-b", clusterB)
 	pair := readyPairForOps()
-	pair.Name = "pair-b"
+	pair.Name = testPairBName
 	pair.Spec.SourceCluster = "site-b"
 	pol := migrationPolicy()
-	pol.Name = "mig-b"
-	pol.Spec.PairRef = "pair-b"
+	pol.Name = testMigPolicyBName
+	pol.Spec.PairRef = testPairBName
 	ops := migrationOps(utils.ReplicationOpsScopeCluster, "site-b")
-	ops.Spec.PolicyRef = "mig-b"
+	ops.Spec.PolicyRef = testMigPolicyBName
 
 	finished := func(name, policy, pvc, handle string) *simplyblockv1alpha1.ReplicationSlot {
 		return &simplyblockv1alpha1.ReplicationSlot{
@@ -579,10 +589,10 @@ func TestMigration_ClusterScope_SelectsVolumesByWhereTheyLiveNow(t *testing.T) {
 		_ = cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: name}, pvc)
 		return pvc.Annotations[utils.AnnotationReplicationPolicy]
 	}
-	if got := annotation("pvc-m"); got != "mig-b" {
+	if got := annotation("pvc-m"); got != testMigPolicyBName {
 		t.Errorf("pvc-m policy = %q, want mig-b: it migrated to B, and its finished slot must give way", got)
 	}
-	if got := annotation("pvc-o"); got != "mig-b" {
+	if got := annotation("pvc-o"); got != testMigPolicyBName {
 		t.Errorf("pvc-o policy = %q, want mig-b", got)
 	}
 	if got := annotation("pvc-n"); got != "away" {
@@ -624,23 +634,23 @@ func TestMigration_ClusterScope_RetiresAFinishedSlotOfTheSamePolicy(t *testing.T
 	)
 	siteB := testCluster("default", "site-b", clusterB)
 	pair := readyPairForOps()
-	pair.Name = "pair-b"
+	pair.Name = testPairBName
 	pair.Spec.SourceCluster = "site-b"
 	pol := migrationPolicy()
-	pol.Name = "mig-b"
-	pol.Spec.PairRef = "pair-b"
+	pol.Name = testMigPolicyBName
+	pol.Spec.PairRef = testPairBName
 	ops := migrationOps(utils.ReplicationOpsScopeCluster, "site-b")
-	ops.Spec.PolicyRef = "mig-b"
+	ops.Spec.PolicyRef = testMigPolicyBName
 	slot := &simplyblockv1alpha1.ReplicationSlot{
 		ObjectMeta: metav1.ObjectMeta{Name: "mig-b-pvc-r", Namespace: "default"},
-		Spec: simplyblockv1alpha1.ReplicationSlotSpec{PolicyRef: "mig-b", PVCRef: "pvc-r",
+		Spec: simplyblockv1alpha1.ReplicationSlotSpec{PolicyRef: testMigPolicyBName, PVCRef: "pvc-r",
 			VolumeID: clusterC + ":" + poolC + ":" + volC},
 		Status: simplyblockv1alpha1.ReplicationSlotStatus{
 			State: string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone),
 		},
 	}
 	r, cl := newOpsReplReconciler(t, siteB, pair, pol, ops, slot,
-		migBoundPVC("pvc-r", "pv-r", map[string]string{utils.AnnotationReplicationPolicy: "mig-b"}),
+		migBoundPVC("pvc-r", "pv-r", map[string]string{utils.AnnotationReplicationPolicy: testMigPolicyBName}),
 		csiPV("pv-r", clusterC+":"+poolC+":"+volC),
 	)
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {

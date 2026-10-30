@@ -32,11 +32,11 @@ func workloadPVC(name, pvName string, annotations map[string]string) *corev1.Per
 
 func TestMigration_ClusterScope_CoversClaimsInEveryNamespace(t *testing.T) {
 	ps := &planServer{postReply: func() (int, string) {
-		return http.StatusCreated, planJSON("plan-1", migrationPlanRunning, planVolumeJSON("vol-w", "replicating", 100))
+		return http.StatusCreated, planJSON(testPlanID, migrationPlanRunning, planVolumeJSON("vol-w", "replicating", 100))
 	}}
-	ps.planBody = planJSON("plan-1", migrationPlanRunning, planVolumeJSON("vol-w", "converging", 10))
+	ps.planBody = planJSON(testPlanID, migrationPlanRunning, planVolumeJSON("vol-w", "converging", 10))
 	ops := migrationOps(utils.ReplicationOpsScopeCluster, testClusterName)
-	ops.Spec.PolicyRef = "mig"
+	ops.Spec.PolicyRef = testMigPolicyName
 	src := testClusterUUID + ":pool:"
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), migrationPolicy(), ops,
 		workloadPVC("pvc-w", "pv-w", nil), csiPV("pv-w", src+"vol-w"), // to enroll
@@ -120,7 +120,7 @@ func TestPVCWatcher_FollowsAPolicyOfAnotherNamespace(t *testing.T) {
 	if len(slots.Items) != 1 {
 		t.Fatalf("slots in %s = %d, want 1 beside the claim", workloadNS, len(slots.Items))
 	}
-	if s := slots.Items[0]; s.Name != "pol-pvc1" || s.Spec.PolicyRef != "default/pol" {
+	if s := slots.Items[0]; s.Name != testPolicySlotPVC1 || s.Spec.PolicyRef != "default/pol" {
 		t.Errorf("slot = %s policyRef %q, want pol-pvc1 following default/pol", s.Name, s.Spec.PolicyRef)
 	}
 }
@@ -129,18 +129,18 @@ func TestSlot_ResolvesAPolicyOfAnotherNamespace(t *testing.T) {
 	pol := readyPolicyForOps("pol")
 	pol.Status.Ready = false // stop right after the lookup
 	slot := &simplyblockv1alpha1.ReplicationSlot{
-		ObjectMeta: metav1.ObjectMeta{Name: "pol-pvc1", Namespace: workloadNS,
+		ObjectMeta: metav1.ObjectMeta{Name: testPolicySlotPVC1, Namespace: workloadNS,
 			Finalizers: []string{utils.FinalizerReplicationSlot}},
 		Spec: simplyblockv1alpha1.ReplicationSlotSpec{PolicyRef: "default/pol", PVCRef: "pvc1", VolumeID: "c:p:v"},
 	}
 	r, cl := newSlotReconciler(t, pol, slot)
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: workloadNS, Name: "pol-pvc1"}})
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: workloadNS, Name: testPolicySlotPVC1}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := &simplyblockv1alpha1.ReplicationSlot{}
-	_ = cl.Get(context.Background(), types.NamespacedName{Namespace: workloadNS, Name: "pol-pvc1"}, got)
+	_ = cl.Get(context.Background(), types.NamespacedName{Namespace: workloadNS, Name: testPolicySlotPVC1}, got)
 	if got.Status.State == string(simplyblockv1alpha1.ReplicationSlotStateError) {
 		t.Fatalf("slot in error (%s); the policy in namespace default was not found", got.Status.Message)
 	}

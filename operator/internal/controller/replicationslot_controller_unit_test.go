@@ -685,7 +685,7 @@ func TestSlot_CutoverPending_CreatesJobForConsumer(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "app-pod", Namespace: "default"},
 		Spec: corev1.PodSpec{
-			NodeName: "worker-1",
+			NodeName: testWorkerNodeName,
 			Volumes: []corev1.Volume{
 				{Name: "data", VolumeSource: corev1.VolumeSource{
 					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "pvc1"},
@@ -723,7 +723,7 @@ func TestSlot_CutoverPending_CreatesJobForConsumer(t *testing.T) {
 	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: expectedJobName}, &job); err != nil {
 		t.Fatalf("preconnect Job %q not created: %v", expectedJobName, err)
 	}
-	if job.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"] != "worker-1" {
+	if job.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"] != testWorkerNodeName {
 		t.Errorf("Job NodeSelector hostname = %q, want worker-1",
 			job.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"])
 	}
@@ -851,7 +851,7 @@ func TestSlot_ReconcileReplicating_PreviousLegCutoverDone_NoLatePreconnect(t *te
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "app-pod", Namespace: "default"},
 		Spec: corev1.PodSpec{
-			NodeName: "worker-1",
+			NodeName: testWorkerNodeName,
 			Volumes: []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{
 				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "pvc1"},
 			}}},

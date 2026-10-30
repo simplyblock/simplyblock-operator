@@ -16,9 +16,10 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
-// planJSONWith is planJSON with an explicit forecast block and warnings.
-func planJSONWith(id, status, forecast, warnings string, volumes ...string) string {
-	return `{"id":"` + id + `","status":"` + status + `","volumes":[` + strings.Join(volumes, ",") +
+// planJSONWith is planJSON for the running plan testPlanID with an explicit
+// forecast block and warnings.
+func planJSONWith(forecast, warnings string, volumes ...string) string {
+	return `{"id":"` + testPlanID + `","status":"` + migrationPlanRunning + `","volumes":[` + strings.Join(volumes, ",") +
 		`],"forecast":` + forecast + `,"warnings":` + warnings + `}`
 }
 
@@ -54,10 +55,10 @@ func countEvents(evs []string, reason string) int {
 
 func TestMigration_NotConverging_SaysSoAndWarnsOncePerTransition(t *testing.T) {
 	ps := &planServer{postReply: func() (int, string) {
-		return http.StatusCreated, planJSONWith("plan-1", migrationPlanRunning, notConvergingForecast, `[]`,
+		return http.StatusCreated, planJSONWith(notConvergingForecast, `[]`,
 			planVolumeJSON("vol-u", "replicating", 0))
 	}}
-	ps.planBody = planJSONWith("plan-1", migrationPlanRunning, notConvergingForecast, `[]`,
+	ps.planBody = planJSONWith(notConvergingForecast, `[]`,
 		planVolumeJSON("vol-u", "replicating", 0))
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps("pol"), slotForPolicy(),
 		migrationOps(utils.ReplicationOpsScopePolicy, "pol"))
@@ -89,7 +90,7 @@ func TestMigration_NotConverging_SaysSoAndWarnsOncePerTransition(t *testing.T) {
 	}
 
 	// Writes slow down: the verdict flips back, with one Converging event.
-	ps.planBody = planJSONWith("plan-1", migrationPlanRunning, convergingForecast, `[]`,
+	ps.planBody = planJSONWith(convergingForecast, `[]`,
 		planVolumeJSON("vol-u", "replicating", 120))
 	reconcileOps(t, r)
 	got = getOps(t, cl)
@@ -104,10 +105,10 @@ func TestMigration_NotConverging_SaysSoAndWarnsOncePerTransition(t *testing.T) {
 func TestMigration_PlanWarningsAreMirrored(t *testing.T) {
 	warnings := `["source cluster has 100 GiB free, less than the 240 GiB pin"]`
 	ps := &planServer{postReply: func() (int, string) {
-		return http.StatusCreated, planJSONWith("plan-1", migrationPlanRunning, convergingForecast, warnings,
+		return http.StatusCreated, planJSONWith(convergingForecast, warnings,
 			planVolumeJSON("vol-u", "replicating", 120))
 	}}
-	ps.planBody = planJSONWith("plan-1", migrationPlanRunning, convergingForecast, warnings,
+	ps.planBody = planJSONWith(convergingForecast, warnings,
 		planVolumeJSON("vol-u", "replicating", 120))
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps("pol"), slotForPolicy(),
 		migrationOps(utils.ReplicationOpsScopePolicy, "pol"))
@@ -125,9 +126,9 @@ func TestMigration_PlanWarningsAreMirrored(t *testing.T) {
 
 func TestMigration_OlderBackendLeavesConvergenceUnknown(t *testing.T) {
 	ps := &planServer{postReply: func() (int, string) {
-		return http.StatusCreated, planJSON("plan-1", migrationPlanRunning, planVolumeJSON("vol-u", "replicating", 600))
+		return http.StatusCreated, planJSON(testPlanID, migrationPlanRunning, planVolumeJSON("vol-u", "replicating", 600))
 	}}
-	ps.planBody = planJSON("plan-1", migrationPlanRunning, planVolumeJSON("vol-u", "replicating", 600))
+	ps.planBody = planJSON(testPlanID, migrationPlanRunning, planVolumeJSON("vol-u", "replicating", 600))
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps("pol"), slotForPolicy(),
 		migrationOps(utils.ReplicationOpsScopePolicy, "pol"))
 	srv := newAPIServer(t, ps.handler)
