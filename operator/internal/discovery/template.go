@@ -513,13 +513,14 @@ func fleetSize(plan Plan) int {
 	return len(workers)
 }
 
-// vcpuCountFor is the smallest chosen memory node's core count across the
-// fleet, floored at the API's minimum.
+// vcpuCountFor is the smallest chosen memory node's logical CPU count across the
+// fleet less one, floored at the API's minimum. The control plane counts logical
+// CPUs and refuses a node without one CPU beyond the cluster's vCPU count.
 func vcpuCountFor(plan Plan) (int32, string) {
 	smallest, smallestWorker := 0, ""
 	for _, worker := range plan.Workers {
-		cores := chosenNodeCores(worker)
-		if cores == 0 {
+		cores := chosenNodeCPUs(worker) - 1
+		if cores <= 0 {
 			continue
 		}
 		if smallest == 0 || cores < smallest {
@@ -535,26 +536,26 @@ func vcpuCountFor(plan Plan) (int32, string) {
 	if int32(smallest) < MinimumVCPUCount {
 		return MinimumVCPUCount, fmt.Sprintf(
 			"vcpuCount is the API's minimum of %d, and the smallest placement (%s) has only "+
-				"%d cores, so this cluster asks for more than that worker has",
+				"%d CPUs to spare for SPDK, so this cluster asks for more than that worker has",
 			MinimumVCPUCount, smallestWorker, smallest)
 	}
 	return int32(smallest), fmt.Sprintf(
-		"vcpuCount is %d, the cores of the memory node chosen on %s, which is the smallest "+
-			"of the fleet: the control plane assumes this uniform across a cluster's nodes",
+		"vcpuCount is %d, the logical CPUs of the memory node chosen on %s less one for the "+
+			"system, the smallest of the fleet: the control plane assumes this uniform across a cluster's nodes",
 		smallest, smallestWorker)
 }
 
-// chosenNodeCores is the physical cores of the memory node a worker's chosen
+// chosenNodeCPUs is the logical CPUs of the memory node a worker's chosen
 // devices hang off. A worker whose devices span nodes, which AllDevices
 // produces, has no single answer and reports none.
-func chosenNodeCores(worker Worker) int {
+func chosenNodeCPUs(worker Worker) int {
 	node, single := chosenNode(worker)
 	if !single {
 		return 0
 	}
 	for _, cpus := range worker.Report.CPU.NUMANodes {
 		if cpus.Node == node {
-			return cpus.PhysicalCores
+			return len(cpus.OnlineCPUs)
 		}
 	}
 	return 0
