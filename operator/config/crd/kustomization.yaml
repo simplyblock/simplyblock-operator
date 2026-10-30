@@ -34,6 +34,7 @@ resources:
 - bases/storage.simplyblock.io_storagedeviceops.yaml
 - bases/storage.simplyblock.io_testfailovers.yaml
 - bases/storage.simplyblock.io_storagesitedeployments.yaml
+- bases/storage.simplyblock.io_stretchedclusters.yaml
 - bases/storage.simplyblock.io_storagefenceremediations.yaml
 - bases/storage.simplyblock.io_storagefenceremediationtemplates.yaml
 # +kubebuilder:scaffold:crdkustomizeresource

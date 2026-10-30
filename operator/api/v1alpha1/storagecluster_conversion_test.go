@@ -775,6 +775,50 @@ func TestAnUndeclaredBaselineValuePassesThrough(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-22-sync-site-dropped-through-v1alpha1. Synchronous
+// replication, and a stretched cluster's site, peer, and role, are hub fields
+// this version has no home for. A cluster read once at v1alpha1 and written
+// back would lose them: enableSyncReplication and stretched are immutable or
+// fixed at creation on the hub, so the write would be refused, and a follower
+// that lost its role would run the create path against a cluster its leader
+// already created.
+func TestStorageClusterStretchedSurvivesTheTripDown(t *testing.T) {
+	hub := &v1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "c", Namespace: "sb"},
+		Spec: v1alpha2.StorageClusterSpec{
+			EnableSyncReplication: ptr.To(true),
+			Stretched: &v1alpha2.StretchedSpec{
+				Site: "b", PeerSite: "a", Role: v1alpha2.StretchedRoleFollower,
+			},
+		},
+		Status: v1alpha2.StorageClusterStatus{
+			Stretched: &v1alpha2.StretchedStatus{
+				Role: v1alpha2.StretchedRoleFollower, LostSite: "a", SiteRecord: "fencing",
+				PeerNodes: 3, PeerNodesOnline: 2,
+			},
+		},
+	}
+
+	var stored StorageCluster
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StorageCluster
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if diff := cmp.Diff(hub.Spec.EnableSyncReplication, back.Spec.EnableSyncReplication); diff != "" {
+		t.Errorf("spec.enableSyncReplication did not survive (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(hub.Spec.Stretched, back.Spec.Stretched); diff != "" {
+		t.Errorf("spec.stretched did not survive (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(hub.Status.Stretched, back.Status.Stretched); diff != "" {
+		t.Errorf("status.stretched did not survive (-want +got):\n%s", diff)
+	}
+}
+
 // A supercluster and its members are hub-only shapes: this version has no
 // field for either, so they travel through a v1alpha1 write in the stash and
 // come back unchanged. Losing them on the way would turn a member into a

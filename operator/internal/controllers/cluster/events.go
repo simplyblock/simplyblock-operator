@@ -31,6 +31,40 @@ const (
 	// than created, which is the difference between a migration and a mistake.
 	ClusterAdopted = "ClusterAdopted"
 
+	// PeerClusterMissing says a follower site is waiting for its leader: the
+	// backend cluster does not exist yet, or the credentials to adopt it have not
+	// been delivered. A follower never creates the cluster itself.
+	PeerClusterMissing = "PeerClusterMissing"
+	// SyncReplicationMismatch says a follower was pointed at a backend cluster
+	// that is not a sync-replication cluster, which no stretched cluster can be;
+	// the adoption is refused rather than joining it.
+	SyncReplicationMismatch = "SyncReplicationMismatch"
+	// ForeignNodeOnSite says a follower's site already has a node in the backend
+	// cluster that none of this site's StorageNodes is, so another installation
+	// holds the site; the adoption is held rather than putting two operators on
+	// one site's nodes.
+	ForeignNodeOnSite = "ForeignNodeOnSite"
+	// SiteRecordChanged says the control plane's record of a lost site changed:
+	// a site was recorded out, its drain or fence moved on, or it returned.
+	SiteRecordChanged = "SiteRecordChanged"
+	// SiteLinkChanged says whether the site link reaches the other site's
+	// operator changed: Normal when it does, Warning when it stops.
+	SiteLinkChanged = "SiteLinkChanged"
+	// RoleChanged says this site's stretched role changed, which moves the
+	// cluster-wide operations to or from this site's operator.
+	RoleChanged = "RoleChanged"
+
+	// RoleConflict holds a follower handed a cluster whose record names the
+	// follower's own site as leader.
+	RoleConflict = "RoleConflict"
+
+	// LeaderSiteRecorded says the leader wrote its site to the cluster record.
+	LeaderSiteRecorded = "LeaderSiteRecorded"
+
+	// WorkerUnreachable holds a follower one of whose workers the control plane
+	// cannot reach.
+	WorkerUnreachable = "WorkerUnreachable"
+
 	// TaskCompleted and TaskCanceled are what remains of a control-plane task
 	// once it leaves status.tasks. The list is a window on the present and
 	// these are the record that something happened in it.
@@ -59,6 +93,11 @@ const (
 
 	// AbortRefused says spec.abort arrived at a step that cannot be stopped.
 	AbortRefused = "AbortRefused"
+	// RoleLost is a cluster-wide operation ended because a role swap made its
+	// cluster a stretched cluster's follower site, whose leader now runs the
+	// cluster's cluster-wide operations. Raised only where the operation can
+	// still be stopped; one the control plane is part-way through runs on.
+	RoleLost = "RoleLost"
 
 	// StepDeadlineExceeded distinguishes an operation still working from one
 	// that stopped, which is the distinction status.message cannot express.

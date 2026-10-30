@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sync"
 
 	atlascp "github.com/simplyblock/atlas/controlplane"
@@ -78,6 +79,15 @@ type ControlPlane interface {
 	StorageNodes(ctx context.Context, clusterID string) ([]utils.NodeStatusResponse, error)
 	ShutdownNode(ctx context.Context, clusterID, nodeID string) error
 	RestartNode(ctx context.Context, clusterID, nodeID string) error
+
+	// SetLeaderSite records site as the cluster's leader on the cluster record
+	// of a stretched cluster. Setting the value it already has is a success.
+	SetLeaderSite(ctx context.Context, clusterID, site string) error
+
+	// Reachability has the control plane probe the given management addresses
+	// once, with the storage-node monitor's own check. ErrReachabilityUnsupported
+	// when the control plane has no such probe.
+	Reachability(ctx context.Context, clusterID string, addresses []string) ([]WorkerReachability, error)
 
 	// Tasks are the control plane's own asynchronous jobs, which
 	// StorageCluster.status.tasks is a window on. It is the fallback the task
@@ -267,6 +277,63 @@ func (c *httpControlPlane) RestartNode(ctx context.Context, clusterID, nodeID st
 		fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterID, nodeID),
 		map[string]bool{"force": true})
 }
+
+func (c *httpControlPlane) SetLeaderSite(ctx context.Context, clusterID, site string) error {
+	_, err := c.call(ctx, http.MethodPut, fmt.Sprintf("/api/v2/clusters/%s/", clusterID),
+		map[string]string{"leader_site": site})
+	return err
+}
+
+// Reachability reads GET .../reachability?address=..., which answers one row
+// per address. A control plane that predates the address parameter answers
+// rows for its nodes instead, or nothing, and both read as no probe.
+func (c *httpControlPlane) Reachability(
+	ctx context.Context, clusterID string, addresses []string,
+) ([]WorkerReachability, error) {
+	query := url.Values{}
+	for _, a := range addresses {
+		query.Add("address", a)
+	}
+	body, err := c.call(ctx, http.MethodGet,
+		fmt.Sprintf("/api/v2/clusters/%s/reachability?%s", clusterID, query.Encode()), nil)
+	var refused *ControlPlaneError
+	if errors.As(err, &refused) && refused.Status == http.StatusNotFound {
+		return nil, ErrReachabilityUnsupported
+	}
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		MgmtIP    string `json:"mgmt_ip"`
+		Reachable bool   `json:"reachable"`
+	}
+	if err := json.Unmarshal(body, &rows); err != nil {
+		return nil, fmt.Errorf("decode the reachability read: %w", err)
+	}
+	reached := map[string]bool{}
+	answered := map[string]bool{}
+	for _, row := range rows {
+		answered[row.MgmtIP], reached[row.MgmtIP] = true, row.Reachable
+	}
+	out := make([]WorkerReachability, 0, len(addresses))
+	for _, a := range addresses {
+		if !answered[a] {
+			return nil, ErrReachabilityUnsupported
+		}
+		out = append(out, WorkerReachability{Address: a, Reachable: reached[a]})
+	}
+	return out, nil
+}
+
+// WorkerReachability is one management address and whether the control plane
+// reached it.
+type WorkerReachability struct {
+	Address   string
+	Reachable bool
+}
+
+// ErrReachabilityUnsupported is a control plane without the address probe.
+var ErrReachabilityUnsupported = errors.New("the control plane has no reachability probe")
 
 func (c *httpControlPlane) Tasks(
 	ctx context.Context, clusterID string,

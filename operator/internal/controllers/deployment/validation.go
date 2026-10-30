@@ -100,6 +100,13 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 		findings = append(findings, finding{reason: DeviceNotFound, message: found})
 	}
 
+	if found := r.missingSites(ctx, config); found != "" {
+		findings = append(findings, finding{reason: MissingSites, message: found})
+	}
+	if found := r.siteMismatches(ctx, config); found != "" {
+		findings = append(findings, finding{reason: SiteMismatch, message: found})
+	}
+
 	overflow, err := r.failureDomainOverflow(ctx, config)
 	if err != nil {
 		return nil, err
@@ -449,6 +456,56 @@ func (r *ClusterDeploymentConfigReconciler) failureDomainsRequired(
 	return cluster.Spec.EnableFailureDomains != nil && *cluster.Spec.EnableFailureDomains
 }
 
+// missingSites reports a sync-replication document whose groups do not all
+// declare a site. Like a missing failure domain, provisioning holds on it
+// rather than failing, so a document approved without a site per group produces
+// nodes the backend refuses at add time.
+func (r *ClusterDeploymentConfigReconciler) missingSites(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) string {
+	// On a stretched cluster an empty group site is the cluster's site
+	// (groupSite), so no group can be missing one.
+	if !r.syncReplicationRequired(ctx, config) || r.stretchedSiteOf(ctx, config) != "" {
+		return ""
+	}
+
+	var found []string
+	for _, set := range config.Spec.NodeSets {
+		for _, group := range set.Groups {
+			if group.Site == "" {
+				found = append(found, set.Name+"/"+group.Name)
+			}
+		}
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"the cluster has sync replication enabled and group %s %s no site; "+
+			"provisioning holds until each declares one",
+		strings.Join(found, ", "), plural(len(found), "declares", "declare"))
+}
+
+// syncReplicationRequired reports whether the document's cluster has sync
+// replication enabled, whether the document creates the cluster or adds to one
+// that already exists.
+func (r *ClusterDeploymentConfigReconciler) syncReplicationRequired(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) bool {
+	if config.Spec.ClusterRef == "" {
+		template := config.Spec.Cluster
+		return template != nil && template.EnableSyncReplication != nil &&
+			*template.EnableSyncReplication
+	}
+
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: config.Namespace, Name: config.Spec.ClusterRef}
+	if err := r.Get(ctx, key, &cluster); err != nil {
+		return false
+	}
+	return cluster.Spec.EnableSyncReplication != nil && *cluster.Spec.EnableSyncReplication
+}
+
 // failureDomainLayoutRefusal is why the control plane would refuse to activate
 // the cluster a document creates in failure-domain mode, or nothing. The control
 // plane checks the layout at a fresh activation alone, after the cluster has
@@ -625,6 +682,56 @@ func blockDevicesWithoutJournalDevice(config *simplyblockv1alpha2.ClusterDeploym
 	return "the groups name logical block devices, and the control plane runs those only with " +
 		"the journal on a device of its own: set spec.cluster.enableJournalDevice, which takes " +
 		"one of each worker's devices, and choose a stripe the rest carry"
+}
+
+// siteMismatches reports the node groups of a stretched cluster's document whose
+// site is not the cluster's. A stretched cluster's site is the whole Kubernetes
+// cluster it runs on, so a group naming the other site would add nodes running
+// here to the other site's half of the backend cluster. An empty site is
+// missingSites' finding, not this one.
+func (r *ClusterDeploymentConfigReconciler) siteMismatches(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) string {
+	site := r.stretchedSiteOf(ctx, config)
+	if site == "" {
+		return ""
+	}
+
+	var found []string
+	for _, set := range config.Spec.NodeSets {
+		for _, group := range set.Groups {
+			if group.Site != "" && group.Site != site {
+				found = append(found, fmt.Sprintf("%s/%s (site %s)", set.Name, group.Name, group.Site))
+			}
+		}
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"this document deploys site %s of a stretched cluster, and group %s %s another site; "+
+			"every group must be on site %s",
+		site, strings.Join(found, ", "), plural(len(found), "names", "name"), site)
+}
+
+// stretchedSiteOf is the site of the stretched cluster the document creates or
+// grows, empty when the cluster is not one site of a stretched cluster.
+func (r *ClusterDeploymentConfigReconciler) stretchedSiteOf(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) string {
+	if config.Spec.ClusterRef == "" {
+		if template := config.Spec.Cluster; template != nil && template.Stretched != nil {
+			return template.Stretched.Site
+		}
+		return ""
+	}
+
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: config.Namespace, Name: config.Spec.ClusterRef}
+	if err := r.Get(ctx, key, &cluster); err != nil {
+		return ""
+	}
+	return cluster.StretchedSite()
 }
 
 // groupsWithNetworkAttachments names the groups that attach their storage nodes

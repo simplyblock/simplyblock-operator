@@ -133,6 +133,9 @@ func (c *StorageDeviceCollector) collect(ctx context.Context) error {
 
 	for i := range devices.Items {
 		device := &devices.Items[i]
+		if device.Status.Remote {
+			continue // the peer site's device, which that site's collector publishes
+		}
 		cluster := device.Labels[simplyblockv1alpha2.DeviceLabelCluster]
 		key := nodeKey{cluster: cluster, node: device.Spec.NodeRef}
 
@@ -221,6 +224,9 @@ func (c *StorageDeviceCollector) publishOccupancy(
 		device := &devices[i]
 		if device.Status.ClusterID == "" {
 			continue // never observed on a stream, so nothing to ask about
+		}
+		if device.Status.Remote {
+			continue // the peer site's device, which that site's collector publishes
 		}
 		byCluster[device.Status.ClusterID] = append(byCluster[device.Status.ClusterID], device)
 	}

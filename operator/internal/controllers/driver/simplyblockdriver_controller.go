@@ -103,6 +103,10 @@ type SimplyblockDriverReconciler struct {
 	// decides both whether a VolumeSnapshotClass is applied and what
 	// status.snapshotSupport records (§4.1).
 	Snapshots SnapshotAPI
+
+	// SiteLink, when set, has the CSI controller join this site's site link,
+	// which the operator runs on a member of a stretched cluster.
+	SiteLink *SiteLinkConfig
 }
 
 func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -360,7 +364,7 @@ func (r *SimplyblockDriverReconciler) desired(
 	if csiAddonsEnabled(d) {
 		objects = append(objects, csiAddonsRole(d), csiAddonsRoleBinding(d), csiAddonsAuthDelegatorBinding(d))
 	}
-	objects = append(objects, nodeDaemonSet(d, image), controllerStatefulSet(d, image), csiDriver(d))
+	objects = append(objects, nodeDaemonSet(d, image), withSiteLink(controllerStatefulSet(d, image), r.SiteLink), csiDriver(d))
 
 	// The class is this deployment's and is applied wherever the kinds exist,
 	// but only where they exist: a cluster serving no snapshot API has no kind

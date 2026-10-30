@@ -43,6 +43,11 @@ type Config struct {
 	// site's operator); an entry without it belongs to another site, kept so
 	// that a failed-over volume's handle still resolves.
 	Local bool `json:"local,omitempty"`
+	// Sync and Site mark one site of a stretched, sync-replicated cluster: the
+	// cluster replicates synchronously between two sites, and Site is the one
+	// this driver runs on (written by the site's operator).
+	Sync bool   `json:"sync,omitempty"`
+	Site string `json:"site,omitempty"`
 }
 
 // Info is the secret file as a whole.
@@ -106,6 +111,21 @@ func Local() (map[string]bool, bool, error) {
 		}
 	}
 	return local, len(local) > 0, nil
+}
+
+// SyncSite reports whether the secret marks clusterID as a sync cluster, and
+// the site this driver runs on when it does.
+func SyncSite(clusterID string) (site string, sync bool, err error) {
+	clusters, err := Load()
+	if err != nil {
+		return "", false, err
+	}
+	for _, cluster := range clusters.Clusters {
+		if cluster.ClusterID == clusterID {
+			return cluster.Site, cluster.Sync, nil
+		}
+	}
+	return "", false, nil
 }
 
 // List returns the ID of every cluster in the secret.

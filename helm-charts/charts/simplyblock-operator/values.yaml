@@ -907,6 +907,14 @@ volumeMigration:
 # connection open, so the operator can query a node's storage state without
 # anything listening on the node. Always on: the operator serves the endpoint
 # and both plugins dial it.
+# The site end of a stretched cluster's site link (the fleet agent's local
+# Service on this member). Off unless the member runs the simplyblock fleet
+# add-on and its StorageCluster is one site of a stretched cluster.
+siteLink:
+  enabled: false
+  address: simplyblock-site-link.open-cluster-management-agent-addon.svc:9443
+  agentNamespace: open-cluster-management-agent-addon
+
 csiLink:
   # Port the operator listens on, and the Service that fronts it.
   # -- Port the operator listens on, and the port of its Service.

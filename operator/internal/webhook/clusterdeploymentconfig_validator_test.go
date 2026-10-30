@@ -458,6 +458,33 @@ func TestApprovingAGrowthDocumentCountsTheClustersNodes(t *testing.T) {
 	}, config))
 }
 
+// withRole makes the document one site of a stretched cluster acting on role.
+func withRole(
+	config *simplyblockv1alpha2.ClusterDeploymentConfig, role simplyblockv1alpha2.StretchedRole,
+) *simplyblockv1alpha2.ClusterDeploymentConfig {
+	config.Spec.Cluster.Stretched = &simplyblockv1alpha2.StretchedSpec{Site: "a", PeerSite: "b", Role: role}
+	return config
+}
+
+// Regression: 2026-10-26-role-swap-never-delivered: the hub swaps a stretched
+// cluster's roles by re-delivering each site's approved document with its new
+// role, and the freeze on an approved document refused that, so no swap ever
+// reached a site (live, 12-leader-swap.sh). The stretched role is the one field
+// an approved document may still change.
+func TestChangingTheStretchedRoleOfAnApprovedDocumentIsAdmitted(t *testing.T) {
+	old := approved(withRole(testConfig(), simplyblockv1alpha2.StretchedRoleLeader))
+	swapped := approved(withRole(testConfig(), simplyblockv1alpha2.StretchedRoleFollower))
+	mustAllow(t, review(t, nil, admissionv1.Update, old, swapped))
+}
+
+// The role is the only exception: a swap that also edits anything else is refused.
+func TestChangingTheRoleWithAnythingElseIsRefused(t *testing.T) {
+	old := approved(withRole(testConfig(), simplyblockv1alpha2.StretchedRoleLeader))
+	edited := approved(withRole(testConfig(), simplyblockv1alpha2.StretchedRoleFollower))
+	edited.Spec.Cluster.Stretched.PeerSite = "c"
+	mustDeny(t, review(t, nil, admissionv1.Update, old, edited), "spec.clusterRef")
+}
+
 // A document of several node sets describes a supercluster, each node set a
 // member cluster (design-superclusters.md §5.1), so the stripe is checked per
 // member: four single-node members are four clusters of one node each, which is

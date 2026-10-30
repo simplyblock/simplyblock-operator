@@ -32,12 +32,13 @@ import (
 	"net/http"
 
 	admissionv1 "k8s.io/api/admission/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storageclusterops,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=storageclusterops,verbs=delete,versions=v1alpha2,name=vstorageclusterops.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storageclusterops,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=storageclusterops,verbs=create;delete,versions=v1alpha2,name=vstorageclusterops.simplyblock.io,admissionReviewVersions=v1
 
 // StorageClusterOpsValidator refuses a delete that would strand a cluster
 // operation mid-flight.
@@ -46,10 +47,17 @@ import (
 // its availability tracks the operator's, and while the operator is down nothing
 // advances an operation anyway.
 //
-// It holds no client. Everything the decision rests on is in the object being
-// deleted, which is what makes the answer the same on every replica and immune
-// to a stale cache.
-type StorageClusterOpsValidator struct{}
+// On CREATE it also refuses a cluster-wide action on a stretched cluster's
+// follower site, which is the one decision that reads anything but the object:
+// the target cluster's role. The DELETE guard still reads only the object being
+// deleted, which keeps that answer the same on every replica and immune to a
+// stale cache.
+type StorageClusterOpsValidator struct {
+	// Client reads the target cluster on CREATE, to refuse a cluster-wide
+	// action on a stretched cluster's follower site. The DELETE guard never
+	// uses it.
+	Client client.Reader
+}
 
 // undeletableClusterSteps says what each step with no abort edge is in the
 // middle of. Which steps those are is cluster.UnabortableSteps's answer, and a
@@ -75,12 +83,39 @@ var undeletableClusterSteps = map[simplyblockv1alpha2.StorageClusterOpsStep]stri
 }
 
 func (v *StorageClusterOpsValidator) Handle(
-	_ context.Context, req admission.Request,
+	ctx context.Context, req admission.Request,
 ) admission.Response {
-	if req.Operation != admissionv1.Delete {
+	switch req.Operation {
+	case admissionv1.Create:
+		return v.admitCreate(ctx, req)
+	case admissionv1.Delete:
+		return v.admitDelete(req)
+	default:
 		return admission.Allowed("")
 	}
-	return v.admitDelete(req)
+}
+
+// admitCreate refuses a cluster-wide action on a stretched cluster's follower
+// site. A cluster that cannot be read is admitted: the operation's controller
+// fails an operation whose cluster does not exist, with a reason of its own.
+func (v *StorageClusterOpsValidator) admitCreate(ctx context.Context, req admission.Request) admission.Response {
+	var ops simplyblockv1alpha2.StorageClusterOps
+	if err := json.Unmarshal(req.Object.Raw, &ops); err != nil {
+		return admission.Errored(http.StatusBadRequest, err)
+	}
+	if !ops.Spec.Action.IsClusterWide() || v.Client == nil {
+		return admission.Allowed("")
+	}
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: ops.Namespace, Name: ops.Spec.ClusterRef}
+	if err := v.Client.Get(ctx, key, &cluster); err != nil || !cluster.IsStretchedFollower() {
+		return admission.Allowed("")
+	}
+	return admission.Denied(fmt.Sprintf(
+		"FollowerSite: StorageCluster %s is the follower site %s of a stretched cluster, and %s acts on "+
+			"the backend cluster as a whole; it runs on the leader site %s, whose operator owns the "+
+			"cluster's cluster-wide operations",
+		cluster.Name, cluster.Spec.Stretched.Site, ops.Spec.Action, cluster.Spec.Stretched.PeerSite))
 }
 
 // admitDelete reads the object from req.OldObject, which is what the API server

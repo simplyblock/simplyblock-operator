@@ -114,6 +114,9 @@ type mockSBCLI struct {
 	// It lets a test drive an RPC through every control-plane response and assert
 	// the resulting gRPC code.
 	injectStatus func(r *http.Request) int
+	// injectBody, when set, is the body an injected status is served with, in
+	// place of a plain detail string.
+	injectBody any
 
 	// replicationStatus, keyed by volume id, is the raw JSON body GET
 	// .../replication/status serves for that volume. A test sets it directly
@@ -309,7 +312,11 @@ func (m *mockSBCLI) locked(h http.HandlerFunc) http.HandlerFunc {
 		}
 		if m.injectStatus != nil {
 			if code := m.injectStatus(r); code != 0 {
-				writeJSON(w, code, map[string]string{"detail": "injected status"})
+				var body any = map[string]string{"detail": "injected status"}
+				if m.injectBody != nil {
+					body = m.injectBody
+				}
+				writeJSON(w, code, body)
 				return
 			}
 		}

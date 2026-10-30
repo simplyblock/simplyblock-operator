@@ -166,8 +166,9 @@ func (v *PersistentVolumeOpsValidator) addressableVolume(
 	return handle, nil
 }
 
-// targetInTheVolumesCluster refuses a target node that does not exist and one
-// that belongs to another cluster than the volume.
+// targetInTheVolumesCluster refuses a target node that does not exist, one that
+// is a stretched cluster's remote node, and one that belongs to another cluster
+// than the volume.
 //
 // The namespace is carried explicitly rather than derived, so that a
 // hand-written spec can be read without performing a join to learn which object
@@ -191,6 +192,13 @@ func (v *PersistentVolumeOpsValidator) targetInTheVolumesCluster(
 			ref.Namespace, ref.Name, ops.Spec.PersistentVolumeName)
 	case err != nil:
 		return *errored(err)
+	}
+
+	if node.IsRemote() {
+		return *denied(
+			"RemoteNode: node %s/%s belongs to site %s of a stretched cluster and is listed on this "+
+				"site from the control plane, and volume %s cannot move to the other site.",
+			ref.Namespace, ref.Name, node.Spec.Config.Site, ops.Spec.PersistentVolumeName)
 	}
 
 	var cluster simplyblockv1alpha2.StorageCluster

@@ -412,6 +412,14 @@ spec:
           name: FD
           priority: 1
           type: string
+        - jsonPath: .spec.config.site
+          name: Site
+          priority: 1
+          type: string
+        - jsonPath: .spec.stretched.remote
+          name: Remote
+          priority: 1
+          type: boolean
         - jsonPath: .metadata.creationTimestamp
           name: Age
           type: date
@@ -608,6 +616,18 @@ spec:
                       maxLength: 63
                       pattern: ^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$
                       type: string
+                    site:
+                      description: |-
+                        Site is the replication site this node belongs to, one of the cluster's two
+                        sites, copied from the ClusterDeploymentConfig node group that produced the
+                        node. Required when the cluster has enableSyncReplication=true. Immutable: a
+                        host sits entirely on one site for the cluster's life.
+                      maxLength: 63
+                      pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
+                      type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     sizing:
                       description: |-
                         Sizing is what this node's huge pages and core layout were sized from.
@@ -694,6 +714,8 @@ spec:
                       rule: '!has(oldSelf.driveSizeRange) || has(self.driveSizeRange)'
                     - message: field failureDomain is immutable once set
                       rule: '!has(oldSelf.failureDomain) || has(self.failureDomain)'
+                    - message: field site is immutable once set
+                      rule: '!has(oldSelf.site) || has(self.site)'
                     - message: field expand is immutable once set
                       rule: '!has(oldSelf.expand) || has(self.expand)'
                 nodeIndex:
@@ -740,22 +762,48 @@ spec:
                     rejects a change made by an identity outside the operator's namespace,
                     which is the same treatment WorkerNode takes and for the same reason.
                   type: string
+                stretched:
+                  description: |-
+                    Stretched marks a node of a stretched cluster that is listed here but
+                    belongs to the other site. Unset on every node of this site and on a
+                    standalone cluster. Cannot be added or removed after creation.
+                  properties:
+                    remote:
+                      description: |-
+                        Remote marks a node of the other site, listed on this cluster from the
+                        control plane so that either site shows every node. A remote node runs no
+                        workload on this cluster, admits no StorageNodeOps, and is recreated from
+                        the control plane if deleted; its own site's operator manages it.
+                        Immutable.
+                      type: boolean
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                  type: object
+                  x-kubernetes-validations:
+                    - message: field remote is immutable once set
+                      rule: '!has(oldSelf.remote) || has(self.remote)'
                 workerNode:
                   description: |-
                     WorkerNode is the Kubernetes worker hostname this node runs on. It is not
                     immutable, because a migration re-points it, but a change made by anything
-                    outside the operator's namespace is rejected.
+                    outside the operator's namespace is rejected. Required for every node of
+                    this site; a remote node (stretched.remote) runs on no worker of this
+                    cluster and leaves it empty.
                   type: string
               required:
                 - clusterRef
                 - config
-                - workerNode
               type: object
               x-kubernetes-validations:
                 - message: field nodeSet is immutable once set
                   rule: '!has(oldSelf.nodeSet) || has(self.nodeSet)'
                 - message: field slot is immutable once set
                   rule: '!has(oldSelf.slot) || has(self.slot)'
+                - message: workerNode is required for a node of this site
+                  rule: (has(self.stretched) && self.stretched.remote) || (has(self.workerNode) && size(self.workerNode) > 0)
+                - message: stretched cannot be added to or removed from an existing node
+                  rule: has(self.stretched) == has(oldSelf.stretched)
             status:
               description: StorageNodeStatus is the observed state of one storage node.
               properties:

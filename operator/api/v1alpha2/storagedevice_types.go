@@ -366,6 +366,17 @@ type StorageDeviceStatus struct {
 	// +optional
 	NodeID string `json:"nodeID,omitempty"`
 
+	// Site is the sync-replication site of the device's node, copied from the
+	// node; empty off a sync cluster.
+	// +optional
+	Site string `json:"site,omitempty"`
+
+	// Remote marks a device of a stretched cluster's remote node: listed here
+	// from the control plane so either site shows every device, and operated on
+	// only by its own site.
+	// +optional
+	Remote bool `json:"remote,omitempty"`
+
 	// ActiveOpsRef names the StorageDeviceOps currently allowed to act on this
 	// device, and is empty when none is. It is the operation lock every entity
 	// of this group carries, and until StorageDeviceOps exists nothing takes it,
@@ -406,6 +417,8 @@ type StorageDeviceStatus struct {
 // +kubebuilder:printcolumn:name="SMART",type=string,JSONPath=".status.health.smart.verdict"
 // +kubebuilder:printcolumn:name="PCI",type=string,JSONPath=".status.hardware.pciAddress",priority=1
 // +kubebuilder:printcolumn:name="Serial",type=string,JSONPath=".status.hardware.serialNumber",priority=1
+// +kubebuilder:printcolumn:name="Site",type=string,JSONPath=".status.site",priority=1
+// +kubebuilder:printcolumn:name="Remote",type=boolean,JSONPath=".status.remote",priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 // +operator-sdk:csv:customresourcedefinitions:displayName="Storage Device"
 

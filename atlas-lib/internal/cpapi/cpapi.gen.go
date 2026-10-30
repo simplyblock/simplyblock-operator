@@ -1277,6 +1277,9 @@ type ClusterDTO struct {
 	IsDegradedByRemoval         *bool              `json:"is_degraded_by_removal,omitempty"`
 	IsReBalancing               bool               `json:"is_re_balancing"`
 	IsShrinking                 *bool              `json:"is_shrinking,omitempty"`
+	LeaderSite                  *string            `json:"leader_site,omitempty"`
+	LostSite                    *string            `json:"lost_site,omitempty"`
+	LostSiteState               *string            `json:"lost_site_state,omitempty"`
 	MaxFaultTolerance           int                `json:"max_fault_tolerance"`
 	Name                        *string            `json:"name"`
 	NodeAffinity                bool               `json:"node_affinity"`
@@ -1289,6 +1292,7 @@ type ClusterDTO struct {
 	SpdkProxyService            string             `json:"spdk_proxy_service"`
 	SpdkProxyTlsSecret          string             `json:"spdk_proxy_tls_secret"`
 	Status                      ClusterDTOStatus   `json:"status"`
+	SyncReplication             *bool              `json:"sync_replication,omitempty"`
 	TlsEnabled                  bool               `json:"tls_enabled"`
 	UtilizationCritical         int                `json:"utilization_critical"`
 	UtilizationWarning          int                `json:"utilization_warning"`
@@ -1336,6 +1340,7 @@ type ClusterParams struct {
 	InflightIoThreshold    *int                     `json:"inflight_io_threshold,omitempty"`
 	InlineChecksum         *bool                    `json:"inline_checksum,omitempty"`
 	IsSingleNode           *bool                    `json:"is_single_node,omitempty"`
+	LeaderSite             *string                  `json:"leader_site,omitempty"`
 	MaxQueueSize           *int                     `json:"max_queue_size,omitempty"`
 	MaxSubsys              int                      `json:"max_subsys"`
 	Name                   *string                  `json:"name,omitempty"`
@@ -1352,6 +1357,7 @@ type ClusterParams struct {
 	SpdkProxyTlsSecret     *string                  `json:"spdk_proxy_tls_secret,omitempty"`
 	SpdkVcpuCount          int                      `json:"spdk_vcpu_count"`
 	StrictNodeAntiAffinity *bool                    `json:"strict_node_anti_affinity,omitempty"`
+	SyncReplication        *bool                    `json:"sync_replication,omitempty"`
 }
 
 // ClusterParamsBlkSize defines model for ClusterParams.BlkSize.

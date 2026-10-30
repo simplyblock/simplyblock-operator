@@ -43,7 +43,8 @@ type sessionConfig struct {
 	// yamux tunes the multiplexer; nil means DefaultYamuxConfig.
 	yamux *yamux.Config
 	// serverOptions configure the session's server: the hub's gate on
-	// unidentified callers.
+	// unidentified callers, which also tells its services which verified
+	// peer a call came from.
 	serverOptions []grpc.ServerOption
 }
 

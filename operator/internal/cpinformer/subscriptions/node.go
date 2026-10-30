@@ -41,6 +41,8 @@ type NodeDTO struct {
 	LvolPort      int32  `json:"lvol_subsys_port"`
 	NVMeOFPort    int32  `json:"nvmf_port"`
 	FailureDomain int    `json:"failure_domain"`
+	// Site is the node's sync-replication site, empty off a sync cluster.
+	Site string `json:"site"`
 
 	// SecondaryNodeID and TertiaryNodeID are the nodes holding this node's
 	// lvstore replicas, empty when it has none.

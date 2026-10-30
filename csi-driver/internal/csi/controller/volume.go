@@ -415,6 +415,7 @@ func reconcileExistingVolume(
 	sbclient controlplane.ClusterAPI,
 	name string,
 	requiredBytes int64,
+	sync bool,
 ) (string, error) {
 	volumes, err := sbclient.ListVolumes(ctx)
 	if err != nil {
@@ -439,6 +440,16 @@ func reconcileExistingVolume(
 			}
 			klog.Infof("reconcile: reusing online existing volume %q id=%s", name, v.UUID)
 			return v.UUID, nil
+		}
+		// On a sync cluster a volume that is not online is also what a volume
+		// whose site is down looks like, and a claim recreated on the surviving
+		// site inherits it (design-stretched-sync-replication-ramen.md §9.6).
+		// The create holds until it is online again or an administrator
+		// removes it; it never deletes it.
+		if sync {
+			return "", status.Errorf(codes.Aborted,
+				"volume %q exists with status %s on a sync cluster; waiting for it rather than replacing it",
+				name, v.Status)
 		}
 		// Non-online leftover from a failed attempt: it will never come online.
 		klog.Warningf("reconcile: deleting non-online leftover volume %q id=%s status=%s", name, v.UUID, v.Status)
@@ -483,6 +494,9 @@ func (cs *Server) createVolume(
 	if err != nil {
 		return nil, err
 	}
+	// A volume of a stretched cluster is born led from this driver's site
+	// (design-stretched-sync-replication-ramen.md §9.5).
+	createVolReq.Site = birthSite(sbclient.ClusterID())
 
 	// Co-locate the volume's primary with the consuming Pod's scheduled worker
 	// (node-affinity placement) when no explicit host_id was already set from a
@@ -507,6 +521,9 @@ func (cs *Server) createVolume(
 
 	volumeID, err := sbclient.CreateVolume(ctx, createVolReq)
 	if err != nil {
+		if errors.Is(err, controlplane.ErrSiteConflict) {
+			return nil, status.Errorf(codes.FailedPrecondition, "createVolume %s: %v", req.GetName(), err)
+		}
 		if errors.Is(err, controlplane.ErrVolumeExists) {
 			klog.Infof("createVolume: volume %q already exists, reconciling", req.GetName())
 			existingUUID, rerr := reconcileExistingVolume(
@@ -514,6 +531,7 @@ func (cs *Server) createVolume(
 				sbclient,
 				req.GetName(),
 				req.GetCapacityRange().GetRequiredBytes(),
+				syncCluster(sbclient.ClusterID()),
 			)
 			if rerr != nil {
 				return nil, rerr
@@ -587,4 +605,23 @@ func (cs *Server) unpublishVolume(ctx context.Context, volumeID string) error {
 		return err
 	}
 	return sbclient.UnpublishVolume(ctx, spdkVol.VolumeID)
+}
+
+// syncCluster reports whether the driver's secret marks clusterID as one site of
+// a stretched, sync-replicated cluster. A secret that cannot be read is not one:
+// the create then behaves as it always has.
+func syncCluster(clusterID string) bool {
+	_, sync, err := clusters.SyncSite(clusterID)
+	return err == nil && sync
+}
+
+// birthSite is the site a new volume of clusterID is born led from: this
+// driver's, when the secret marks the cluster sync-replicated, and none
+// otherwise.
+func birthSite(clusterID string) string {
+	site, sync, err := clusters.SyncSite(clusterID)
+	if err != nil || !sync {
+		return ""
+	}
+	return site
 }

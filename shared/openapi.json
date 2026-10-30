@@ -11461,6 +11461,26 @@
           "node_label_suffix": {
             "type": "string",
             "title": "Node Label Suffix"
+          },
+          "sync_replication": {
+            "type": "boolean",
+            "title": "Sync Replication",
+            "default": false
+          },
+          "lost_site": {
+            "type": "string",
+            "title": "Lost Site",
+            "default": ""
+          },
+          "lost_site_state": {
+            "type": "string",
+            "title": "Lost Site State",
+            "default": ""
+          },
+          "leader_site": {
+            "type": "string",
+            "title": "Leader Site",
+            "default": ""
           }
         },
         "type": "object",
@@ -11678,6 +11698,16 @@
             "type": "boolean",
             "title": "Is Single Node",
             "default": false
+          },
+          "sync_replication": {
+            "type": "boolean",
+            "title": "Sync Replication",
+            "default": false
+          },
+          "leader_site": {
+            "type": "string",
+            "title": "Leader Site",
+            "default": ""
           },
           "fabric": {
             "type": "string",

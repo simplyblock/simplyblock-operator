@@ -398,6 +398,8 @@ func (r *StorageDeviceReconciler) upsert(
 		Hardware:     deviceHardware(dto),
 		ClusterID:    scope[0],
 		NodeID:       scope[1],
+		Site:         node.Spec.Config.Site,
+		Remote:       node.IsRemote(),
 		Message:      deviceMessage(dto),
 	}
 	// unavailable means serving-and-should-not-be only on a node that serves. A

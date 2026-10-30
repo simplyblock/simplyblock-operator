@@ -234,6 +234,8 @@ type fakeControlPlane struct {
 	tasks        func(string) ([]subscriptions.TaskDTO, error)
 	cancelTask   func(string, string) error
 
+	setLeaderSite     func(string, string) error
+	reachability      func(string, []string) ([]WorkerReachability, error)
 	serviceClasses    func(string) (ServiceClassConfig, error)
 	setServiceClasses func(string, ServiceClassConfig) error
 
@@ -255,6 +257,25 @@ type fakeControlPlane struct {
 }
 
 func (f *fakeControlPlane) Endpoint(context.Context) string { return f.endpoint }
+
+func (f *fakeControlPlane) SetLeaderSite(_ context.Context, clusterID, site string) error {
+	if f.setLeaderSite == nil {
+		return nil
+	}
+	return f.setLeaderSite(clusterID, site)
+}
+
+// Reachability answers every address reachable unless a test scripts it.
+func (f *fakeControlPlane) Reachability(_ context.Context, clusterID string, addrs []string) ([]WorkerReachability, error) {
+	if f.reachability == nil {
+		out := make([]WorkerReachability, 0, len(addrs))
+		for _, a := range addrs {
+			out = append(out, WorkerReachability{Address: a, Reachable: true})
+		}
+		return out, nil
+	}
+	return f.reachability(clusterID, addrs)
+}
 
 func (f *fakeControlPlane) Ready(context.Context) error {
 	if f.ready == nil {

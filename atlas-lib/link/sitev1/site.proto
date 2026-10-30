@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package atlas.link.site.v1;
+
+option go_package = "github.com/simplyblock/atlas/link/sitev1;sitev1";
+
+// SiteService is what one site's operator of a stretched cluster serves the
+// other's over the site link (design-stretched-sync-replication-ramen.md
+// §11.3): a description of the site, and the refresh of a storage node's pod,
+// which only the operator of the site the pod runs on can make.
+service SiteService {
+  // Describe reports the site, the role its operator acts on, and its nodes.
+  rpc Describe(DescribeRequest) returns (SiteDescription);
+  // RefreshNode replaces the storage-node pod of node on this site, once: the
+  // pod is deleted if it was created before since, and the answer is
+  // REFRESHED once a pod created after since is Ready. Asking again is
+  // harmless, so the leader's rolling restart asks on every pass until then.
+  rpc RefreshNode(RefreshNodeRequest) returns (RefreshNodeResponse);
+}
+
+message DescribeRequest {}
+
+message SiteDescription {
+  // site is this site's backend site name.
+  string site = 1;
+  // role is Leader or Follower, the role this site's operator acts on.
+  string role = 2;
+  // cluster_uuid is the backend cluster this site is one site of.
+  string cluster_uuid = 3;
+  // nodes and nodes_online count this site's own storage nodes.
+  int32 nodes = 4;
+  int32 nodes_online = 5;
+}
+
+message RefreshNodeRequest {
+  // cluster_uuid is the backend cluster, so a request for another cluster is
+  // refused rather than acted on.
+  string cluster_uuid = 1;
+  // node is the backend node UUID.
+  string node = 2;
+  // since_unix is the line, in Unix seconds, a pod must have been created
+  // after to count as refreshed: the start of the asking operation.
+  int64 since_unix = 3;
+}
+
+message RefreshNodeResponse {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    // REFRESHED: a pod created after since is Ready.
+    STATE_REFRESHED = 1;
+    // IN_PROGRESS: the old pod is being replaced; ask again.
+    STATE_IN_PROGRESS = 2;
+    // NOT_FOUND: no storage-node pod of the node runs on this site.
+    STATE_NOT_FOUND = 3;
+  }
+  State state = 1;
+  string message = 2;
+}

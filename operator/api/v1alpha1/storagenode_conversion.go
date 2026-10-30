@@ -78,6 +78,8 @@ const (
 	annoNodePhase      = "storage.simplyblock.io/conversion-status.phase"
 	annoNodeMessage    = "storage.simplyblock.io/conversion-status.message"
 	annoNodeObserved   = "storage.simplyblock.io/conversion-status.observedGeneration"
+	annoNodeSite       = "storage.simplyblock.io/conversion-spec.config.site"
+	annoNodeStretched  = "storage.simplyblock.io/conversion-spec.stretched"
 )
 
 // ConvertTo converts this StorageNode to the v1alpha2 hub.
@@ -319,6 +321,8 @@ func stashNodeHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageNode) error 
 		{annoNodeSizing, src.Spec.Config.Sizing},
 		{annoNodeSpdkPull, string(src.Spec.Config.SpdkImagePullPolicy)},
 		{annoNodeProxyPull, string(src.Spec.Config.SpdkProxyImagePullPolicy)},
+		{annoNodeSite, src.Spec.Config.Site},
+		{annoNodeStretched, src.Spec.Stretched},
 		{annoNodeStep, src.Status.Step},
 		{annoNodePhase, string(src.Status.Phase)},
 		{annoNodeMessage, src.Status.Message},
@@ -381,6 +385,8 @@ func restoreNodeHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageNode) erro
 		{annoNodeSizing, &dst.Spec.Config.Sizing},
 		{annoNodeSpdkPull, &dst.Spec.Config.SpdkImagePullPolicy},
 		{annoNodeProxyPull, &dst.Spec.Config.SpdkProxyImagePullPolicy},
+		{annoNodeSite, &dst.Spec.Config.Site},
+		{annoNodeStretched, &dst.Spec.Stretched},
 		{annoNodeMessage, &dst.Status.Message},
 		{annoNodeObserved, &dst.Status.ObservedGeneration},
 	} {

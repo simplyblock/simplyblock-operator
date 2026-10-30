@@ -505,11 +505,10 @@ func (r *StorageNodeWorkloadReconciler) reconcileService(
 // reconcileEndpointSlice publishes one per-pod DNS name per worker the cluster's
 // nodes run on, plus the target of each migration that is running.
 //
-// The slice is built from the pass's one reading of the cluster's StorageNodes
-// (clusterNodes), so a node on its way out drops its worker here exactly where the
-// ConfigMap and the enrollment drop it. The nodes are what say which workers are
-// in the storage plane now: a relocation adds the target before the node's own spec.workerNode moves,
-// so the Migrate operations are read as well.
+// The slice is built from the StorageNode objects rather than from a list on the
+// cluster, because the nodes are what say which workers are in the storage plane
+// now: a relocation adds the target before the node's own spec.workerNode moves.
+// A remote node is the peer site's, runs on no worker here, and is not published.
 func (r *StorageNodeWorkloadReconciler) reconcileEndpointSlice(
 	ctx context.Context,
 	cluster *simplyblockv1alpha2.StorageCluster,

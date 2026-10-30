@@ -1,5 +1,5 @@
 // Package identity serves the csi-addons Identity service: GetIdentity,
-// GetCapabilities (advertising VOLUME_REPLICATION), and Probe. It is a
+// GetCapabilities (VOLUME_REPLICATION, VOLUME_GROUP, NETWORK_FENCE), and Probe. It is a
 // distinct service from the CSI spec's own Identity (served by
 // internal/csi/identity), not an extension of it, because the
 // kubernetes-csi-addons controller-manager and the CSI sidecars probe two
@@ -84,6 +84,16 @@ func (s *Server) GetCapabilities(
 				Type: &identity.Capability_VolumeGroup_{
 					VolumeGroup: &identity.Capability_VolumeGroup{
 						Type: identity.Capability_VolumeGroup_DO_NOT_ALLOW_VG_TO_DELETE_VOLUMES,
+					},
+				},
+			},
+			// NetworkFence (design-stretched-sync-replication-ramen.md §10.2):
+			// Ramen fences a lost site of a stretched cluster through it before
+			// failing its workloads over to the other site.
+			{
+				Type: &identity.Capability_NetworkFence_{
+					NetworkFence: &identity.Capability_NetworkFence{
+						Type: identity.Capability_NetworkFence_NETWORK_FENCE,
 					},
 				},
 			},

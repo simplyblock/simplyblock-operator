@@ -17,9 +17,12 @@ CPAPI_GEN := internal/cpapi/cpapi.gen.go internal/cpapi/validation.gen.go
 # generator this one is not a go.mod dependency but a pinned binary in .bin, so
 # the rules take `buf` as an order-only prerequisite: it installs the toolchain
 # when absent without a phony target forcing a regeneration on every make run.
-PROTO_DIRS := link/linkv1 storage/storagerpc/storagev1 nfsexport/nfsexportrpc/nfsexportv1 \
+PROTO_DIRS := link/linkv1 link/sitev1 storage/storagerpc/storagev1 nfsexport/nfsexportrpc/nfsexportv1 \
 	conntrack/conntrackrpc/conntrackv1 placement/placementrpc/placementv1 netcheck/netcheckrpc/netcheckv1
 PROTO_GEN := link/linkv1/link.pb.go link/linkv1/link_grpc.pb.go \
+	link/sitev1/relay.pb.go link/sitev1/relay_grpc.pb.go \
+	link/sitev1/switchover.pb.go link/sitev1/switchover_grpc.pb.go \
+	link/sitev1/site.pb.go link/sitev1/site_grpc.pb.go \
 	storage/storagerpc/storagev1/nvme.pb.go storage/storagerpc/storagev1/nvme_grpc.pb.go \
 	nfsexport/nfsexportrpc/nfsexportv1/export.pb.go nfsexport/nfsexportrpc/nfsexportv1/export_grpc.pb.go \
 	conntrack/conntrackrpc/conntrackv1/flow.pb.go conntrack/conntrackrpc/conntrackv1/flow_grpc.pb.go \
@@ -50,6 +53,21 @@ link/linkv1/link.pb.go: link/linkv1/link.proto link/linkv1/buf.gen.yaml link/lin
 	cd link/linkv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
 
 link/linkv1/link_grpc.pb.go: link/linkv1/link.pb.go
+
+link/sitev1/relay.pb.go: link/sitev1/relay.proto link/sitev1/buf.gen.yaml link/sitev1/buf.yaml | buf
+	cd link/sitev1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
+
+link/sitev1/relay_grpc.pb.go: link/sitev1/relay.pb.go
+
+# One buf invocation generates every file of the module, so the second pair
+# rides the first's recipe.
+link/sitev1/switchover.pb.go: link/sitev1/switchover.proto | link/sitev1/relay.pb.go
+
+link/sitev1/switchover_grpc.pb.go: link/sitev1/switchover.pb.go
+
+link/sitev1/site.pb.go: link/sitev1/site.proto | link/sitev1/relay.pb.go
+
+link/sitev1/site_grpc.pb.go: link/sitev1/site.pb.go
 
 storage/storagerpc/storagev1/nvme.pb.go: storage/storagerpc/storagev1/nvme.proto storage/storagerpc/storagev1/buf.gen.yaml storage/storagerpc/storagev1/buf.yaml | buf
 	cd storage/storagerpc/storagev1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate

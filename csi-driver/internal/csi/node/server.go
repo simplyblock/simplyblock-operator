@@ -7,10 +7,12 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/lvol"
 	export "github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/nvme"
 
+	"github.com/simplyblock/csi-driver/internal/clusters"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/csi-driver/internal/fabric"
 	"github.com/simplyblock/csi-driver/internal/guardian"
@@ -46,6 +48,12 @@ type Server struct {
 	kubeClient     kubernetes.Interface
 	manager        *sbkube.Manager
 	guardian       *guardian.Guardian
+
+	// The stretched cluster's stage gate (syncgate.go): this node's site and
+	// whether a cluster is sync, and where a volume is led from. Seams, so the
+	// gate is tested without a cluster.
+	syncSite   func(clusterID string) (site string, sync bool, err error)
+	syncStatus func(ctx context.Context, h lvol.VolumeHandle) (controlplane.VolumeSyncStatus, error)
 }
 
 // New builds the node service. It performs no I/O and starts nothing: the
@@ -65,7 +73,23 @@ func New(d *csicommon.CSIDriver, kubeClient kubernetes.Interface, manager *sbkub
 		volumeLocks:       csicommon.NewVolumeLocks(),
 		kubeClient:        kubeClient,
 		manager:           manager,
+		syncSite:          clusters.SyncSite,
+		syncStatus:        syncStatusFromSecret,
 	}, nil
+}
+
+// syncStatusFromSecret reads where a volume is led from, through the cluster
+// the driver's secret names.
+func syncStatusFromSecret(ctx context.Context, h lvol.VolumeHandle) (controlplane.VolumeSyncStatus, error) {
+	cluster, _, _, err := h.Split()
+	if err != nil {
+		return controlplane.VolumeSyncStatus{}, err
+	}
+	c, err := clusters.ReplicationClient(ctx, cluster.String())
+	if err != nil {
+		return controlplane.VolumeSyncStatus{}, err
+	}
+	return c.SyncStatus(ctx, h)
 }
 
 // AttachGuardian gives the node service the guardian to report a volume's total

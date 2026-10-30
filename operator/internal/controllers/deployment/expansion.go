@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -36,6 +37,7 @@ import (
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // configStep is the document's step type, aliased so the graph reads as the graph.
@@ -268,6 +270,13 @@ func (r *ClusterDeploymentConfigReconciler) activateTarget(
 		}
 	}
 
+	// A stretched cluster's activation is its leader's. The follower asks for
+	// none, and the leader waits for the other site's nodes, because the backend
+	// activates a two-site cluster only once each site can hold a stripe.
+	if held, done, err := r.stretchedActivation(ctx, config, cluster); err != nil || held {
+		return done, err
+	}
+
 	name := cluster + "-activate"
 	ops := &simplyblockv1alpha2.StorageClusterOps{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: config.Namespace},
@@ -332,6 +341,8 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 			Arbitration:              template.Arbitration,
 			FabricType:               template.FabricType,
 			EnableFailureDomains:     template.EnableFailureDomains,
+			EnableSyncReplication:    template.EnableSyncReplication,
+			Stretched:                template.Stretched.DeepCopy(),
 			EnableNodeAffinity:       template.EnableNodeAffinity,
 			NvmfBasePort:             ports.NVMf,
 			RpcBasePort:              ports.Rpc,
@@ -665,7 +676,8 @@ type slotKey struct {
 	slot   int32
 }
 
-// nodesOfCluster indexes the cluster's existing nodes by the slot each fills.
+// nodesOfCluster indexes the cluster's existing nodes on this site by the slot
+// each fills. A remote node is the peer site's and fills no slot here.
 func (r *ClusterDeploymentConfigReconciler) nodesOfCluster(
 	ctx context.Context, namespace, cluster string,
 ) (map[slotKey]string, error) {
@@ -676,7 +688,7 @@ func (r *ClusterDeploymentConfigReconciler) nodesOfCluster(
 	filled := map[slotKey]string{}
 	for i := range nodes.Items {
 		node := &nodes.Items[i]
-		if node.Spec.ClusterRef != cluster {
+		if node.Spec.ClusterRef != cluster || node.IsRemote() {
 			continue
 		}
 		slot := int32(0)
@@ -767,6 +779,7 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 				MgmtInterface:    group.MgmtInterface,
 				DataInterfaces:   group.DataInterfaces,
 				FailureDomain:    group.FailureDomain,
+				Site:             groupSite(group, cluster),
 				SpdkSystemMemory: group.SpdkSystemMemory,
 				// The core ids this group's machines hold back. It reaches the
 				// node's own entry in the per-node ConfigMap, which is where a
@@ -983,4 +996,147 @@ func (r *ClusterDeploymentConfigReconciler) recordNodes(
 		func(status *simplyblockv1alpha2.ClusterDeploymentConfigStatus) {
 			status.NodeRefs = names
 		})
+}
+
+// firstNodeRefNotOnline names a node the document created that is not Online, with
+// its phase, or "" when every one is.
+func (r *ClusterDeploymentConfigReconciler) firstNodeRefNotOnline(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) (string, simplyblockv1alpha2.StorageNodePhase, error) {
+	for _, name := range config.Status.NodeRefs {
+		var node simplyblockv1alpha2.StorageNode
+		key := client.ObjectKey{Namespace: config.Namespace, Name: name}
+		if err := r.Get(ctx, key, &node); err != nil {
+			if apierrors.IsNotFound(err) {
+				// A node the document created and somebody has since removed is
+				// not one to wait for. The deployment it described is what it
+				// built, and this is no longer part of it.
+				continue
+			}
+			return "", "", fmt.Errorf("reading StorageNode %s: %w", name, err)
+		}
+		if node.Status.Phase != simplyblockv1alpha2.StorageNodePhaseOnline {
+			return name, node.Status.Phase, nil
+		}
+	}
+	return "", "", nil
+}
+
+// awaitingPeerSite reports a stretched leader whose own nodes are all online
+// and which holds its activation only for the other site's nodes. That wait is
+// on another site rather than on work of this step's, so it does not count
+// against the step's deadline, as a follower's wait for its leader does not.
+func (r *ClusterDeploymentConfigReconciler) awaitingPeerSite(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) (bool, error) {
+	if config.Status.ClusterRef == "" {
+		return false, nil
+	}
+	if name, _, err := r.firstNodeRefNotOnline(ctx, config); err != nil || name != "" {
+		return false, err
+	}
+	held, done, err := r.stretchedActivation(ctx, config, config.Status.ClusterRef)
+	return held && !done, err
+}
+
+// stretchedActivation decides the activation of one site of a stretched
+// cluster. It reports held when the ordinary activation must not be raised on
+// this pass, with done saying whether the step is nevertheless finished: true
+// for a follower, whose activation is its leader's; false for a leader whose
+// other site does not yet have the online nodes the backend requires, which is
+// ndcs+npcs on each site. A cluster that is not stretched is not held.
+func (r *ClusterDeploymentConfigReconciler) stretchedActivation(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig, name string,
+) (held, done bool, err error) {
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: config.Namespace, Name: name}
+	if err := r.Get(ctx, key, &cluster); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, false, nil
+		}
+		return false, false, fmt.Errorf("reading StorageCluster %s: %w", key.Name, err)
+	}
+	if cluster.Spec.Stretched == nil {
+		return false, false, nil
+	}
+	if cluster.IsStretchedFollower() {
+		r.emit(config, corev1.EventTypeNormal, ActivationLeftToLeader, fmt.Sprintf(
+			"Every node of site %s is online; cluster %s is activated by its leader site %s",
+			cluster.Spec.Stretched.Site, cluster.Name, cluster.Spec.Stretched.PeerSite))
+		return true, true, nil
+	}
+
+	need := stripeWidth(&cluster)
+	var nodes simplyblockv1alpha2.StorageNodeList
+	if err := r.List(ctx, &nodes, client.InNamespace(config.Namespace)); err != nil {
+		return false, false, fmt.Errorf("listing the peer site's nodes: %w", err)
+	}
+	online := 0
+	hosts := map[string]struct{}{}
+	for i := range nodes.Items {
+		node := &nodes.Items[i]
+		if node.Spec.ClusterRef == cluster.Name && node.IsRemote() &&
+			node.Status.Status == utils.NodeStatusOnline {
+			online++
+			if host := nodeHost(node.Status.Hostname); host != "" {
+				hosts[host] = struct{}{}
+			}
+		}
+	}
+	if online < need || len(hosts) < syncMinHostsPerSite {
+		r.emit(config, corev1.EventTypeNormal, WaitingForPeerSite, fmt.Sprintf(
+			"Site %s has %d online node(s) on %d host(s); the backend needs %d node(s) on %d host(s) "+
+				"on each site before cluster %s can activate",
+			cluster.Spec.Stretched.PeerSite, online, len(hosts), need, syncMinHostsPerSite, cluster.Name))
+		return true, false, nil
+	}
+	return false, false, nil
+}
+
+// syncMinHostsPerSite is the fewest hosts the backend activates a two-site
+// cluster's site on: a host-disjoint triplet per site. The backend asks for more
+// when a node's journal keeps more copies per site than that, and refuses the
+// activation then; the leader's next pass asks again.
+const syncMinHostsPerSite = 3
+
+// nodeHost is the host a backend node runs on, read from the name the control
+// plane gives it, which is the host's name and the node's RPC port joined by an
+// underscore. Two nodes of one machine are one host. An empty name, which a
+// node not yet read back has, names no host.
+func nodeHost(hostname string) string {
+	if i := strings.LastIndex(hostname, "_"); i > 0 {
+		return hostname[:i]
+	}
+	return hostname
+}
+
+// stripeWidth is ndcs+npcs, the number of online nodes the backend needs on each
+// site of a two-site cluster: the scheme the backend reports once the cluster
+// exists, else the one the cluster asked for, with an unstated half read as 1 as
+// the CRD does.
+func stripeWidth(cluster *simplyblockv1alpha2.StorageCluster) int {
+	var ndcs, npcs int
+	if _, err := fmt.Sscanf(cluster.Status.ErasureCodingScheme, "%dx%d", &ndcs, &npcs); err == nil {
+		return ndcs + npcs
+	}
+	ndcs, npcs = 1, 1
+	if stripe := cluster.Spec.Stripe; stripe != nil {
+		if stripe.DataChunks != nil {
+			ndcs = int(*stripe.DataChunks)
+		}
+		if stripe.ParityChunks != nil {
+			npcs = int(*stripe.ParityChunks)
+		}
+	}
+	return ndcs + npcs
+}
+
+// groupSite is the site a group's nodes join: the group's own, or, on a
+// stretched cluster, whose site is the whole Kubernetes cluster, the cluster's
+// site when the group names none.
+func groupSite(group simplyblockv1alpha2.NodeGroup, cluster *simplyblockv1alpha2.StorageCluster) string {
+	if group.Site != "" {
+		return group.Site
+	}
+	return cluster.StretchedSite()
 }

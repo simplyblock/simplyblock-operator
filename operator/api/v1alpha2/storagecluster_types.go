@@ -664,11 +664,95 @@ const (
 	ClusterModeStandard ClusterMode = "Standard"
 )
 
+// StretchedSpec is one site's part of a stretched cluster: the backend site its
+// nodes join, the other site's name, and the role it plays.
+// +kubebuilder:validation:XValidation:rule="self.site != self.peerSite",message="site and peerSite must differ"
+type StretchedSpec struct {
+	// Site is the backend site every node this StorageCluster adds belongs to.
+	// Immutable: a site is a property of the installation.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
+	// +k8s:immutable
+	Site string `json:"site"`
+
+	// PeerSite is the other site's backend name. Nodes the control plane reports
+	// on it are listed here as remote StorageNodes. Immutable.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
+	// +k8s:immutable
+	PeerSite string `json:"peerSite"`
+
+	// PeerCluster is the other site's managed cluster: the name the hub knows
+	// it by, and the one the site link reaches that site's operator by. Empty
+	// means the same as peerSite.
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	PeerCluster string `json:"peerCluster,omitempty"`
+
+	// Role is Leader or Follower. A leader creates and activates the backend
+	// cluster and runs every cluster-wide operation; a follower adopts the
+	// cluster and manages only its own site's nodes. A change is a role swap,
+	// delivered from the hub.
+	// +kubebuilder:validation:Required
+	Role StretchedRole `json:"role"`
+}
+
+// StretchedStatus is this site's view of its stretched cluster, read from the
+// control plane.
+type StretchedStatus struct {
+	// Role is the role this site's operator last acted on. It differs from
+	// spec.stretched.role only while a role swap is being taken up.
+	// +optional
+	Role StretchedRole `json:"role,omitempty"`
+
+	// LostSite is the site the control plane records as out of service, empty
+	// while both sites serve.
+	// +optional
+	LostSite string `json:"lostSite,omitempty"`
+
+	// SiteRecord is how far the control plane's handling of lostSite got, in the
+	// control plane's own words: draining, down, fencing, or done. Empty while
+	// both sites serve.
+	// +optional
+	SiteRecord string `json:"siteRecord,omitempty"`
+
+	// PeerNodes is the number of the other site's storage nodes the control
+	// plane lists.
+	// +optional
+	PeerNodes int32 `json:"peerNodes,omitempty"`
+
+	// PeerNodesOnline is how many of them are online.
+	// +optional
+	PeerNodesOnline int32 `json:"peerNodesOnline,omitempty"`
+
+	// SiteLink is whether this site's operator reaches the other site's over
+	// the site link. Empty when the operator runs no site link.
+	// +optional
+	SiteLink StretchedSiteLink `json:"siteLink,omitempty"`
+}
+
+// StretchedSiteLink is the state of the site link to the other site's operator.
+// +kubebuilder:validation:Enum=Connected;Unreachable
+type StretchedSiteLink string
+
+const (
+	// StretchedSiteLinkConnected: the other site's operator answered over the
+	// site link on the last check.
+	StretchedSiteLinkConnected StretchedSiteLink = "Connected"
+	// StretchedSiteLinkUnreachable: it did not. The operator's log and the
+	// SiteLinkUnreachable event carry why.
+	StretchedSiteLinkUnreachable StretchedSiteLink = "Unreachable"
+)
+
 // StorageClusterSpec is the desired state of one simplyblock backend cluster.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.kms) || self.kms == oldSelf.kms",message="kms is immutable once set"
 // +kubebuilder:validation:XValidation:rule="(has(self.clusterMode) && self.clusterMode == 'Dual') || (!has(self.arbitration) && !(has(self.enableArbitration) && self.enableArbitration))",message="enableArbitration and arbitration are only valid when clusterMode is Dual"
 // +kubebuilder:validation:XValidation:rule="(has(self.clusterMode) && self.clusterMode == 'Single') == (has(oldSelf.clusterMode) && oldSelf.clusterMode == 'Single')",message="clusterMode cannot be changed to or from Single: the control plane fixes it when the cluster is created"
 // +kubebuilder:validation:XValidation:rule="!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomicity4K requires enableChecksumValidation to be true"
+// +kubebuilder:validation:XValidation:rule="!has(self.stretched) || (has(self.enableSyncReplication) && self.enableSyncReplication)",message="stretched requires enableSyncReplication to be true"
+// +kubebuilder:validation:XValidation:rule="has(self.stretched) == has(oldSelf.stretched)",message="stretched cannot be added to or removed from an existing cluster"
 // +kubebuilder:validation:XValidation:rule="has(self.supercluster) || (has(self.maxSubsystemCount) && has(self.vcpuCount))",message="maxSubsystemCount and vcpuCount are required unless the cluster is a supercluster"
 // +kubebuilder:validation:XValidation:rule="(has(self.storageNodes) && has(self.storageNodes.network)) == (has(oldSelf.storageNodes) && has(oldSelf.storageNodes.network))",message="spec.storageNodes.network is set when the cluster is created and cannot be added or removed afterward"
 // +kubebuilder:validation:XValidation:rule="has(self.supercluster) == has(oldSelf.supercluster)",message="a cluster cannot become a supercluster, or stop being one, after creation"
@@ -769,6 +853,25 @@ type StorageClusterSpec struct {
 	// +optional
 	// +k8s:immutable
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
+
+	// EnableSyncReplication opts the cluster into synchronous two-site
+	// replication, where the cluster spans exactly two sites, every node
+	// declares a site, and each logical volume store is replicated to the other
+	// site. Immutable: the backend accepts it only at cluster-create, so a
+	// cluster created without it cannot be converted.
+	// +optional
+	// +k8s:immutable
+	EnableSyncReplication *bool `json:"enableSyncReplication,omitempty"`
+
+	// Stretched marks this StorageCluster as one site of a synchronously
+	// replicated cluster whose two sites are two Kubernetes clusters. Every node
+	// this StorageCluster adds joins stretched.site. A leader creates the backend
+	// cluster; a follower adopts the one its leader created and never creates or
+	// deletes it. Delivered by the hub with the site's deployment; a standalone
+	// cluster leaves it unset. Requires enableSyncReplication, and cannot be added
+	// to or removed from an existing cluster.
+	// +optional
+	Stretched *StretchedSpec `json:"stretched,omitempty"`
 
 	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
 	// from the local node's own devices where it can, before crossing the
@@ -1196,6 +1299,11 @@ type StorageClusterStatus struct {
 	// +optional
 	Arbitration *ArbitrationStatus `json:"arbitration,omitempty"`
 
+	// Stretched is this site's view of its stretched cluster, read from the
+	// control plane; set only when spec.stretched is.
+	// +optional
+	Stretched *StretchedStatus `json:"stretched,omitempty"`
+
 	// Role is what this cluster is within a supercluster: Standalone,
 	// Supercluster, or PlacementGroup for a member.
 	// +optional
@@ -1402,6 +1510,10 @@ type FailureDomainIndex struct {
 // +kubebuilder:printcolumn:name="EC",type=string,JSONPath=".status.erasureCodingScheme"
 // +kubebuilder:printcolumn:name="FTT",type=integer,JSONPath=".status.maxFaultTolerance",priority=1
 // +kubebuilder:printcolumn:name="UUID",type=string,JSONPath=".status.uuid"
+// +kubebuilder:printcolumn:name="Site",type=string,JSONPath=".spec.stretched.site",priority=1
+// +kubebuilder:printcolumn:name="Role",type=string,JSONPath=".spec.stretched.role",priority=1
+// +kubebuilder:printcolumn:name="Peer-Online",type=integer,JSONPath=".status.stretched.peerNodesOnline",priority=1
+// +kubebuilder:printcolumn:name="Site-Record",type=string,JSONPath=".status.stretched.siteRecord",priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // StorageCluster is one simplyblock backend cluster, or a supercluster that

@@ -110,8 +110,9 @@ func TestAStoredDocumentCarriesItsApprovalFlag(t *testing.T) {
 	}
 }
 
-// Approval is one-way, and an approved document is frozen. Both rules exist to
-// stop a document being edited out from under a deployment that is acting on it.
+// Approval is one-way. The freeze on the rest of an approved document is the
+// admission webhook's (TestEditingAnApprovedDocumentIsRefused), because it
+// makes one exception, the stretched role, which a schema rule cannot state.
 func TestAnApprovedDocumentIsFrozen(t *testing.T) {
 	apiClient := apiServer(t)
 	config := aStoredDocument(t, apiClient, "frozen")
@@ -129,11 +130,26 @@ func TestAnApprovedDocumentIsFrozen(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "withdraw") && !strings.Contains(err.Error(), "immutable") {
 		t.Errorf("the refusal is %v, want one about withdrawal or immutability", err)
 	}
+}
 
-	edited := config.DeepCopy()
-	edited.Spec.NodeSets[0].Groups[0].Workers = []string{"worker-1", "worker-2"}
-	if err := apiClient.Update(context.Background(), edited); err == nil {
-		t.Error("an approved document was edited")
+// Regression: 2026-10-26-role-swap-never-delivered: the schema froze an approved
+// document whole, so the hub's re-delivery of a site's document with its new
+// stretched role was refused and no role swap reached a site. The apiserver
+// admits the role change; the webhook admits it and nothing else.
+func TestTheStretchedRoleOfAnApprovedDocumentCanChange(t *testing.T) {
+	apiClient := apiServer(t)
+	config := aStoredDocument(t, apiClient, "swappable")
+	config.Spec.Cluster.Stretched = &simplyblockv1alpha2.StretchedSpec{
+		Site: "a", PeerSite: "b", Role: simplyblockv1alpha2.StretchedRoleLeader,
+	}
+	config.Spec.Approved = true
+	if err := apiClient.Update(context.Background(), config); err != nil {
+		t.Fatalf("approving: %v", err)
+	}
+	swapped := config.DeepCopy()
+	swapped.Spec.Cluster.Stretched.Role = simplyblockv1alpha2.StretchedRoleFollower
+	if err := apiClient.Update(context.Background(), swapped); err != nil {
+		t.Fatalf("the apiserver refused a role swap on an approved document: %v", err)
 	}
 }
 

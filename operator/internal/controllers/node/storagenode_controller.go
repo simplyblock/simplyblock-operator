@@ -258,6 +258,13 @@ func (r *StorageNodeReconciler) Reconcile(
 		ctx = authenticatedContext(ctx, secret, err)
 	}
 
+	// A stretched cluster's other-site node is listed here as a record: it runs
+	// no workload on this cluster, holds no finalizer, and its deletion removes
+	// nothing from the control plane (remote_controller.go).
+	if node.IsRemote() {
+		return r.reconcileRemote(ctx, &node, cluster)
+	}
+
 	if !node.DeletionTimestamp.IsZero() {
 		return r.teardown(ctx, &node)
 	}
@@ -544,7 +551,12 @@ func (r *StorageNodeReconciler) checkHost(
 	// which is the migration route off a Helm deployment. It diverts before the
 	// host check, because an adopted node is already running and its API answering
 	// is not this operator's precondition to establish.
-	if r.upgradeAdoption(ctx, node.Namespace, cluster.Name) {
+	//
+	// A stretched follower carries the same Secret for another purpose: the hub
+	// delivers it to adopt the leader's backend cluster, and the follower's own
+	// nodes are new and are added. A follower node that is already in the backend
+	// is still found by its address below.
+	if !cluster.IsStretchedFollower() && r.upgradeAdoption(ctx, node.Namespace, cluster.Name) {
 		return stepAdopting, true, nil
 	}
 
@@ -588,6 +600,12 @@ func (r *StorageNodeReconciler) checkConfig(
 		return stepCheckingConfig, false, blockedf(FailureDomainMissing,
 			"cluster %s requires a fault group and this node declares none; "+
 				"set spec.config.failureDomain", cluster.Name)
+	}
+	if ptr.BoolFromOrFalse(cluster.Spec.EnableSyncReplication) &&
+		node.Spec.Config.Site == "" {
+		return stepCheckingConfig, false, blockedf(SiteMissing,
+			"cluster %s requires a site and this node declares none; "+
+				"set spec.config.site", cluster.Name)
 	}
 	if declaresDefinitions(networkOf(cluster)) {
 		return stepCheckingNetwork, true, nil
@@ -1634,6 +1652,7 @@ func (r *StorageNodeReconciler) addParams(
 		Format4K:         ptr.BoolFromOrFalse(workload.EnableFormat4K),
 		SpdkSystemMemory: config.SpdkSystemMemory,
 		Expand:           ptr.BoolFromOrFalse(config.Expand),
+		Site:             config.Site,
 	}
 
 	// The control plane's failure domain is an integer, and this API's is a label.

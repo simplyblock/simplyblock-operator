@@ -85,6 +85,8 @@ const (
 	annoClusterBackupBucket = "storage.simplyblock.io/conversion-spec.backup.bucket"
 	annoClusterBackupRegion = "storage.simplyblock.io/conversion-spec.backup.region"
 	annoClusterDeviceClass  = "storage.simplyblock.io/conversion-spec.deviceClass"
+	annoClusterSync         = "storage.simplyblock.io/conversion-spec.enableSyncReplication"
+	annoClusterStretched    = "storage.simplyblock.io/conversion-spec.stretched"
 
 	// The service classes have no counterpart in this version.
 	annoClusterServiceClasses       = "storage.simplyblock.io/conversion-spec.serviceClasses"
@@ -93,11 +95,12 @@ const (
 	// The realignment switch needs no key here. Both versions default it to on
 	// and the hub states that default by negation, so the pair round-trips
 	// through negate alone and there is nothing the stored shape cannot say.
-	annoClusterStatusPhase    = "storage.simplyblock.io/conversion-status.phase"
-	annoClusterStatusStep     = "storage.simplyblock.io/conversion-status.step"
-	annoClusterStatusTasks    = "storage.simplyblock.io/conversion-status.tasks"
-	annoClusterStatusMessage  = "storage.simplyblock.io/conversion-status.message"
-	annoClusterStatusObserved = "storage.simplyblock.io/conversion-status.observedGeneration"
+	annoClusterStatusPhase     = "storage.simplyblock.io/conversion-status.phase"
+	annoClusterStatusStep      = "storage.simplyblock.io/conversion-status.step"
+	annoClusterStatusTasks     = "storage.simplyblock.io/conversion-status.tasks"
+	annoClusterStatusMessage   = "storage.simplyblock.io/conversion-status.message"
+	annoClusterStatusObserved  = "storage.simplyblock.io/conversion-status.observedGeneration"
+	annoClusterStatusStretched = "storage.simplyblock.io/conversion-status.stretched"
 
 	// The failure-domain mapping has no v1alpha1 field, and losing it would
 	// let a later deployment give a label another index than its nodes run
@@ -427,6 +430,9 @@ func stashClusterHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageCluster) 
 		value any
 	}{
 		{annoClusterDeviceClass, deviceClass},
+		{annoClusterSync, src.Spec.EnableSyncReplication},
+		{annoClusterStretched, src.Spec.Stretched},
+		{annoClusterStatusStretched, src.Status.Stretched},
 		{annoClusterServiceClasses, src.Spec.ServiceClasses},
 		{annoClusterStatusServiceClasses, src.Status.ServiceClasses},
 		{annoClusterStatusPhase, string(src.Status.Phase)},
@@ -512,6 +518,9 @@ func restoreClusterHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageCluster
 		key    string
 		target any
 	}{
+		{annoClusterSync, &dst.Spec.EnableSyncReplication},
+		{annoClusterStretched, &dst.Spec.Stretched},
+		{annoClusterStatusStretched, &dst.Status.Stretched},
 		{annoClusterServiceClasses, &dst.Spec.ServiceClasses},
 		{annoClusterStatusServiceClasses, &dst.Status.ServiceClasses},
 		{annoClusterStatusTasks, &dst.Status.Tasks},

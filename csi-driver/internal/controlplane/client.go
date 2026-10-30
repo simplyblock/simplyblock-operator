@@ -30,6 +30,9 @@ var (
 	ErrVolumeExists     = errors.New("volume already exists")
 	ErrSnapshotNotFound = errors.New("snapshot not found")
 	ErrSnapshotExists   = errors.New("snapshot already exists")
+	// ErrSiteConflict is a create on a stretched cluster pinned to a node of
+	// another site than the one it names.
+	ErrSiteConflict = errors.New("the volume's host is on another site")
 
 	// ErrClusterNotFound means the clusterID referenced by a request is no longer
 	// present in the driver's secret configuration, i.e., the cluster has been
@@ -291,6 +294,16 @@ func (client APIClient) createVolume(ctx context.Context, poolID string, params 
 	raw, err := client.do(ctx, http.MethodPost, client.v2volumes(poolID), params)
 	if err != nil {
 		if isHTTPStatus(err, http.StatusConflict) {
+			// A name that exists is a plain detail; a host on another site is a
+			// detail naming that site.
+			var e *HTTPError
+			_ = errors.As(err, &e)
+			var conflict struct {
+				NodeSite string `json:"node_site"`
+			}
+			if json.Unmarshal([]byte(e.Message), &conflict) == nil && conflict.NodeSite != "" {
+				return "", fmt.Errorf("%w: %s", ErrSiteConflict, e.Message)
+			}
 			err = ErrVolumeExists
 		}
 		return "", err

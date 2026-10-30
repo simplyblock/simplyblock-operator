@@ -1,5 +1,4 @@
-# The fleet image. It carries the hub manager today, and it is where the member
-# agent lands when that is built, for the reason the operator's image carries its
+# The fleet image. It carries the hub manager and the member agent, for the reason the operator's image carries its
 # node probe: the manager renders the add-on template that deploys the agent and
 # names its own image for it, so the agent cannot be a version out of step with
 # the manager that shipped it.
@@ -31,7 +30,9 @@ COPY fleet/ .
 # plane over TLS the standard library provides, and a static binary is what the
 # minimal runtime base below can run without a libc.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -a -o fleet-manager ./cmd/fleet-manager
+    go build -a -o fleet-manager ./cmd/fleet-manager && \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -a -o fleet-agent ./cmd/fleet-agent
 
 FROM registry.access.redhat.com/ubi10/ubi-minimal:10.2
 
@@ -50,6 +51,7 @@ LABEL name="simplyblock-fleet" \
 
 WORKDIR /
 COPY --from=builder /workspace/fleet-manager .
+COPY --from=builder /workspace/fleet-agent .
 COPY LICENSE /licenses/LICENSE
 
 USER 65532:65532

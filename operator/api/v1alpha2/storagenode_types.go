@@ -305,6 +305,16 @@ type StorageNodeConfig struct {
 	// +k8s:immutable
 	FailureDomain string `json:"failureDomain,omitempty"`
 
+	// Site is the replication site this node belongs to, one of the cluster's two
+	// sites, copied from the ClusterDeploymentConfig node group that produced the
+	// node. Required when the cluster has enableSyncReplication=true. Immutable: a
+	// host sits entirely on one site for the cluster's life.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
+	// +optional
+	// +k8s:immutable
+	Site string `json:"site,omitempty"`
+
 	// Expand marks this node as an addition to an already-active cluster, which
 	// the control plane reads as a request to rebalance onto it rather than to
 	// treat it as part of an initial layout. Immutable once set: it describes how
@@ -316,6 +326,8 @@ type StorageNodeConfig struct {
 
 // StorageNodeSpec is the desired state of one backend storage node, meaning one
 // SPDK process bound to one NUMA socket of one Kubernetes worker.
+// +kubebuilder:validation:XValidation:rule="(has(self.stretched) && self.stretched.remote) || (has(self.workerNode) && size(self.workerNode) > 0)",message="workerNode is required for a node of this site"
+// +kubebuilder:validation:XValidation:rule="has(self.stretched) == has(oldSelf.stretched)",message="stretched cannot be added to or removed from an existing node"
 type StorageNodeSpec struct {
 	// ClusterRef names the StorageCluster this node belongs to. The cluster also
 	// owns this object by controller reference, so deleting the cluster deletes
@@ -338,9 +350,11 @@ type StorageNodeSpec struct {
 
 	// WorkerNode is the Kubernetes worker hostname this node runs on. It is not
 	// immutable, because a migration re-points it, but a change made by anything
-	// outside the operator's namespace is rejected.
-	// +kubebuilder:validation:Required
-	WorkerNode string `json:"workerNode"`
+	// outside the operator's namespace is rejected. Required for every node of
+	// this site; a remote node (stretched.remote) runs on no worker of this
+	// cluster and leaves it empty.
+	// +optional
+	WorkerNode string `json:"workerNode,omitempty"`
 
 	// SocketID is the NUMA socket this node is bound to, as declared in the node
 	// set's socket list, so 0 or 1. With NodeIndex it decomposes Slot into the
@@ -379,6 +393,24 @@ type StorageNodeSpec struct {
 	// created afterward.
 	// +kubebuilder:validation:Required
 	Config StorageNodeConfig `json:"config"`
+
+	// Stretched marks a node of a stretched cluster that is listed here but
+	// belongs to the other site. Unset on every node of this site and on a
+	// standalone cluster. Cannot be added or removed after creation.
+	// +optional
+	Stretched *StretchedNodeSpec `json:"stretched,omitempty"`
+}
+
+// StretchedNodeSpec describes a node of a stretched cluster's other site.
+type StretchedNodeSpec struct {
+	// Remote marks a node of the other site, listed on this cluster from the
+	// control plane so that either site shows every node. A remote node runs no
+	// workload on this cluster, admits no StorageNodeOps, and is recreated from
+	// the control plane if deleted; its own site's operator manages it.
+	// Immutable.
+	// +optional
+	// +k8s:immutable
+	Remote bool `json:"remote,omitempty"`
 }
 
 // NodeLatencyMetrics is the fio-measured 4K NVMe-oF write latency of one backend
@@ -620,6 +652,8 @@ type StorageNodeStatus struct {
 // +kubebuilder:printcolumn:name="Health",type=boolean,JSONPath=".status.health"
 // +kubebuilder:printcolumn:name="UUID",type=string,JSONPath=".status.uuid",priority=1
 // +kubebuilder:printcolumn:name="FD",type=string,JSONPath=".status.failureDomain",priority=1
+// +kubebuilder:printcolumn:name="Site",type=string,JSONPath=".spec.config.site",priority=1
+// +kubebuilder:printcolumn:name="Remote",type=boolean,JSONPath=".spec.stretched.remote",priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // StorageNode is one backend storage node: one SPDK process bound to one NUMA

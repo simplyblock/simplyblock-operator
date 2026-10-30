@@ -76,6 +76,10 @@ type StorageNodeSetAddParams struct {
 	// node never came online (2026-08-27 incident, found live redeploying
 	// with domains numbered from 0).
 	FailureDomain *int `json:"failure_domain,omitempty"`
+	// Site is the replication site this node is added to, required on a sync
+	// cluster and rejected otherwise. Wire key must match the add-node endpoint
+	// (sbcli sync-replication branch).
+	Site string `json:"site,omitempty"`
 	// Expand signals that this node is being added to expand an already-active cluster.
 	Expand bool `json:"expand,omitempty"`
 	// ForceFormat wipes partitioned lblk devices at add-node time; node_configure.py

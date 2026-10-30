@@ -399,9 +399,13 @@ func csiAddonsSidecarContainer(
 	}
 }
 
+// controllerPluginName is the controller plugin's container, the one of the
+// controller pod's containers that links to the operator and to the site.
+const controllerPluginName = "csi-controller"
+
 func controllerPluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string) corev1.Container {
 	return corev1.Container{
-		Name:            "csi-controller",
+		Name:            controllerPluginName,
 		Image:           image,
 		ImagePullPolicy: pullPolicy(d),
 		Args: append([]string{

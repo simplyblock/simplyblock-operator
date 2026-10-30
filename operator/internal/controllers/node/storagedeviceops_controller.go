@@ -144,6 +144,22 @@ func (r *StorageDeviceOpsReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
+	// A remote node's device is the peer site's, managed by that site's
+	// operator. Admission refuses an operation on one; this is the refusal for
+	// an operation admitted while the webhook was down or on a failed read.
+	var node simplyblockv1alpha2.StorageNode
+	nodeKey := client.ObjectKey{Namespace: device.Namespace, Name: device.Spec.NodeRef}
+	switch err := r.Get(ctx, nodeKey, &node); {
+	case apierrors.IsNotFound(err):
+	case err != nil:
+		return ctrl.Result{}, err
+	case node.IsRemote():
+		return ctrl.Result{}, r.fail(ctx, &ops, fmt.Sprintf(
+			"RemoteNode: device %s belongs to node %s of site %q of the stretched cluster "+
+				"and is managed by that site's operator; run the operation there",
+			device.Name, node.Name, node.Spec.Config.Site))
+	}
+
 	held, err := r.acquireLock(ctx, &ops, device)
 	if err != nil {
 		return ctrl.Result{}, err

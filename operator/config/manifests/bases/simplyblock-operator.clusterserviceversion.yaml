@@ -655,6 +655,14 @@ spec:
       kind: StorageSiteDeployment
       name: storagesitedeployments.storage.simplyblock.io
       version: v1alpha2
+    - description: Deploys one stretched cluster across two managed sites from the
+        hub, through OCM. Discovers both sites, applies the shared sizing and images
+        to both drafts and, once approved, has the leader site create the backend
+        cluster and the follower site adopt it; status projects both sites.
+      displayName: Stretched Cluster
+      kind: StretchedCluster
+      name: stretchedclusters.storage.simplyblock.io
+      version: v1alpha2
   description: The Simplyblock Operator helps with installation, operation, and management
     of Simplyblock Control Planes, Storage Planes, and the CSI Driver.
   displayName: Simplyblock Operator

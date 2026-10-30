@@ -47,10 +47,12 @@ import (
 	"github.com/simplyblock/atlas/storage"
 	"github.com/simplyblock/atlas/storage/storagerpc"
 
+	"github.com/simplyblock/csi-driver/internal/clusters"
 	"github.com/simplyblock/csi-driver/internal/config"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/csi-driver/internal/csi/controller"
 	csiaddonsidentityserver "github.com/simplyblock/csi-driver/internal/csi/csiaddons/identity"
+	"github.com/simplyblock/csi-driver/internal/csi/fence"
 	"github.com/simplyblock/csi-driver/internal/csi/identity"
 	"github.com/simplyblock/csi-driver/internal/csi/node"
 	"github.com/simplyblock/csi-driver/internal/csilink"
@@ -163,6 +165,20 @@ func Run(conf *config.Config) {
 		}
 	}
 
+	// The site link, on a controller plugin of a stretched cluster's member.
+	// Like the operator link it is independent of the CSI server.
+	if conf.SiteLinkEnabled && conf.IsControllerServer && kubeClient != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		csilink.StartSiteLink(ctx, kubeClient, csilink.SiteLinkConfig{
+			Address:        conf.SiteLinkAddress,
+			AgentNamespace: conf.SiteLinkNamespace,
+			TokenFile:      conf.SiteLinkTokenFile,
+			ID:             link.ControllerPeer(conf.PodName),
+			InstanceUID:    conf.PodUID,
+		})
+	}
+
 	// The csi-addons Identity and Replication services register alongside the
 	// CSI services on the same socket. Identity is always registered (it just
 	// answers capability probes); Replication only when this process serves
@@ -182,6 +198,13 @@ func Run(conf *config.Config) {
 		register = append(register, func(gs *grpc.Server) {
 			csiaddonsvolumegroup.RegisterControllerServer(gs, cs)
 		})
+		// The csi-addons NetworkFence service (design-stretched-sync-replication-
+		// ramen.md §10.2): Ramen fences a lost site of a stretched cluster
+		// through it before failing over.
+		fences := fence.New(func(clusterID string) (fence.Backend, error) {
+			return clusters.ReplicationClient(context.Background(), clusterID)
+		}, soleSyncCluster)
+		register = append(register, func(gs *grpc.Server) { fences.Register(gs) })
 	}
 
 	s := csicommon.NewNonBlockingGRPCServer()
@@ -357,4 +380,24 @@ func markBroken(g *guardian.Guardian) func(string) {
 		return nil
 	}
 	return g.MarkBrokenLvol
+}
+
+// soleSyncCluster is the cluster a fence naming none fences: the one
+// sync-replicated cluster in the driver's secret.
+func soleSyncCluster() (string, error) {
+	ids, err := clusters.List()
+	if err != nil {
+		return "", err
+	}
+	var sync []string
+	for _, id := range ids {
+		if _, ok, err := clusters.SyncSite(id); err == nil && ok {
+			sync = append(sync, id)
+		}
+	}
+	if len(sync) != 1 {
+		return "", fmt.Errorf(
+			"the secret has %d sync-replicated clusters; the fence must name one in parameter clusterID", len(sync))
+	}
+	return sync[0], nil
 }

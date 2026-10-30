@@ -139,7 +139,11 @@ atlas/
 │   ├── auth.go             Authenticator iface, bearer-token plumbing, TokenSource
 │   ├── kubeauth.go         KubeAuthenticator: TokenReview → the pod's node, not the peer's word
 │   ├── dial.go             TLSFileDialer / TLSDialer / InsecureDialer
-│   └── linkv1/             the Hello handshake protocol (buf-generated, committed)
+│   ├── peercontext.go      PeerFromContext; the hub refuses calls before Hello
+│   ├── remote.go           RemotePeer ("site/<site>/<kind>[/<name>]"), SitePeer
+│   ├── relay.go            the site link: Relay (hub), Forwarder (a site), Acceptor + OpenRemote/RemoteConn (a peer)
+│   ├── linkv1/             the Hello handshake protocol (buf-generated, committed)
+│   └── sitev1/             RelayService: the site link's one stream (buf-generated, committed)
 ├── storage/                one node's storage as one value, with no gRPC in here
 │   ├── accessor.go         Accessor: every lookup flat, plus the questions that re-scan
 │   │                       Local(sysfs) fills one in; storagerpc.Remote fills the same struct

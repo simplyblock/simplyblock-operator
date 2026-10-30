@@ -616,6 +616,22 @@ spec:
         - jsonPath: .status.uuid
           name: UUID
           type: string
+        - jsonPath: .spec.stretched.site
+          name: Site
+          priority: 1
+          type: string
+        - jsonPath: .spec.stretched.role
+          name: Role
+          priority: 1
+          type: string
+        - jsonPath: .status.stretched.peerNodesOnline
+          name: Peer-Online
+          priority: 1
+          type: integer
+        - jsonPath: .status.stretched.siteRecord
+          name: Site-Record
+          priority: 1
+          type: string
         - jsonPath: .metadata.creationTimestamp
           name: Age
           type: date
@@ -871,6 +887,17 @@ spec:
                     and what changes is which copy of a chunk is read.
                     Co-locating a workload with the primary node of its volume is a separate
                     mechanism and is not configured here.
+                  type: boolean
+                  x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                enableSyncReplication:
+                  description: |-
+                    EnableSyncReplication opts the cluster into synchronous two-site
+                    replication, where the cluster spans exactly two sites, every node
+                    declares a site, and each logical volume store is replicated to the other
+                    site. Immutable: the backend accepts it only at cluster-create, so a
+                    cluster created without it cannot be converted.
                   type: boolean
                   x-kubernetes-validations:
                     - message: field is immutable
@@ -1474,6 +1501,61 @@ spec:
                       rule: '!has(oldSelf.enableBlockFormat) || has(self.enableBlockFormat)'
                     - message: dataInterfaces are allowed only with network.spdkOnHostNetwork
                       rule: '!has(self.dataInterfaces) || !has(self.network) || (has(self.network.spdkOnHostNetwork) && self.network.spdkOnHostNetwork)'
+                stretched:
+                  description: |-
+                    Stretched marks this StorageCluster as one site of a synchronously
+                    replicated cluster whose two sites are two Kubernetes clusters. Every node
+                    this StorageCluster adds joins stretched.site. A leader creates the backend
+                    cluster; a follower adopts the one its leader created and never creates or
+                    deletes it. Delivered by the hub with the site's deployment; a standalone
+                    cluster leaves it unset. Requires enableSyncReplication, and cannot be added
+                    to or removed from an existing cluster.
+                  properties:
+                    peerCluster:
+                      description: |-
+                        PeerCluster is the other site's managed cluster: the name the hub knows
+                        it by, and the one the site link reaches that site's operator by. Empty
+                        means the same as peerSite.
+                      maxLength: 63
+                      type: string
+                    peerSite:
+                      description: |-
+                        PeerSite is the other site's backend name. Nodes the control plane reports
+                        on it are listed here as remote StorageNodes. Immutable.
+                      maxLength: 63
+                      pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
+                      type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                    role:
+                      description: |-
+                        Role is Leader or Follower. A leader creates and activates the backend
+                        cluster and runs every cluster-wide operation; a follower adopts the
+                        cluster and manages only its own site's nodes. A change is a role swap,
+                        delivered from the hub.
+                      enum:
+                        - Leader
+                        - Follower
+                      type: string
+                    site:
+                      description: |-
+                        Site is the backend site every node this StorageCluster adds belongs to.
+                        Immutable: a site is a property of the installation.
+                      maxLength: 63
+                      pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
+                      type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                  required:
+                    - peerSite
+                    - role
+                    - site
+                  type: object
+                  x-kubernetes-validations:
+                    - message: site and peerSite must differ
+                      rule: self.site != self.peerSite
                 stripe:
                   description: |-
                     Stripe is the erasure-coding layout every volume in the cluster is
@@ -1725,6 +1807,8 @@ spec:
                   rule: '!has(oldSelf.snodeApiPort) || has(self.snodeApiPort)'
                 - message: field enableFailureDomains is immutable once set
                   rule: '!has(oldSelf.enableFailureDomains) || has(self.enableFailureDomains)'
+                - message: field enableSyncReplication is immutable once set
+                  rule: '!has(oldSelf.enableSyncReplication) || has(self.enableSyncReplication)'
                 - message: field enableNodeAffinity is immutable once set
                   rule: '!has(oldSelf.enableNodeAffinity) || has(self.enableNodeAffinity)'
                 - message: field enableChecksumValidation is immutable once set
@@ -1741,6 +1825,10 @@ spec:
                   rule: (has(self.clusterMode) && self.clusterMode == 'Single') == (has(oldSelf.clusterMode) && oldSelf.clusterMode == 'Single')
                 - message: enableAtomicity4K requires enableChecksumValidation to be true
                   rule: '!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)'
+                - message: stretched requires enableSyncReplication to be true
+                  rule: '!has(self.stretched) || (has(self.enableSyncReplication) && self.enableSyncReplication)'
+                - message: stretched cannot be added to or removed from an existing cluster
+                  rule: has(self.stretched) == has(oldSelf.stretched)
                 - message: maxSubsystemCount and vcpuCount are required unless the cluster is a supercluster
                   rule: has(self.supercluster) || (has(self.maxSubsystemCount) && has(self.vcpuCount))
                 - message: spec.storageNodes.network is set when the cluster is created and cannot be added or removed afterward
@@ -2196,6 +2284,49 @@ spec:
                   x-kubernetes-validations:
                     - message: unknown step
                       rule: '!has(self.state) || self.state in [''Claiming'',''CheckingControlPlane'',''ResolvingConfig'',''Creating'',''Adopting'',''Persisting'']'
+                stretched:
+                  description: |-
+                    Stretched is this site's view of its stretched cluster, read from the
+                    control plane; set only when spec.stretched is.
+                  properties:
+                    lostSite:
+                      description: |-
+                        LostSite is the site the control plane records as out of service, empty
+                        while both sites serve.
+                      type: string
+                    peerNodes:
+                      description: |-
+                        PeerNodes is the number of the other site's storage nodes the control
+                        plane lists.
+                      format: int32
+                      type: integer
+                    peerNodesOnline:
+                      description: PeerNodesOnline is how many of them are online.
+                      format: int32
+                      type: integer
+                    role:
+                      description: |-
+                        Role is the role this site's operator last acted on. It differs from
+                        spec.stretched.role only while a role swap is being taken up.
+                      enum:
+                        - Leader
+                        - Follower
+                      type: string
+                    siteLink:
+                      description: |-
+                        SiteLink is whether this site's operator reaches the other site's over
+                        the site link. Empty when the operator runs no site link.
+                      enum:
+                        - Connected
+                        - Unreachable
+                      type: string
+                    siteRecord:
+                      description: |-
+                        SiteRecord is how far the control plane's handling of lostSite got, in the
+                        control plane's own words: draining, down, fencing, or done. Empty while
+                        both sites serve.
+                      type: string
+                  type: object
                 tasks:
                   description: |-
                     Tasks are the control plane's running and pending jobs, capped at twenty

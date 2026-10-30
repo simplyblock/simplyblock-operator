@@ -406,6 +406,32 @@ func TestFailureDomainsAreCheckedAgainstTheTemplate(t *testing.T) {
 	}
 }
 
+// A sync-replication document whose groups declare no site holds, the same way a
+// failure-domain document missing a fault group does: every node of a sync
+// cluster needs a site, and the backend refuses a node added without one.
+func TestSitesAreCheckedAgainstTheTemplate(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Approved = false
+		c.Spec.Cluster.EnableSyncReplication = ptr.To(true)
+	})
+	objects := append(workers("worker-1", "worker-2"), config)
+	r := reconcilerFor(t, objects...)
+
+	findings, err := r.validate(context.Background(), config)
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want the missing site", findings)
+	}
+	if findings[0].reason != MissingSites {
+		t.Errorf("reason = %q, want %q", findings[0].reason, MissingSites)
+	}
+	if !strings.Contains(findings[0].message, "rack-a/saturn") {
+		t.Errorf("the finding does not name the group: %s", findings[0].message)
+	}
+}
+
 // The environment is a shorthand and the expansion is where it is spent: naming
 // OpenShift once decides the distribution flags, after which nothing reads it.
 func TestTheEnvironmentResolvesIntoTheWorkloadFlags(t *testing.T) {

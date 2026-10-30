@@ -34,7 +34,8 @@ import (
 // StorageNode.STATUS_REMOVED for the same reason: a removed node's stale domain
 // assignment must not inflate that domain's apparent host count for either the
 // activation gate below or the removal gate beside it. The worker is the host,
-// so a multi-socket worker's nodes count once.
+// so a multi-socket worker's nodes count once. A remote node is the peer
+// site's node of a stretched cluster, has no worker here, and is skipped.
 func FailureDomainHosts(
 	ctx context.Context, c client.Client, namespace, clusterName string,
 ) (map[string]int32, error) {
@@ -44,7 +45,7 @@ func FailureDomainHosts(
 	}
 	hostDomains := map[string]int32{}
 	for _, node := range nodes.Items {
-		if node.Spec.ClusterRef != clusterName ||
+		if node.Spec.ClusterRef != clusterName || node.IsRemote() ||
 			node.Status.Status == utils.NodeStatusRemoved {
 			continue
 		}

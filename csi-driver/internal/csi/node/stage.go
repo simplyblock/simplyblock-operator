@@ -110,6 +110,14 @@ func (ns *Server) NodeStageVolume(
 		vc = map[string]string{}
 	}
 	vc["stagingParentPath"] = stagingParentPath
+	// On a stretched cluster the volume must be led from this node's site
+	// before anything connects to it, so the gate runs before the volume
+	// context is refreshed: that refresh reads the volume's connection, and a
+	// connection made on the wrong site is what the gate exists to prevent.
+	if err := ns.ensureLedHere(ctx, volumeID); err != nil {
+		klog.Warningf("volume %s is not led from this node's site yet: %v", volumeID, err)
+		return nil, err
+	}
 	ns.refreshVolumeContext(ctx, volumeID, vc)
 
 	plan, err := ns.attachPlan(ctx, volumeID, stagingTargetPath, vc, req.GetVolumeCapability())

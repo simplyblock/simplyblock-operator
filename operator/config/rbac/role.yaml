@@ -292,6 +292,14 @@ rules:
   - update
   - watch
 - apiGroups:
+  - ramendr.openshift.io
+  resources:
+  - volumereplicationgroups
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - rbac.authorization.k8s.io
   resources:
   - clusterrolebindings
@@ -425,6 +433,7 @@ rules:
   - storagepoolops/finalizers
   - storagepools/finalizers
   - storagesitedeployments/finalizers
+  - stretchedclusters/finalizers
   - tasks/finalizers
   - testfailovers/finalizers
   - volumemigrations/finalizers
@@ -462,6 +471,7 @@ rules:
   - storagepoolops/status
   - storagepools/status
   - storagesitedeployments/status
+  - stretchedclusters/status
   - tasks/status
   - testfailovers/status
   - volumegroupsnapshotops/status
@@ -485,6 +495,7 @@ rules:
   - storage.simplyblock.io
   resources:
   - storagefenceremediations
+  - stretchedclusters
   verbs:
   - get
   - list

@@ -21,33 +21,42 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/link"
 	"github.com/simplyblock/atlas/placement/placementrpc"
 	atlasprom "github.com/simplyblock/atlas/prometheus"
+	atlasswitchover "github.com/simplyblock/atlas/switchover"
 
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/metricsapi"
+	"github.com/simplyblock/simplyblock-operator/internal/sitelink"
+	"github.com/simplyblock/simplyblock-operator/internal/sitesvc"
 
 	// Import all Kubernetes client auth plugins (e.g., Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -73,8 +82,10 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/twonode"
 	twonodecp "github.com/simplyblock/simplyblock-operator/internal/controllers/twonode/cpadapter"
 	volumecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/volume"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/vrgfollow"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
 	"github.com/simplyblock/simplyblock-operator/internal/placement"
+	"github.com/simplyblock/simplyblock-operator/internal/switchover"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -230,6 +241,17 @@ func main() {
 		"The name of the CSI link serving key file.")
 	flag.StringVar(&csiLinkAudience, "csi-link-audience", "simplyblock-csi-link",
 		"The audience the peers' projected ServiceAccount tokens must carry.")
+	var siteLinkEnabled bool
+	var siteLinkAddr, siteLinkNamespace, siteLinkTokenPath string
+	flag.BoolVar(&siteLinkEnabled, "site-link", false,
+		"Link to this site's fleet agent, the site end of a stretched cluster's site link.")
+	flag.StringVar(&siteLinkAddr, "site-link-address",
+		"simplyblock-site-link.open-cluster-management-agent-addon.svc:9443",
+		"The site's fleet agent, host:port.")
+	flag.StringVar(&siteLinkNamespace, "site-link-namespace", "open-cluster-management-agent-addon",
+		"The fleet agent's namespace, where it publishes the CA it serves with.")
+	flag.StringVar(&siteLinkTokenPath, "site-link-token-path", "/var/run/secrets/simplyblock/site-link/token",
+		"The projected ServiceAccount token, with the site link's audience, the agent verifies.")
 	flag.StringVar(&csiLinkClientCAFile, "csi-link-client-ca-file", "",
 		"The CA bundle that verifies the CSI peers' client certificates. Set, the link requires "+
 			"mutual TLS, admitting only the CSI node and controller client certificates.")
@@ -403,6 +425,13 @@ func main() {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
+
+	// SwitchoverService (design-stretched-sync-replication-ramen.md §9.3): the
+	// operator moves a sync volume's leadership to the site a pod stages on,
+	// for its own node plugins over the CSI link and for the other site's
+	// operator over the site link. It reaches the control plane the
+	// ControlPlane object names, with the credential it names.
+	switchoverServer := newSwitchoverServer(mgr, operatorNamespace)
 
 	// The CSI link. csiPeers is the registry of linked node and controller
 	// plugins; a reconciler reaching a node goes through it, and treats
@@ -677,7 +706,44 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlaneOps")
 		os.Exit(1)
 	}
+	// The site link is the elected replica's, so it runs as a leader-election
+	// runnable and the StorageCluster controller probes through it.
+	var siteLinkProber clustercontroller.SiteLinkProber
+	// peerSite reaches the other site's operator for the leader's rolling
+	// restart (design-stretched-sync-replication-ramen.md §11.3); nil without a
+	// site link.
+	var peerSite clustercontroller.PeerSite
+	if siteLinkEnabled {
+		siteKube, err := kubernetes.NewForConfig(mgr.GetConfig())
+		if err != nil {
+			setupLog.Error(err, "unable to create the site link's client")
+			os.Exit(1)
+		}
+		siteLink := &sitelink.Link{
+			Pod:         os.Getenv("POD_NAME"),
+			PodUID:      os.Getenv("POD_UID"),
+			Address:     siteLinkAddr,
+			CANamespace: siteLinkNamespace,
+			Kube:        siteKube,
+			Token:       link.TokenFile(siteLinkTokenPath),
+			Logger:      slog.Default().With("component", "site-link"),
+			// The other site's operator asks this one to move volumes and to
+			// refresh this site's storage-node pods.
+			Register: func(srv grpc.ServiceRegistrar) {
+				switchoverServer.Register(srv)
+				(&sitesvc.Server{Client: mgr.GetClient(), Namespace: operatorNamespace}).Register(srv)
+			},
+		}
+		if err := mgr.Add(siteLink); err != nil {
+			setupLog.Error(err, "unable to add the site link")
+			os.Exit(1)
+		}
+		siteLinkProber = siteLink
+		peerSite = siteLink
+	}
+
 	if err := (&clustercontroller.StorageClusterReconciler{
+		SiteLink:     siteLinkProber,
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Recorder:     mgr.GetEventRecorder("storagecluster-controller"),
@@ -897,6 +963,16 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
 	}
+	if err := (&nodecontroller.RemoteNodeReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagenode-remote-controller"),
+		API:      nodecontroller.NewControlPlane(controlPlaneEndpoint),
+		Nodes:    nodeSubscription,
+	}).SetupWithManager(ctrlMgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeRemote")
+		os.Exit(1)
+	}
 	if err := (&nodecontroller.StorageNodeOpsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -991,11 +1067,18 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageDeviceOps")
 		os.Exit(1)
 	}
+	// The CSI controller joins the operator's site link, so the other site's
+	// operator can reach it too.
+	var driverSiteLink *driver.SiteLinkConfig
+	if siteLinkEnabled {
+		driverSiteLink = &driver.SiteLinkConfig{Address: siteLinkAddr, AgentNamespace: siteLinkNamespace}
+	}
 	if err := (&driver.SimplyblockDriverReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		Recorder:  mgr.GetEventRecorder("simplyblockdriver-controller"),
 		Snapshots: &driver.DiscoveredSnapshotAPI{Discovery: operatorOpsDiscovery},
+		SiteLink:  driverSiteLink,
 	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SimplyblockDriver")
 		os.Exit(1)
@@ -1008,6 +1091,7 @@ func main() {
 		Clusters: clusterSubscription,
 		Nodes:    nodeSubscription,
 		Tasks:    taskSubscription,
+		Peer:     peerSite,
 	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageClusterOps")
 		os.Exit(1)
@@ -1165,6 +1249,16 @@ func main() {
 		}).SetupWithManager(ctrlMgr); err != nil {
 			return fmt.Errorf("controller StorageSiteDeployment: %w", err)
 		}
+		// A stretched cluster is two site deployments joined on the hub, which
+		// also runs the control plane the follower's credentials are read from.
+		if err := (&controller.StretchedClusterReconciler{
+			Client:       mgr.GetClient(),
+			Scheme:       mgr.GetScheme(),
+			Recorder:     mgr.GetEventRecorder("stretchedcluster-controller"),
+			ControlPlane: webapi.NewClient(),
+		}).SetupWithManager(ctrlMgr); err != nil {
+			return fmt.Errorf("controller StretchedCluster: %w", err)
+		}
 		return nil
 	}
 	if hasManifestWork {
@@ -1175,14 +1269,45 @@ func main() {
 	} else {
 		// OCM may be installed after the operator (the DR stack brings it): keep
 		// looking, and start the controllers once ManifestWork is served.
-		setupLog.Info("OCM ManifestWork resource not served yet; the TestFailover and "+
-			"StorageSiteDeployment controllers start once it is (hub-only)",
+		setupLog.Info("OCM ManifestWork resource not served yet; the TestFailover, "+
+			"StorageSiteDeployment, and StretchedCluster controllers start once it is (hub-only)",
 			"groupVersion", ocmWorkGroupVersion, "resource", ocmManifestWorkResource)
 		if err := mgr.Add(&ocmLateStart{log: setupLog, disc: workDiscovery, register: registerOCMControllers}); err != nil {
 			setupLog.Error(err, "unable to add the OCM ManifestWork watcher")
 			os.Exit(1)
 		}
 	}
+	// The VRG follower moves a stretched cluster's volumes to the site Ramen makes
+	// their VolumeReplicationGroup primary on (design-stretched-sync-replication-
+	// ramen.md §9). It watches Ramen's kind, so it starts once Ramen is installed.
+	registerVRGFollower := func() error {
+		if err := (&vrgfollow.Reconciler{
+			Client:    mgr.GetClient(),
+			Recorder:  mgr.GetEventRecorder("vrgfollow"),
+			Mover:     switchoverServer,
+			Namespace: operatorNamespace,
+		}).SetupWithManager(ctrlMgr); err != nil {
+			return fmt.Errorf("controller VRGFollower: %w", err)
+		}
+		return nil
+	}
+	hasVRG, err := serverHasResource(workDiscovery, ramenGroupVersion, ramenVRGResource)
+	if err != nil {
+		setupLog.Error(err, "unable to determine whether Ramen's VolumeReplicationGroup is served")
+		os.Exit(1)
+	}
+	if hasVRG {
+		if err := registerVRGFollower(); err != nil {
+			setupLog.Error(err, "unable to create controller")
+			os.Exit(1)
+		}
+	} else if err := mgr.Add(&ramenLateStart{
+		log: setupLog, disc: workDiscovery, register: registerVRGFollower,
+	}); err != nil {
+		setupLog.Error(err, "unable to add the Ramen VolumeReplicationGroup watcher")
+		os.Exit(1)
+	}
+
 	// +kubebuilder:scaffold:builder
 
 	// Provision the admission webhooks' serving certificate at runtime (self-signed
@@ -1268,7 +1393,7 @@ func main() {
 		setupLog.Info("registered controlplaneops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storageclusterops",
-			&webhook.Admission{Handler: &internalwebhook.StorageClusterOpsValidator{}})
+			&webhook.Admission{Handler: &internalwebhook.StorageClusterOpsValidator{Client: mgr.GetClient()}})
 		setupLog.Info("registered storageclusterops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-operatorops",
@@ -1276,8 +1401,20 @@ func main() {
 		setupLog.Info("registered operatorops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagenodeops",
-			&webhook.Admission{Handler: &internalwebhook.StorageNodeOpsValidator{}})
+			&webhook.Admission{Handler: &internalwebhook.StorageNodeOpsValidator{Client: mgr.GetClient()}})
 		setupLog.Info("registered storagenodeops validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-stretchedcluster",
+			// The role-swap guard reads the control plane the hub runs, which is
+			// the current record of a lost site and its fence.
+			&webhook.Admission{Handler: &internalwebhook.StretchedClusterValidator{
+				Backend: clustercontroller.NewControlPlane(controlPlaneEndpoint, controlPlaneCredential),
+			}})
+		setupLog.Info("registered stretchedcluster validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagedeviceops",
+			&webhook.Admission{Handler: &internalwebhook.StorageDeviceOpsValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered storagedeviceops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-persistentvolumeops",
 			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeOpsValidator{
@@ -1368,3 +1505,29 @@ type leaderOnly func(context.Context) error
 func (f leaderOnly) Start(ctx context.Context) error { return f(ctx) }
 
 func (leaderOnly) NeedLeaderElection() bool { return true }
+
+// newSwitchoverServer builds the operator's SwitchoverService. A move that had
+// to be forced, because the site the volume was served from is not online, is
+// announced on this namespace's StorageCluster as SyncPeerSiteOffline.
+func newSwitchoverServer(mgr ctrl.Manager, namespace string) *atlasswitchover.Server {
+	backend := &switchover.Backend{
+		Endpoint:   controlplanecontroller.NewEndpointResolver(mgr.GetClient(), namespace),
+		Credential: controlplanecontroller.NewCredentialResolver(mgr.GetClient(), namespace),
+	}
+	if cfg, err := webapi.ControlPlaneConfig(); err == nil {
+		backend.Transport = cfg.Transport
+	}
+	server := atlasswitchover.New(backend, slog.Default().With("component", "switchover"))
+	recorder := mgr.GetEventRecorder("switchover")
+	server.OnForced = func(volume, from, to string) {
+		var clusters simplyblockv1alpha2.StorageClusterList
+		if err := mgr.GetClient().List(context.Background(), &clusters, client.InNamespace(namespace)); err != nil {
+			return
+		}
+		for i := range clusters.Items {
+			recorder.Eventf(&clusters.Items[i], nil, corev1.EventTypeWarning, "SyncPeerSiteOffline", "SyncPeerSiteOffline",
+				"volume %s was promoted on site %s by force: site %s, which served it, is not online", volume, to, from)
+		}
+	}
+	return server
+}

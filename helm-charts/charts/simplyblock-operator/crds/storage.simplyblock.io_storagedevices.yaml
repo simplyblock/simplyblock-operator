@@ -46,6 +46,14 @@ spec:
       name: Serial
       priority: 1
       type: string
+    - jsonPath: .status.site
+      name: Site
+      priority: 1
+      type: string
+    - jsonPath: .status.remote
+      name: Remote
+      priority: 1
+      type: boolean
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -334,11 +342,22 @@ spec:
                 - Failed
                 - Migrated
                 type: string
+              remote:
+                description: |-
+                  Remote marks a device of a stretched cluster's remote node: listed here
+                  from the control plane so either site shows every device, and operated on
+                  only by its own site.
+                type: boolean
               role:
                 description: Role is what the device carries.
                 enum:
                 - Storage
                 - Journal
+                type: string
+              site:
+                description: |-
+                  Site is the sync-replication site of the device's node, copied from the
+                  node; empty off a sync cluster.
                 type: string
             type: object
         required:

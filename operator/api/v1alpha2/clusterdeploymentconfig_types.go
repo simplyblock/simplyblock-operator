@@ -304,6 +304,16 @@ type NodeGroup struct {
 	// +optional
 	FailureDomain string `json:"failureDomain,omitempty"`
 
+	// Site is the replication site every worker in this group belongs to, one of
+	// the cluster's two sites. Discovery seeds it from topology.kubernetes.io/zone,
+	// as it does FailureDomain, since a sync cluster's two sites are its two zones.
+	// Required when the cluster has enableSyncReplication=true, rejected otherwise.
+	// It expands into StorageNode.spec.config.site, whose shape it shares.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
+	// +optional
+	Site string `json:"site,omitempty"`
+
 	// SpdkSystemMemory is the memory the control plane starts SPDK with on these
 	// nodes.
 	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
@@ -671,6 +681,24 @@ type ClusterTemplate struct {
 	// +optional
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
 
+	// EnableSyncReplication opts the cluster into synchronous two-site
+	// replication. The cluster then spans exactly two sites and every node group
+	// declares a site (see NodeGroup.Site). It is on the document because it is
+	// immutable on the cluster it lands on: the backend accepts it only at
+	// cluster-create, so a cluster created without it is one nobody can turn it
+	// on for.
+	// +optional
+	EnableSyncReplication *bool `json:"enableSyncReplication,omitempty"`
+
+	// Stretched makes the cluster one site of a stretched cluster, whose two
+	// sites are two Kubernetes clusters: the site this document's nodes join,
+	// the other site, and whether this site creates the cluster or adopts it.
+	// Written by the hub that manages both sites, and expanded verbatim into the
+	// StorageCluster. Requires enableSyncReplication; every node group's site
+	// must equal stretched.site.
+	// +optional
+	Stretched *StretchedSpec `json:"stretched,omitempty"`
+
 	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
 	// from the local node's own devices where it can, before crossing the
 	// network.
@@ -792,7 +820,6 @@ type DeploymentImages struct {
 // node set names the same member of its DeviceSelection. The expansion reads the
 // class off them and stamps it onto the cluster it creates, which is why the
 // document carries no field for it.
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval cannot be withdrawn"
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)) || s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group of a node set must name the same device class: all nvme or all block"
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, has(g.networkAttachment))) || self.nodeSets.all(s, s.groups.all(g, !has(g.networkAttachment)))",message="every group must use the same networking: all host networking or all network attachments"
