@@ -1,13 +1,12 @@
 // What a logical block-device run does when the fleet does not say which disk
 // the journal goes on.
 //
-// It drafts the journal split. With enableJournalDevice unset, the journal of a
-// block-device node is a partition carved from its worker's smallest disk when
-// the node is configured, so every disk keeps carrying data. That is the layout
-// for a worker with a single disk, such as one RAID-protected storage-array LUN,
-// and for workers of equal disks. A fleet with a sole smallest disk still gets
-// the dedicated journal device, and a run told to force one dedicates one of the
-// equal disks.
+// It drafts the journal split, whatever the disks look like. With
+// enableJournalDevice unset, the journal of a block-device node is a partition
+// carved from its smallest disk when the node is configured, so every disk
+// keeps carrying data. That is also the layout for a worker with a single disk,
+// such as one RAID-protected storage-array LUN. Only a run told to force it
+// dedicates the smallest disk of every node to the journal.
 
 package discovery
 
@@ -59,7 +58,7 @@ func TestABlockFleetWithNoJournalDiskGetsTheJournalSplit(t *testing.T) {
 			*template.Template.EnableJournalDevice)
 	}
 	notes := strings.Join(template.Notes, " ")
-	for _, want := range []string{"worker-1", "partition carved from its smallest disk", "forceJournalDevice"} {
+	for _, want := range []string{"partition carved from its smallest disk", "forceJournalDevice"} {
 		if !strings.Contains(notes, want) {
 			t.Errorf("the notes read %q, and they have to name %q", notes, want)
 		}
@@ -104,10 +103,10 @@ func TestAForcedRunDraftsTheFleetItWouldHaveRefused(t *testing.T) {
 	}
 }
 
-// A block fleet that does name a journal disk is drafted without being forced,
-// and the flag is proposed. Nothing about the refusal changes the fleet that was
-// always readable.
-func TestABlockFleetWithAJournalDiskIsDraftedUnforced(t *testing.T) {
+// A block fleet with a sole smallest disk per worker is drafted with the
+// journal split too: the default does not depend on the disk sizes, and only a
+// forced run dedicates that disk.
+func TestABlockFleetWithASmallerDiskStillGetsTheJournalSplit(t *testing.T) {
 	plan := blockFleetWithDisks(
 		[]uint64{oneTerabyte, twoTerabytes},
 		[]uint64{oneTerabyte, twoTerabytes},
@@ -117,8 +116,17 @@ func TestABlockFleetWithAJournalDiskIsDraftedUnforced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a readable fleet was refused: %v", err)
 	}
-	if template.Template.EnableJournalDevice == nil || !*template.Template.EnableJournalDevice {
-		t.Error("a fleet with a sole smallest disk did not get enableJournalDevice")
+	if template.Template.EnableJournalDevice != nil {
+		t.Errorf("enableJournalDevice is %v, and the journal split is the default for block devices",
+			*template.Template.EnableJournalDevice)
+	}
+
+	forced, err := ClusterTemplateFor("a-cluster", plan, TemplateOptions{ForceJournalDevice: true})
+	if err != nil {
+		t.Fatalf("a forced run refused: %v", err)
+	}
+	if forced.Template.EnableJournalDevice == nil || !*forced.Template.EnableJournalDevice {
+		t.Error("a forced run over a fleet with a sole smallest disk did not set enableJournalDevice")
 	}
 }
 

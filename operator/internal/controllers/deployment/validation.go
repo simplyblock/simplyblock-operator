@@ -133,9 +133,6 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 		if found := conflictingInterfaces(scope.document); found != "" {
 			findings = append(findings, finding{reason: WorkerNotFound, message: scope.prefix + found})
 		}
-		if found := blockDevicesWithoutJournalDevice(scope.document); found != "" {
-			findings = append(findings, finding{reason: JournalDeviceRequired, message: scope.prefix + found})
-		}
 		if found := failureDomainLayoutRefusal(scope.document); found != "" {
 			findings = append(findings, finding{reason: FailureDomainLayout, message: scope.prefix + found})
 		}
@@ -606,36 +603,6 @@ func (r *ClusterDeploymentConfigReconciler) growthLimit(
 	return fmt.Sprintf(
 		"the document adds %d storage nodes to cluster %s, which has %d, and a cluster holds at most %d",
 		total.nodes()-held.nodes(), cluster.Name, held.nodes(), maxStorageNodesPerCluster), nil
-}
-
-// blockDevicesWithoutJournalDevice reports a cluster of logical block devices
-// whose journal cannot be laid out.
-//
-// Without enableJournalDevice, the journal of a block-device node is a
-// partition carved from the smallest of its worker's devices at configure
-// time (the journal split), which is the layout for a worker with a single
-// RAID-protected LUN. The split hands the journal partition and the data
-// partitions to one storage node, so the control plane refuses it when a
-// worker runs more than one, which lands after the cluster exists. A growth
-// document carries no template, and its cluster's setting already holds.
-func blockDevicesWithoutJournalDevice(config *simplyblockv1alpha2.ClusterDeploymentConfig) string {
-	template := config.Spec.Cluster
-	if config.Spec.ClusterRef != "" || template == nil ||
-		DeviceClassOf(config) != simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock {
-		return ""
-	}
-	if template.EnableJournalDevice != nil && *template.EnableJournalDevice {
-		return ""
-	}
-	if slots := slotsOf(template.SocketsToUse, template.NodesPerSocket); slots > 1 {
-		return fmt.Sprintf(
-			"the groups name logical block devices without spec.cluster.enableJournalDevice, so "+
-				"each worker's journal is a partition carved from its smallest device, and that "+
-				"layout needs one storage node per worker, not %d: set enableJournalDevice, "+
-				"which takes one of each worker's devices, or run one storage node per worker",
-			slots)
-	}
-	return ""
 }
 
 // groupsWithNetworkAttachments names the groups that attach their storage nodes
