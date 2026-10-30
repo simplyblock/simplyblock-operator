@@ -70,13 +70,12 @@ const (
 	StorageClusterOpsActionCancelTask StorageClusterOpsAction = "CancelTask"
 
 	// StorageClusterOpsActionGrowDevices grows every Linux block device (lblk)
-	// of the cluster online to the size its block device has now, after the
-	// LUNs were grown on the storage array. When every device has grown by the
-	// same factor, the placement weights keep their relative sizes and no data
-	// moves. When they have grown unevenly, the weights are set to the new
-	// sizes and the cluster is rebalanced (see spec.growDevices.skipRebalance).
-	// A device that cannot be grown does not stop the others; it is listed in
-	// status.deviceGrowth.errors.
+	// of the cluster online to the size its block device has now. It is the
+	// action for a cluster on storage-array LUNs after every LUN has grown by
+	// the same factor: a device's placement weight keeps the size it was placed
+	// with, so growing the devices together is what keeps the added capacity
+	// fully usable. A device that cannot be grown does not stop the others; it
+	// is listed in status.deviceGrowth.errors.
 	StorageClusterOpsActionGrowDevices StorageClusterOpsAction = "GrowDevices"
 )
 
@@ -123,17 +122,6 @@ type CancelTaskSpec struct {
 	TaskID string `json:"taskID"`
 }
 
-// GrowDevicesSpec parameterizes the GrowDevices action.
-type GrowDevicesSpec struct {
-	// SkipRebalance keeps the device weights when the devices have grown
-	// unevenly. By default the weights are set to the new device sizes and the
-	// cluster is rebalanced, which moves a large part of the data in the
-	// background.
-	// +optional
-	// +k8s:immutable
-	SkipRebalance bool `json:"skipRebalance,omitempty"`
-}
-
 // StorageClusterOpsSpec is one operation to perform against one StorageCluster.
 type StorageClusterOpsSpec struct {
 	// ClusterRef names the StorageCluster this operation acts on. The operation
@@ -166,12 +154,11 @@ type StorageClusterOpsSpec struct {
 	// others.
 	// +optional
 	RollingRestart *RollingRestartSpec `json:"rollingRestart,omitempty"`
-
-	// GrowDevices parameterizes action GrowDevices and is ignored by the others.
-	// +optional
-	GrowDevices *GrowDevicesSpec `json:"growDevices,omitempty"`
 }
 
+// RollingRestartStatus is the walk's position over the cluster's nodes. Where
+// the machine has got to within the node currently being restarted is
+// status.step, and neither field is complete without the other.
 // ClusterDeviceGrowthStatus is what one GrowDevices did to the devices of a
 // cluster.
 type ClusterDeviceGrowthStatus struct {
@@ -186,30 +173,11 @@ type ClusterDeviceGrowthStatus struct {
 	// +optional
 	Errors map[string]string `json:"errors,omitempty"`
 
-	// Uniform reports whether every data device of the cluster has grown by the
-	// same factor. Then the device weights keep their relative sizes and no
-	// data has to move.
+	// Uniform reports whether every data device of the cluster has now grown by
+	// the same factor, which is what makes the added capacity fully usable.
 	Uniform bool `json:"uniform"`
-
-	// WeightsUpdated reports that the devices had grown unevenly and every node
-	// now places data by the devices' new sizes.
-	// +optional
-	WeightsUpdated bool `json:"weightsUpdated,omitempty"`
-
-	// RebalanceStarted reports that the cluster rebalance which moves data to
-	// the new weights was queued. Its progress is in StorageCluster.status.tasks.
-	// +optional
-	RebalanceStarted bool `json:"rebalanceStarted,omitempty"`
-
-	// RebalanceMessage says why the weights were not updated or the rebalance
-	// was not started after an uneven growth.
-	// +optional
-	RebalanceMessage string `json:"rebalanceMessage,omitempty"`
 }
 
-// RollingRestartStatus is the walk's position over the cluster's nodes. Where
-// the machine has got to within the node currently being restarted is
-// status.step, and neither field is complete without the other.
 type RollingRestartStatus struct {
 	// Nodes is the ordered list of storage node UUIDs this action covers,
 	// written once when the walk starts and not modified afterward, so a node

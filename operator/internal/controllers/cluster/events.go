@@ -43,9 +43,6 @@ const (
 	// unusable.
 	DevicesGrown       = "DevicesGrown"
 	DeviceGrowthUneven = "DeviceGrowthUneven"
-	// DevicesReweighted reports that unevenly grown devices got new weights
-	// and the cluster rebalance was started.
-	DevicesReweighted = "DevicesReweighted"
 
 	// TaskGaveUp is a task that left the window having been restarted, which is
 	// the control plane reporting a failure rather than a finish. Its own status

@@ -10445,7 +10445,7 @@
     "/api/v2/clusters/{cluster_id}/grow-devices": {
       "post": {
         "summary": "Clusters:Grow Devices",
-        "description": "Grow every online lblk data device of the cluster to the size of its\nblock device, one device at a time. Used after the LUNs of the cluster\nwere grown on the storage array. If they have grown unevenly, the device\nweights are set to the new sizes and the cluster is rebalanced, unless\n``rebalance`` is false.",
+        "description": "Grow every online lblk data device of the cluster to the size of its\nblock device, one device at a time. Used after all LUNs of the cluster\nwere grown by the same factor on the storage array.",
         "operationId": "clusters_grow_devices_api_v2_clusters__cluster_id__grow_devices_post",
         "security": [
           {
@@ -10461,16 +10461,6 @@
               "type": "string",
               "format": "uuid",
               "title": "Cluster Id"
-            }
-          },
-          {
-            "name": "rebalance",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": true,
-              "title": "Rebalance"
             }
           }
         ],
@@ -16986,16 +16976,6 @@
           "uniform": {
             "type": "boolean",
             "title": "Uniform"
-          },
-          "rebalance": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/DeviceRebalanceDTO"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "type": "object",
@@ -17005,29 +16985,6 @@
           "uniform"
         ],
         "title": "DeviceGrowthDTO"
-      },
-      "DeviceRebalanceDTO": {
-        "properties": {
-          "weights_updated": {
-            "type": "boolean",
-            "title": "Weights Updated"
-          },
-          "started": {
-            "type": "boolean",
-            "title": "Started"
-          },
-          "reason": {
-            "type": "string",
-            "title": "Reason"
-          }
-        },
-        "type": "object",
-        "required": [
-          "weights_updated",
-          "started",
-          "reason"
-        ],
-        "title": "DeviceRebalanceDTO"
       }
     },
     "securitySchemes": {

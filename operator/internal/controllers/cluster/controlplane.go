@@ -92,9 +92,7 @@ type ControlPlane interface {
 	// GrowDevices grows every lblk data device of the cluster to the size of
 	// its block device. It is synchronous and safe to repeat: a device that
 	// has already grown is reported unchanged.
-	// With rebalance, unevenly grown devices get new weights and the cluster
-	// is rebalanced.
-	GrowDevices(ctx context.Context, clusterID string, rebalance bool) (atlascp.ClusterDeviceGrowth, error)
+	GrowDevices(ctx context.Context, clusterID string) (atlascp.ClusterDeviceGrowth, error)
 
 	// Endpoint is the base URL this call would currently reach the control
 	// plane at, resolved the same way every other call resolves it (§3.3).
@@ -230,10 +228,10 @@ func (c *httpControlPlane) Expand(ctx context.Context, clusterID string) error {
 }
 
 func (c *httpControlPlane) GrowDevices(
-	ctx context.Context, clusterID string, rebalance bool,
+	ctx context.Context, clusterID string,
 ) (atlascp.ClusterDeviceGrowth, error) {
 	body, err := c.call(ctx, http.MethodPost,
-		fmt.Sprintf("/api/v2/clusters/%s/grow-devices?rebalance=%t", clusterID, rebalance), nil)
+		fmt.Sprintf("/api/v2/clusters/%s/grow-devices", clusterID), nil)
 	if err != nil {
 		return atlascp.ClusterDeviceGrowth{}, err
 	}
@@ -247,25 +245,14 @@ func (c *httpControlPlane) GrowDevices(
 			Uniform       bool   `json:"uniform"`
 			Warning       string `json:"warning"`
 		} `json:"devices"`
-		Errors    map[string]string `json:"errors"`
-		Uniform   bool              `json:"uniform"`
-		Rebalance *struct {
-			WeightsUpdated bool   `json:"weights_updated"`
-			Started        bool   `json:"started"`
-			Reason         string `json:"reason"`
-		} `json:"rebalance"`
+		Errors  map[string]string `json:"errors"`
+		Uniform bool              `json:"uniform"`
 	}
 	if err := json.Unmarshal(body, &wire); err != nil {
 		return atlascp.ClusterDeviceGrowth{}, fmt.Errorf("decode the device growth of cluster %s: %w",
 			clusterID, err)
 	}
 	out := atlascp.ClusterDeviceGrowth{Errors: wire.Errors, Uniform: wire.Uniform}
-	if wire.Rebalance != nil {
-		out.Rebalance = &atlascp.DeviceRebalance{
-			WeightsUpdated: wire.Rebalance.WeightsUpdated, Started: wire.Rebalance.Started,
-			Reason: wire.Rebalance.Reason,
-		}
-	}
 	for _, d := range wire.Devices {
 		out.Devices = append(out.Devices, atlascp.DeviceGrowth{
 			DeviceID: d.DeviceID, OldSize: d.OldSize, NewSize: d.NewSize,
