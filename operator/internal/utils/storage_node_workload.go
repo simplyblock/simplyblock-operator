@@ -101,19 +101,17 @@ func BuildStorageNodeDaemonSet(
 		}},
 		{Name: "CPU_TOPOLOGY_ENABLED", Value: ptr.StringOrDefault(wl.EnableCpuTopology, "false")},
 	}
-	if wl.Network != nil {
-		// The agent is in the pod network, where its interfaces are not the host's,
-		// so the control plane takes the worker's address from here.
-		mainEnv = append(mainEnv,
-			corev1.EnvVar{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{
-				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"},
-			}},
-			// The node-preparation job calls the agent, and the agent is no longer at
-			// the worker's address.
-			corev1.EnvVar{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{
-				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
-			}})
-	}
+	// The agent is in the pod network, where its interfaces are not the host's, so
+	// the control plane takes the worker's address from here.
+	mainEnv = append(mainEnv,
+		corev1.EnvVar{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"},
+		}},
+		// The node-preparation job calls the agent, which is not at the worker's
+		// address.
+		corev1.EnvVar{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
+		}})
 	if wl.NodeProvisioningBudget != nil {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "MAX_PARALLEL_NODE_ADDS", Value: fmt.Sprintf("%d", *wl.NodeProvisioningBudget)})
 	}
@@ -319,8 +317,11 @@ func BuildStorageNodeDaemonSet(
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "simplyblock-storage-node-sa",
-					HostNetwork:        wl.Network == nil,
-					Tolerations:        storageNodeAgentTolerations(sn, wl),
+					// Off the host network, and in its PID namespace: the agent reads
+					// the host's interfaces and opens its connections by entering
+					// PID 1's network namespace.
+					HostPID:     true,
+					Tolerations: storageNodeAgentTolerations(sn, wl),
 					NodeSelector: map[string]string{
 						kube.LabelStorageNodeSet: sn.Name,
 					},
@@ -514,6 +515,14 @@ func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 			APIGroups: []string{""},
 			Resources: []string{"pods", "pods/exec"},
 			Verbs:     []string{"list", "get", "create", "delete", "watch"},
+		},
+		{
+			// The Service in front of an SPDK pod on the pod network: created
+			// with the pod, its ports set as the node's are allotted, deleted
+			// with the node.
+			APIGroups: []string{""},
+			Resources: []string{"services"},
+			Verbs:     []string{"get", "create", "update", "delete"},
 		},
 		{
 			APIGroups: []string{"apps"},

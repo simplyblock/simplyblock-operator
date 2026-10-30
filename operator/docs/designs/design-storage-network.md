@@ -62,7 +62,7 @@ The management API pods also run on the host network, because they dial the node
 
 ### Non-Goals
 
-- **Other plugins.** `bridge` and SR-IOV are not qualified. The operator does not inspect the plugin, so a definition of another type attaches only if it takes its address from the `ips` of the network selection element.
+- **Other plugins.** `bridge` is not qualified. The operator does not inspect the plugin, so a definition of another type attaches only if it takes its address from the `ips` of the network selection element. Devices a device plugin hands out (an SR-IOV VF pool) are covered in §5.3.
 - **Replacing the primary CNI.** The pod network and Service routing stay with the cluster's CNI. Interfaces are added beside the default one.
 - **Creating the `NetworkAttachmentDefinition`, the routes, or the CNI plugins.** The administrator owns them (§4.2). Multus and the plugins are a prerequisite (P0-3).
 - **RDMA on an attached network.** An RDMA fabric states its data networks as host interfaces (§4.4).
@@ -141,6 +141,26 @@ spec:
 
 The definition is looked up in the storage cluster's namespace, because Multus rejects a reference to another namespace when its namespace isolation is on. An omitted `management` leaves SPDK's RPC on the pod network (Q6).
 
+### 4.1a Serving on the pod network
+
+A third attachment, `podNetwork: {}`, puts the SPDK pod on the cluster CNI's network with nothing attached beside it. The pod's one interface carries the RPC and the data, so the CRD admits it only as the single data network, with no management network and no address pool.
+
+```yaml
+spec:
+  storageNodes:
+    network:
+      data:
+        - name: cni
+          attachment:
+            podNetwork: {}
+```
+
+The pod's own address changes on every restart, and every peer and client holds the address a volume is served on. The node agent therefore keeps a ClusterIP Service in front of each SPDK pod, created before the pod and deleted only with the node, and the control plane records the Service's address as the node's data address while the target binds the pod's own. A Service forwards only the ports it names, so the control plane publishes the node's ports to it whenever they change: at the add, on every restart, and for every lvstore the node starts or stops serving. The kernel initiator on a client reconnects to the same address after a restart, which is what keeps failover and restart behaviour as they are on a host interface.
+
+The operator does none of the attaching: there is no definition to require, no address to assign and no probe to run, so a pod-network node passes the network check at once. Node-add carries `pod_network: true` and no `networks`. The node's status reports the one network with interface `eth0`, the Service's address, and a phase of `Attached` once the pod runs behind the Service, `Unavailable` while it does not, and `Pending` until the Service exists.
+
+What the pod network costs: the traffic goes through the CNI's datapath instead of a NIC. Measured on the Talos lab (Cilium 1.20, four nodes 2+1, node NIC at 1500, fio 4k random read at queue depth 32 through the CSI), a client on the primary's node reached 36k IOPS against 48-50k on a VF, and a cross-node client 31k with native routing against 48k on a VF; in tunnel mode the cross-node figure drops by a further third and large-block bandwidth to a third. Native routing on a jumbo node network is the configuration this mode is meant for.
+
 ### 4.2 The administrator owns the definition
 
 The definition holds the plugin, the NIC it moves, IPAM, and routes. Those depend on the site's NICs, switches, and CNI, which the operator cannot know, and an operator that generated definitions would need a parameter for every plugin option and would tie itself to the plugins it knows. A reference keeps the operator out of the plugin's other fields. The same definition can serve other workloads, and the operator never rewrites an object the administrator or another team depends on. The operator checks the plugin, the IPAM, and the result of an attachment (§5.4, §8.1) and does not write the definition.
@@ -175,7 +195,7 @@ The pool is not allowed with `hostInterface`, which carries the host's own addre
 - `network` is present from the cluster's creation or never. It cannot be added to an existing cluster, changed, or removed, because the control plane resolves the networks at node-add and nothing re-reads the cluster field, and because a cluster that exists on the host network stays there.
 - A node's assigned address is fixed once recorded, because the listeners and every initiator hold it. Changing one is a remove and a re-add.
 - `network` and the legacy fields are mutually exclusive. The legacy fields stay supported and mean `hostInterface` attachments.
-- A cluster's networks are all `networkAttachmentRef` or all `hostInterface`, because a pod is either on the host network or not.
+- A cluster's networks are all `networkAttachmentRef` or all `hostInterface`, because a pod is either on the host network or not; or the one `podNetwork` data network alone (§4.1a).
 - A cluster whose `fabricType` includes RDMA cannot declare a `networkAttachmentRef` data network.
 
 ### 4.5 Per-node status
@@ -249,6 +269,17 @@ A definition that serves a storage node meets these requirements, and the operat
 - **Two interfaces of a pod do not share a subnet,** because that causes ARP flux and reverse-path filtering drops. A definition that must share one adds a `tuning` plugin to set `arp_ignore` and `arp_announce`.
 - **One NIC per pod for `host-device`.** The plugin moves the whole interface, so a worker that runs several SPDK pods needs a NIC and a definition for each. `macvlan` and `ipvlan` leave the parent on the host, so several pods share it, and a pool gives each its own address.
 - **The `device` or `master` is one name for the whole cluster.** A fleet with different NIC names needs a definition per name, or a PCI address when the slots agree (Q3).
+- **A device a device plugin hands out.** A definition annotated `k8s.v1.cni.cncf.io/resourceName: <vendor>/<pool>` takes its device from a device plugin at attach time: the SR-IOV Network Device Plugin's VF pools, with the `sriov` CNI, or with `host-device` and the `deviceID` capability, which takes the PCI address Multus passes in. The preflight reads the annotation with the definition and records the resource on the node's status beside its address; node-add sends it with the network as the `resource` field of its element, and the SPDK container requests one of it in both requests and limits, as Kubernetes requires of an extended resource; the QoS class is unchanged. Without the request the plugin allocates nothing and Multus has no device to attach. The definition names no device, so the node's address comes from an `addressPool`: there is no NIC to adopt an address from before the device is allocated, and the node is held until a pool is declared.
+
+```json
+{
+  "cniVersion": "0.3.1",
+  "name": "storage-vf",
+  "type": "sriov",
+  "capabilities": { "ips": true },
+  "ipam": { "type": "static" }
+}
+```
 
 ### 5.4 Verification in two stages
 
@@ -282,7 +313,7 @@ The SPDK pod therefore reports for itself, and the node agent reports its own ho
 
 The DaemonSet adds `HOST_IP` and `POD_IP` only for a cluster that declares a network, so an upgrade does not roll the agents of a cluster on the host network.
 
-`bind_to_device` needs no change, because the interface name only has to exist in SPDK's own namespace.
+`bind_to_device` needs no change for an attachment, because the interface name only has to exist in SPDK's own namespace. On the pod network it is not set: the Service's traffic is delivered on the pod's interface by the CNI, and a socket pinned to a device refuses it. sbcli's `IFace` carries the two addresses apart, `ip4_address` for what peers and clients connect to and `listen_address` for what the target binds, and the two differ only on the pod network.
 
 When no management network is declared, SPDK's RPC stays on the pod network. The control plane has to dial a name that follows the pod across restarts, which is the per-port DNS name, because a pod address changes when the pod is recreated (Q6).
 

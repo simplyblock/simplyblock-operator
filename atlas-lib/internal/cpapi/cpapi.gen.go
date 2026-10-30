@@ -2271,6 +2271,7 @@ type StorageNodeParams struct {
 	Networks            *[]NetworkAttachment `json:"networks,omitempty"`
 	NodeAddress         string               `json:"node_address"`
 	Partitions          *int                 `json:"partitions,omitempty"`
+	PodNetwork          *bool                `json:"pod_network,omitempty"`
 	SpdkDebug           *bool                `json:"spdk_debug,omitempty"`
 	SpdkImage           *string              `json:"spdk_image,omitempty"`
 	SpdkProxyImage      *string              `json:"spdk_proxy_image,omitempty"`

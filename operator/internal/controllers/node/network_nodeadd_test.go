@@ -21,13 +21,8 @@ import (
 
 const nodeAddDefinition = "storage-data"
 
-func aDataNetwork() simplyblockv1alpha2.StorageNetwork {
-	return simplyblockv1alpha2.StorageNetwork{
-		Name: "fabric",
-		Attachment: simplyblockv1alpha2.NetworkAttachment{
-			NetworkAttachmentRef: &simplyblockv1alpha2.NetworkDefinitionReference{Name: nodeAddDefinition},
-		},
-	}
+func aDataNetwork() *simplyblockv1alpha2.StorageNetworkSpec {
+	return onDefinition(nodeAddDefinition)
 }
 
 func aDefinition() *unstructured.Unstructured {
@@ -130,4 +125,99 @@ func nodeAndClusterOf(t *testing.T, r *StorageNodeReconciler) (*simplyblockv1alp
 		t.Fatal(err)
 	}
 	return node, cluster
+}
+
+// The add of a node on the pod network says so and carries no attachment, so the
+// control plane starts the pod off the host network behind its Service.
+func TestTheAddOfAPodNetworkNodeDeclaresTheModeAndNoNetworks(t *testing.T) {
+	r, _ := onANetwork(t, viaPodNetwork())
+	api := r.API.(*scriptedControlPlane)
+	node, cluster := nodeAndClusterOf(t, r)
+
+	if err := r.postNode(context.Background(), node, cluster); err != nil {
+		t.Fatalf("postNode: %v", err)
+	}
+
+	if !api.adds[0].PodNetwork {
+		t.Fatal("the add did not declare the pod network")
+	}
+	if api.adds[0].Networks != nil {
+		t.Fatalf("networks = %+v, want none on the pod network", api.adds[0].Networks)
+	}
+}
+
+func TestOnlyAPodNetworkDeclarationIsOnThePodNetwork(t *testing.T) {
+	for name, cluster := range map[string]*simplyblockv1alpha2.StorageCluster{
+		"no network":       {},
+		"a definition":     clusterDeclaring(aDataNetwork()),
+		"the host network": clusterDeclaring(viaHost()),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if onPodNetwork(cluster) {
+				t.Fatal("reported on the pod network")
+			}
+		})
+	}
+	if !onPodNetwork(clusterDeclaring(viaPodNetwork())) {
+		t.Fatal("a pod network declaration was not recognised")
+	}
+}
+
+func clusterDeclaring(network *simplyblockv1alpha2.StorageNetworkSpec) *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{Spec: simplyblockv1alpha2.StorageClusterSpec{
+		StorageNodes: &simplyblockv1alpha2.StorageNodesSpec{Network: network},
+	}}
+}
+
+// A definition whose device a device plugin hands out (an SR-IOV VF pool) names
+// the plugin's resource in the k8s.v1.cni.cncf.io/resourceName annotation. The
+// preflight reads it with the definition and records it on the node's status
+// beside the address, so the one read serves the add too.
+func TestThePreflightRecordsTheDeviceResourceOfTheDefinition(t *testing.T) {
+	definition := aDefinitionConfigured(hostDeviceStatic)
+	definition.SetAnnotations(map[string]string{
+		"k8s.v1.cni.cncf.io/resourceName": "intel.com/sriov_storage",
+	})
+	r, apiClient := onANetwork(t, onDefinition(storageNetwork), definition)
+	node := nodeRead(t, apiClient)
+	node.Status.Network = nil
+	if err := apiClient.Status().Update(context.Background(), node); err != nil {
+		t.Fatal(err)
+	}
+	r.HostCheck = aWorkerWithTheNIC(adoptedAddress)
+
+	if _, _, err := runCheck(t, r); err != nil {
+		t.Fatalf("checkNetwork: %v", err)
+	}
+
+	status := nodeRead(t, apiClient).Status.Network
+	if len(status) != 1 || status[0].Resource != "intel.com/sriov_storage" {
+		t.Fatalf("status = %+v, want the resource recorded on network %s", status, storageNetwork)
+	}
+}
+
+// The add carries the recorded resource with the network, so the SPDK pod
+// requests one of it: without the request the plugin allocates no device and
+// Multus has none to attach.
+func TestTheAddCarriesTheDeviceResourceOfTheDefinition(t *testing.T) {
+	r, apiClient := onANetwork(t, aDataNetwork(), aDefinition())
+	api := r.API.(*scriptedControlPlane)
+	node := nodeRead(t, apiClient)
+	node.Status.Network[0].Resource = "intel.com/sriov_storage"
+	if err := apiClient.Status().Update(context.Background(), node); err != nil {
+		t.Fatal(err)
+	}
+	node, cluster := nodeAndClusterOf(t, r)
+
+	if err := r.postNode(context.Background(), node, cluster); err != nil {
+		t.Fatalf("postNode: %v", err)
+	}
+
+	want := []utils.NodeNetworkParams{{
+		Name: nodeAddDefinition, Namespace: opsNamespace, Interface: "data0", IPs: []string{"10.10.10.101/24"},
+		Resource: "intel.com/sriov_storage",
+	}}
+	if len(api.adds) != 1 || !reflect.DeepEqual(api.adds[0].Networks, want) {
+		t.Fatalf("add carried %+v, want networks %+v", api.adds, want)
+	}
 }

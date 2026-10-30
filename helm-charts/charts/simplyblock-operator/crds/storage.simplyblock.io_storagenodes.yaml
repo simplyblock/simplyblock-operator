@@ -466,6 +466,17 @@ spec:
                     node exists, deleting it changes nothing, and editing it reaches only nodes
                     created afterward.
                   properties:
+                    dataInterfaces:
+                      description: |-
+                        DataInterfaces are the host NICs this node serves data on, for a cluster
+                        whose data network is a hostInterface. Unset, the cluster's
+                        spec.storageNodes.dataInterfaces applies.
+                      items:
+                        type: string
+                      type: array
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     deviceNames:
                       description: |-
                         DeviceNames names the devices to use. An entry is a PCI address
@@ -536,6 +547,15 @@ spec:
                           minimum: 1
                           type: integer
                       type: object
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                    mgmtInterface:
+                      description: |-
+                        MgmtInterface is the management NIC this node binds. Unset, the cluster's
+                        spec.storageNodes.mgmtInterface applies, which is what a node created before
+                        the interface was stated per node carries.
+                      type: string
                       x-kubernetes-validations:
                         - message: field is immutable
                           rule: self == oldSelf
@@ -662,6 +682,10 @@ spec:
                       rule: '!has(oldSelf.journalManager) || has(self.journalManager)'
                     - message: field deviceNames is immutable once set
                       rule: '!has(oldSelf.deviceNames) || has(self.deviceNames)'
+                    - message: field mgmtInterface is immutable once set
+                      rule: '!has(oldSelf.mgmtInterface) || has(self.mgmtInterface)'
+                    - message: field dataInterfaces is immutable once set
+                      rule: '!has(oldSelf.dataInterfaces) || has(self.dataInterfaces)'
                     - message: field pcieDenyList is immutable once set
                       rule: '!has(oldSelf.pcieDenyList) || has(self.pcieDenyList)'
                     - message: field pcieModel is immutable once set
@@ -828,6 +852,15 @@ spec:
                           - Attached
                           - Mismatched
                           - Unavailable
+                        type: string
+                      resource:
+                        description: |-
+                          Resource is the extended resource the SPDK pod requests for the network's
+                          device, from the definition's k8s.v1.cni.cncf.io/resourceName annotation:
+                          a device plugin (an SR-IOV VF pool) hands the device out only to a pod
+                          that requests it. It is recorded with the address, before the node is
+                          added, and is empty for a definition whose plugin creates the interface
+                          itself or names its device.
                         type: string
                     required:
                       - network

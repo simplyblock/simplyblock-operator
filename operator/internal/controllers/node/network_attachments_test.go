@@ -22,18 +22,21 @@ const (
 
 func viaDefinition(name string) simplyblockv1alpha2.StorageNetwork {
 	return simplyblockv1alpha2.StorageNetwork{
-		Name: name,
-		Attachment: simplyblockv1alpha2.NetworkAttachment{
-			NetworkAttachmentRef: &simplyblockv1alpha2.NetworkDefinitionReference{Name: name + "-def"},
-		},
+		NetworkAttachmentRef: simplyblockv1alpha2.NetworkDefinitionReference{Name: name},
 	}
 }
 
-func viaHost(name, iface string) simplyblockv1alpha2.StorageNetwork {
-	return simplyblockv1alpha2.StorageNetwork{
-		Name:       name,
-		Attachment: simplyblockv1alpha2.NetworkAttachment{HostInterface: iface},
+// onDefinition is a cluster network made of the one definition, on the pod network
+// that data networks attach to.
+func onDefinition(name string) *simplyblockv1alpha2.StorageNetworkSpec {
+	return &simplyblockv1alpha2.StorageNetworkSpec{
+		PodNetwork: true, Data: []simplyblockv1alpha2.StorageNetwork{viaDefinition(name)},
 	}
+}
+
+// viaHost is a cluster network that runs the SPDK pods on the host network.
+func viaHost() *simplyblockv1alpha2.StorageNetworkSpec {
+	return &simplyblockv1alpha2.StorageNetworkSpec{SpdkOnHostNetwork: true}
 }
 
 // statedAddresses is the addresses the operator assigned a node, by network name.
@@ -59,17 +62,15 @@ func build(
 // U-01
 func TestAttachmentsAreNamedInTheOrderTheClusterListsThem(t *testing.T) {
 	network := &simplyblockv1alpha2.StorageNetworkSpec{
-		Management: &[]simplyblockv1alpha2.StorageNetwork{viaDefinition("management")}[0],
-		Data:       []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-a"), viaDefinition("storage-b")},
+		Data: []simplyblockv1alpha2.StorageNetwork{viaDefinition("storage-a"), viaDefinition("storage-b")},
 	}
-	config := statedAddresses("management", "10.0.0.5/24", "storage-a", nicAddress, "storage-b", "10.20.20.101/24")
+	config := statedAddresses("storage-a", nicAddress, "storage-b", "10.20.20.101/24")
 
 	got := build(t, network, config)
 
 	want := []struct{ name, iface, ip string }{
-		{"management-def", "mgmt0", "10.0.0.5/24"},
-		{"storage-a-def", firstData, nicAddress},
-		{"storage-b-def", "data1", "10.20.20.101/24"},
+		{"storage-a", firstData, nicAddress},
+		{"storage-b", "data1", "10.20.20.101/24"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d attachments, want %d: %+v", len(got), len(want), got)
@@ -78,7 +79,7 @@ func TestAttachmentsAreNamedInTheOrderTheClusterListsThem(t *testing.T) {
 		if got[i].Name != w.name || got[i].Interface != w.iface || len(got[i].IPs) != 1 || got[i].IPs[0] != w.ip {
 			t.Errorf("attachment %d = %+v, want %+v", i, got[i], w)
 		}
-		if wantNetwork := []string{"management", "storage-a", "storage-b"}[i]; got[i].Network != wantNetwork {
+		if wantNetwork := []string{"storage-a", "storage-b"}[i]; got[i].Network != wantNetwork {
 			t.Errorf("attachment %d network = %q, want %q", i, got[i].Network, wantNetwork)
 		}
 		if got[i].Namespace != attachNamespace {
@@ -103,7 +104,7 @@ func TestAnAttachmentCarriesTheAddressAndNeverARoute(t *testing.T) {
 	if err := json.Unmarshal([]byte(encoded), &decoded); err != nil {
 		t.Fatalf("the annotation is not a JSON list: %v", err)
 	}
-	if len(decoded) != 1 || decoded[0]["name"] != "storage-a-def" || decoded[0]["interface"] != firstData ||
+	if len(decoded) != 1 || decoded[0]["name"] != storageNetwork || decoded[0]["interface"] != firstData ||
 		decoded[0]["namespace"] != attachNamespace {
 		t.Fatalf("annotation = %s", encoded)
 	}
@@ -124,11 +125,7 @@ func TestWithoutAManagementNetworkTheDataNetworksStartAtDataZero(t *testing.T) {
 
 // U-04
 func TestAHostInterfaceNetworkProducesNoAttachment(t *testing.T) {
-	network := &simplyblockv1alpha2.StorageNetworkSpec{
-		Management: &[]simplyblockv1alpha2.StorageNetwork{viaHost("management", "eth0")}[0],
-		Data:       []simplyblockv1alpha2.StorageNetwork{viaHost("storage-a", "eth1")},
-	}
-	if got := build(t, network, nil); len(got) != 0 {
+	if got := build(t, viaHost(), nil); len(got) != 0 {
 		t.Fatalf("got %+v, want none", got)
 	}
 	if got := build(t, nil, nil); len(got) != 0 {
@@ -175,5 +172,19 @@ func TestAtMostEightDataNetworksAreBuilt(t *testing.T) {
 				t.Fatalf("got %+v", got)
 			}
 		})
+	}
+}
+
+// viaPodNetwork is the network of a cluster on the pod network.
+func viaPodNetwork() *simplyblockv1alpha2.StorageNetworkSpec {
+	return &simplyblockv1alpha2.StorageNetworkSpec{PodNetwork: true}
+}
+
+// A pod on the pod network attaches to nothing: no element, no annotation.
+func TestAPodNetworkHasNoAttachment(t *testing.T) {
+	got := build(t, viaPodNetwork(), nil)
+
+	if len(got) != 0 {
+		t.Fatalf("attachments = %+v, want none", got)
 	}
 }

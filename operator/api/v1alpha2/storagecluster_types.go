@@ -519,7 +519,7 @@ type OpenShiftSpec struct {
 // memory, and the sizing block, which are per node precisely so that an image
 // rollout and a hardware re-size can walk the fleet one machine at a time.
 //
-// +kubebuilder:validation:XValidation:rule="!has(self.network) || (!has(self.mgmtInterface) && !has(self.dataInterfaces))",message="network cannot be combined with mgmtInterface or dataInterfaces"
+// +kubebuilder:validation:XValidation:rule="!has(self.dataInterfaces) || !has(self.network) || (has(self.network.spdkOnHostNetwork) && self.network.spdkOnHostNetwork)",message="dataInterfaces are allowed only with network.spdkOnHostNetwork"
 type StorageNodesSpec struct {
 	// Image is the storage-node container image. Defaults to the ControlPlane
 	// singleton's spec.image when unset, so a deployment states the version once.
@@ -549,11 +549,11 @@ type StorageNodesSpec struct {
 
 	// Network states the networks the storage nodes' SPDK pods attach to, as
 	// references to networks rather than interface names. It replaces
-	// mgmtInterface and dataInterfaces, and the two cannot be combined. It is
-	// set when the cluster is created and never added, changed, or removed
-	// afterward: the control plane resolves a node's networks when it adds the
-	// node and does not revisit them, and a cluster created without it keeps its
-	// pods on the host network.
+	// dataInterfaces, which are allowed only with network.spdkOnHostNetwork. The
+	// management interface is still mgmtInterface. It is set when the cluster is created and never added,
+	// changed, or removed afterward: the control plane resolves a node's networks
+	// when it adds the node and does not revisit them, and a cluster created
+	// without it keeps its pods on the host network.
 	// +optional
 	// +k8s:immutable
 	Network *StorageNetworkSpec `json:"network,omitempty"`
@@ -675,7 +675,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="has(self.superclusterRef) == has(oldSelf.superclusterRef) && (!has(self.superclusterRef) || self.superclusterRef == oldSelf.superclusterRef)",message="superclusterRef is set at creation and never changed"
 // +kubebuilder:validation:XValidation:rule="!(has(self.supercluster) && has(self.superclusterRef))",message="a supercluster cannot be a member of another"
 // +kubebuilder:validation:XValidation:rule="has(self.superclusterRef) || !has(self.disablePlacement)",message="disablePlacement is valid only on a member"
-// +kubebuilder:validation:XValidation:rule="!has(self.storageNodes) || !has(self.storageNodes.network) || !has(self.storageNodes.network.data) || !self.storageNodes.network.data.exists(n, has(n.attachment.networkAttachmentRef)) || !has(self.fabricType) || self.fabricType == 'tcp'",message="a data network attached through a NetworkAttachmentDefinition serves NVMe/TCP only"
+// +kubebuilder:validation:XValidation:rule="!has(self.storageNodes) || !has(self.storageNodes.network) || !has(self.storageNodes.network.data) || self.storageNodes.network.data.size() == 0 || !has(self.fabricType) || self.fabricType == 'tcp'",message="a data network attached through a NetworkAttachmentDefinition serves NVMe/TCP only"
 type StorageClusterSpec struct {
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
 	// node. It is the cluster's and no node carries a copy: every node's
@@ -1347,51 +1347,50 @@ func init() {
 	SchemeBuilder.Register(&StorageCluster{}, &StorageClusterList{})
 }
 
-// StorageNetworkSpec is the management network and the data networks of a
-// storage cluster. Its networks are attached the same way: all through
-// NetworkAttachmentDefinitions or all as host interfaces.
+// StorageNetworkSpec is how a storage cluster's SPDK pods reach their networks.
+// The pods are on the host network (spdkOnHostNetwork), or on the pod network
+// (podNetwork), which Multus data networks may add dedicated interfaces to. The
+// host network excludes the rest.
 //
-// +kubebuilder:validation:XValidation:rule="!has(self.data) || self.data.size() == 0 || (self.data.all(n, has(n.attachment.networkAttachmentRef) == has(self.data[0].attachment.networkAttachmentRef)) && (!has(self.management) || has(self.management.attachment.networkAttachmentRef) == has(self.data[0].attachment.networkAttachmentRef)))",message="all networks must use networkAttachmentRef, or all must use hostInterface"
+// +kubebuilder:validation:XValidation:rule="(has(self.podNetwork) && self.podNetwork) || (has(self.spdkOnHostNetwork) && self.spdkOnHostNetwork)",message="one of podNetwork and spdkOnHostNetwork must be set"
+// +kubebuilder:validation:XValidation:rule="!(has(self.podNetwork) && self.podNetwork && has(self.spdkOnHostNetwork) && self.spdkOnHostNetwork)",message="podNetwork and spdkOnHostNetwork are exclusive"
+// +kubebuilder:validation:XValidation:rule="!has(self.data) || self.data.size() == 0 || (has(self.podNetwork) && self.podNetwork)",message="data networks require podNetwork: true"
+// +kubebuilder:validation:XValidation:rule="!has(self.data) || self.data.all(a, self.data.exists_one(b, b.networkAttachmentRef.name == a.networkAttachmentRef.name))",message="data networks must name distinct NetworkAttachmentDefinitions"
 type StorageNetworkSpec struct {
-	// Management is the network the control plane reaches the SPDK RPC on.
-	// Unset, the RPC is served on the pod network.
+	// PodNetwork puts the SPDK pods on the cluster CNI's network. Alone, the pod's
+	// one interface carries the RPC and the data, and a Service in front of the pod
+	// is the address peers and clients hold, since the pod's own address changes on
+	// every restart. The control plane keeps the Service and the ports it carries.
+	// With data networks, the RPC stays on that interface and the data moves to the
+	// networks' interfaces, whose addresses are stable, so no Service is kept.
 	// +optional
-	Management *StorageNetwork `json:"management,omitempty"`
+	PodNetwork bool `json:"podNetwork,omitempty"`
 
-	// Data are the networks the storage nodes serve volumes on. Unset, data is
-	// served on the management network.
+	// SpdkOnHostNetwork runs the SPDK pods on the host network, where they bind
+	// host NICs. The NICs' names are not stated here, because a fleet's workers
+	// do not agree on what their NICs are called: each node names its own in
+	// its spec.config.dataInterfaces, which is allowed only in this mode.
+	// +optional
+	SpdkOnHostNetwork bool `json:"spdkOnHostNetwork,omitempty"`
+
+	// Data are the Multus networks the storage nodes serve volumes on, each a
+	// NetworkAttachmentDefinition the pod attaches to besides the pod network, which
+	// podNetwork must therefore state.
 	// +kubebuilder:validation:MaxItems=8
-	// +listType=map
-	// +listMapKey=name
+	// +listType=atomic
 	// +optional
 	Data []StorageNetwork `json:"data,omitempty"`
 }
 
-// StorageNetwork is one network a storage node's SPDK pod attaches to. A
-// network attached through a definition takes each node's address from its
-// address pool, or, with no pool, from the address the NIC the definition moves
-// holds on the worker.
-//
-// +kubebuilder:validation:XValidation:rule="!has(self.attachment.hostInterface) || !has(self.addressPool)",message="addressPool is not allowed with hostInterface"
+// StorageNetwork is one data network a storage node's SPDK pod attaches to
+// through a NetworkAttachmentDefinition.
 type StorageNetwork struct {
-	// Name identifies the network within the cluster, and is the key the nodes'
-	// addresses and status use.
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// NetworkAttachmentRef is the Multus NetworkAttachmentDefinition in the
+	// namespace of the storage cluster, and the key the nodes' addresses and
+	// status use. The pod attaches to it and takes the interface the definition's
+	// plugin creates.
 	// +kubebuilder:validation:Required
-	Name string `json:"name"`
-
-	// Attachment is how the pod reaches the network.
-	// +kubebuilder:validation:Required
-	Attachment NetworkAttachment `json:"attachment"`
-
-	// AddressPool is the range the operator takes each node's address on this
-	// network from. Unset, a network attached through a definition takes the
-	// address its NIC holds on the worker. It is not allowed for a host
-	// interface, which carries the host's own address.
-	// +optional
-	AddressPool *NetworkAddressPool `json:"addressPool,omitempty"`
+	NetworkAttachmentRef NetworkDefinitionReference `json:"networkAttachmentRef"`
 }
 
 // NetworkAddressPool is the subnet a network's node addresses are taken from.
@@ -1423,24 +1422,6 @@ type NetworkAddressPool struct {
 	Last string `json:"last,omitempty"`
 }
 
-// NetworkAttachment names the mechanism that connects a pod to a network.
-// Exactly one field is set.
-// +kubebuilder:validation:XValidation:rule="has(self.networkAttachmentRef) != has(self.hostInterface)",message="exactly one of networkAttachmentRef and hostInterface must be set"
-type NetworkAttachment struct {
-	// NetworkAttachmentRef is a Multus NetworkAttachmentDefinition in the
-	// namespace of the storage cluster. The pod attaches to it and takes the
-	// interface the definition's plugin creates.
-	// +optional
-	NetworkAttachmentRef *NetworkDefinitionReference `json:"networkAttachmentRef,omitempty"`
-
-	// HostInterface is the name of a host interface. The pods run on the host
-	// network and bind it.
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
-	// +optional
-	HostInterface string `json:"hostInterface,omitempty"`
-}
-
 // NetworkDefinitionReference names a NetworkAttachmentDefinition in the
 // namespace of the object that holds the reference.
 type NetworkDefinitionReference struct {
@@ -1449,4 +1430,10 @@ type NetworkDefinitionReference struct {
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
+
+	// AddressPool is the range the operator takes each node's address on this
+	// network from. Unset, the network takes the address the NIC the definition
+	// moves holds on the worker.
+	// +optional
+	AddressPool *NetworkAddressPool `json:"addressPool,omitempty"`
 }

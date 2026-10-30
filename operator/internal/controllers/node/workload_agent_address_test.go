@@ -23,16 +23,21 @@ import (
 const agentPodAddress = "10.244.1.7"
 
 func anAgentPod(podIP string) *corev1.Pod {
+	return anAgentPodOn(opsWorker, podIP)
+}
+
+// anAgentPodOn is the agent pod of a worker, at the address given.
+func anAgentPodOn(worker, podIP string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "agent-" + opsWorker,
+			Name:      "agent-" + worker,
 			Namespace: opsNamespace,
 			Labels: map[string]string{
 				atlaskube.LabelApp:                atlaskube.AppStorageNode,
 				atlaskube.LabelSimplyblockCluster: opsCluster,
 			},
 		},
-		Spec:   corev1.PodSpec{NodeName: opsWorker},
+		Spec:   corev1.PodSpec{NodeName: worker},
 		Status: corev1.PodStatus{PodIP: podIP},
 	}
 }
@@ -63,9 +68,7 @@ func publishedAfterReconcile(t *testing.T, network *simplyblockv1alpha2.StorageN
 }
 
 func aDeclaredNetwork() *simplyblockv1alpha2.StorageNetworkSpec {
-	return &simplyblockv1alpha2.StorageNetworkSpec{
-		Data: []simplyblockv1alpha2.StorageNetwork{{Name: "fabric"}},
-	}
+	return onDefinition("fabric-data")
 }
 
 // I-39
@@ -86,12 +89,13 @@ func TestTheSliceOmitsAnAgentPodWithNoAddressYet(t *testing.T) {
 	}
 }
 
-// I-40
-func TestTheSliceKeepsTheWorkerAddressWhenNoNetworkIsDeclared(t *testing.T) {
+// I-40: the agent is always in the pod network, so a cluster with no network
+// declared carries the pod's address as well.
+func TestTheSliceCarriesTheAgentPodAddressWhenNoNetworkIsDeclared(t *testing.T) {
 	published := publishedAfterReconcile(t, nil, anAgentPod(agentPodAddress))
 
-	if got := published[utils.NodeHostnameLabel(opsWorker)]; got != sourceWorkerAddress {
-		t.Fatalf("published %q, want the worker's %q (all: %v)", got, sourceWorkerAddress, published)
+	if got := published[utils.NodeHostnameLabel(opsWorker)]; got != agentPodAddress {
+		t.Fatalf("published %q, want the agent pod's %q (all: %v)", got, agentPodAddress, published)
 	}
 }
 

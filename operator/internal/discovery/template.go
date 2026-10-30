@@ -92,6 +92,21 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 		seed = &simplyblockv1alpha2.ClusterTemplate{}
 	}
 
+	switch {
+	case seed.Network != nil:
+		out.Template.Network = seed.Network.DeepCopy()
+		out.Notes = append(out.Notes, statedNote("network", "the one the installation stated"))
+	case plan.DataNetworks > 0:
+		out.Template.Network = hostNetwork()
+		out.Notes = append(out.Notes, "network runs the SPDK pods on the host network, because most workers of the "+
+			"draft have a data interface. Each group names its own NICs. A cluster's network is fixed when it is "+
+			"created, so this is the line to correct now or never")
+	case plan.Unattached:
+		out.Template.Network = podNetworkOnly()
+		out.Notes = append(out.Notes, "network is the pod network, because no worker has a data interface of its own. "+
+			"A cluster's network is fixed when it is created, so this is the line to correct now or never")
+	}
+
 	if seed.EnableDriveFormat != nil {
 		out.Template.EnableDriveFormat = seed.EnableDriveFormat
 		out.Notes = append(out.Notes, statedNote("enableDriveFormat",
@@ -814,4 +829,15 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// podNetworkOnly is the network of a cluster that serves data on the pod network.
+func podNetworkOnly() *simplyblockv1alpha2.StorageNetworkSpec {
+	return &simplyblockv1alpha2.StorageNetworkSpec{PodNetwork: true}
+}
+
+// hostNetwork is the network of a cluster whose SPDK pods bind host NICs. The NICs
+// themselves are named by each group.
+func hostNetwork() *simplyblockv1alpha2.StorageNetworkSpec {
+	return &simplyblockv1alpha2.StorageNetworkSpec{SpdkOnHostNetwork: true}
 }

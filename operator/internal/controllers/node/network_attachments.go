@@ -20,10 +20,8 @@ import (
 var errNoAddress = errors.New("the node has no assigned address")
 
 const (
-	// managementInterface is the name the management network takes inside the
-	// pod, and dataInterfacePrefix is what the data networks' names start with.
-	// Both are explicit so that no name depends on the order Multus assigns.
-	managementInterface = "mgmt0"
+	// dataInterfacePrefix is what the data networks' interface names start with.
+	// It is explicit so that no name depends on the order Multus assigns.
 	dataInterfacePrefix = "data"
 
 	// maxDataNetworks is the number of data networks a cluster may declare.
@@ -62,6 +60,18 @@ func assignedAddresses(status []simplyblockv1alpha2.NodeNetworkStatus) map[strin
 	return assigned
 }
 
+// assignedResources is the device resource recorded for each network that has
+// one, by network name.
+func assignedResources(status []simplyblockv1alpha2.NodeNetworkStatus) map[string]string {
+	resources := map[string]string{}
+	for _, n := range status {
+		if n.Resource != "" {
+			resources[n.Network] = n.Resource
+		}
+	}
+	return resources
+}
+
 // BuildAttachments turns the declaration and a node's assigned addresses into
 // its attachment list: mgmt0 first, then data0 onward in the declared order. A
 // host interface network has no element.
@@ -79,26 +89,21 @@ func BuildAttachments(
 
 	var attachments []Attachment
 	add := func(n *simplyblockv1alpha2.StorageNetwork, iface string) error {
-		ref := n.Attachment.NetworkAttachmentRef
+		ref := &n.NetworkAttachmentRef
 		if ref == nil {
 			return nil
 		}
-		address, found := assigned[n.Name]
+		address, found := assigned[n.Name()]
 		if !found {
-			return fmt.Errorf("network %q: %w", n.Name, errNoAddress)
+			return fmt.Errorf("network %q: %w", n.Name(), errNoAddress)
 		}
 		attachments = append(attachments, Attachment{
-			Network: n.Name, Name: ref.Name, Namespace: namespace, Interface: iface,
+			Network: n.Name(), Name: ref.Name, Namespace: namespace, Interface: iface,
 			IPs: []string{address},
 		})
 		return nil
 	}
 
-	if network.Management != nil {
-		if err := add(network.Management, managementInterface); err != nil {
-			return nil, err
-		}
-	}
 	for i := range network.Data {
 		if err := add(&network.Data[i], fmt.Sprintf("%s%d", dataInterfacePrefix, i)); err != nil {
 			return nil, err

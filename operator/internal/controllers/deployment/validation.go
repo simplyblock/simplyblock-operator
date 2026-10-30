@@ -162,7 +162,7 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 				strings.Join(groups, ", ")),
 		})
 	}
-	if groups := groupsWithoutManagementInterface(config); len(groups) > 0 && !onANetwork(config) {
+	if groups := groupsWithoutManagementInterface(config); len(groups) > 0 && (!onANetwork(config) || onHostNICs(config)) {
 		findings = append(findings, finding{
 			reason: NoManagementInterface,
 			message: fmt.Sprintf(

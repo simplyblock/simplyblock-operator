@@ -40,11 +40,11 @@ func (r *StorageNodeReconciler) checkNetwork(
 		return stepAwaitingSlot, true, nil
 	}
 
-	configs, err := r.requireDefinitions(ctx, node, cluster, network)
+	definitions, err := r.requireDefinitions(ctx, node, cluster, network)
 	if err != nil {
 		return stepCheckingNetwork, false, err
 	}
-	if err := r.assignAddresses(ctx, node, cluster, configs); err != nil {
+	if err := r.assignAddresses(ctx, node, cluster, definitions); err != nil {
 		return stepCheckingNetwork, false, err
 	}
 	if _, err := BuildAttachments(node.Namespace, network, assignedAddresses(node.Status.Network)); err != nil {
@@ -62,17 +62,28 @@ func (r *StorageNodeReconciler) heldFor(
 	return blockedf(reason, format, args...)
 }
 
+// definition is what the preflight reads of one NetworkAttachmentDefinition: its
+// CNI configuration, and the extended resource a device plugin hands its device
+// out under (the k8s.v1.cni.cncf.io/resourceName annotation), "" for a
+// definition whose plugin creates the interface itself (macvlan, ipvlan) or names
+// its device (host-device with device or pciBusID).
+type definition struct {
+	Config   inventory.NetworkAttachmentConfig
+	Resource string
+}
+
 // requireDefinitions holds the node when a referenced definition cannot be read.
-// It returns each definition's configuration by the name of the network that
-// references it.
+// It returns what it read of each definition by the name of the network that
+// references it. This is the one read of a definition a node makes: what node-add
+// needs of it later is recorded on the node's status with its address.
 func (r *StorageNodeReconciler) requireDefinitions(
 	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
 	cluster *simplyblockv1alpha2.StorageCluster, network *simplyblockv1alpha2.StorageNetworkSpec,
-) (map[string]inventory.NetworkAttachmentConfig, error) {
-	configs := map[string]inventory.NetworkAttachmentConfig{}
+) (map[string]definition, error) {
+	definitions := map[string]definition{}
 	for _, n := range pooledNetworks(network) {
-		ref := n.Attachment.NetworkAttachmentRef
-		definition, err := multus.GetDefinition(ctx, r.Client, client.ObjectKey{Namespace: node.Namespace, Name: ref.Name})
+		ref := n.NetworkAttachmentRef
+		nad, err := multus.GetDefinition(ctx, r.Client, client.ObjectKey{Namespace: node.Namespace, Name: ref.Name})
 		switch {
 		case err == nil:
 		case multus.KindNotServed(err):
@@ -81,14 +92,17 @@ func (r *StorageNodeReconciler) requireDefinitions(
 		case apierrors.IsNotFound(err):
 			return nil, r.heldFor(cluster, NetworkAttachmentNotFound,
 				"the NetworkAttachmentDefinition %s/%s for network %q does not exist",
-				node.Namespace, ref.Name, n.Name)
+				node.Namespace, ref.Name, n.Name())
 		default:
 			return nil, fmt.Errorf("reading the definition %q: %w", ref.Name, err)
 		}
 
-		configs[n.Name] = inventory.ParseNetworkAttachmentConfig(definitionConfig(definition))
+		definitions[n.Name()] = definition{
+			Config:   inventory.ParseNetworkAttachmentConfig(definitionConfig(nad)),
+			Resource: nad.GetAnnotations()[inventory.NetworkAttachmentResourceNameAnnotation],
+		}
 	}
-	return configs, nil
+	return definitions, nil
 }
 
 // definitionConfig is the CNI configuration a definition carries.

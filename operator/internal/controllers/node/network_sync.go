@@ -28,6 +28,11 @@ const spdkPodRole = "simplyblock-storage-node"
 func (r *StorageNodeReconciler) syncNetwork(
 	ctx context.Context, node *simplyblockv1alpha2.StorageNode, cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
+	if onPodNetwork(cluster) {
+		// Nothing is attached, so there is no network-status to verify: the
+		// Service in front of the pod is what the node's status reports.
+		return r.syncPodNetwork(ctx, node, cluster)
+	}
 	declared, err := BuildAttachments(node.Namespace, networkOf(cluster), assignedAddresses(node.Status.Network))
 	if errors.Is(err, errNoAddress) {
 		// The node has not reached the step that assigns its addresses, so there is
@@ -203,7 +208,7 @@ func equalNetworkStatus(a, b []simplyblockv1alpha2.NodeNetworkStatus) bool {
 	}
 	for i := range a {
 		if a[i].Network != b[i].Network || a[i].Interface != b[i].Interface ||
-			a[i].Address != b[i].Address || a[i].Assigned != b[i].Assigned ||
+			a[i].Address != b[i].Address || a[i].Assigned != b[i].Assigned || a[i].Resource != b[i].Resource ||
 			a[i].Phase != b[i].Phase || !equalBool(a[i].HostReachable, b[i].HostReachable) {
 			return false
 		}

@@ -251,6 +251,20 @@ type StorageNodeConfig struct {
 	// +k8s:immutable
 	DeviceNames []string `json:"deviceNames,omitempty"`
 
+	// MgmtInterface is the management NIC this node binds. Unset, the cluster's
+	// spec.storageNodes.mgmtInterface applies, which is what a node created before
+	// the interface was stated per node carries.
+	// +optional
+	// +k8s:immutable
+	MgmtInterface string `json:"mgmtInterface,omitempty"`
+
+	// DataInterfaces are the host NICs this node serves data on, for a cluster
+	// whose data network is a hostInterface. Unset, the cluster's
+	// spec.storageNodes.dataInterfaces applies.
+	// +optional
+	// +k8s:immutable
+	DataInterfaces []string `json:"dataInterfaces,omitempty"`
+
 	// PcieAllowList selects devices by PCI address. It is the one device field a
 	// migration writes, merging spec.migrate.newSsdPcie into it so devices added
 	// on the target host survive a later rebuild, so it is guarded by the
@@ -640,17 +654,20 @@ func init() {
 type NodeNetworkPhase string
 
 const (
-	// NodeNetworkPhasePending means the pod has not reported the network.
+	// NodeNetworkPhasePending means the pod has not reported the network; on
+	// the pod network, that the Service in front of the pod does not exist yet.
 	NodeNetworkPhasePending NodeNetworkPhase = "Pending"
 
-	// NodeNetworkPhaseAttached means the pod holds the declared address.
+	// NodeNetworkPhaseAttached means the pod holds the declared address; on the
+	// pod network, that the pod runs behind its Service.
 	NodeNetworkPhaseAttached NodeNetworkPhase = "Attached"
 
 	// NodeNetworkPhaseMismatched means the pod holds a different address from
 	// the one the node states.
 	NodeNetworkPhaseMismatched NodeNetworkPhase = "Mismatched"
 
-	// NodeNetworkPhaseUnavailable means the interface the pod held is gone.
+	// NodeNetworkPhaseUnavailable means the interface the pod held is gone; on
+	// the pod network, that the Service exists and the pod does not run.
 	NodeNetworkPhaseUnavailable NodeNetworkPhase = "Unavailable"
 )
 
@@ -670,6 +687,15 @@ type NodeNetworkStatus struct {
 	// keeps it across restarts and reboots. It is empty until it is chosen.
 	// +optional
 	Assigned string `json:"assigned,omitempty"`
+
+	// Resource is the extended resource the SPDK pod requests for the network's
+	// device, from the definition's k8s.v1.cni.cncf.io/resourceName annotation:
+	// a device plugin (an SR-IOV VF pool) hands the device out only to a pod
+	// that requests it. It is recorded with the address, before the node is
+	// added, and is empty for a definition whose plugin creates the interface
+	// itself or names its device.
+	// +optional
+	Resource string `json:"resource,omitempty"`
 
 	// Address is the address the pod reported.
 	// +optional

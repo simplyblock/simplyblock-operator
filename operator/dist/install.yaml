@@ -1191,195 +1191,101 @@ spec:
                     properties:
                       data:
                         description: |-
-                          Data are the networks the storage nodes serve volumes on. Unset, data is
-                          served on the management network.
+                          Data are the Multus networks the storage nodes serve volumes on, each a
+                          NetworkAttachmentDefinition the pod attaches to besides the pod network, which
+                          podNetwork must therefore state.
                         items:
                           description: |-
-                            StorageNetwork is one network a storage node's SPDK pod attaches to. A
-                            network attached through a definition takes each node's address from its
-                            address pool, or, with no pool, from the address the NIC the definition moves
-                            holds on the worker.
+                            StorageNetwork is one data network a storage node's SPDK pod attaches to
+                            through a NetworkAttachmentDefinition.
                           properties:
-                            addressPool:
+                            networkAttachmentRef:
                               description: |-
-                                AddressPool is the range the operator takes each node's address on this
-                                network from. Unset, a network attached through a definition takes the
-                                address its NIC holds on the worker. It is not allowed for a host
-                                interface, which carries the host's own address.
+                                NetworkAttachmentRef is the Multus NetworkAttachmentDefinition in the
+                                namespace of the storage cluster, and the key the nodes' addresses and
+                                status use. The pod attaches to it and takes the interface the definition's
+                                plugin creates.
                               properties:
-                                first:
+                                addressPool:
                                   description: |-
-                                    First is the lowest address the operator may hand out. Unset, the range
-                                    starts at the subnet's first host address. It is set together with Last.
-                                  maxLength: 15
-                                  pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
-                                  type: string
-                                last:
-                                  description: |-
-                                    Last is the highest address the operator may hand out. Unset, the range
-                                    ends at the subnet's last host address. It is set together with First.
-                                  maxLength: 15
-                                  pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
-                                  type: string
-                                subnet:
-                                  description: |-
-                                    Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
-                                    length is the one each node's address carries.
-                                  maxLength: 18
-                                  pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$
-                                  type: string
-                              required:
-                              - subnet
-                              type: object
-                              x-kubernetes-validations:
-                              - message: first and last are set together
-                                rule: has(self.first) == has(self.last)
-                              - message: first and last must lie inside subnet
-                                rule: '!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first))
-                                  && cidr(self.subnet).containsIP(ip(self.last)))'
-                            attachment:
-                              description: Attachment is how the pod reaches the network.
-                              properties:
-                                hostInterface:
-                                  description: |-
-                                    HostInterface is the name of a host interface. The pods run on the host
-                                    network and bind it.
-                                  maxLength: 63
-                                  minLength: 1
-                                  type: string
-                                networkAttachmentRef:
-                                  description: |-
-                                    NetworkAttachmentRef is a Multus NetworkAttachmentDefinition in the
-                                    namespace of the storage cluster. The pod attaches to it and takes the
-                                    interface the definition's plugin creates.
+                                    AddressPool is the range the operator takes each node's address on this
+                                    network from. Unset, the network takes the address the NIC the definition
+                                    moves holds on the worker.
                                   properties:
-                                    name:
-                                      description: Name is the definition's name.
-                                      maxLength: 253
-                                      minLength: 1
+                                    first:
+                                      description: |-
+                                        First is the lowest address the operator may hand out. Unset, the range
+                                        starts at the subnet's first host address. It is set together with Last.
+                                      maxLength: 15
+                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                      type: string
+                                    last:
+                                      description: |-
+                                        Last is the highest address the operator may hand out. Unset, the range
+                                        ends at the subnet's last host address. It is set together with First.
+                                      maxLength: 15
+                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                      type: string
+                                    subnet:
+                                      description: |-
+                                        Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
+                                        length is the one each node's address carries.
+                                      maxLength: 18
+                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$
                                       type: string
                                   required:
-                                  - name
+                                  - subnet
                                   type: object
+                                  x-kubernetes-validations:
+                                  - message: first and last are set together
+                                    rule: has(self.first) == has(self.last)
+                                  - message: first and last must lie inside subnet
+                                    rule: '!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first))
+                                      && cidr(self.subnet).containsIP(ip(self.last)))'
+                                name:
+                                  description: Name is the definition's name.
+                                  maxLength: 253
+                                  minLength: 1
+                                  type: string
+                              required:
+                              - name
                               type: object
-                              x-kubernetes-validations:
-                              - message: exactly one of networkAttachmentRef and hostInterface
-                                  must be set
-                                rule: has(self.networkAttachmentRef) != has(self.hostInterface)
-                            name:
-                              description: |-
-                                Name identifies the network within the cluster, and is the key the nodes'
-                                addresses and status use.
-                              maxLength: 63
-                              minLength: 1
-                              pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-                              type: string
                           required:
-                          - attachment
-                          - name
+                          - networkAttachmentRef
                           type: object
-                          x-kubernetes-validations:
-                          - message: addressPool is not allowed with hostInterface
-                            rule: '!has(self.attachment.hostInterface) || !has(self.addressPool)'
                         maxItems: 8
                         type: array
-                        x-kubernetes-list-map-keys:
-                        - name
-                        x-kubernetes-list-type: map
-                      management:
+                        x-kubernetes-list-type: atomic
+                      podNetwork:
                         description: |-
-                          Management is the network the control plane reaches the SPDK RPC on.
-                          Unset, the RPC is served on the pod network.
-                        properties:
-                          addressPool:
-                            description: |-
-                              AddressPool is the range the operator takes each node's address on this
-                              network from. Unset, a network attached through a definition takes the
-                              address its NIC holds on the worker. It is not allowed for a host
-                              interface, which carries the host's own address.
-                            properties:
-                              first:
-                                description: |-
-                                  First is the lowest address the operator may hand out. Unset, the range
-                                  starts at the subnet's first host address. It is set together with Last.
-                                maxLength: 15
-                                pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
-                                type: string
-                              last:
-                                description: |-
-                                  Last is the highest address the operator may hand out. Unset, the range
-                                  ends at the subnet's last host address. It is set together with First.
-                                maxLength: 15
-                                pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
-                                type: string
-                              subnet:
-                                description: |-
-                                  Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
-                                  length is the one each node's address carries.
-                                maxLength: 18
-                                pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$
-                                type: string
-                            required:
-                            - subnet
-                            type: object
-                            x-kubernetes-validations:
-                            - message: first and last are set together
-                              rule: has(self.first) == has(self.last)
-                            - message: first and last must lie inside subnet
-                              rule: '!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first))
-                                && cidr(self.subnet).containsIP(ip(self.last)))'
-                          attachment:
-                            description: Attachment is how the pod reaches the network.
-                            properties:
-                              hostInterface:
-                                description: |-
-                                  HostInterface is the name of a host interface. The pods run on the host
-                                  network and bind it.
-                                maxLength: 63
-                                minLength: 1
-                                type: string
-                              networkAttachmentRef:
-                                description: |-
-                                  NetworkAttachmentRef is a Multus NetworkAttachmentDefinition in the
-                                  namespace of the storage cluster. The pod attaches to it and takes the
-                                  interface the definition's plugin creates.
-                                properties:
-                                  name:
-                                    description: Name is the definition's name.
-                                    maxLength: 253
-                                    minLength: 1
-                                    type: string
-                                required:
-                                - name
-                                type: object
-                            type: object
-                            x-kubernetes-validations:
-                            - message: exactly one of networkAttachmentRef and hostInterface
-                                must be set
-                              rule: has(self.networkAttachmentRef) != has(self.hostInterface)
-                          name:
-                            description: |-
-                              Name identifies the network within the cluster, and is the key the nodes'
-                              addresses and status use.
-                            maxLength: 63
-                            minLength: 1
-                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-                            type: string
-                        required:
-                        - attachment
-                        - name
-                        type: object
-                        x-kubernetes-validations:
-                        - message: addressPool is not allowed with hostInterface
-                          rule: '!has(self.attachment.hostInterface) || !has(self.addressPool)'
+                          PodNetwork puts the SPDK pods on the cluster CNI's network. Alone, the pod's
+                          one interface carries the RPC and the data, and a Service in front of the pod
+                          is the address peers and clients hold, since the pod's own address changes on
+                          every restart. The control plane keeps the Service and the ports it carries.
+                          With data networks, the RPC stays on that interface and the data moves to the
+                          networks' interfaces, whose addresses are stable, so no Service is kept.
+                        type: boolean
+                      spdkOnHostNetwork:
+                        description: |-
+                          SpdkOnHostNetwork runs the SPDK pods on the host network, where they bind
+                          host NICs. The NICs' names are not stated here, because a fleet's workers
+                          do not agree on what their NICs are called: each node names its own in
+                          its spec.config.dataInterfaces, which is allowed only in this mode.
+                        type: boolean
                     type: object
                     x-kubernetes-validations:
-                    - message: all networks must use networkAttachmentRef, or all
-                        must use hostInterface
-                      rule: '!has(self.data) || self.data.size() == 0 || (self.data.all(n,
-                        has(n.attachment.networkAttachmentRef) == has(self.data[0].attachment.networkAttachmentRef))
-                        && (!has(self.management) || has(self.management.attachment.networkAttachmentRef)
-                        == has(self.data[0].attachment.networkAttachmentRef)))'
+                    - message: one of podNetwork and spdkOnHostNetwork must be set
+                      rule: (has(self.podNetwork) && self.podNetwork) || (has(self.spdkOnHostNetwork)
+                        && self.spdkOnHostNetwork)
+                    - message: podNetwork and spdkOnHostNetwork are exclusive
+                      rule: '!(has(self.podNetwork) && self.podNetwork && has(self.spdkOnHostNetwork)
+                        && self.spdkOnHostNetwork)'
+                    - message: 'data networks require podNetwork: true'
+                      rule: '!has(self.data) || self.data.size() == 0 || (has(self.podNetwork)
+                        && self.podNetwork)'
+                    - message: data networks must name distinct NetworkAttachmentDefinitions
+                      rule: '!has(self.data) || self.data.all(a, self.data.exists_one(b,
+                        b.networkAttachmentRef.name == a.networkAttachmentRef.name))'
                   nodeProvisioningBudget:
                     description: |-
                       NodeProvisioningBudget is how many workers the expansion may have in the
@@ -2028,10 +1934,10 @@ spec:
                 has more than one node set or names a cluster in clusterRef
               rule: size(self.nodeSets) > 1 || has(self.clusterRef) || self.nodeSets.all(s,
                 !has(s.cluster))
-            - message: a cluster on a network names no management or data interfaces
-                in its groups, because the network replaces them
-              rule: '!has(self.cluster) || !has(self.cluster.network) || self.nodeSets.all(s,
-                s.groups.all(g, !has(g.mgmtInterface) && !has(g.dataInterfaces)))'
+            - message: group dataInterfaces are allowed only with cluster.network.spdkOnHostNetwork
+              rule: '!has(self.cluster) || !has(self.cluster.network) || (has(self.cluster.network.spdkOnHostNetwork)
+                && self.cluster.network.spdkOnHostNetwork) || self.nodeSets.all(s,
+                s.groups.all(g, !has(g.dataInterfaces)))'
             - message: spec.cluster.openshift is what a deployment onto OpenShift
                 states, so spec.environment has to be OpenShift
               rule: '!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment)
@@ -8734,205 +8640,111 @@ spec:
                     description: |-
                       Network states the networks the storage nodes' SPDK pods attach to, as
                       references to networks rather than interface names. It replaces
-                      mgmtInterface and dataInterfaces, and the two cannot be combined. It is
-                      set when the cluster is created and never added, changed, or removed
-                      afterward: the control plane resolves a node's networks when it adds the
-                      node and does not revisit them, and a cluster created without it keeps its
-                      pods on the host network.
+                      dataInterfaces, which are allowed only with network.spdkOnHostNetwork. The
+                      management interface is still mgmtInterface. It is set when the cluster is created and never added,
+                      changed, or removed afterward: the control plane resolves a node's networks
+                      when it adds the node and does not revisit them, and a cluster created
+                      without it keeps its pods on the host network.
                     properties:
                       data:
                         description: |-
-                          Data are the networks the storage nodes serve volumes on. Unset, data is
-                          served on the management network.
+                          Data are the Multus networks the storage nodes serve volumes on, each a
+                          NetworkAttachmentDefinition the pod attaches to besides the pod network, which
+                          podNetwork must therefore state.
                         items:
                           description: |-
-                            StorageNetwork is one network a storage node's SPDK pod attaches to. A
-                            network attached through a definition takes each node's address from its
-                            address pool, or, with no pool, from the address the NIC the definition moves
-                            holds on the worker.
+                            StorageNetwork is one data network a storage node's SPDK pod attaches to
+                            through a NetworkAttachmentDefinition.
                           properties:
-                            addressPool:
+                            networkAttachmentRef:
                               description: |-
-                                AddressPool is the range the operator takes each node's address on this
-                                network from. Unset, a network attached through a definition takes the
-                                address its NIC holds on the worker. It is not allowed for a host
-                                interface, which carries the host's own address.
+                                NetworkAttachmentRef is the Multus NetworkAttachmentDefinition in the
+                                namespace of the storage cluster, and the key the nodes' addresses and
+                                status use. The pod attaches to it and takes the interface the definition's
+                                plugin creates.
                               properties:
-                                first:
+                                addressPool:
                                   description: |-
-                                    First is the lowest address the operator may hand out. Unset, the range
-                                    starts at the subnet's first host address. It is set together with Last.
-                                  maxLength: 15
-                                  pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
-                                  type: string
-                                last:
-                                  description: |-
-                                    Last is the highest address the operator may hand out. Unset, the range
-                                    ends at the subnet's last host address. It is set together with First.
-                                  maxLength: 15
-                                  pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
-                                  type: string
-                                subnet:
-                                  description: |-
-                                    Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
-                                    length is the one each node's address carries.
-                                  maxLength: 18
-                                  pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$
-                                  type: string
-                              required:
-                              - subnet
-                              type: object
-                              x-kubernetes-validations:
-                              - message: first and last are set together
-                                rule: has(self.first) == has(self.last)
-                              - message: first and last must lie inside subnet
-                                rule: '!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first))
-                                  && cidr(self.subnet).containsIP(ip(self.last)))'
-                            attachment:
-                              description: Attachment is how the pod reaches the network.
-                              properties:
-                                hostInterface:
-                                  description: |-
-                                    HostInterface is the name of a host interface. The pods run on the host
-                                    network and bind it.
-                                  maxLength: 63
-                                  minLength: 1
-                                  type: string
-                                networkAttachmentRef:
-                                  description: |-
-                                    NetworkAttachmentRef is a Multus NetworkAttachmentDefinition in the
-                                    namespace of the storage cluster. The pod attaches to it and takes the
-                                    interface the definition's plugin creates.
+                                    AddressPool is the range the operator takes each node's address on this
+                                    network from. Unset, the network takes the address the NIC the definition
+                                    moves holds on the worker.
                                   properties:
-                                    name:
-                                      description: Name is the definition's name.
-                                      maxLength: 253
-                                      minLength: 1
+                                    first:
+                                      description: |-
+                                        First is the lowest address the operator may hand out. Unset, the range
+                                        starts at the subnet's first host address. It is set together with Last.
+                                      maxLength: 15
+                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                      type: string
+                                    last:
+                                      description: |-
+                                        Last is the highest address the operator may hand out. Unset, the range
+                                        ends at the subnet's last host address. It is set together with First.
+                                      maxLength: 15
+                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                      type: string
+                                    subnet:
+                                      description: |-
+                                        Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
+                                        length is the one each node's address carries.
+                                      maxLength: 18
+                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$
                                       type: string
                                   required:
-                                  - name
+                                  - subnet
                                   type: object
+                                  x-kubernetes-validations:
+                                  - message: first and last are set together
+                                    rule: has(self.first) == has(self.last)
+                                  - message: first and last must lie inside subnet
+                                    rule: '!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first))
+                                      && cidr(self.subnet).containsIP(ip(self.last)))'
+                                name:
+                                  description: Name is the definition's name.
+                                  maxLength: 253
+                                  minLength: 1
+                                  type: string
+                              required:
+                              - name
                               type: object
-                              x-kubernetes-validations:
-                              - message: exactly one of networkAttachmentRef and hostInterface
-                                  must be set
-                                rule: has(self.networkAttachmentRef) != has(self.hostInterface)
-                            name:
-                              description: |-
-                                Name identifies the network within the cluster, and is the key the nodes'
-                                addresses and status use.
-                              maxLength: 63
-                              minLength: 1
-                              pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-                              type: string
                           required:
-                          - attachment
-                          - name
+                          - networkAttachmentRef
                           type: object
-                          x-kubernetes-validations:
-                          - message: addressPool is not allowed with hostInterface
-                            rule: '!has(self.attachment.hostInterface) || !has(self.addressPool)'
                         maxItems: 8
                         type: array
-                        x-kubernetes-list-map-keys:
-                        - name
-                        x-kubernetes-list-type: map
-                      management:
+                        x-kubernetes-list-type: atomic
+                      podNetwork:
                         description: |-
-                          Management is the network the control plane reaches the SPDK RPC on.
-                          Unset, the RPC is served on the pod network.
-                        properties:
-                          addressPool:
-                            description: |-
-                              AddressPool is the range the operator takes each node's address on this
-                              network from. Unset, a network attached through a definition takes the
-                              address its NIC holds on the worker. It is not allowed for a host
-                              interface, which carries the host's own address.
-                            properties:
-                              first:
-                                description: |-
-                                  First is the lowest address the operator may hand out. Unset, the range
-                                  starts at the subnet's first host address. It is set together with Last.
-                                maxLength: 15
-                                pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
-                                type: string
-                              last:
-                                description: |-
-                                  Last is the highest address the operator may hand out. Unset, the range
-                                  ends at the subnet's last host address. It is set together with First.
-                                maxLength: 15
-                                pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
-                                type: string
-                              subnet:
-                                description: |-
-                                  Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
-                                  length is the one each node's address carries.
-                                maxLength: 18
-                                pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$
-                                type: string
-                            required:
-                            - subnet
-                            type: object
-                            x-kubernetes-validations:
-                            - message: first and last are set together
-                              rule: has(self.first) == has(self.last)
-                            - message: first and last must lie inside subnet
-                              rule: '!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first))
-                                && cidr(self.subnet).containsIP(ip(self.last)))'
-                          attachment:
-                            description: Attachment is how the pod reaches the network.
-                            properties:
-                              hostInterface:
-                                description: |-
-                                  HostInterface is the name of a host interface. The pods run on the host
-                                  network and bind it.
-                                maxLength: 63
-                                minLength: 1
-                                type: string
-                              networkAttachmentRef:
-                                description: |-
-                                  NetworkAttachmentRef is a Multus NetworkAttachmentDefinition in the
-                                  namespace of the storage cluster. The pod attaches to it and takes the
-                                  interface the definition's plugin creates.
-                                properties:
-                                  name:
-                                    description: Name is the definition's name.
-                                    maxLength: 253
-                                    minLength: 1
-                                    type: string
-                                required:
-                                - name
-                                type: object
-                            type: object
-                            x-kubernetes-validations:
-                            - message: exactly one of networkAttachmentRef and hostInterface
-                                must be set
-                              rule: has(self.networkAttachmentRef) != has(self.hostInterface)
-                          name:
-                            description: |-
-                              Name identifies the network within the cluster, and is the key the nodes'
-                              addresses and status use.
-                            maxLength: 63
-                            minLength: 1
-                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-                            type: string
-                        required:
-                        - attachment
-                        - name
-                        type: object
-                        x-kubernetes-validations:
-                        - message: addressPool is not allowed with hostInterface
-                          rule: '!has(self.attachment.hostInterface) || !has(self.addressPool)'
+                          PodNetwork puts the SPDK pods on the cluster CNI's network. Alone, the pod's
+                          one interface carries the RPC and the data, and a Service in front of the pod
+                          is the address peers and clients hold, since the pod's own address changes on
+                          every restart. The control plane keeps the Service and the ports it carries.
+                          With data networks, the RPC stays on that interface and the data moves to the
+                          networks' interfaces, whose addresses are stable, so no Service is kept.
+                        type: boolean
+                      spdkOnHostNetwork:
+                        description: |-
+                          SpdkOnHostNetwork runs the SPDK pods on the host network, where they bind
+                          host NICs. The NICs' names are not stated here, because a fleet's workers
+                          do not agree on what their NICs are called: each node names its own in
+                          its spec.config.dataInterfaces, which is allowed only in this mode.
+                        type: boolean
                     type: object
                     x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
-                    - message: all networks must use networkAttachmentRef, or all
-                        must use hostInterface
-                      rule: '!has(self.data) || self.data.size() == 0 || (self.data.all(n,
-                        has(n.attachment.networkAttachmentRef) == has(self.data[0].attachment.networkAttachmentRef))
-                        && (!has(self.management) || has(self.management.attachment.networkAttachmentRef)
-                        == has(self.data[0].attachment.networkAttachmentRef)))'
+                    - message: one of podNetwork and spdkOnHostNetwork must be set
+                      rule: (has(self.podNetwork) && self.podNetwork) || (has(self.spdkOnHostNetwork)
+                        && self.spdkOnHostNetwork)
+                    - message: podNetwork and spdkOnHostNetwork are exclusive
+                      rule: '!(has(self.podNetwork) && self.podNetwork && has(self.spdkOnHostNetwork)
+                        && self.spdkOnHostNetwork)'
+                    - message: 'data networks require podNetwork: true'
+                      rule: '!has(self.data) || self.data.size() == 0 || (has(self.podNetwork)
+                        && self.podNetwork)'
+                    - message: data networks must name distinct NetworkAttachmentDefinitions
+                      rule: '!has(self.data) || self.data.all(a, self.data.exists_one(b,
+                        b.networkAttachmentRef.name == a.networkAttachmentRef.name))'
                   nodeProvisioningBudget:
                     default: 1
                     description: |-
@@ -9050,8 +8862,9 @@ spec:
                   rule: '!has(oldSelf.enableFormat4K) || has(self.enableFormat4K)'
                 - message: field enableBlockFormat is immutable once set
                   rule: '!has(oldSelf.enableBlockFormat) || has(self.enableBlockFormat)'
-                - message: network cannot be combined with mgmtInterface or dataInterfaces
-                  rule: '!has(self.network) || (!has(self.mgmtInterface) && !has(self.dataInterfaces))'
+                - message: dataInterfaces are allowed only with network.spdkOnHostNetwork
+                  rule: '!has(self.dataInterfaces) || !has(self.network) || (has(self.network.spdkOnHostNetwork)
+                    && self.network.spdkOnHostNetwork)'
               stripe:
                 description: |-
                   Stripe is the erasure-coding layout every volume in the cluster is
@@ -9354,9 +9167,8 @@ spec:
             - message: a data network attached through a NetworkAttachmentDefinition
                 serves NVMe/TCP only
               rule: '!has(self.storageNodes) || !has(self.storageNodes.network) ||
-                !has(self.storageNodes.network.data) || !self.storageNodes.network.data.exists(n,
-                has(n.attachment.networkAttachmentRef)) || !has(self.fabricType) ||
-                self.fabricType == ''tcp'''
+                !has(self.storageNodes.network.data) || self.storageNodes.network.data.size()
+                == 0 || !has(self.fabricType) || self.fabricType == ''tcp'''
           status:
             properties:
               activeOpsRef:
@@ -10430,6 +10242,241 @@ spec:
     storage: true
     subresources:
       status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: storagefenceremediations.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: StorageFenceRemediation
+    listKind: StorageFenceRemediationList
+    plural: storagefenceremediations
+    shortNames:
+    - sfr
+    singular: storagefenceremediation
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.node
+      name: Node
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.epoch
+      name: Epoch
+      type: integer
+    - jsonPath: .status.message
+      name: Message
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StorageFenceRemediation applies the out-of-service taint to a node whose
+          host the control plane fenced. NodeHealthCheck creates and deletes it.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: StorageFenceRemediationSpec is what one remediation does.
+            properties:
+              allowForeignVolumes:
+                description: |-
+                  AllowForeignVolumes lets the remediation apply the out-of-service taint
+                  although a volume of another CSI driver is attached to the node. The
+                  taint force-detaches every volume of the node, and only simplyblock
+                  volumes are fenced, so by default such a node is left to an administrator.
+                type: boolean
+            type: object
+          status:
+            description: StorageFenceRemediationStatus is the remediation's progress.
+            properties:
+              conditions:
+                description: Conditions are Processing and Succeeded, which NodeHealthCheck
+                  reads.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              epoch:
+                description: Epoch is the arbiter's epoch of the host fence the taint
+                  was applied for.
+                format: int64
+                type: integer
+              message:
+                description: Message explains a Pending or Blocked phase.
+                type: string
+              node:
+                description: Node is the Kubernetes node remediated.
+                type: string
+              phase:
+                description: Phase is where the remediation stands.
+                enum:
+                - Pending
+                - Blocked
+                - Tainted
+                type: string
+              taintedAt:
+                description: TaintedAt is when the out-of-service taint was applied.
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: storagefenceremediationtemplates.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: StorageFenceRemediationTemplate
+    listKind: StorageFenceRemediationTemplateList
+    plural: storagefenceremediationtemplates
+    shortNames:
+    - sfrt
+    singular: storagefenceremediationtemplate
+  scope: Namespaced
+  versions:
+  - name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StorageFenceRemediationTemplate is what a NodeHealthCheck names as its
+          remediationTemplate to remediate storage-fenced nodes.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              StorageFenceRemediationTemplateSpec holds the template, in the shape every
+              NodeHealthCheck external remediation template has.
+            properties:
+              template:
+                description: |-
+                  StorageFenceRemediationTemplateResource is the remediation NodeHealthCheck
+                  creates from a template.
+                properties:
+                  spec:
+                    description: StorageFenceRemediationSpec is what one remediation
+                      does.
+                    properties:
+                      allowForeignVolumes:
+                        description: |-
+                          AllowForeignVolumes lets the remediation apply the out-of-service taint
+                          although a volume of another CSI driver is attached to the node. The
+                          taint force-detaches every volume of the node, and only simplyblock
+                          volumes are fenced, so by default such a node is left to an administrator.
+                        type: boolean
+                    type: object
+                required:
+                - spec
+                type: object
+            required:
+            - template
+            type: object
+        type: object
+    served: true
+    storage: true
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -11671,6 +11718,17 @@ spec:
                   node exists, deleting it changes nothing, and editing it reaches only nodes
                   created afterward.
                 properties:
+                  dataInterfaces:
+                    description: |-
+                      DataInterfaces are the host NICs this node serves data on, for a cluster
+                      whose data network is a hostInterface. Unset, the cluster's
+                      spec.storageNodes.dataInterfaces applies.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                   deviceNames:
                     description: |-
                       DeviceNames names the devices to use. An entry is a PCI address
@@ -11742,6 +11800,15 @@ spec:
                         minimum: 1
                         type: integer
                     type: object
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  mgmtInterface:
+                    description: |-
+                      MgmtInterface is the management NIC this node binds. Unset, the cluster's
+                      spec.storageNodes.mgmtInterface applies, which is what a node created before
+                      the interface was stated per node carries.
+                    type: string
                     x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
@@ -11869,6 +11936,10 @@ spec:
                   rule: '!has(oldSelf.journalManager) || has(self.journalManager)'
                 - message: field deviceNames is immutable once set
                   rule: '!has(oldSelf.deviceNames) || has(self.deviceNames)'
+                - message: field mgmtInterface is immutable once set
+                  rule: '!has(oldSelf.mgmtInterface) || has(self.mgmtInterface)'
+                - message: field dataInterfaces is immutable once set
+                  rule: '!has(oldSelf.dataInterfaces) || has(self.dataInterfaces)'
                 - message: field pcieDenyList is immutable once set
                   rule: '!has(oldSelf.pcieDenyList) || has(self.pcieDenyList)'
                 - message: field pcieModel is immutable once set
@@ -12037,6 +12108,15 @@ spec:
                       - Attached
                       - Mismatched
                       - Unavailable
+                      type: string
+                    resource:
+                      description: |-
+                        Resource is the extended resource the SPDK pod requests for the network's
+                        device, from the definition's k8s.v1.cni.cncf.io/resourceName annotation:
+                        a device plugin (an SR-IOV VF pool) hands the device out only to a pod
+                        that requests it. It is recorded with the address, before the node is
+                        added, and is empty for a definition whose plugin creates the interface
+                        itself or names its device.
                       type: string
                   required:
                   - network
@@ -14727,197 +14807,102 @@ spec:
                         properties:
                           data:
                             description: |-
-                              Data are the networks the storage nodes serve volumes on. Unset, data is
-                              served on the management network.
+                              Data are the Multus networks the storage nodes serve volumes on, each a
+                              NetworkAttachmentDefinition the pod attaches to besides the pod network, which
+                              podNetwork must therefore state.
                             items:
                               description: |-
-                                StorageNetwork is one network a storage node's SPDK pod attaches to. A
-                                network attached through a definition takes each node's address from its
-                                address pool, or, with no pool, from the address the NIC the definition moves
-                                holds on the worker.
+                                StorageNetwork is one data network a storage node's SPDK pod attaches to
+                                through a NetworkAttachmentDefinition.
                               properties:
-                                addressPool:
+                                networkAttachmentRef:
                                   description: |-
-                                    AddressPool is the range the operator takes each node's address on this
-                                    network from. Unset, a network attached through a definition takes the
-                                    address its NIC holds on the worker. It is not allowed for a host
-                                    interface, which carries the host's own address.
+                                    NetworkAttachmentRef is the Multus NetworkAttachmentDefinition in the
+                                    namespace of the storage cluster, and the key the nodes' addresses and
+                                    status use. The pod attaches to it and takes the interface the definition's
+                                    plugin creates.
                                   properties:
-                                    first:
+                                    addressPool:
                                       description: |-
-                                        First is the lowest address the operator may hand out. Unset, the range
-                                        starts at the subnet's first host address. It is set together with Last.
-                                      maxLength: 15
-                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
-                                      type: string
-                                    last:
-                                      description: |-
-                                        Last is the highest address the operator may hand out. Unset, the range
-                                        ends at the subnet's last host address. It is set together with First.
-                                      maxLength: 15
-                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
-                                      type: string
-                                    subnet:
-                                      description: |-
-                                        Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
-                                        length is the one each node's address carries.
-                                      maxLength: 18
-                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$
-                                      type: string
-                                  required:
-                                  - subnet
-                                  type: object
-                                  x-kubernetes-validations:
-                                  - message: first and last are set together
-                                    rule: has(self.first) == has(self.last)
-                                  - message: first and last must lie inside subnet
-                                    rule: '!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first))
-                                      && cidr(self.subnet).containsIP(ip(self.last)))'
-                                attachment:
-                                  description: Attachment is how the pod reaches the
-                                    network.
-                                  properties:
-                                    hostInterface:
-                                      description: |-
-                                        HostInterface is the name of a host interface. The pods run on the host
-                                        network and bind it.
-                                      maxLength: 63
-                                      minLength: 1
-                                      type: string
-                                    networkAttachmentRef:
-                                      description: |-
-                                        NetworkAttachmentRef is a Multus NetworkAttachmentDefinition in the
-                                        namespace of the storage cluster. The pod attaches to it and takes the
-                                        interface the definition's plugin creates.
+                                        AddressPool is the range the operator takes each node's address on this
+                                        network from. Unset, the network takes the address the NIC the definition
+                                        moves holds on the worker.
                                       properties:
-                                        name:
-                                          description: Name is the definition's name.
-                                          maxLength: 253
-                                          minLength: 1
+                                        first:
+                                          description: |-
+                                            First is the lowest address the operator may hand out. Unset, the range
+                                            starts at the subnet's first host address. It is set together with Last.
+                                          maxLength: 15
+                                          pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                          type: string
+                                        last:
+                                          description: |-
+                                            Last is the highest address the operator may hand out. Unset, the range
+                                            ends at the subnet's last host address. It is set together with First.
+                                          maxLength: 15
+                                          pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                          type: string
+                                        subnet:
+                                          description: |-
+                                            Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
+                                            length is the one each node's address carries.
+                                          maxLength: 18
+                                          pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$
                                           type: string
                                       required:
-                                      - name
+                                      - subnet
                                       type: object
+                                      x-kubernetes-validations:
+                                      - message: first and last are set together
+                                        rule: has(self.first) == has(self.last)
+                                      - message: first and last must lie inside subnet
+                                        rule: '!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first))
+                                          && cidr(self.subnet).containsIP(ip(self.last)))'
+                                    name:
+                                      description: Name is the definition's name.
+                                      maxLength: 253
+                                      minLength: 1
+                                      type: string
+                                  required:
+                                  - name
                                   type: object
-                                  x-kubernetes-validations:
-                                  - message: exactly one of networkAttachmentRef and
-                                      hostInterface must be set
-                                    rule: has(self.networkAttachmentRef) != has(self.hostInterface)
-                                name:
-                                  description: |-
-                                    Name identifies the network within the cluster, and is the key the nodes'
-                                    addresses and status use.
-                                  maxLength: 63
-                                  minLength: 1
-                                  pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-                                  type: string
                               required:
-                              - attachment
-                              - name
+                              - networkAttachmentRef
                               type: object
-                              x-kubernetes-validations:
-                              - message: addressPool is not allowed with hostInterface
-                                rule: '!has(self.attachment.hostInterface) || !has(self.addressPool)'
                             maxItems: 8
                             type: array
-                            x-kubernetes-list-map-keys:
-                            - name
-                            x-kubernetes-list-type: map
-                          management:
+                            x-kubernetes-list-type: atomic
+                          podNetwork:
                             description: |-
-                              Management is the network the control plane reaches the SPDK RPC on.
-                              Unset, the RPC is served on the pod network.
-                            properties:
-                              addressPool:
-                                description: |-
-                                  AddressPool is the range the operator takes each node's address on this
-                                  network from. Unset, a network attached through a definition takes the
-                                  address its NIC holds on the worker. It is not allowed for a host
-                                  interface, which carries the host's own address.
-                                properties:
-                                  first:
-                                    description: |-
-                                      First is the lowest address the operator may hand out. Unset, the range
-                                      starts at the subnet's first host address. It is set together with Last.
-                                    maxLength: 15
-                                    pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
-                                    type: string
-                                  last:
-                                    description: |-
-                                      Last is the highest address the operator may hand out. Unset, the range
-                                      ends at the subnet's last host address. It is set together with First.
-                                    maxLength: 15
-                                    pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
-                                    type: string
-                                  subnet:
-                                    description: |-
-                                      Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
-                                      length is the one each node's address carries.
-                                    maxLength: 18
-                                    pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$
-                                    type: string
-                                required:
-                                - subnet
-                                type: object
-                                x-kubernetes-validations:
-                                - message: first and last are set together
-                                  rule: has(self.first) == has(self.last)
-                                - message: first and last must lie inside subnet
-                                  rule: '!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first))
-                                    && cidr(self.subnet).containsIP(ip(self.last)))'
-                              attachment:
-                                description: Attachment is how the pod reaches the
-                                  network.
-                                properties:
-                                  hostInterface:
-                                    description: |-
-                                      HostInterface is the name of a host interface. The pods run on the host
-                                      network and bind it.
-                                    maxLength: 63
-                                    minLength: 1
-                                    type: string
-                                  networkAttachmentRef:
-                                    description: |-
-                                      NetworkAttachmentRef is a Multus NetworkAttachmentDefinition in the
-                                      namespace of the storage cluster. The pod attaches to it and takes the
-                                      interface the definition's plugin creates.
-                                    properties:
-                                      name:
-                                        description: Name is the definition's name.
-                                        maxLength: 253
-                                        minLength: 1
-                                        type: string
-                                    required:
-                                    - name
-                                    type: object
-                                type: object
-                                x-kubernetes-validations:
-                                - message: exactly one of networkAttachmentRef and
-                                    hostInterface must be set
-                                  rule: has(self.networkAttachmentRef) != has(self.hostInterface)
-                              name:
-                                description: |-
-                                  Name identifies the network within the cluster, and is the key the nodes'
-                                  addresses and status use.
-                                maxLength: 63
-                                minLength: 1
-                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-                                type: string
-                            required:
-                            - attachment
-                            - name
-                            type: object
-                            x-kubernetes-validations:
-                            - message: addressPool is not allowed with hostInterface
-                              rule: '!has(self.attachment.hostInterface) || !has(self.addressPool)'
+                              PodNetwork puts the SPDK pods on the cluster CNI's network. Alone, the pod's
+                              one interface carries the RPC and the data, and a Service in front of the pod
+                              is the address peers and clients hold, since the pod's own address changes on
+                              every restart. The control plane keeps the Service and the ports it carries.
+                              With data networks, the RPC stays on that interface and the data moves to the
+                              networks' interfaces, whose addresses are stable, so no Service is kept.
+                            type: boolean
+                          spdkOnHostNetwork:
+                            description: |-
+                              SpdkOnHostNetwork runs the SPDK pods on the host network, where they bind
+                              host NICs. The NICs' names are not stated here, because a fleet's workers
+                              do not agree on what their NICs are called: each node names its own in
+                              its spec.config.dataInterfaces, which is allowed only in this mode.
+                            type: boolean
                         type: object
                         x-kubernetes-validations:
-                        - message: all networks must use networkAttachmentRef, or
-                            all must use hostInterface
-                          rule: '!has(self.data) || self.data.size() == 0 || (self.data.all(n,
-                            has(n.attachment.networkAttachmentRef) == has(self.data[0].attachment.networkAttachmentRef))
-                            && (!has(self.management) || has(self.management.attachment.networkAttachmentRef)
-                            == has(self.data[0].attachment.networkAttachmentRef)))'
+                        - message: one of podNetwork and spdkOnHostNetwork must be
+                            set
+                          rule: (has(self.podNetwork) && self.podNetwork) || (has(self.spdkOnHostNetwork)
+                            && self.spdkOnHostNetwork)
+                        - message: podNetwork and spdkOnHostNetwork are exclusive
+                          rule: '!(has(self.podNetwork) && self.podNetwork && has(self.spdkOnHostNetwork)
+                            && self.spdkOnHostNetwork)'
+                        - message: 'data networks require podNetwork: true'
+                          rule: '!has(self.data) || self.data.size() == 0 || (has(self.podNetwork)
+                            && self.podNetwork)'
+                        - message: data networks must name distinct NetworkAttachmentDefinitions
+                          rule: '!has(self.data) || self.data.all(a, self.data.exists_one(b,
+                            b.networkAttachmentRef.name == a.networkAttachmentRef.name))'
                       nodeProvisioningBudget:
                         description: |-
                           NodeProvisioningBudget is how many workers the expansion may have in the

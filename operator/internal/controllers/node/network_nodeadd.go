@@ -14,7 +14,8 @@ import (
 
 // networkParams is the node's attachments in the shape node-add takes, nil for a
 // cluster with no network. A missing address is an error, because leaving the
-// network out would start the SPDK pod on the host network.
+// network out would start the SPDK pod on the host network. The device resource
+// of a network is the one the preflight recorded on the status with the address.
 func (r *StorageNodeReconciler) networkParams(
 	node *simplyblockv1alpha2.StorageNode, cluster *simplyblockv1alpha2.StorageCluster,
 ) ([]utils.NodeNetworkParams, error) {
@@ -27,11 +28,20 @@ func (r *StorageNodeReconciler) networkParams(
 		return nil, nil
 	}
 
+	resources := assignedResources(node.Status.Network)
 	params := make([]utils.NodeNetworkParams, 0, len(attachments))
 	for _, a := range attachments {
 		params = append(params, utils.NodeNetworkParams{
-			Name: a.Name, Namespace: a.Namespace, Interface: a.Interface, IPs: a.IPs,
+			Name: a.Name, Namespace: a.Namespace, Interface: a.Interface, IPs: a.IPs, Resource: resources[a.Network],
 		})
 	}
 	return params, nil
+}
+
+// onPodNetwork reports whether the cluster puts its SPDK pods on the pod network
+// alone, behind a Service. With data networks the pod also attaches to them, and
+// those addresses are stable, so no Service is kept.
+func onPodNetwork(cluster *simplyblockv1alpha2.StorageCluster) bool {
+	network := networkOf(cluster)
+	return network != nil && network.PodNetwork && len(network.Data) == 0
 }

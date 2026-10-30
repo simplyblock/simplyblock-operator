@@ -623,15 +623,10 @@ func (r *StorageNodeWorkloadReconciler) clusterOfOperation(
 }
 
 // agentAddress is what the storage-node API endpoint of a worker carries: the
-// worker's internal IP while the agent runs on the host network, and the agent
-// pod's own IP once the cluster declares a network and the pod has left it.
+// agent pod's own IP, because the agent is in the pod network.
 func (r *StorageNodeWorkloadReconciler) agentAddress(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, worker string,
 ) (string, error) {
-	if cluster.Spec.StorageNodes == nil || cluster.Spec.StorageNodes.Network == nil {
-		return r.workerAddress(ctx, worker)
-	}
-
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods,
 		client.InNamespace(cluster.Namespace),
@@ -645,22 +640,6 @@ func (r *StorageNodeWorkloadReconciler) agentAddress(
 	for i := range pods.Items {
 		if pods.Items[i].Spec.NodeName == worker {
 			return pods.Items[i].Status.PodIP, nil
-		}
-	}
-	return "", nil
-}
-
-// workerAddress is the worker's internal IP, which is what an endpoint carries.
-func (r *StorageNodeWorkloadReconciler) workerAddress(
-	ctx context.Context, worker string,
-) (string, error) {
-	var object corev1.Node
-	if err := r.Get(ctx, types.NamespacedName{Name: worker}, &object); err != nil {
-		return "", client.IgnoreNotFound(err)
-	}
-	for _, address := range object.Status.Addresses {
-		if address.Type == corev1.NodeInternalIP {
-			return address.Address, nil
 		}
 	}
 	return "", nil

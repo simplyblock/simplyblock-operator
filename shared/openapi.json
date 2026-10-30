@@ -15559,6 +15559,11 @@
             },
             "type": "array",
             "title": "Networks"
+          },
+          "pod_network": {
+            "type": "boolean",
+            "title": "Pod Network",
+            "default": false
           }
         },
         "type": "object",

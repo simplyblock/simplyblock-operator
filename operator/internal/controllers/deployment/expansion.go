@@ -440,21 +440,6 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		workload.ImagePullPolicy = images.NodeAgent.ImagePullPolicy
 	}
 
-	for _, set := range config.Spec.NodeSets {
-		for _, group := range set.Groups {
-			// A network replaces the interfaces, and the cluster refuses both.
-			if workload.Network != nil {
-				continue
-			}
-			if workload.MgmtInterface == "" {
-				workload.MgmtInterface = group.MgmtInterface
-			}
-			if len(workload.DataInterfaces) == 0 {
-				workload.DataInterfaces = group.DataInterfaces
-			}
-		}
-	}
-
 	// The host OS is spent here too, and on one flag. Ubuntu keeps the NVMe-oF
 	// modules in linux-modules-extra rather than in the base install, so a
 	// storage node on one installs the package for its running kernel before it
@@ -775,8 +760,12 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 				// which the control plane reads as a request to rebalance onto it
 				// rather than to treat it as part of an initial layout. A growth
 				// document is exactly that case.
-				Expand:           expansionOf(config),
-				DeviceNames:      devicesOf(group),
+				Expand:      expansionOf(config),
+				DeviceNames: devicesOf(group),
+				// The NICs are the node's own: a fleet's workers do not agree on
+				// what their NICs are called, and the node-add is made per node.
+				MgmtInterface:    group.MgmtInterface,
+				DataInterfaces:   group.DataInterfaces,
 				FailureDomain:    group.FailureDomain,
 				SpdkSystemMemory: group.SpdkSystemMemory,
 				// The core ids this group's machines hold back. It reaches the
