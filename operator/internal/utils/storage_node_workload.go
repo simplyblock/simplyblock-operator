@@ -374,6 +374,14 @@ func BuildStorageNodeDaemonSet(
 							Name:            "s-node-api-container",
 							Image:           image,
 							ImagePullPolicy: imagePullPolicy,
+							// Published on the worker's port 5000, where a control plane on
+							// another cluster dials it (Workload.NodeAddress).
+							Ports: []corev1.ContainerPort{{
+								Name:          "node-api",
+								ContainerPort: 5000,
+								HostPort:      5000,
+								Protocol:      corev1.ProtocolTCP,
+							}},
 							// The entry is sourced and one variable is exported
 							// out of it, because sourcing alone sets a shell
 							// variable and exec only inherits what is exported.
