@@ -472,6 +472,10 @@ type ClusterTemplate struct {
 	// deployment's workers to the journal manager, instead of carving a journal
 	// partition out of every device.
 	//
+	// For logical block devices it dedicates the smallest device of each node
+	// to the journal, instead of carving one journal partition out of that
+	// device (the default journal split), and needs two devices per node.
+	//
 	// It is here rather than on a node set because it is immutable on the cluster
 	// it lands on, for the reason SocketsToUse is: the on-disk layout a fleet was
 	// built with is not one a later document can vary. It also costs a drive of

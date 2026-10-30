@@ -666,15 +666,13 @@ func chosenNodeHugePageBytes(worker Worker) uint64 {
 // a disk of no size, because an unsized disk is smaller than anything and the
 // generator invents those for claimed userspace controllers.
 //
-// The two classes part company on what happens then. An NVMe cluster with no
-// dedicated journal device carves a journal partition out of every device, so
-// leaving the field unset is a layout the backend builds and the fleet keeps
-// every disk. A logical block-device cluster has no such fallback: the control
-// plane refuses partitioned-journal mode for the class outright, so an unset
-// field is a document that cannot deploy — every worker's node_add fails on it,
-// after the cluster has been created and the drives formatted. A block run
-// therefore refuses the fleet rather than drafting it, which is the same
-// judgment made where it costs nothing.
+// Leaving the field unset is a layout both classes build, and the fleet keeps
+// every disk. An NVMe cluster with no dedicated journal device carves a journal
+// partition out of every device.
+//
+// A logical block-device cluster is decided by blockJournalDeviceFor instead:
+// its default is the journal split, one journal partition carved from each
+// node's smallest device at configure time, whatever the disks look like.
 //
 // TemplateOptions.ForceJournalDevice overrides the tie, and only the tie. It
 // breaks it by address, ascending, so two runs over one unchanged fleet name the
@@ -693,6 +691,9 @@ func journalDeviceFor(plan Plan, force bool) (bool, string, error) {
 	if len(plan.Workers) == 0 {
 		return false, "", nil
 	}
+	if plan.Class == ClassBlock {
+		return blockJournalDeviceFor(plan, force)
+	}
 
 	var smallest uint64
 	var onWorker, named string
@@ -706,15 +707,6 @@ func journalDeviceFor(plan Plan, force bool) (bool, string, error) {
 			// No answer to force. The worker hands over fewer than two disks, or
 			// its disks report no size, and dedicating one either leaves it
 			// nothing to store on or dedicates a disk nobody could measure.
-			if plan.Class == ClassBlock {
-				return false, "", fmt.Errorf(
-					"%s hands over no disk that could carry the journal, and a %s cluster has "+
-						"no other journal layout: the control plane refuses the partitioned "+
-						"journal for this class, so a document leaving enableJournalDevice "+
-						"unset creates the cluster, formats its drives, and then fails every "+
-						"node_add. Give the worker a second disk, or deploy it as %s",
-					worker.Name, ClassBlock, ClassNVMe)
-			}
 			return false, fmt.Sprintf(
 				"enableJournalDevice is left unset: %s hands over no single disk smaller than "+
 					"its others, so there is none to dedicate. Setting it would give up a disk "+
@@ -724,17 +716,6 @@ func journalDeviceFor(plan Plan, force bool) (bool, string, error) {
 		case verdict == journalDiskTied && !force:
 			// The fleet declines to say which of several equal disks to take,
 			// and nothing here decides for it.
-			if plan.Class == ClassBlock {
-				return false, "", fmt.Errorf(
-					"%s hands over no disk smaller than its others, so nothing says which one "+
-						"carries the journal, and a %s cluster has no other journal layout: "+
-						"the control plane refuses the partitioned journal for this class, so "+
-						"a document leaving enableJournalDevice unset creates the cluster, "+
-						"formats its drives, and then fails every node_add. Set "+
-						"spec.discover.forceJournalDevice to dedicate one of the equal disks "+
-						"anyway, which spends %s of this worker's capacity on the journal",
-					worker.Name, ClassBlock, humanBytes(size))
-			}
 			return false, fmt.Sprintf(
 				"enableJournalDevice is left unset: %s hands over no single disk smaller than "+
 					"its others, so there is none to dedicate. Setting it would give up a disk "+
@@ -766,6 +747,47 @@ func journalDeviceFor(plan Plan, force bool) (bool, string, error) {
 			"others, the smallest being %s (%s) on %s, and the control plane dedicates that "+
 			"disk to the journal manager instead of carving a journal partition out of every "+
 			"disk. This is the line to remove if the disk was meant to carry data",
+		humanBytes(smallest), named, onWorker), nil
+}
+
+// blockJournalDeviceFor decides the journal of a logical block-device draft.
+//
+// The default is the journal split: the configure of every storage node carves
+// a journal partition out of the node's smallest device, so every disk carries
+// data, whatever sizes the disks have. That is also the only layout for a
+// worker with a single disk, such as one RAID-protected LUN of a storage array.
+//
+// ForceJournalDevice asks for the smallest disk of every node to be dedicated
+// to the journal instead. It is honoured only where every worker hands over at
+// least two disks of known size; otherwise the draft keeps the split and says
+// which worker could not give up a disk.
+func blockJournalDeviceFor(plan Plan, force bool) (bool, string, error) {
+	if !force {
+		return false, "enableJournalDevice is left unset: the journal of every storage node " +
+			"is a partition carved from its smallest disk when the node is configured, and " +
+			"every disk carries data. Set spec.discover.forceJournalDevice to dedicate the " +
+			"smallest disk of every node to the journal instead", nil
+	}
+	var smallest uint64
+	var onWorker, named string
+	for _, worker := range plan.Workers {
+		size, address, verdict := smallestDisk(worker)
+		if verdict == journalDiskImpossible {
+			return false, fmt.Sprintf(
+				"enableJournalDevice is left unset although spec.discover.forceJournalDevice "+
+					"asks for it: %s hands over no second disk of known size, so dedicating one "+
+					"would leave it nothing to store on. The journal of every storage node is a "+
+					"partition carved from its smallest disk instead", worker.Name), nil
+		}
+		if onWorker == "" || size < smallest {
+			smallest, onWorker, named = size, worker.Name, address
+		}
+	}
+	return true, fmt.Sprintf(
+		"enableJournalDevice is set because spec.discover.forceJournalDevice asked for it: "+
+			"the smallest disk of every node carries the journal instead of data, the "+
+			"smallest named being %s (%s) on %s. This is the line to remove to carve the "+
+			"journal from a partition instead",
 		humanBytes(smallest), named, onWorker), nil
 }
 

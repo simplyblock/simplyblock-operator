@@ -1626,7 +1626,7 @@ func (r *StorageNodeReconciler) addParams(
 		DataNics:         nicsOf(config.DataInterfaces, workload.DataInterfaces),
 		Namespace:        node.Namespace,
 		JMPercent:        journalPercent(config.JournalManager),
-		Partitions:       partitionsPerDevice(workload),
+		Partitions:       partitionsPerDevice(workload, cluster.Spec.DeviceClass),
 		HaJMCount:        journalCount(config.JournalManager),
 		CRName:           cluster.Name,
 		CRNameSpace:      cluster.Namespace,
@@ -1708,7 +1708,17 @@ func domainIndex(domain string, mapping []simplyblockv1alpha2.FailureDomainIndex
 // has claimed — which is every device of a machine that has run this product
 // before. A count one higher than the fleet was built with therefore does not
 // lay the disks out differently; it makes the node impossible to add.
-func partitionsPerDevice(workload *simplyblockv1alpha2.StorageNodesSpec) int {
+//
+// A logical block-device cluster always answers 0. Its journal is either the
+// dedicated device or, without enableJournalDevice, the journal partition the
+// node's configure carved from its smallest device; the control plane flags
+// that partition in the node's configuration and adds it as the journal
+// device, and it refuses the per-device journal partitions for this class.
+func partitionsPerDevice(workload *simplyblockv1alpha2.StorageNodesSpec,
+	class simplyblockv1alpha2.StorageClusterDeviceClass) int {
+	if class == simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock {
+		return 0
+	}
 	if ptr.BoolFromOrFalse(workload.EnableJournalDevice) {
 		return 0
 	}

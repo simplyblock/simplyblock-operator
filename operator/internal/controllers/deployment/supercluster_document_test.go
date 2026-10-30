@@ -469,27 +469,25 @@ func TestTheLaterStepsRefuseASuperclusterWithoutItsMemberRecord(t *testing.T) {
 	}
 }
 
-// The control plane runs logical block devices only with a dedicated journal
-// device, and refuses each node add without one, after the cluster exists. A
-// document that names block devices without the journal device says so while
-// it can still be corrected.
-func TestBlockDevicesWithoutAJournalDeviceAreReported(t *testing.T) {
+// A logical block-device node carries its journal in a partition carved from
+// its own smallest device by default (the journal split), and the split is per
+// node, so it holds with several storage nodes per worker too. A document
+// without a dedicated journal device therefore draws no finding, whatever the
+// node count, and neither does one with it.
+func TestBlockDevicesWithoutAJournalDeviceAreAccepted(t *testing.T) {
 	config := aSuperclusterDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
 		c.Spec.Cluster.EnableJournalDevice = ptr.To(false)
 	})
-
-	found := findingsOf(t, config, workers("worker-1", "worker-2")...)
-	if len(found) != 2 {
-		t.Fatalf("findings = %+v, want one JournalDeviceRequired per member", found)
-	}
-	for _, f := range found {
-		if f.reason != JournalDeviceRequired || !strings.Contains(f.message, "enableJournalDevice") {
-			t.Errorf("finding %+v, want JournalDeviceRequired naming the field to set", f)
+	for _, nodes := range []int32{1, 2} {
+		config.Spec.Cluster.NodesPerSocket = ptr.To(nodes)
+		for _, journal := range []bool{false, true} {
+			config.Spec.Cluster.EnableJournalDevice = ptr.To(journal)
+			for _, f := range findingsOf(t, config, workers("worker-1", "worker-2")...) {
+				if strings.Contains(strings.ToLower(f.message), "journal") {
+					t.Errorf("finding %+v with %d nodes per worker and enableJournalDevice=%v, want "+
+						"none about the journal", f, nodes, journal)
+				}
+			}
 		}
-	}
-
-	config.Spec.Cluster.EnableJournalDevice = ptr.To(true)
-	if found := findingsOf(t, config, workers("worker-1", "worker-2")...); len(found) > 0 {
-		t.Errorf("findings = %+v with the journal device on, want none", found)
 	}
 }

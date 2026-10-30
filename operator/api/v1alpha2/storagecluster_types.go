@@ -583,7 +583,9 @@ type StorageNodesSpec struct {
 
 	// EnableJournalDevice dedicates the smallest NVMe device on each node to the
 	// journal manager, instead of carving a journal partition out of every
-	// device.
+	// device. For logical block devices it dedicates the smallest device of
+	// each node instead of carving one journal partition out of it (the
+	// default journal split).
 	// +optional
 	// +k8s:immutable
 	EnableJournalDevice *bool `json:"enableJournalDevice,omitempty"`

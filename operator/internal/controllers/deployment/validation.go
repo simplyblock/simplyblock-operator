@@ -133,9 +133,6 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 		if found := conflictingInterfaces(scope.document); found != "" {
 			findings = append(findings, finding{reason: WorkerNotFound, message: scope.prefix + found})
 		}
-		if found := blockDevicesWithoutJournalDevice(scope.document); found != "" {
-			findings = append(findings, finding{reason: JournalDeviceRequired, message: scope.prefix + found})
-		}
 		if found := failureDomainLayoutRefusal(scope.document); found != "" {
 			findings = append(findings, finding{reason: FailureDomainLayout, message: scope.prefix + found})
 		}
@@ -606,25 +603,6 @@ func (r *ClusterDeploymentConfigReconciler) growthLimit(
 	return fmt.Sprintf(
 		"the document adds %d storage nodes to cluster %s, which has %d, and a cluster holds at most %d",
 		total.nodes()-held.nodes(), cluster.Name, held.nodes(), maxStorageNodesPerCluster), nil
-}
-
-// blockDevicesWithoutJournalDevice reports a cluster of logical block devices
-// whose template does not put the journal on a device of its own. The control
-// plane refuses every node add of such a cluster ("lblk device mode requires
-// --enable-journal-device"), which lands after the cluster exists. A growth
-// document carries no template, and its cluster's setting already holds.
-func blockDevicesWithoutJournalDevice(config *simplyblockv1alpha2.ClusterDeploymentConfig) string {
-	template := config.Spec.Cluster
-	if config.Spec.ClusterRef != "" || template == nil ||
-		DeviceClassOf(config) != simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock {
-		return ""
-	}
-	if template.EnableJournalDevice != nil && *template.EnableJournalDevice {
-		return ""
-	}
-	return "the groups name logical block devices, and the control plane runs those only with " +
-		"the journal on a device of its own: set spec.cluster.enableJournalDevice, which takes " +
-		"one of each worker's devices, and choose a stripe the rest carry"
 }
 
 // groupsWithNetworkAttachments names the groups that attach their storage nodes
