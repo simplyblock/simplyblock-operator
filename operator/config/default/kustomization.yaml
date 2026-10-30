@@ -93,6 +93,16 @@ replacements:
     - spec.template.spec.containers.[name=manager].env.[name=SB_OPERATOR_IMAGE].value
     - spec.template.spec.containers.[name=manager].env.[name=SB_NODEPROBE_IMAGE].value
 - source:
+    kind: ServiceAccount
+    name: simplyblock-operator-nodeprobe
+    fieldPath: metadata.name
+  targets:
+  - select:
+      kind: Deployment
+      name: simplyblock-operator-controller-manager
+    fieldPaths:
+    - spec.template.spec.containers.[name=manager].env.[name=SB_NODEPROBE_SERVICE_ACCOUNT].value
+- source:
     kind: Service
     name: simplyblock-operator-csi-link
     fieldPath: metadata.labels.[simplyblock.io/service-name]

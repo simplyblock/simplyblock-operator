@@ -79,6 +79,10 @@ spec:
           value: controller:latest
         - name: SB_NODEPROBE_IMAGE
           value: controller:latest
+        # Filled in from the probe ServiceAccount by config/default, which is
+        # named with the namePrefix.
+        - name: SB_NODEPROBE_SERVICE_ACCOUNT
+          value: nodeprobe
         securityContext:
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false

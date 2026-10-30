@@ -1,0 +1,45 @@
+# The identity a worker probe writes its report as. The Helm chart renders the
+# same three objects (templates/nodeprobe-rbac.yaml); an OLM install has no
+# chart, so the bundle carries them. See that template for why this is a Role
+# and not a ClusterRole.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: kustomize
+    storage.simplyblock.io/component: nodeprobe
+  name: nodeprobe
+  namespace: system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: kustomize
+    storage.simplyblock.io/component: nodeprobe
+  name: nodeprobe
+  namespace: system
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: kustomize
+    storage.simplyblock.io/component: nodeprobe
+  name: nodeprobe
+  namespace: system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nodeprobe
+subjects:
+- kind: ServiceAccount
+  name: nodeprobe
+  namespace: system
