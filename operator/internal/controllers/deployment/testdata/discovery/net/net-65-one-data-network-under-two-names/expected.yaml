@@ -18,7 +18,7 @@ spec:
     stripe:
       dataChunks: 1
       parityChunks: 0
-    vcpuCount: 31
+    vcpuCount: 30
   environment: K3s
   hostOS:
     distro: ubuntu

@@ -510,9 +510,9 @@ func TestDiscoverWritesADraftFromTheReports(t *testing.T) {
 	if config.Spec.Cluster == nil {
 		t.Fatal("the document proposes no cluster")
 	}
-	if config.Spec.Cluster.VCPUCount == nil || *config.Spec.Cluster.VCPUCount != 15 {
-		t.Errorf("the cluster asks for %v vCPUs, want the 16 logical CPUs of the chosen node less one",
-			*config.Spec.Cluster.VCPUCount)
+	if config.Spec.Cluster.VCPUCount == nil || *config.Spec.Cluster.VCPUCount != 14 {
+		t.Errorf("the cluster asks for %v vCPUs, want the 16 logical CPUs of the chosen node less the two kept for the system",
+			config.Spec.Cluster.VCPUCount)
 	}
 	if config.Spec.Cluster.MaxSubsystemCount == nil {
 		t.Error("the cluster names no maxSubsystemCount, which the API requires")
