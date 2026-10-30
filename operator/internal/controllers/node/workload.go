@@ -102,15 +102,11 @@ type Workload struct {
 //
 // A managed control plane runs on a different Kubernetes cluster and can
 // never resolve this cluster's own Service DNS, so it is given the worker's
-// real, routable address instead -- one the storage-node-api pod already
-// answers on directly, since it runs with hostNetwork (BuildStorageNodeDaemonSet).
+// real, routable address instead -- one the storage-node-api pod answers on
+// through its hostPort 5000 (BuildStorageNodeDaemonSet).
 // Reading the worker Node's own reported address is what keeps this additive:
 // a deployment with no managed control plane takes exactly the path it always
 // did.
-//
-// A cluster that declares a network runs the agent off the host network, so the
-// worker's address no longer answers: an external control plane reaching it is
-// Phase 2 of the storage network design (§5.2).
 func (w *Workload) NodeAddress(ctx context.Context, namespace, cluster, worker string) string {
 	if address, ok := w.managedNodeAddress(ctx, worker, namespace); ok {
 		return address

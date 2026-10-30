@@ -51,6 +51,28 @@ func TestTheAgentIsOffTheHostNetworkWhateverTheNetwork(t *testing.T) {
 	}
 }
 
+// Regression: off the host network, a control plane on another cluster dials
+// the worker's address at port 5000 and finds nothing, so node-add never starts.
+// The agent publishes its API on the worker's port 5000 again.
+func TestTheAgentAPIIsPublishedOnTheWorkersPort5000(t *testing.T) {
+	for name, cluster := range map[string]*simplyblockv1alpha2.StorageCluster{
+		"no network":       clusterWithNetwork(nil),
+		"the pod network":  clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{PodNetwork: true}),
+		"the host network": clusterWithNetwork(&simplyblockv1alpha2.StorageNetworkSpec{SpdkOnHostNetwork: true}),
+	} {
+		ds := BuildStorageNodeDaemonSet(cluster, false, false, "", "", "agent:test")
+		published := false
+		for _, port := range ds.Spec.Template.Spec.Containers[0].Ports {
+			if port.ContainerPort == 5000 && port.HostPort == 5000 && port.Protocol == corev1.ProtocolTCP {
+				published = true
+			}
+		}
+		if !published {
+			t.Errorf("%s: the agent API is not published on the worker's port 5000", name)
+		}
+	}
+}
+
 // envVarOf finds one variable on the agent's container.
 func envVarOf(cluster *simplyblockv1alpha2.StorageCluster, name string) (corev1.EnvVar, bool) {
 	ds := BuildStorageNodeDaemonSet(cluster, false, false, "", "", "agent:test")
