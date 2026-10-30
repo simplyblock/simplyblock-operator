@@ -18,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      tag: ${{ steps.image_tag.outputs.tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -107,3 +109,58 @@ jobs:
             RELEASE=1
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  # An OLM bundle for the branch's images. A release pushes its own, with
+  # digests, from operator_release.yaml.
+  bundle:
+    name: "Build and push (bundle)"
+    if: inputs.version == ''
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: operator
+    env:
+      TAG: ${{ needs.build-and-push.outputs.tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: operator/go.mod
+
+      - name: Install operator-sdk
+        run: |
+          OPERATOR_SDK_VERSION="v1.42.2"
+          OPERATOR_SDK_SHA256="8847c45ea994ac62b3cd134f77934df2a16a56a39a634eb988e0d1db99d1a413"
+          curl -sLo /usr/local/bin/operator-sdk \
+            "https://github.com/operator-framework/operator-sdk/releases/download/${OPERATOR_SDK_VERSION}/operator-sdk_linux_amd64"
+          echo "${OPERATOR_SDK_SHA256}  /usr/local/bin/operator-sdk" | sha256sum -c -
+          chmod +x /usr/local/bin/operator-sdk
+
+      - name: Install kustomize
+        run: |
+          make kustomize
+          echo "${{ github.workspace }}/operator/bin" >> "$GITHUB_PATH"
+
+      # A ClusterServiceVersion name must be SemVer, so the run number stands in
+      # for the version and the branch is in the image tag.
+      - name: Build and push the bundle image
+        run: |
+          make bundle-dev \
+            VERSION=0.0.0-${{ github.run_number }} IMG_TAG="$TAG" \
+            IMG_BASE=docker.io/simplyblock/simplyblock-operator \
+            REBALANCER_IMG_BASE=docker.io/simplyblock/simplyblock-rebalancer \
+            CLUSTER_IMAGE_BASE=docker.io/simplyblock/simplyblock CLUSTER_IMAGE_TAG=main
+          docker build -f bundle.Dockerfile -t "docker.io/simplyblock/simplyblock-operator-bundle:$TAG" .
+          docker push "docker.io/simplyblock/simplyblock-operator-bundle:$TAG"

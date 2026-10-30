@@ -69,8 +69,10 @@ FROM registry.access.redhat.com/ubi10/ubi-minimal:10.2
 ARG VERSION=0.1.0
 ARG RELEASE=1
 
-# Apply all available security patches from the UBI10 repositories.
-RUN microdnf update -y && microdnf clean all
+# Apply all available security patches from the UBI10 repositories. iputils is
+# what the storage network probe runs: arping for the duplicate-address check,
+# and ping for the peers. The probe pods run this image.
+RUN microdnf update -y && microdnf install -y iputils && microdnf clean all
 
 # Required labels for Red Hat certification (preflight check operator).
 LABEL name="simplyblock-operator" \

@@ -6,7 +6,8 @@
 // The Role grants two verbs on one kind because that is the whole of what a probe
 // does to the cluster: it writes one report ConfigMap, and a retried Job
 // replaces it. Reading the reports and cleaning them up is the operator's, and a
-// probe that could delete them could delete another worker's.
+// probe that could delete them could delete another worker's. Beside that it may
+// list the namespace's NetworkAttachmentDefinitions, which the report carries.
 
 package deployment
 
@@ -36,7 +37,10 @@ const (
 
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create
-// rbac-justified: the probe Role grants configmaps create and update, which the manager already holds.
+// +kubebuilder:rbac:groups=k8s.cni.cncf.io,resources=network-attachment-definitions,verbs=list
+// rbac-justified: the probe Role grants configmaps create and update, which the manager already holds, and list on
+// network-attachment-definitions, which the manager holds by the marker above: Kubernetes refuses to create a Role
+// granting a verb its creator lacks. Listing the definitions reads CNI configurations and grants nothing on the host.
 
 // probeIdentityName is the one name the run's account, Role, and binding take. A
 // run name too long to prefix is shortened with a hash of itself, so two long
@@ -80,6 +84,13 @@ func (r *OperatorOpsReconciler) ensureProbeIdentity(
 				APIGroups: []string{""},
 				Resources: []string{"configmaps"},
 				Verbs:     []string{"create", "update"},
+			}, {
+				// The report carries the namespace's definitions. A cluster
+				// without Multus serves no such kind, and the rule then grants
+				// nothing.
+				APIGroups: []string{"k8s.cni.cncf.io"},
+				Resources: []string{"network-attachment-definitions"},
+				Verbs:     []string{"list"},
 			}},
 		},
 		&rbacv1.RoleBinding{

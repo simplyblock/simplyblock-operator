@@ -435,6 +435,10 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		// partitioned a journal out of every drive on a deployment reviewed for
 		// a dedicated one.
 		workload.EnableJournalDevice = template.EnableJournalDevice
+		// The network is the cluster's alone and fixed when it is created, so this
+		// is the only place it can be stated. Copied, so the document and the
+		// cluster never share one.
+		workload.Network = template.Network.DeepCopy()
 	}
 
 	// The nodeAgent slot of spec.images. It is read here rather than in
@@ -445,17 +449,6 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 	if images := config.Spec.Images; images != nil && images.NodeAgent != nil {
 		workload.Image = images.NodeAgent.Image
 		workload.ImagePullPolicy = images.NodeAgent.ImagePullPolicy
-	}
-
-	for _, set := range config.Spec.NodeSets {
-		for _, group := range set.Groups {
-			if workload.MgmtInterface == "" {
-				workload.MgmtInterface = group.MgmtInterface
-			}
-			if len(workload.DataInterfaces) == 0 {
-				workload.DataInterfaces = group.DataInterfaces
-			}
-		}
 	}
 
 	// The host OS is spent here too, and on one flag. Ubuntu keeps the NVMe-oF
@@ -749,7 +742,7 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 ) *simplyblockv1alpha2.StorageNode {
 	socket, index := decomposeSlot(cluster, slot)
 
-	return &simplyblockv1alpha2.StorageNode{
+	node := &simplyblockv1alpha2.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      nodeName(cluster.Name, worker, slot),
 			Namespace: config.Namespace,
@@ -779,8 +772,12 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 				// which the control plane reads as a request to rebalance onto it
 				// rather than to treat it as part of an initial layout. A growth
 				// document is exactly that case.
-				Expand:           expansionOf(config),
-				DeviceNames:      devicesOf(group),
+				Expand:      expansionOf(config),
+				DeviceNames: devicesOf(group),
+				// The NICs are the node's own: a fleet's workers do not agree on
+				// what their NICs are called, and the node-add is made per node.
+				MgmtInterface:    group.MgmtInterface,
+				DataInterfaces:   group.DataInterfaces,
 				FailureDomain:    group.FailureDomain,
 				Site:             groupSite(group, cluster),
 				SpdkSystemMemory: group.SpdkSystemMemory,
@@ -801,6 +798,7 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 			},
 		},
 	}
+	return node
 }
 
 // The two slots of spec.images a node is built from, as accessors rather than as

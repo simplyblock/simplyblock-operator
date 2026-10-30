@@ -107,6 +107,10 @@ type Workload struct {
 // Reading the worker Node's own reported address is what keeps this additive:
 // a deployment with no managed control plane takes exactly the path it always
 // did.
+//
+// A cluster that declares a network runs the agent off the host network, so the
+// worker's address no longer answers: an external control plane reaching it is
+// Phase 2 of the storage network design (§5.2).
 func (w *Workload) NodeAddress(ctx context.Context, namespace, cluster, worker string) string {
 	if address, ok := w.managedNodeAddress(ctx, worker, namespace); ok {
 		return address

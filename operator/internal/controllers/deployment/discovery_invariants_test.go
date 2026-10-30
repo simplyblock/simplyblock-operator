@@ -127,6 +127,10 @@ var knownUnbuildable = map[string]string{
 	// expansion binds one interface per cluster, so a fleet whose machines name
 	// their NICs differently produces exactly the document this refuses.
 	WorkerNotFound: "the groups name different management interfaces",
+
+	// A run naming network attachments drafts them, and the expansion does not
+	// build storage nodes on them until the CNI support lands.
+	NetworkAttachmentNotDeployable: "the expansion does not build storage nodes on network attachments yet",
 }
 
 // TestEveryDraftedDocumentPassesItsOwnValidation runs each document through the

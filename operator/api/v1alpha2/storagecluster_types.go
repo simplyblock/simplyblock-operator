@@ -518,6 +518,8 @@ type OpenShiftSpec struct {
 // What can differ is in StorageNode.spec.config: the two images, the SPDK system
 // memory, and the sizing block, which are per node precisely so that an image
 // rollout and a hardware re-size can walk the fleet one machine at a time.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.dataInterfaces) || !has(self.network) || (has(self.network.spdkOnHostNetwork) && self.network.spdkOnHostNetwork)",message="dataInterfaces are allowed only with network.spdkOnHostNetwork"
 type StorageNodesSpec struct {
 	// Image is the storage-node container image. Defaults to the ControlPlane
 	// singleton's spec.image when unset, so a deployment states the version once.
@@ -544,6 +546,17 @@ type StorageNodesSpec struct {
 	// +optional
 	// +k8s:immutable
 	DataInterfaces []string `json:"dataInterfaces,omitempty"`
+
+	// Network states the networks the storage nodes' SPDK pods attach to, as
+	// references to networks rather than interface names. It replaces
+	// dataInterfaces, which are allowed only with network.spdkOnHostNetwork. The
+	// management interface is still mgmtInterface. It is set when the cluster is created and never added,
+	// changed, or removed afterward: the control plane resolves a node's networks
+	// when it adds the node and does not revisit them, and a cluster created
+	// without it keeps its pods on the host network.
+	// +optional
+	// +k8s:immutable
+	Network *StorageNetworkSpec `json:"network,omitempty"`
 
 	// SocketsToUse restricts deployment to selected NUMA sockets. Empty means
 	// socket 0 alone.
@@ -741,10 +754,12 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.stretched) || (has(self.enableSyncReplication) && self.enableSyncReplication)",message="stretched requires enableSyncReplication to be true"
 // +kubebuilder:validation:XValidation:rule="has(self.stretched) == has(oldSelf.stretched)",message="stretched cannot be added to or removed from an existing cluster"
 // +kubebuilder:validation:XValidation:rule="has(self.supercluster) || (has(self.maxSubsystemCount) && has(self.vcpuCount))",message="maxSubsystemCount and vcpuCount are required unless the cluster is a supercluster"
+// +kubebuilder:validation:XValidation:rule="(has(self.storageNodes) && has(self.storageNodes.network)) == (has(oldSelf.storageNodes) && has(oldSelf.storageNodes.network))",message="spec.storageNodes.network is set when the cluster is created and cannot be added or removed afterward"
 // +kubebuilder:validation:XValidation:rule="has(self.supercluster) == has(oldSelf.supercluster)",message="a cluster cannot become a supercluster, or stop being one, after creation"
 // +kubebuilder:validation:XValidation:rule="has(self.superclusterRef) == has(oldSelf.superclusterRef) && (!has(self.superclusterRef) || self.superclusterRef == oldSelf.superclusterRef)",message="superclusterRef is set at creation and never changed"
 // +kubebuilder:validation:XValidation:rule="!(has(self.supercluster) && has(self.superclusterRef))",message="a supercluster cannot be a member of another"
 // +kubebuilder:validation:XValidation:rule="has(self.superclusterRef) || !has(self.disablePlacement)",message="disablePlacement is valid only on a member"
+// +kubebuilder:validation:XValidation:rule="!has(self.storageNodes) || !has(self.storageNodes.network) || !has(self.storageNodes.network.data) || self.storageNodes.network.data.size() == 0 || !has(self.fabricType) || self.fabricType == 'tcp'",message="a data network attached through a NetworkAttachmentDefinition serves NVMe/TCP only"
 type StorageClusterSpec struct {
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
 	// node. It is the cluster's and no node carries a copy: every node's
@@ -754,7 +769,7 @@ type StorageClusterSpec struct {
 	// a node that receives no value fails config generation outright rather
 	// than falling back to a default.
 	// +kubebuilder:validation:Minimum=10
-	// +kubebuilder:validation:Maximum=75
+	// +kubebuilder:validation:Maximum=500
 	// +optional
 	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
 
@@ -1041,6 +1056,82 @@ type StorageClusterSpec struct {
 	// member.
 	// +optional
 	DisablePlacement *bool `json:"disablePlacement,omitempty"`
+
+	// ServiceClasses are the I/O service classes volumes are placed in, and the
+	// share of I/O scheduling snapshot replication gets. A volume selects a
+	// class by name through its StoragePool's volumeDefaults.priorityClass.
+	// Omitted, the cluster's classes are left as they are. Mutable: classes can
+	// be added, reweighted, and removed on a live cluster, except that a class a
+	// volume still uses cannot be removed.
+	// +optional
+	ServiceClasses *ServiceClassesSpec `json:"serviceClasses,omitempty"`
+}
+
+// ServiceClassesSpec configures the cluster's I/O service classes.
+//
+// Every volume runs in one class. Default is always there, and up to five more
+// can be defined. The weights of Default and the defined classes are relative
+// to each other and divide what remains after the share reserved for internal
+// metadata I/O and the replicationShare.
+type ServiceClassesSpec struct {
+	// DefaultWeight is the relative weight of the Default class, which every
+	// volume without a class runs in.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1000
+	// +kubebuilder:default=100
+	// +optional
+	DefaultWeight *int32 `json:"defaultWeight,omitempty"`
+
+	// Classes are the service classes besides Default. A class keeps the
+	// number the control plane gave it for as long as it exists, and a class a
+	// volume still uses cannot be removed.
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=5
+	// +optional
+	Classes []ServiceClass `json:"classes,omitempty"`
+
+	// ReplicationShare is the percentage of I/O scheduling given to snapshot
+	// replication traffic, which runs in a class of its own: the source
+	// snapshot while it is read, and the receiving copy while it is written. A
+	// share is a weight rather than a cap: replication uses more when nothing
+	// else competes. Zero leaves it only the scheduler's minimum.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=74
+	// +kubebuilder:default=10
+	// +optional
+	ReplicationShare *int32 `json:"replicationShare,omitempty"`
+}
+
+// ServiceClass is one user-defined I/O service class.
+type ServiceClass struct {
+	// Name is how a StoragePool's volumeDefaults.priorityClass selects the
+	// class. Default is reserved.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[A-Za-z][A-Za-z0-9_.-]*$`
+	// +kubebuilder:validation:XValidation:rule="self != 'Default'",message="Default is the built-in class, whose weight is set with defaultWeight"
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Weight is the class's weight relative to Default and the other classes.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1000
+	// +kubebuilder:validation:Required
+	Weight int32 `json:"weight"`
+}
+
+// ServiceClassStatus is one service class as the control plane holds it.
+type ServiceClassStatus struct {
+	// Name is the class's name.
+	Name string `json:"name"`
+
+	// ID is the control plane's number for the class, which is what its
+	// command-line tools show and accept.
+	ID int32 `json:"id"`
+
+	// Weight is the class's relative weight.
+	Weight int32 `json:"weight"`
 }
 
 // StorageClusterStatus is the observed state of one backend cluster.
@@ -1188,6 +1279,15 @@ type StorageClusterStatus struct {
 	// cycle.
 	// +optional
 	RebalancingMetrics *RebalancingMetrics `json:"rebalancingMetrics,omitempty"`
+
+	// ServiceClasses are the cluster's service classes besides Default as the
+	// control plane last reported them. Written only while spec.serviceClasses
+	// is set.
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=8
+	// +optional
+	ServiceClasses []ServiceClassStatus `json:"serviceClasses,omitempty"`
 
 	// Message is the reason the phase is what it is: one sentence, replaced as
 	// the cluster moves, and never a log.
@@ -1442,4 +1542,95 @@ type StorageClusterList struct {
 
 func init() {
 	SchemeBuilder.Register(&StorageCluster{}, &StorageClusterList{})
+}
+
+// StorageNetworkSpec is how a storage cluster's SPDK pods reach their networks.
+// The pods are on the host network (spdkOnHostNetwork), or on the pod network
+// (podNetwork), which Multus data networks may add dedicated interfaces to. The
+// host network excludes the rest.
+//
+// +kubebuilder:validation:XValidation:rule="(has(self.podNetwork) && self.podNetwork) || (has(self.spdkOnHostNetwork) && self.spdkOnHostNetwork)",message="one of podNetwork and spdkOnHostNetwork must be set"
+// +kubebuilder:validation:XValidation:rule="!(has(self.podNetwork) && self.podNetwork && has(self.spdkOnHostNetwork) && self.spdkOnHostNetwork)",message="podNetwork and spdkOnHostNetwork are exclusive"
+// +kubebuilder:validation:XValidation:rule="!has(self.data) || self.data.size() == 0 || (has(self.podNetwork) && self.podNetwork)",message="data networks require podNetwork: true"
+// +kubebuilder:validation:XValidation:rule="!has(self.data) || self.data.all(a, self.data.exists_one(b, b.networkAttachmentRef.name == a.networkAttachmentRef.name))",message="data networks must name distinct NetworkAttachmentDefinitions"
+type StorageNetworkSpec struct {
+	// PodNetwork puts the SPDK pods on the cluster CNI's network. Alone, the pod's
+	// one interface carries the RPC and the data, and a Service in front of the pod
+	// is the address peers and clients hold, since the pod's own address changes on
+	// every restart. The control plane keeps the Service and the ports it carries.
+	// With data networks, the RPC stays on that interface and the data moves to the
+	// networks' interfaces, whose addresses are stable, so no Service is kept.
+	// +optional
+	PodNetwork bool `json:"podNetwork,omitempty"`
+
+	// SpdkOnHostNetwork runs the SPDK pods on the host network, where they bind
+	// host NICs. The NICs' names are not stated here, because a fleet's workers
+	// do not agree on what their NICs are called: each node names its own in
+	// its spec.config.dataInterfaces, which is allowed only in this mode.
+	// +optional
+	SpdkOnHostNetwork bool `json:"spdkOnHostNetwork,omitempty"`
+
+	// Data are the Multus networks the storage nodes serve volumes on, each a
+	// NetworkAttachmentDefinition the pod attaches to besides the pod network, which
+	// podNetwork must therefore state.
+	// +kubebuilder:validation:MaxItems=8
+	// +listType=atomic
+	// +optional
+	Data []StorageNetwork `json:"data,omitempty"`
+}
+
+// StorageNetwork is one data network a storage node's SPDK pod attaches to
+// through a NetworkAttachmentDefinition.
+type StorageNetwork struct {
+	// NetworkAttachmentRef is the Multus NetworkAttachmentDefinition in the
+	// namespace of the storage cluster, and the key the nodes' addresses and
+	// status use. The pod attaches to it and takes the interface the definition's
+	// plugin creates.
+	// +kubebuilder:validation:Required
+	NetworkAttachmentRef NetworkDefinitionReference `json:"networkAttachmentRef"`
+}
+
+// NetworkAddressPool is the subnet a network's node addresses are taken from.
+// The operator gives each node of the namespace the first address of the range
+// that no other node holds, and keeps it for the life of the node.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.first) == has(self.last)",message="first and last are set together"
+// +kubebuilder:validation:XValidation:rule="!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first)) && cidr(self.subnet).containsIP(ip(self.last)))",message="first and last must lie inside subnet"
+type NetworkAddressPool struct {
+	// Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
+	// length is the one each node's address carries.
+	// +kubebuilder:validation:MaxLength=18
+	// +kubebuilder:validation:Pattern=`^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$`
+	// +kubebuilder:validation:Required
+	Subnet string `json:"subnet"`
+
+	// First is the lowest address the operator may hand out. Unset, the range
+	// starts at the subnet's first host address. It is set together with Last.
+	// +kubebuilder:validation:MaxLength=15
+	// +kubebuilder:validation:Pattern=`^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$`
+	// +optional
+	First string `json:"first,omitempty"`
+
+	// Last is the highest address the operator may hand out. Unset, the range
+	// ends at the subnet's last host address. It is set together with First.
+	// +kubebuilder:validation:MaxLength=15
+	// +kubebuilder:validation:Pattern=`^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$`
+	// +optional
+	Last string `json:"last,omitempty"`
+}
+
+// NetworkDefinitionReference names a NetworkAttachmentDefinition in the
+// namespace of the object that holds the reference.
+type NetworkDefinitionReference struct {
+	// Name is the definition's name.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// AddressPool is the range the operator takes each node's address on this
+	// network from. Unset, the network takes the address the NIC the definition
+	// moves holds on the worker.
+	// +optional
+	AddressPool *NetworkAddressPool `json:"addressPool,omitempty"`
 }

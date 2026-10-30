@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+// Package atlas.netcheck.v1 asks a worker's host what its network shows: the
+// addresses of one interface, and whether a TCP connection from the host to an
+// address and port succeeds.
+//
+// The operator is the caller and the CSI node plugin serves it, on the host's
+// network, because only the host's namespace holds the NIC before a pod takes it
+// and is the one the kernel NVMe/TCP initiator connects from. Both calls only
+// read: nothing here changes the host.
+package atlas.netcheck.v1;
+
+option go_package = "github.com/simplyblock/atlas/netcheck/netcheckrpc/netcheckv1;netcheckv1";
+
+// CheckService answers host-side network questions on the node it runs on.
+service CheckService {
+  // InterfaceAddresses reads the addresses of one host interface. An interface
+  // the host does not have is success with found false, because the caller
+  // treats it as a missing NIC and not as a failed call.
+  rpc InterfaceAddresses(InterfaceAddressesRequest) returns (InterfaceAddressesResponse);
+
+  // Connect opens a TCP connection from the host to an address and port and
+  // closes it. A refusal or a timeout is success with connected false, because
+  // that is the answer the caller asked for.
+  rpc Connect(ConnectRequest) returns (ConnectResponse);
+}
+
+// InterfaceAddressesRequest names the interface by name or by the PCI address of
+// its device. The name wins when both are set.
+message InterfaceAddressesRequest {
+  string name = 1;
+  string pci_address = 2;
+}
+
+// InterfaceAddressesResponse is what the host shows for the interface.
+message InterfaceAddressesResponse {
+  // Whether the host has the interface.
+  bool found = 1;
+  // Its addresses in CIDR form, in the order the host reports them.
+  repeated string addresses = 2;
+}
+
+// ConnectRequest names the endpoint to connect to.
+message ConnectRequest {
+  string address = 1;
+  uint32 port = 2;
+  // Longest the connection attempt may take, in seconds. Zero takes the
+  // server's default.
+  uint32 timeout_seconds = 3;
+}
+
+// ConnectResponse is the outcome of the connection attempt.
+message ConnectResponse {
+  bool connected = 1;
+  // Why it did not connect, for a message. Empty when it did.
+  string detail = 2;
+}

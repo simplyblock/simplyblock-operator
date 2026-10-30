@@ -271,6 +271,7 @@ rules:
   verbs:
   - create
   - get
+  - list
   - update
 - apiGroups:
   - operator.openshift.io

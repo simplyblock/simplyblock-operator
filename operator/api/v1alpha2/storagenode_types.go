@@ -66,7 +66,7 @@ const (
 
 // StorageNodeStep is one step of the provisioning path. There is one graph rather
 // than a MultiConfig, because an entity has no spec.action to key one on.
-// +kubebuilder:validation:Enum=CheckingHost;CheckingConfig;AwaitingSlot;Posting;Resolving;Adopting;AwaitingWorker
+// +kubebuilder:validation:Enum=CheckingHost;CheckingConfig;CheckingNetwork;AwaitingSlot;Posting;Resolving;Adopting;AwaitingWorker
 type StorageNodeStep string
 
 const (
@@ -78,6 +78,12 @@ const (
 	// where its cluster requires one. It is a gate rather than a validation: the
 	// value can arrive later, and holding is what makes filling it in sufficient.
 	StorageNodeStepCheckingConfig StorageNodeStep = "CheckingConfig"
+
+	// StorageNodeStepCheckingNetwork runs the probe pod that attaches to the
+	// declared networks the way the SPDK pod will, and holds the node until the
+	// attach, the address, and the peers check out. A node on the host network
+	// never enters it.
+	StorageNodeStepCheckingNetwork StorageNodeStep = "CheckingNetwork"
 
 	// StorageNodeStepAwaitingSlot holds until the cluster is under its
 	// parallel-add limit and no FoundationDB worker is in flight.
@@ -244,6 +250,20 @@ type StorageNodeConfig struct {
 	// +optional
 	// +k8s:immutable
 	DeviceNames []string `json:"deviceNames,omitempty"`
+
+	// MgmtInterface is the management NIC this node binds. Unset, the cluster's
+	// spec.storageNodes.mgmtInterface applies, which is what a node created before
+	// the interface was stated per node carries.
+	// +optional
+	// +k8s:immutable
+	MgmtInterface string `json:"mgmtInterface,omitempty"`
+
+	// DataInterfaces are the host NICs this node serves data on, for a cluster
+	// whose data network is a hostInterface. Unset, the cluster's
+	// spec.storageNodes.dataInterfaces applies.
+	// +optional
+	// +k8s:immutable
+	DataInterfaces []string `json:"dataInterfaces,omitempty"`
 
 	// PcieAllowList selects devices by PCI address. It is the one device field a
 	// migration writes, merging spec.migrate.newSsdPcie into it so devices added
@@ -526,7 +546,7 @@ type StorageNodeStatus struct {
 
 	// Step is the position of the provisioning machine. The value is one of the
 	// steps that machine declares.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['CheckingHost','CheckingConfig','AwaitingSlot','Posting','Resolving','Adopting','AwaitingWorker']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['CheckingHost','CheckingConfig','CheckingNetwork','AwaitingSlot','Posting','Resolving','Adopting','AwaitingWorker']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
@@ -582,6 +602,14 @@ type StorageNodeStatus struct {
 	// rebalancer reads.
 	// +optional
 	LatencyMetrics *NodeLatencyMetrics `json:"latencyMetrics,omitempty"`
+
+	// Network records, per storage network, what the node's SPDK pod reported
+	// and whether the attachment matches the declaration. A node on the host
+	// network has no entries.
+	// +listType=map
+	// +listMapKey=network
+	// +optional
+	Network []NodeNetworkStatus `json:"network,omitempty"`
 
 	// Message is the reason the phase is what it is: one sentence, replaced as the
 	// node moves, and never a log.
@@ -653,4 +681,66 @@ type StorageNodeList struct {
 
 func init() {
 	SchemeBuilder.Register(&StorageNode{}, &StorageNodeList{})
+}
+
+// NodeNetworkPhase is where a node's attachment to one network stands.
+// +kubebuilder:validation:Enum=Pending;Attached;Mismatched;Unavailable
+type NodeNetworkPhase string
+
+const (
+	// NodeNetworkPhasePending means the pod has not reported the network; on
+	// the pod network, that the Service in front of the pod does not exist yet.
+	NodeNetworkPhasePending NodeNetworkPhase = "Pending"
+
+	// NodeNetworkPhaseAttached means the pod holds the declared address; on the
+	// pod network, that the pod runs behind its Service.
+	NodeNetworkPhaseAttached NodeNetworkPhase = "Attached"
+
+	// NodeNetworkPhaseMismatched means the pod holds a different address from
+	// the one the node states.
+	NodeNetworkPhaseMismatched NodeNetworkPhase = "Mismatched"
+
+	// NodeNetworkPhaseUnavailable means the interface the pod held is gone; on
+	// the pod network, that the Service exists and the pod does not run.
+	NodeNetworkPhaseUnavailable NodeNetworkPhase = "Unavailable"
+)
+
+// NodeNetworkStatus is what a node's SPDK pod reports for one network.
+type NodeNetworkStatus struct {
+	// Network is the name of the cluster network.
+	Network string `json:"network"`
+
+	// Interface is the interface's name inside the pod.
+	// +optional
+	Interface string `json:"interface,omitempty"`
+
+	// Assigned is the node's address on the network, with its prefix length: the
+	// one the operator took from the network's address pool, or, for a network
+	// with no pool, the one the NIC the definition moves holds on the worker. It
+	// is chosen once, before the node is added, and never changes, so the node
+	// keeps it across restarts and reboots. It is empty until it is chosen.
+	// +optional
+	Assigned string `json:"assigned,omitempty"`
+
+	// Resource is the extended resource the SPDK pod requests for the network's
+	// device, from the definition's k8s.v1.cni.cncf.io/resourceName annotation:
+	// a device plugin (an SR-IOV VF pool) hands the device out only to a pod
+	// that requests it. It is recorded with the address, before the node is
+	// added, and is empty for a definition whose plugin creates the interface
+	// itself or names its device.
+	// +optional
+	Resource string `json:"resource,omitempty"`
+
+	// Address is the address the pod reported.
+	// +optional
+	Address string `json:"address,omitempty"`
+
+	// HostReachable is whether the initiators on the workers can reach the
+	// address, which a volume attach needs. It is unset until the reachability
+	// gate has run.
+	// +optional
+	HostReachable *bool `json:"hostReachable,omitempty"`
+
+	// Phase is where the attachment stands.
+	Phase NodeNetworkPhase `json:"phase"`
 }

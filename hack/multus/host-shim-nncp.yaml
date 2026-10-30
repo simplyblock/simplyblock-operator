@@ -1,0 +1,102 @@
+# Host-side macvlan sibling for the storage network, one NodeNetworkConfigurationPolicy
+# per worker (kubernetes-nmstate). A pod's macvlan interface cannot be reached from its
+# own parent, so the worker's address moves from eth1 onto a second macvlan interface
+# that can. The administrator applies this before creating the NetworkAttachmentDefinition,
+# and the operator only checks the result (hostReachable). Edit the hostname and address
+# per worker. For hosts without kubernetes-nmstate, the same change is an nmcli profile.
+#
+#     kubectl apply -f hack/multus/host-shim-nncp.yaml
+#     kubectl get nncp
+---
+apiVersion: nmstate.io/v1
+kind: NodeNetworkConfigurationPolicy
+metadata:
+  name: storage-host-shim-vm12
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: vm12.simplyblock2.localdomain
+  desiredState:
+    interfaces:
+      - name: eth1
+        type: ethernet
+        state: up
+        mtu: 9000
+        ipv4: {enabled: false}
+        ipv6: {enabled: false}
+      - name: shim0
+        type: mac-vlan
+        state: up
+        mtu: 9000
+        mac-vlan:
+          base-iface: eth1
+          mode: bridge
+          promiscuous: true
+        ipv4:
+          enabled: true
+          dhcp: false
+          address:
+            - ip: 10.10.10.62
+              prefix-length: 24
+        ipv6: {enabled: false}
+---
+apiVersion: nmstate.io/v1
+kind: NodeNetworkConfigurationPolicy
+metadata:
+  name: storage-host-shim-vm13
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: vm13.simplyblock2.localdomain
+  desiredState:
+    interfaces:
+      - name: eth1
+        type: ethernet
+        state: up
+        mtu: 9000
+        ipv4: {enabled: false}
+        ipv6: {enabled: false}
+      - name: shim0
+        type: mac-vlan
+        state: up
+        mtu: 9000
+        mac-vlan:
+          base-iface: eth1
+          mode: bridge
+          promiscuous: true
+        ipv4:
+          enabled: true
+          dhcp: false
+          address:
+            - ip: 10.10.10.63
+              prefix-length: 24
+        ipv6: {enabled: false}
+---
+apiVersion: nmstate.io/v1
+kind: NodeNetworkConfigurationPolicy
+metadata:
+  name: storage-host-shim-vm14
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: vm14.simplyblock2.localdomain
+  desiredState:
+    interfaces:
+      - name: eth1
+        type: ethernet
+        state: up
+        mtu: 9000
+        ipv4: {enabled: false}
+        ipv6: {enabled: false}
+      - name: shim0
+        type: mac-vlan
+        state: up
+        mtu: 9000
+        mac-vlan:
+          base-iface: eth1
+          mode: bridge
+          promiscuous: true
+        ipv4:
+          enabled: true
+          dhcp: false
+          address:
+            - ip: 10.10.10.64
+              prefix-length: 24
+        ipv6: {enabled: false}

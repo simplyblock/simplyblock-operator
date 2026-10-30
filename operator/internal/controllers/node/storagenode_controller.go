@@ -84,6 +84,11 @@ type StorageNodeReconciler struct {
 	Recorder events.EventRecorder
 	API      ControlPlane
 
+	// HostCheck asks the CSI node plugins, which run on the host network of
+	// their worker, to read a NIC's address and to test a connection to the SPDK
+	// listener (design §8.1). Unset, a node on a network waits for it.
+	HostCheck HostChecker
+
 	// Nodes is the storage-node stream's cache, which steady state is read from
 	// and which adoption matches against. It is optional: a deployment without the
 	// control-plane informer falls back to reading the control plane directly.
@@ -464,6 +469,8 @@ func (r *StorageNodeReconciler) performNodeStep(
 		return r.checkConfig(ctx, node, cluster)
 	case stepAwaitingSlot:
 		return r.awaitSlot(ctx, node, cluster)
+	case stepCheckingNetwork:
+		return r.checkNetwork(ctx, node, cluster)
 	case stepPosting:
 		return stepResolving, true, r.postNode(ctx, node, cluster)
 	case stepResolving:
@@ -599,6 +606,9 @@ func (r *StorageNodeReconciler) checkConfig(
 		return stepCheckingConfig, false, blockedf(SiteMissing,
 			"cluster %s requires a site and this node declares none; "+
 				"set spec.config.site", cluster.Name)
+	}
+	if declaresDefinitions(networkOf(cluster)) {
+		return stepCheckingNetwork, true, nil
 	}
 	return stepAwaitingSlot, true, nil
 }
@@ -793,6 +803,12 @@ func (r *StorageNodeReconciler) postNode(
 	cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
 	params := r.addParams(ctx, node, cluster)
+	networks, err := r.networkParams(node, cluster)
+	if err != nil {
+		return fmt.Errorf("add node %s on worker %s: %w", node.Name, node.Spec.WorkerNode, err)
+	}
+	params.Networks = networks
+	params.PodNetwork = onPodNetwork(cluster)
 	taskID, err := r.API.AddNode(ctx, cluster.Status.UUID, params)
 	if err != nil {
 		return fmt.Errorf("add node %s on worker %s: %w",
@@ -1018,6 +1034,11 @@ func (r *StorageNodeReconciler) syncStatus(
 	err = r.writeStatus(ctx, node, func(status *simplyblockv1alpha2.StorageNodeStatus) {
 		applyReading(status, reading)
 		status.Phase = phaseOf(reading)
+		// A node on a network is not online until the CSI node plugins reach its
+		// listener: a volume cannot attach to one they cannot reach.
+		if status.Phase == simplyblockv1alpha2.StorageNodePhaseOnline && r.networkGateHolds(node, cluster) {
+			status.Phase = simplyblockv1alpha2.StorageNodePhaseProvisioning
+		}
 		if sampled && worthWriting(status.Resources.Capacity, sample) {
 			status.Resources.Capacity = &simplyblockv1alpha2.StorageNodeCapacity{
 				TotalBytes: ptr.To(sample.Total),
@@ -1028,6 +1049,10 @@ func (r *StorageNodeReconciler) syncStatus(
 	})
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+
+	if err := r.syncNetwork(ctx, node, cluster); err != nil {
+		return ctrl.Result{RequeueAfter: nodeRetry}, err
 	}
 
 	if !wasOnline && node.Status.Phase == simplyblockv1alpha2.StorageNodePhaseOnline {
@@ -1613,10 +1638,10 @@ func (r *StorageNodeReconciler) addParams(
 
 	params := utils.StorageNodeSetAddParams{
 		NodeAddress:      r.Workload.NodeAddress(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode),
-		InterfaceName:    workload.MgmtInterface,
+		InterfaceName:    firstNonEmpty(config.MgmtInterface, workload.MgmtInterface),
 		SPDKImage:        config.SpdkImage,
 		SPDKProxyImage:   config.SpdkProxyImage,
-		DataNics:         workload.DataInterfaces,
+		DataNics:         nicsOf(config.DataInterfaces, workload.DataInterfaces),
 		Namespace:        node.Namespace,
 		JMPercent:        journalPercent(config.JournalManager),
 		Partitions:       partitionsPerDevice(workload),
@@ -1642,6 +1667,23 @@ func (r *StorageNodeReconciler) addParams(
 		params.FailureDomain = index
 	}
 	return params
+}
+
+// firstNonEmpty is the node's own NIC name, or the cluster's for a node created
+// before NICs were stated per node.
+func firstNonEmpty(node, cluster string) string {
+	if node != "" {
+		return node
+	}
+	return cluster
+}
+
+// nicsOf is the node's own data NICs, or the cluster's for a node that names none.
+func nicsOf(node, cluster []string) []string {
+	if len(node) > 0 {
+		return node
+	}
+	return cluster
 }
 
 // domainIndex is the integer the control plane's own field takes for a
@@ -1842,7 +1884,8 @@ func equalNodeStatus(a, b simplyblockv1alpha2.StorageNodeStatus) bool {
 		a.Step.State != b.Step.State || !equalTime(a.Step.Deadline, b.Step.Deadline) {
 		return false
 	}
-	return equalResources(a.Resources, b.Resources) && equalPorts(a.Ports, b.Ports)
+	return equalResources(a.Resources, b.Resources) && equalPorts(a.Ports, b.Ports) &&
+		equalNetworkStatus(a.Network, b.Network)
 }
 
 func equalResources(a, b *simplyblockv1alpha2.StorageNodeResources) bool {

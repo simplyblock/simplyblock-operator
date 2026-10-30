@@ -77,7 +77,6 @@ type JobPlacement struct {
 // namespaced Job, so a caller that has no owner to name passes none and cleans
 // its Jobs up itself.
 func BuildJob(p JobParams) *batchv1.Job {
-	privileged := true
 	readOnly := true
 	var owners []metav1.OwnerReference
 	if p.OwnerRef.Name != "" {
@@ -97,8 +96,10 @@ func BuildJob(p JobParams) *batchv1.Job {
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					NodeSelector:  map[string]string{"kubernetes.io/hostname": p.Hostname},
-					Tolerations:   p.Tolerations,
-					HostNetwork:   true,
+					Tolerations:   pinnedNodeTolerations(p.Tolerations),
+					// NVMe connections are made here, and a reconnect leaves a pod's
+					// network namespace for the host's.
+					HostNetwork: true,
 					Volumes: []corev1.Volume{
 						{
 							Name: "host-dev",
@@ -122,7 +123,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 							ImagePullPolicy:        corev1.PullAlways,
 							Command:                []string{"simplyblock-rebalancer", "--mode=" + p.Mode},
 							Env:                    p.Env,
-							SecurityContext:        &corev1.SecurityContext{Privileged: &privileged},
+							SecurityContext:        PrivilegedAsRoot(),
 							TerminationMessagePath: p.TerminationMessagePath,
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "host-dev", MountPath: "/dev"},
@@ -197,6 +198,22 @@ func RecordVolumeMoved(
 	return name, err
 }
 
+// pinnedNodeTolerations adds a toleration of every NoSchedule taint to the
+// cluster's own. A Job built here is pinned by hostname to one node, which is a
+// node chosen because it already runs the work the Job serves (the consumer of
+// a volume, or a storage node), so that node's NoSchedule taints are the
+// workload's own. Carrying only the storage nodes' tolerations left preconnect
+// and validation Jobs Pending on a tainted client worker, and a cutover then
+// proceeded on its timeout with no target path connected. NoExecute is not
+// tolerated: it marks a node that is going away.
+func pinnedNodeTolerations(cluster []corev1.Toleration) []corev1.Toleration {
+	out := append([]corev1.Toleration(nil), cluster...)
+	return append(out, corev1.Toleration{
+		Operator: corev1.TolerationOpExists,
+		Effect:   corev1.TaintEffectNoSchedule,
+	})
+}
+
 // JobPlacementOf returns what the StorageCluster reporting clusterUUID says
 // about running a Job against one of its nodes.
 //
@@ -236,4 +253,17 @@ func JobPlacementOf(ctx context.Context, c client.Client, namespace, clusterUUID
 func JobImage(ctx context.Context, c client.Client, namespace, clusterUUID string) (string, error) {
 	placement, err := JobPlacementOf(ctx, c, namespace, clusterUUID)
 	return placement.Image, err
+}
+
+// PrivilegedAsRoot is the security context of every container that runs the
+// simplyblock-rebalancer image against the host's kernel: the migration path
+// Jobs, the injected sidecar and the latency baseline Job. They are privileged
+// (NVMe-fabrics, raw block devices) and run as root, calling nvme-cli and fio
+// directly as the CSI node plugin does. The image's default uid 65532 is for
+// certification only: a privileged container gains nothing from a non-root
+// uid, and the sudo hop it used to need failed PAM account management inside
+// a privileged container on GKE's Ubuntu nodes (containerd 2.2, 2026-10-28).
+func PrivilegedAsRoot() *corev1.SecurityContext {
+	privileged, root := true, int64(0)
+	return &corev1.SecurityContext{Privileged: &privileged, RunAsUser: &root, RunAsGroup: &root}
 }

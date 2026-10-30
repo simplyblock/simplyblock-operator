@@ -557,7 +557,7 @@ func (r *PersistentVolumeOpsReconciler) modeJob(
 	}
 
 	return vmigration.BuildJob(vmigration.JobParams{
-		Name:          jobName(mode, ops.Name, node),
+		Name:          jobName(mode, ops.Name, string(ops.UID), node),
 		Namespace:     namespace,
 		Hostname:      node,
 		Image:         placement.Image,
@@ -608,15 +608,33 @@ func deref(v *int32) int32 {
 	return *v
 }
 
-// jobName is stable for one (mode, operation, node), which is what makes
-// creating it idempotent: a pass that created the Job and crashed before
+// jobName is stable for one (mode, operation instance, node), which is what
+// makes creating it idempotent: a pass that created the Job and crashed before
 // recording it finds its own Job rather than making a second.
-func jobName(mode, ops, node string) string {
+//
+// The instance (the PersistentVolumeOps UID) is part of the name, not only its
+// name. A PersistentVolumeOps re-created under the name a failed one used leaves
+// that one's Jobs behind for their TTL, and a Job found by name alone was taken
+// for the new one's check: the cutover then ran with no path to the new
+// location and the client lost every path (GKE, 2026-10-28).
+func jobName(mode, ops, instance, node string) string {
 	prefix := "pvops-validate-"
 	if mode == modeRelease {
 		prefix = "pvops-release-"
 	}
-	return prefix + labelSafe(ops) + "-" + nodeSuffix(node)
+	op := labelSafe(ops)
+	if len(op) > 12 {
+		op = op[:12]
+	}
+	return prefix + op + "-" + instanceSuffix(instance) + "-" + nodeSuffix(node)
+}
+
+// instanceSuffix is a short, label-safe identity of an operation instance:
+// eight hex characters of the hash of its UID, so the whole Job name stays
+// within the 63 characters of a label next to the node suffix.
+func instanceSuffix(instance string) string {
+	sum := sha256.Sum256([]byte(instance))
+	return hex.EncodeToString(sum[:4])
 }
 
 // nodeSuffix is a DNS-label-safe, collision-resistant suffix for a node name.

@@ -128,3 +128,34 @@ func TestTheFiltersOfTheClassNotScannedAreRefused(t *testing.T) {
 		})
 	}
 }
+
+// A run may name the NetworkAttachmentDefinitions its storage nodes are to be
+// attached through, the management one alone or both.
+func TestARunNamesItsNetworkAttachments(t *testing.T) {
+	apiClient := apiServer(t)
+
+	for _, attachment := range []map[string]any{
+		{"management": "storage-mgmt"},
+		{"management": "storage-mgmt", "data": "storage-data"},
+	} {
+		run := aDiscoverRun(map[string]any{"networkAttachment": attachment})
+		if err := apiClient.Create(context.Background(), run, client.FieldValidation("Strict")); err != nil {
+			t.Errorf("a run naming %v was refused: %v", attachment, err)
+		}
+	}
+}
+
+// Data traffic flows through the management attachment when no data one is
+// named, so a data attachment alone describes nothing that can be deployed.
+func TestARunNamingOnlyADataAttachmentIsRefused(t *testing.T) {
+	apiClient := apiServer(t)
+
+	run := aDiscoverRun(map[string]any{"networkAttachment": map[string]any{"data": "storage-data"}})
+	err := apiClient.Create(context.Background(), run, client.FieldValidation("Strict"))
+	if err == nil {
+		t.Fatal("a run naming only a data attachment was stored")
+	}
+	if !strings.Contains(err.Error(), "management") {
+		t.Errorf("refused for the wrong reason: %v", err)
+	}
+}

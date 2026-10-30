@@ -10,8 +10,12 @@
 package metricsapi
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	openapi_v2 "github.com/google/gnostic-models/openapiv2"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,6 +27,7 @@ import (
 	restclient "k8s.io/client-go/rest"
 	basecompatibility "k8s.io/component-base/compatibility"
 
+	"k8s.io/kube-openapi/pkg/util/proto"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	metricsv1alpha2 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2"
@@ -154,6 +159,13 @@ func TestCodecRoundTripsAReading(t *testing.T) {
 // demands is rejected, and where a kind whose OpenAPI definition is missing shows
 // up. Running it without a listener proves both registrations are well-formed.
 func TestAPIGroupInstalls(t *testing.T) {
+	installedServer(t)
+}
+
+// installedServer builds a bare API server with the group installed, configured
+// the way server.go configures the real one, and with no listener.
+func installedServer(t *testing.T) *genericapiserver.GenericAPIServer {
+	t.Helper()
 	config := genericapiserver.NewRecommendedConfig(Codecs)
 	config.EffectiveVersion = basecompatibility.NewEffectiveVersionFromString(operatorAPIVersion, "", "")
 	config.ExternalAddress = "metrics.simplyblock.test:443"
@@ -189,6 +201,59 @@ func TestAPIGroupInstalls(t *testing.T) {
 	if err := server.InstallAPIGroup(&group); err != nil {
 		t.Fatalf("InstallAPIGroup: %v", err)
 	}
+	return server
+}
+
+// Regression: 2026-10-28-metrics-openapi-v2-unknown-model. The served OpenAPI v2
+// document named its models by Go import path, so a reference to a nested type
+// such as LogicalVolumeCapacity carried escaped slashes that the kube-openapi
+// proto parser cannot resolve. The kube-apiserver merges this document into the
+// cluster's /openapi/v2, and Argo CD parses that whole document before it syncs
+// anything, so every application on the cluster failed with an unknown model in
+// a reference. The parser here is the one Argo CD uses.
+func TestOpenAPIV2DocumentParses(t *testing.T) {
+	handler := installedServer(t).PrepareRun().Handler
+
+	request := httptest.NewRequest(http.MethodGet, "/openapi/v2", nil)
+	request.Header.Set("Accept", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /openapi/v2 = %d: %s", response.Code, response.Body.String())
+	}
+
+	document, err := openapi_v2.ParseDocument(response.Body.Bytes())
+	if err != nil {
+		t.Fatalf("parse /openapi/v2: %v", err)
+	}
+	models, err := proto.NewOpenAPIData(document)
+	if err != nil {
+		t.Fatalf("resolve the models of /openapi/v2: %v", err)
+	}
+	for kind := range servedKinds {
+		gvk := metricsv1alpha2.GroupVersion.WithKind(kind)
+		found := false
+		for _, name := range models.ListModels() {
+			if model := models.LookupModel(name); model != nil && hasGVK(model, gvk) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("/openapi/v2 has no model for %s", gvk)
+		}
+	}
+}
+
+// hasGVK reports whether a model's x-kubernetes-group-version-kind names gvk.
+func hasGVK(model proto.Schema, gvk schema.GroupVersionKind) bool {
+	entries, _ := model.GetExtensions()["x-kubernetes-group-version-kind"].([]any)
+	for _, entry := range entries {
+		fields, _ := entry.(map[any]any)
+		if fields["group"] == gvk.Group && fields["version"] == gvk.Version && fields["kind"] == gvk.Kind {
+			return true
+		}
+	}
+	return false
 }
 
 // One served version, and it is v1alpha2. The count is the assertion: a second
@@ -245,11 +310,15 @@ func TestCodecRoundTripsADeviceReading(t *testing.T) {
 // `kubectl explain` empty.
 func TestOpenAPIDefinitionsCoverEveryServedKind(t *testing.T) {
 	definitions := openAPIDefinitions(func(string) spec.Ref { return spec.Ref{} })
-	const pkg = "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2."
 	for kind := range servedKinds {
 		for _, name := range []string{kind, kind + "List"} {
-			if _, ok := definitions[pkg+name]; !ok {
-				t.Errorf("no OpenAPI definition for %s", pkg+name)
+			definition, err := Scheme.ToOpenAPIDefinitionName(metricsv1alpha2.GroupVersion.WithKind(name))
+			if err != nil {
+				t.Errorf("OpenAPI definition name of %s: %v", name, err)
+				continue
+			}
+			if _, ok := definitions[definition]; !ok {
+				t.Errorf("no OpenAPI definition for %s", definition)
 			}
 		}
 	}

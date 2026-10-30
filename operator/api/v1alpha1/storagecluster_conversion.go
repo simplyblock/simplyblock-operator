@@ -88,6 +88,10 @@ const (
 	annoClusterSync         = "storage.simplyblock.io/conversion-spec.enableSyncReplication"
 	annoClusterStretched    = "storage.simplyblock.io/conversion-spec.stretched"
 
+	// The service classes have no counterpart in this version.
+	annoClusterServiceClasses       = "storage.simplyblock.io/conversion-spec.serviceClasses"
+	annoClusterStatusServiceClasses = "storage.simplyblock.io/conversion-status.serviceClasses"
+
 	// The realignment switch needs no key here. Both versions default it to on
 	// and the hub states that default by negation, so the pair round-trips
 	// through negate alone and there is nothing the stored shape cannot say.
@@ -429,6 +433,8 @@ func stashClusterHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageCluster) 
 		{annoClusterSync, src.Spec.EnableSyncReplication},
 		{annoClusterStretched, src.Spec.Stretched},
 		{annoClusterStatusStretched, src.Status.Stretched},
+		{annoClusterServiceClasses, src.Spec.ServiceClasses},
+		{annoClusterStatusServiceClasses, src.Status.ServiceClasses},
 		{annoClusterStatusPhase, string(src.Status.Phase)},
 		{annoClusterStatusTasks, src.Status.Tasks},
 		{annoClusterStatusFailureDomains, src.Status.FailureDomains},
@@ -515,6 +521,8 @@ func restoreClusterHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageCluster
 		{annoClusterSync, &dst.Spec.EnableSyncReplication},
 		{annoClusterStretched, &dst.Spec.Stretched},
 		{annoClusterStatusStretched, &dst.Status.Stretched},
+		{annoClusterServiceClasses, &dst.Spec.ServiceClasses},
+		{annoClusterStatusServiceClasses, &dst.Status.ServiceClasses},
 		{annoClusterStatusTasks, &dst.Status.Tasks},
 		{annoClusterStatusFailureDomains, &dst.Status.FailureDomains},
 		{annoClusterStatusMessage, &dst.Status.Message},

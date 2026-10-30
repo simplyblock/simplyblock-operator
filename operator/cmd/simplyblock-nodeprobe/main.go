@@ -21,9 +21,11 @@
 //	    --sysfs-root=/host/sys --proc-root=/host/proc --dev-root=/dev
 //	    --host-root=/host/root --mountinfo=/host/proc/1/mountinfo
 //
-// With --output=stdout it writes the report to standard output and touches no
-// cluster at all, which is how it is run by hand on a machine to see what a
-// discovery run would make of it.
+// With --output=stdout it writes the report to standard output and writes
+// nothing to the cluster, which is how it is run by hand on a machine to see
+// what a discovery run would make of it. Given --kubeconfig, it still reads the
+// NetworkAttachmentDefinitions of --namespace, or of every namespace without
+// one; without a cluster to ask, the report carries none.
 
 package main
 
@@ -38,6 +40,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -103,6 +107,19 @@ func fail(err error) {
 // still contributes the disks it has, and the run records what was missing
 // rather than losing the machine.
 func run(ctx context.Context, opts options) error {
+	// The cluster is needed for the network attachments as well as for the
+	// report. A probe run by hand with no cluster to ask reads the machine
+	// alone, and its report carries no attachments rather than an empty list.
+	cfg, err := restConfigFor(opts.kubeconfig)
+	switch {
+	case err == nil:
+		if opts, err = withCluster(opts, cfg); err != nil {
+			return err
+		}
+	case opts.output == outputConfigMap:
+		return err
+	}
+
 	inv, unreadable := inventory.Collect(ctx, opts.roots)
 	report := nodeprobe.FromInventory(opts.node, time.Now(), inv, unreadable)
 
@@ -116,7 +133,7 @@ func run(ctx context.Context, opts options) error {
 		return nil
 	}
 
-	if err := writeConfigMap(ctx, opts, report); err != nil {
+	if err := writeConfigMap(ctx, cfg, opts, report); err != nil {
 		return err
 	}
 	fmt.Println(nodeprobe.Summary(report))
@@ -125,15 +142,15 @@ func run(ctx context.Context, opts options) error {
 
 // writeConfigMap puts the report where the discovery step looks for it,
 // replacing the one this probe wrote before if the Job restarted it.
-func writeConfigMap(ctx context.Context, opts options, report nodeprobe.Report) error {
+func writeConfigMap(ctx context.Context, cfg *rest.Config, opts options, report nodeprobe.Report) error {
 	cm, err := nodeprobe.ConfigMap(opts.namespace, opts.run, opts.owner, report)
 	if err != nil {
 		return err
 	}
 
-	client, err := clientFor(opts.kubeconfig)
+	client, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("build a Kubernetes client: %w", err)
 	}
 	configMaps := client.CoreV1().ConfigMaps(opts.namespace)
 
@@ -155,9 +172,31 @@ func writeConfigMap(ctx context.Context, opts options, report nodeprobe.Report) 
 	return nil
 }
 
-// clientFor builds the client the report is written with: the pod's own service
-// account in a cluster, or a kubeconfig when the probe is run by hand.
-func clientFor(kubeconfig string) (kubernetes.Interface, error) {
+// withCluster points the collection at the cluster for the one reading that
+// comes from it: the NetworkAttachmentDefinitions of the namespace the report
+// goes to. That is the namespace the probe's Role is granted in and the one the
+// draft's storage nodes are created in. The environment is not asked for, since
+// the run concludes it once from the API.
+func withCluster(opts options, cfg *rest.Config) (options, error) {
+	disco, err := discovery.NewDiscoveryClientForConfig(cfg)
+	if err != nil {
+		return opts, fmt.Errorf("build a discovery client: %w", err)
+	}
+	dyn, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		return opts, fmt.Errorf("build a dynamic client: %w", err)
+	}
+	opts.roots.Kubernetes.NetworkAttachments = inventory.NetworkAttachmentSource{
+		Discovery: disco,
+		Dynamic:   dyn,
+		Namespace: opts.namespace,
+	}
+	return opts, nil
+}
+
+// restConfigFor is the configuration the cluster is reached with: the pod's own
+// service account in a cluster, or a kubeconfig when the probe is run by hand.
+func restConfigFor(kubeconfig string) (*rest.Config, error) {
 	cfg, err := rest.InClusterConfig()
 	if errors.Is(err, rest.ErrNotInCluster) {
 		if kubeconfig == "" {
@@ -171,12 +210,7 @@ func clientFor(kubeconfig string) (kubernetes.Interface, error) {
 	} else if err != nil {
 		return nil, fmt.Errorf("read this pod's cluster configuration: %w", err)
 	}
-
-	client, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("build a Kubernetes client: %w", err)
-	}
-	return client, nil
+	return cfg, nil
 }
 
 // parseOptions reads the flags, defaulting the ambient facts from the

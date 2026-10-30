@@ -228,9 +228,10 @@ func TestJobPlacementCarriesTheClustersTolerations(t *testing.T) {
 		Name: "check", Namespace: testNamespace, Hostname: "worker-1",
 		Image: placement.Image, Tolerations: placement.Tolerations,
 	})
-	if len(job.Spec.Template.Spec.Tolerations) != 1 {
-		t.Errorf("the Job tolerates %+v, want the cluster's taint",
-			job.Spec.Template.Spec.Tolerations)
+	// The cluster's taint first; the pinned node's NoSchedule taints are
+	// tolerated on top (TestBuildJobToleratesThePinnedNodesNoScheduleTaints).
+	if tols := job.Spec.Template.Spec.Tolerations; len(tols) == 0 || tols[0] != tolerations[0] {
+		t.Errorf("the Job tolerates %+v, want the cluster's taint", tols)
 	}
 }
 
@@ -249,4 +250,62 @@ func TestJobPlacementOfAClusterThatTakesNoTaint(t *testing.T) {
 	if len(placement.Tolerations) != 0 {
 		t.Errorf("the placement tolerates %+v with nothing stated", placement.Tolerations)
 	}
+}
+
+func TestBuildJobRunsTheRebalancerAsRoot(t *testing.T) {
+	job := BuildJob(JobParams{Name: "j", Namespace: testNamespace, Hostname: "worker-3"})
+	sc := job.Spec.Template.Spec.Containers[0].SecurityContext
+	if sc == nil || sc.Privileged == nil || !*sc.Privileged {
+		t.Fatalf("the container must be privileged: %+v", sc)
+	}
+	// The container calls nvme-cli directly as root, as the CSI node plugin does; the
+	// sudo hop a non-root uid needed failed PAM inside a privileged container on GKE.
+	if sc.RunAsUser == nil || *sc.RunAsUser != 0 || sc.RunAsGroup == nil || *sc.RunAsGroup != 0 {
+		t.Fatalf("the container must run as root (uid 0, gid 0): user=%v group=%v", sc.RunAsUser, sc.RunAsGroup)
+	}
+}
+
+// TestBuildJobToleratesThePinnedNodesNoScheduleTaints. A preconnect or
+// validation Job is pinned to the node that already runs the consuming pod, so
+// that node's NoSchedule taints are the workload's own. Carrying only the
+// storage nodes' tolerations left the Job Pending on a tainted client worker,
+// and the backend's cutover-proceed timeout then flipped ANA with no target
+// path connected. A NoExecute taint (the node is going away) is not tolerated.
+func TestBuildJobToleratesThePinnedNodesNoScheduleTaints(t *testing.T) {
+	storage := corev1.Toleration{Key: "storage.simplyblock.io/dedicated", Operator: corev1.TolerationOpEqual,
+		Value: "true", Effect: corev1.TaintEffectNoSchedule}
+	job := BuildJob(JobParams{Name: "j", Namespace: testNamespace, Hostname: "worker-3",
+		Tolerations: []corev1.Toleration{storage}})
+
+	clientTaint := corev1.Taint{Key: "simplyblock.io/role", Value: "client", Effect: corev1.TaintEffectNoSchedule}
+	dying := corev1.Taint{Key: "node.kubernetes.io/unreachable", Effect: corev1.TaintEffectNoExecute}
+	var tolerated, toleratesDying bool
+	for i := range job.Spec.Template.Spec.Tolerations {
+		tol := job.Spec.Template.Spec.Tolerations[i]
+		tolerated = tolerated || tolerates(tol, clientTaint)
+		toleratesDying = toleratesDying || tolerates(tol, dying)
+	}
+	if !tolerated {
+		t.Errorf("tolerations %v keep the Job off a tainted client worker", job.Spec.Template.Spec.Tolerations)
+	}
+	if toleratesDying {
+		t.Error("the Job tolerates NoExecute: it would stay on a node that is going away")
+	}
+	if job.Spec.Template.Spec.Tolerations[0] != storage {
+		t.Error("the storage nodes' tolerations were dropped")
+	}
+}
+
+// tolerates is the scheduler's toleration match for the Exists and Equal operators.
+func tolerates(tol corev1.Toleration, taint corev1.Taint) bool {
+	if tol.Effect != "" && tol.Effect != taint.Effect {
+		return false
+	}
+	if tol.Key != "" && tol.Key != taint.Key {
+		return false
+	}
+	if tol.Operator == corev1.TolerationOpExists {
+		return true
+	}
+	return tol.Key == taint.Key && tol.Value == taint.Value
 }

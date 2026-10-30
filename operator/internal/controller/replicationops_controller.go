@@ -66,9 +66,12 @@ type ReplicationOpsReconciler struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpairs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpolicies,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpolicies/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationslots,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationslots,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationslots/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
 
 func (r *ReplicationOpsReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -212,6 +215,8 @@ func (r *ReplicationOpsReconciler) reconcileTargetScope(
 		return r.reconcileTargetFailover(ctx, ops, &pair, apiClient)
 	case "failback":
 		return r.failOps(ctx, ops, "scope=target failback is not supported; use scope=policy")
+	case "migration":
+		return r.reconcileTargetMigration(ctx, ops, &pair, apiClient)
 	default:
 		return r.failOps(ctx, ops, fmt.Sprintf("unknown action %q", ops.Spec.Action))
 	}
@@ -616,97 +621,6 @@ func (r *ReplicationOpsReconciler) reconcileFailbackWait(
 	return r.succeedOps(ctx, ops, "Failback complete; all volumes are replicating/source", results)
 }
 
-// reconcileMigration drives a planned online cutover (mode=migration).
-// For each slot it calls POST .../replication/commit which queues an async
-// task on the backend. The backend transitions the slot through:
-//
-//	replicating → cutover_pending (both paths served) → cutover_done (target only).
-//
-// The ReplicationOps succeeds as soon as all commit calls are accepted (202).
-// The slot state transitions to cutover_done asynchronously; the test script
-// should wait on slot state independently of the ops phase.
-func (r *ReplicationOpsReconciler) reconcileMigration(
-	ctx context.Context,
-	ops *simplyblockv1alpha1.ReplicationOps,
-	policy *simplyblockv1alpha1.ReplicationPolicy,
-	apiClient *webapi.Client,
-) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
-	var pair simplyblockv1alpha1.ReplicationPair
-	if err := r.Get(ctx, types.NamespacedName{Name: policy.Spec.PairRef, Namespace: policy.Namespace}, &pair); err != nil {
-		return r.failOps(ctx, ops, fmt.Sprintf("get ReplicationPair %q: %v", policy.Spec.PairRef, err))
-	}
-	clusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, policy.Namespace, pair.Spec.SourceCluster)
-	if err != nil {
-		return r.failOps(ctx, ops, fmt.Sprintf("resolve cluster UUID: %v", err))
-	}
-
-	slots, err := r.collectAffectedSlots(ctx, ops, policy)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	r.setSubphase(ctx, ops, "TriggeringCommit")
-
-	results := make([]simplyblockv1alpha1.ReplicationOpsResult, 0, len(slots))
-	anyFailed := false
-
-	for i := range slots {
-		slot := &slots[i]
-		clusterID, poolID, volumeID, ok := splitVolumeHandle(slot.Spec.VolumeID)
-		if !ok {
-			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
-				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
-				Detail: "invalid VolumeID",
-			})
-			anyFailed = true
-			continue
-		}
-		_ = clusterID // volume is on the source cluster identified by clusterUUID
-
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication/commit",
-			clusterUUID, poolID, volumeID)
-		var commitBody interface{}
-		if ops.Spec.DeleteSource {
-			commitBody = map[string]interface{}{"delete_source": true}
-		}
-		_, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, commitBody)
-		if err != nil || (status != 202 && status >= 300) {
-			if err == nil {
-				err = fmt.Errorf("status %d", status)
-			}
-			log.Error(err, "POST replication/commit failed", "slot", slot.Name)
-			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
-				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
-				Detail: fmt.Sprintf("commit failed: %v", err),
-			})
-			anyFailed = true
-			continue
-		}
-
-		// Commit accepted — mark slot as cutover_pending immediately.
-		// The backend task drives it to cutover_done asynchronously.
-		slotPatch := client.MergeFrom(slot.DeepCopy())
-		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending)
-		slot.Status.Message = fmt.Sprintf("Cutover commit queued via ReplicationOps %s", ops.Name)
-		if err := r.Status().Patch(ctx, slot, slotPatch); err != nil {
-			log.Error(err, "failed to update slot status to cutover_pending", "slot", slot.Name)
-		}
-
-		results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
-			SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultSucceeded),
-		})
-	}
-
-	if anyFailed {
-		return r.failOps(ctx, ops, "Migration commit failed for one or more volumes; see results for details")
-	}
-	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "MigrationCommitQueued", "MigrationCommitQueued",
-		"Cutover commit queued for policy %s (%d volumes); slots transitioning to cutover_done", policy.Name, len(slots))
-	return r.succeedOps(ctx, ops, "Migration cutover commit accepted; slots transitioning to cutover_done", results)
-}
-
 // collectAffectedSlots resolves the list of ReplicationSlots targeted by ops.
 func (r *ReplicationOpsReconciler) collectAffectedSlots(
 	ctx context.Context,
@@ -725,7 +639,7 @@ func (r *ReplicationOpsReconciler) collectAffectedSlots(
 		var list simplyblockv1alpha1.ReplicationSlotList
 		if err := r.List(ctx, &list,
 			client.InNamespace(ops.Namespace),
-			client.MatchingFields{"spec.policyRef": policy.Name},
+			client.MatchingFields{"spec.policyRef": policy.Namespace + "/" + policy.Name},
 		); err != nil {
 			return nil, fmt.Errorf("list ReplicationSlots for policy %q: %w", policy.Name, err)
 		}
@@ -756,7 +670,7 @@ func (r *ReplicationOpsReconciler) collectSlotsForPair(
 		var slots simplyblockv1alpha1.ReplicationSlotList
 		if err := r.List(ctx, &slots,
 			client.InNamespace(namespace),
-			client.MatchingFields{"spec.policyRef": pol.Name},
+			client.MatchingFields{"spec.policyRef": pol.Namespace + "/" + pol.Name},
 		); err != nil {
 			return nil, fmt.Errorf("list slots for policy %q: %w", pol.Name, err)
 		}
@@ -791,11 +705,15 @@ func (r *ReplicationOpsReconciler) releasePairLock(ctx context.Context, ops *sim
 
 // resolveAffectedPolicyName returns the ReplicationPolicy name targeted by ops.
 // For scope=volume, ref is a ReplicationSlot name; the policy is read from the
-// slot's spec.policyRef. For all other scopes, ref IS the policy name.
+// slot's spec.policyRef. For scope=cluster, ref names a storage cluster and the
+// policy is spec.policyRef. For all other scopes, ref IS the policy name.
 func (r *ReplicationOpsReconciler) resolveAffectedPolicyName(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.ReplicationOps,
 ) (string, error) {
+	if ops.Spec.Scope == utils.ReplicationOpsScopeCluster {
+		return ops.Spec.PolicyRef, nil
+	}
 	if ops.Spec.Scope != utils.ReplicationOpsScopeVolume {
 		return ops.Spec.Ref, nil
 	}

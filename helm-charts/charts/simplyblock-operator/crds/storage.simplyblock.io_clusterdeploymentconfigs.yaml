@@ -499,7 +499,7 @@ spec:
                       node of this cluster serves. Required, because the StorageCluster's own
                       field is, and no StorageNode carries a copy of it.
                     format: int32
-                    maximum: 75
+                    maximum: 500
                     minimum: 10
                     type: integer
                   minHugePagesSize:
@@ -518,6 +518,110 @@ spec:
                       succeed, since the cluster it would write is one the API server refuses.
                     maxLength: 63
                     type: string
+                  network:
+                    description: |-
+                      Network states the networks the storage nodes' SPDK pods attach to, which
+                      is spec.storageNodes.network of the cluster this document creates. It is
+                      set here and nowhere else, because a cluster's network is fixed when it is
+                      created. Unstated, the nodes run on the host network.
+                    properties:
+                      data:
+                        description: |-
+                          Data are the Multus networks the storage nodes serve volumes on, each a
+                          NetworkAttachmentDefinition the pod attaches to besides the pod network, which
+                          podNetwork must therefore state.
+                        items:
+                          description: |-
+                            StorageNetwork is one data network a storage node's SPDK pod attaches to
+                            through a NetworkAttachmentDefinition.
+                          properties:
+                            networkAttachmentRef:
+                              description: |-
+                                NetworkAttachmentRef is the Multus NetworkAttachmentDefinition in the
+                                namespace of the storage cluster, and the key the nodes' addresses and
+                                status use. The pod attaches to it and takes the interface the definition's
+                                plugin creates.
+                              properties:
+                                addressPool:
+                                  description: |-
+                                    AddressPool is the range the operator takes each node's address on this
+                                    network from. Unset, the network takes the address the NIC the definition
+                                    moves holds on the worker.
+                                  properties:
+                                    first:
+                                      description: |-
+                                        First is the lowest address the operator may hand out. Unset, the range
+                                        starts at the subnet's first host address. It is set together with Last.
+                                      maxLength: 15
+                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                      type: string
+                                    last:
+                                      description: |-
+                                        Last is the highest address the operator may hand out. Unset, the range
+                                        ends at the subnet's last host address. It is set together with First.
+                                      maxLength: 15
+                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                      type: string
+                                    subnet:
+                                      description: |-
+                                        Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
+                                        length is the one each node's address carries.
+                                      maxLength: 18
+                                      pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$
+                                      type: string
+                                  required:
+                                  - subnet
+                                  type: object
+                                  x-kubernetes-validations:
+                                  - message: first and last are set together
+                                    rule: has(self.first) == has(self.last)
+                                  - message: first and last must lie inside subnet
+                                    rule: '!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first))
+                                      && cidr(self.subnet).containsIP(ip(self.last)))'
+                                name:
+                                  description: Name is the definition's name.
+                                  maxLength: 253
+                                  minLength: 1
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                          required:
+                          - networkAttachmentRef
+                          type: object
+                        maxItems: 8
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      podNetwork:
+                        description: |-
+                          PodNetwork puts the SPDK pods on the cluster CNI's network. Alone, the pod's
+                          one interface carries the RPC and the data, and a Service in front of the pod
+                          is the address peers and clients hold, since the pod's own address changes on
+                          every restart. The control plane keeps the Service and the ports it carries.
+                          With data networks, the RPC stays on that interface and the data moves to the
+                          networks' interfaces, whose addresses are stable, so no Service is kept.
+                        type: boolean
+                      spdkOnHostNetwork:
+                        description: |-
+                          SpdkOnHostNetwork runs the SPDK pods on the host network, where they bind
+                          host NICs. The NICs' names are not stated here, because a fleet's workers
+                          do not agree on what their NICs are called: each node names its own in
+                          its spec.config.dataInterfaces, which is allowed only in this mode.
+                        type: boolean
+                    type: object
+                    x-kubernetes-validations:
+                    - message: one of podNetwork and spdkOnHostNetwork must be set
+                      rule: (has(self.podNetwork) && self.podNetwork) || (has(self.spdkOnHostNetwork)
+                        && self.spdkOnHostNetwork)
+                    - message: podNetwork and spdkOnHostNetwork are exclusive
+                      rule: '!(has(self.podNetwork) && self.podNetwork && has(self.spdkOnHostNetwork)
+                        && self.spdkOnHostNetwork)'
+                    - message: 'data networks require podNetwork: true'
+                      rule: '!has(self.data) || self.data.size() == 0 || (has(self.podNetwork)
+                        && self.podNetwork)'
+                    - message: data networks must name distinct NetworkAttachmentDefinitions
+                      rule: '!has(self.data) || self.data.all(a, self.data.exists_one(b,
+                        b.networkAttachmentRef.name == a.networkAttachmentRef.name))'
                   nodeProvisioningBudget:
                     description: |-
                       NodeProvisioningBudget is how many workers the expansion may have in the
@@ -966,7 +1070,7 @@ spec:
                             MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
                             node of this member serves.
                           format: int32
-                          maximum: 75
+                          maximum: 500
                           minimum: 10
                           type: integer
                         minHugePagesSize:
@@ -1114,6 +1218,31 @@ spec:
                               events a validation failure emits.
                             maxLength: 253
                             type: string
+                          networkAttachment:
+                            description: |-
+                              NetworkAttachment attaches the storage nodes through Multus
+                              NetworkAttachmentDefinitions instead of host networking. A group names
+                              this or its interfaces, and every group of a document uses the same
+                              networking.
+                            properties:
+                              data:
+                                description: |-
+                                  Data is the definition the storage node's data traffic is attached
+                                  through. Absent sends data through the management attachment.
+                                maxLength: 253
+                                pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                                type: string
+                              management:
+                                description: |-
+                                  Management is the definition the storage node's management traffic is
+                                  attached through.
+                                maxLength: 253
+                                minLength: 1
+                                pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                                type: string
+                            required:
+                            - management
+                            type: object
                           reservedSystemCPU:
                             description: |-
                               ReservedSystemCPU is the CPU set held back from SPDK for the system on
@@ -1163,6 +1292,11 @@ spec:
                         - name
                         - workers
                         type: object
+                        x-kubernetes-validations:
+                        - message: a group names its network interfaces or its network
+                            attachments, not both
+                          rule: '!has(self.networkAttachment) || (!has(self.mgmtInterface)
+                            && !has(self.dataInterfaces))'
                       maxItems: 64
                       minItems: 1
                       type: array
@@ -1190,10 +1324,18 @@ spec:
                 all nvme or all block'
               rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))
                 || s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))
+            - message: 'every group must use the same networking: all host networking
+                or all network attachments'
+              rule: self.nodeSets.all(s, s.groups.all(g, has(g.networkAttachment)))
+                || self.nodeSets.all(s, s.groups.all(g, !has(g.networkAttachment)))
             - message: a node set overrides the cluster template only when the document
                 has more than one node set or names a cluster in clusterRef
               rule: size(self.nodeSets) > 1 || has(self.clusterRef) || self.nodeSets.all(s,
                 !has(s.cluster))
+            - message: group dataInterfaces are allowed only with cluster.network.spdkOnHostNetwork
+              rule: '!has(self.cluster) || !has(self.cluster.network) || (has(self.cluster.network.spdkOnHostNetwork)
+                && self.cluster.network.spdkOnHostNetwork) || self.nodeSets.all(s,
+                s.groups.all(g, !has(g.dataInterfaces)))'
             - message: spec.cluster.openshift is what a deployment onto OpenShift
                 states, so spec.environment has to be OpenShift
               rule: '!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment)

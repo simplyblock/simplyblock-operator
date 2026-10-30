@@ -40,7 +40,7 @@ jobs:
         -t public.ecr.aws/simply-block/spdkcsi:base_image \
         -t registry.simplyblock.ai/simplyblock/spdkcsi:base_image \
         -f deploy/image/Dockerfile_base .. --push
-        echo "::notice title=Docker.com::simplyblock/spdkcsi:base_image
-        echo "::notice title=AWS-ECR::public.ecr.aws/simply-block/spdkcsi:base_image
-        echo "::notice title=Internal::registry.simplyblock.ai/simplyblock/spdkcsi:base_image
+        echo "::notice title=Docker.com::simplyblock/spdkcsi:base_image"
+        echo "::notice title=AWS-ECR::public.ecr.aws/simply-block/spdkcsi:base_image"
+        echo "::notice title=Internal::registry.simplyblock.ai/simplyblock/spdkcsi:base_image"
 

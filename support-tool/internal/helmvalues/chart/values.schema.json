@@ -3,12 +3,6 @@
   "type": "object",
   "additionalProperties": true,
   "properties": {
-    "clusterDnsDomain": {
-      "description": "The cluster's DNS domain, the suffix after <service>.<namespace>.svc. Every in-cluster address and certificate name the operator and this chart build uses it, as does the FoundationDB cluster file.",
-      "type": "string",
-      "maxLength": 253,
-      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
-    },
     "tls": {
       "type": "object",
       "additionalProperties": false,
@@ -610,6 +604,22 @@
         "forceJournalDevice": {
           "type": "boolean"
         },
+        "networkAttachment": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "management": {
+              "type": "string",
+              "pattern": "^$|^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+              "maxLength": 253
+            },
+            "data": {
+              "type": "string",
+              "pattern": "^$|^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+              "maxLength": 253
+            }
+          }
+        },
         "deviceFilter": {
           "type": "object",
           "additionalProperties": false,
@@ -701,7 +711,7 @@
                 "maxSubsystemCount": {
                   "type": "integer",
                   "minimum": 10,
-                  "maximum": 75
+                  "maximum": 500
                 },
                 "enableDriveFormat": {
                   "type": "boolean"

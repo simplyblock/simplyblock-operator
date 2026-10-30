@@ -134,6 +134,39 @@ var (
 		},
 		[]string{"cluster"},
 	)
+
+	networkAttached = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "simplyblock_storagenode_network_attached_state",
+			Help: "1 while the network is attached and verified on the node, 0 otherwise.",
+		},
+		[]string{"cluster", "node", "network"},
+	)
+
+	networkHostReachable = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "simplyblock_storagenode_network_host_reachable_state",
+			Help: "1 while the host can reach the node's SPDK address on its own worker, 0 otherwise.",
+		},
+		[]string{"cluster", "node", "network"},
+	)
+
+	networkAttachFailuresTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "simplyblock_storagenode_network_attach_failures_total",
+			Help: "Attach attempts that ended in each failure reason.",
+		},
+		[]string{"cluster", "reason"},
+	)
+
+	networkPreflightSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "simplyblock_storagenode_network_preflight_seconds",
+			Help:    "How long the preflight took, from the probe pod's creation to its result.",
+			Buckets: prometheus.ExponentialBuckets(1, 2, 8),
+		},
+		[]string{"cluster"},
+	)
 )
 
 func init() {
@@ -149,5 +182,9 @@ func init() {
 		maintenanceHoldSeconds,
 		nodePhaseState,
 		provisioningDurationSeconds,
+		networkAttached,
+		networkHostReachable,
+		networkAttachFailuresTotal,
+		networkPreflightSeconds,
 	)
 }

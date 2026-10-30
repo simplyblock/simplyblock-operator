@@ -78,6 +78,7 @@ spec:
                 enum:
                 - Restart
                 - Fail
+                - CheckHealth
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable

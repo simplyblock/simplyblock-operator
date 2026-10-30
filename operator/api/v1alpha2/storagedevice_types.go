@@ -142,6 +142,179 @@ type DeviceHardware struct {
 	NVMeController string `json:"nvmeController,omitempty"`
 }
 
+// DevicePerformanceVerdict is how the device performs against the other devices
+// of its cluster that carry the same role.
+// +kubebuilder:validation:Enum=Ok;Slow;Unknown
+type DevicePerformanceVerdict string
+
+const (
+	// DevicePerformanceOk is a device serving its share of the cluster's I/O at a
+	// latency in line with the rest of the fleet.
+	DevicePerformanceOk DevicePerformanceVerdict = "Ok"
+	// DevicePerformanceSlow is a device whose latency stands out from the fleet
+	// by more than its load explains. Every write that lands on a slow device
+	// waits for it, so one slow device sets the latency of the volumes it
+	// carries.
+	DevicePerformanceSlow DevicePerformanceVerdict = "Slow"
+	// DevicePerformanceUnknown is a device that could not be compared: too
+	// little I/O to measure, too few devices to compare against, or no metrics.
+	DevicePerformanceUnknown DevicePerformanceVerdict = "Unknown"
+)
+
+// DeviceSMARTVerdict is what the device's own health log says about it.
+// +kubebuilder:validation:Enum=Ok;Warning;Failing;Unsupported;Unknown
+type DeviceSMARTVerdict string
+
+const (
+	// DeviceSMARTOk is a device whose health log reports nothing wrong.
+	DeviceSMARTOk DeviceSMARTVerdict = "Ok"
+	// DeviceSMARTWarning is a device that is serving and is wearing out or
+	// running hot: worth planning a replacement for, not yet worth failing.
+	DeviceSMARTWarning DeviceSMARTVerdict = "Warning"
+	// DeviceSMARTFailing is a device whose health log reports that its
+	// reliability is degraded, that it has gone read-only, or that its spare
+	// capacity is exhausted. It is a replacement candidate now.
+	DeviceSMARTFailing DeviceSMARTVerdict = "Failing"
+	// DeviceSMARTUnsupported is a device that exposes no health log, such as a
+	// virtual disk inside a virtual machine.
+	DeviceSMARTUnsupported DeviceSMARTVerdict = "Unsupported"
+	// DeviceSMARTUnknown is a device whose health log could not be read on the
+	// last attempt.
+	DeviceSMARTUnknown DeviceSMARTVerdict = "Unknown"
+)
+
+// DevicePerformance is the device's performance measured against its fleet:
+// the devices of the same cluster with the same role. Each device is expected to
+// carry I/O in proportion to its weight, which is its capacity, because that is
+// how the cluster places data.
+type DevicePerformance struct {
+	// Verdict is the operator's judgment. It changes only after the condition
+	// has held for several consecutive assessments, so a single burst does not
+	// flip it.
+	// +optional
+	Verdict DevicePerformanceVerdict `json:"verdict,omitempty"`
+
+	// Reason is the measurement behind the verdict, in one sentence.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// Since is when the verdict last changed.
+	// +optional
+	Since *metav1.Time `json:"since,omitempty"`
+
+	// AssessedAt is when the device was last assessed.
+	// +optional
+	AssessedAt *metav1.Time `json:"assessedAt,omitempty"`
+
+	// LatencyMicroseconds is the device's mean latency per I/O over the
+	// assessment window.
+	// +optional
+	LatencyMicroseconds *int64 `json:"latencyMicroseconds,omitempty"`
+
+	// FleetLatencyMicroseconds is the median latency per I/O of the fleet the
+	// device is compared against.
+	// +optional
+	FleetLatencyMicroseconds *int64 `json:"fleetLatencyMicroseconds,omitempty"`
+
+	// LatencyRatioPercent is the device's latency as a percentage of the fleet
+	// median: 100 is exactly the median.
+	// +optional
+	LatencyRatioPercent *int32 `json:"latencyRatioPercent,omitempty"`
+
+	// IOPSRatioPercent is the I/O the device serves as a percentage of the share
+	// its weight entitles it to: 100 is exactly its share. A device far above
+	// its share is expected to be slower, and one far below it while slower is
+	// one that is not keeping up.
+	// +optional
+	IOPSRatioPercent *int32 `json:"iopsRatioPercent,omitempty"`
+}
+
+// DeviceSMART is the device's own health log, as last read, and the verdict
+// drawn from it. Which fields are present depends on the device: an NVMe drive
+// reports wear and spare capacity, and a SATA or SAS drive reports its overall
+// self-assessment and its sector counts.
+type DeviceSMART struct {
+	// Verdict is the operator's judgment of the health log.
+	// +optional
+	Verdict DeviceSMARTVerdict `json:"verdict,omitempty"`
+
+	// Reason names what in the health log decided the verdict.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// CheckedAt is when the health log was last read, successfully or not.
+	// +optional
+	CheckedAt *metav1.Time `json:"checkedAt,omitempty"`
+
+	// Source is where the health log came from: `spdk` for a device the
+	// storage engine drives directly, `nvme-cli` or `smartctl` for a device the
+	// host kernel drives.
+	// +optional
+	Source string `json:"source,omitempty"`
+
+	// CriticalWarning is the NVMe critical-warning bit field. Zero is healthy.
+	// +optional
+	CriticalWarning *int32 `json:"criticalWarning,omitempty"`
+
+	// TemperatureCelsius is the device's composite temperature.
+	// +optional
+	TemperatureCelsius *int32 `json:"temperatureCelsius,omitempty"`
+
+	// AvailableSparePercent is the spare capacity left, from 0 to 100.
+	// +optional
+	AvailableSparePercent *int32 `json:"availableSparePercent,omitempty"`
+
+	// AvailableSpareThresholdPercent is the spare capacity below which the
+	// device itself reports a critical warning.
+	// +optional
+	AvailableSpareThresholdPercent *int32 `json:"availableSpareThresholdPercent,omitempty"`
+
+	// PercentageUsed is the device's own estimate of how much of its rated life
+	// is used. It can exceed 100.
+	// +optional
+	PercentageUsed *int32 `json:"percentageUsed,omitempty"`
+
+	// MediaErrors is how many unrecovered data-integrity errors the device has
+	// reported over its life.
+	// +optional
+	MediaErrors *int64 `json:"mediaErrors,omitempty"`
+
+	// PowerOnHours is how long the device has been powered.
+	// +optional
+	PowerOnHours *int64 `json:"powerOnHours,omitempty"`
+
+	// UnsafeShutdowns is how often the device lost power without a clean
+	// shutdown.
+	// +optional
+	UnsafeShutdowns *int64 `json:"unsafeShutdowns,omitempty"`
+
+	// SMARTPassed is a SATA or SAS device's overall self-assessment. It is
+	// absent on NVMe, which reports CriticalWarning instead.
+	// +optional
+	SMARTPassed *bool `json:"smartPassed,omitempty"`
+
+	// ReallocatedSectors is how many sectors a SATA device has remapped.
+	// +optional
+	ReallocatedSectors *int64 `json:"reallocatedSectors,omitempty"`
+
+	// PendingSectors is how many sectors a SATA device is waiting to remap.
+	// +optional
+	PendingSectors *int64 `json:"pendingSectors,omitempty"`
+}
+
+// DeviceHealth is what the operator has observed about how well the device
+// works, as distinct from the state the control plane reports for it.
+type DeviceHealth struct {
+	// Performance is the device measured against its fleet.
+	// +optional
+	Performance *DevicePerformance `json:"performance,omitempty"`
+
+	// SMART is the device's own health log. It is read on a schedule, and a
+	// StorageDeviceOps with action CheckHealth reads it immediately.
+	// +optional
+	SMART *DeviceSMART `json:"smart,omitempty"`
+}
+
 // StorageDeviceSpec identifies the device this object reports on, and carries
 // nothing else. Everything a user could change about a device is on the node, so
 // a spec field here would be a second place to set the same thing.
@@ -213,6 +386,13 @@ type StorageDeviceStatus struct {
 	// +optional
 	ActiveOpsRef string `json:"activeOpsRef,omitempty"`
 
+	// Health is how well the device works: its performance against the fleet
+	// and its own health log. It is assessed by the operator rather than
+	// reported by the control plane, and a device that is slow or failing
+	// raises an alert on the control plane's alerts endpoint as well.
+	// +optional
+	Health *DeviceHealth `json:"health,omitempty"`
+
 	// Message is the reason the phase is what it is: one sentence, replaced as
 	// the device moves, and never a log.
 	// +optional
@@ -233,6 +413,8 @@ type StorageDeviceStatus struct {
 // +kubebuilder:printcolumn:name="Role",type=string,JSONPath=".status.role"
 // +kubebuilder:printcolumn:name="Status",type=string,JSONPath=".status.deviceStatus"
 // +kubebuilder:printcolumn:name="Total",type=integer,JSONPath=".status.capacity.totalBytes"
+// +kubebuilder:printcolumn:name="Performance",type=string,JSONPath=".status.health.performance.verdict"
+// +kubebuilder:printcolumn:name="SMART",type=string,JSONPath=".status.health.smart.verdict"
 // +kubebuilder:printcolumn:name="PCI",type=string,JSONPath=".status.hardware.pciAddress",priority=1
 // +kubebuilder:printcolumn:name="Serial",type=string,JSONPath=".status.hardware.serialNumber",priority=1
 // +kubebuilder:printcolumn:name="Site",type=string,JSONPath=".status.site",priority=1

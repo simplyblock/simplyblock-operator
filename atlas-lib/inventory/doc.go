@@ -13,8 +13,9 @@
 //
 // One call gathers all of it. [Collect] is the entry point, and the readers it
 // composes — [ReadCPU], [ReadMemory], [ReadHugePages], [ReadInterfaces],
-// [ReadHostOS], [ReadNVMeFormats], the blockdev scan, and [DetectEnvironment]
-// — are exported for the caller that wants one of them alone.
+// [ReadHostOS], [ReadNVMeFormats], the blockdev scan, [DetectEnvironment], and
+// [CollectNetworkAttachments] — are exported for the caller that wants one of
+// them alone.
 //
 //	inv, err := inventory.Collect(ctx, inventory.Config{
 //	    Kubernetes: inventory.KubernetesSources{

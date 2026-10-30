@@ -71,6 +71,11 @@ type Worker struct {
 	// facts, whose empty kernel section is no reading at all.
 	KernelReported bool `json:"kernelReported"`
 
+	// NetworkAttachmentsReported is false for a report version that predates
+	// the NetworkAttachmentDefinitions, whose absent reading says nothing about
+	// whether the cluster runs Multus.
+	NetworkAttachmentsReported bool `json:"networkAttachmentsReported"`
+
 	Node   Node              `json:"node"`
 	Report *nodeprobe.Report `json:"report,omitempty"`
 
@@ -171,6 +176,10 @@ type Group struct {
 	MgmtInterface  string   `json:"mgmtInterface,omitempty"`
 	DataInterfaces []string `json:"dataInterfaces,omitempty"`
 	FailureDomain  string   `json:"failureDomain,omitempty"`
+
+	// NetworkAttachment is what the group attaches its storage nodes through
+	// instead of host interfaces, nil on host networking.
+	NetworkAttachment *simplyblockv1alpha2.NetworkAttachmentSelection `json:"networkAttachment,omitempty"`
 }
 
 // Severity says whether a finding keeps a document from deploying.
@@ -280,6 +289,7 @@ func workersOf(b *supportbundle.Bundle) []Worker {
 		w.ReportFile = r.File
 		w.ReportVersion = r.Version
 		w.KernelReported = r.KernelReported()
+		w.NetworkAttachmentsReported = r.NetworkAttachmentsReported()
 		report := r.Report
 		w.Report = &report
 	}

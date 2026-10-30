@@ -252,6 +252,11 @@ func (cs *Server) DeleteVolume(
 	return &csi.DeleteVolumeResponse{}, nil
 }
 
+// maxChainHops bounds deleteRetiredReplicaChain: a guard against a looping
+// relationship record, not a limit on how often a volume may move. Same value
+// as the walks in atlas-lib's controlplane and the node package.
+const maxChainHops = 256
+
 // deleteRetiredReplicaChain removes the RETIRED members of the volume's
 // replication pairing chain. Ramen's S3-restore keeps every PV on the
 // ORIGINAL volumeHandle across fail-overs, so the DeleteVolume that cleans up
@@ -272,7 +277,10 @@ func (cs *Server) deleteRetiredReplicaChain(ctx context.Context, volumeID string
 		return nil // unparsable handles were already tolerated as deleted above
 	}
 	cur := h
-	for range 8 { // one hop per past fail-over; capped far above any real chain
+	// One hop per past move, never compacted: the 8-hop cap the chain walks
+	// lost on 2026-10-03 left the ninth retired copy here. A loop ends at the
+	// hop whose target is the active volume, so the bound is a cycle guard.
+	for range maxChainHops {
 		client, err := clusters.ReplicationClient(ctx, cur.ClusterID)
 		if err != nil {
 			return err
@@ -372,21 +380,23 @@ func (cs *Server) prepareCreateVolumeReq(
 	}
 
 	createVolReq := controlplane.CreateLVolData{
-		LvolName:     req.GetName(),
-		Size:         strconv.FormatInt(capacityBytes, 10),
-		LvsName:      params["pool_name"],
-		Fabric:       params["fabric"],
-		MaxRWIOPS:    maxRWIOPS,
-		MaxRWmBytes:  maxRWmBytes,
-		MaxRmBytes:   maxRmBytes,
-		MaxWmBytes:   maxWmBytes,
-		MaxSize:      params["max_size"],
-		MaxNamespace: maxNamespace,
-		Encryption:   encryption,
-		HostID:       hostID,
-		LvolID:       lvolID,
-		Namespaced:   maxNamespace > 1,
-		PvcName:      pvcFullName,
+		LvolName:    req.GetName(),
+		Size:        strconv.FormatInt(capacityBytes, 10),
+		LvsName:     params["pool_name"],
+		Fabric:      params["fabric"],
+		MaxRWIOPS:   maxRWIOPS,
+		MaxRWmBytes: maxRWmBytes,
+		MaxRmBytes:  maxRmBytes,
+		MaxWmBytes:  maxWmBytes,
+		MaxSize:     params["max_size"],
+		// The service class the pool's volumeDefaults.priorityClass names.
+		PriorityClass: params[kube.ParamPriorityClass],
+		MaxNamespace:  maxNamespace,
+		Encryption:    encryption,
+		HostID:        hostID,
+		LvolID:        lvolID,
+		Namespaced:    maxNamespace > 1,
+		PvcName:       pvcFullName,
 		// Join the volume to its consistency group at creation (design §4.1):
 		// the PVC's storage.simplyblock.io/consistency-group label, forwarded so
 		// the control plane pins placement and opens the member's epoch.

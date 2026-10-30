@@ -99,6 +99,15 @@ type ControlPlane interface {
 	// reads a 404 as success.
 	CancelTask(ctx context.Context, clusterID, taskID string) error
 
+	// ServiceClasses reads the cluster's I/O service classes. A control plane
+	// older than the endpoint answers 404.
+	ServiceClasses(ctx context.Context, clusterID string) (ServiceClassConfig, error)
+
+	// SetServiceClasses makes the cluster's classes exactly the ones given. It
+	// is idempotent, and it is refused with 409 while a class it would remove
+	// is still used by a volume.
+	SetServiceClasses(ctx context.Context, clusterID string, config ServiceClassConfig) error
+
 	// Endpoint is the base URL this call would currently reach the control
 	// plane at, resolved the same way every other call resolves it (§3.3).
 	// upsertCSICredentials carries it into the CSI driver's aggregate Secret,

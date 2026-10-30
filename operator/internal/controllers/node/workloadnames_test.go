@@ -280,7 +280,7 @@ func TestANodeIsAddressedThroughItsClustersService(t *testing.T) {
 
 	got := r.Workload.NodeAddress(context.Background(), opsNamespace, secondCluster, "worker-2.example")
 
-	if want := "worker-2." + utils.ServiceFQDN(names.NodeAPIService, opsNamespace) + ":5000"; got != want {
+	if want := "worker-2." + utils.ServiceDNSName(names.NodeAPIService, opsNamespace) + ":5000"; got != want {
 		t.Errorf("NodeAddress = %q, want %q", got, want)
 	}
 }

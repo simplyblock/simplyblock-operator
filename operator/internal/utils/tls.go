@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"fmt"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -51,12 +50,10 @@ func ServingCertServiceAnnotations(tlsEnabled bool, tlsProvider, secretName stri
 }
 
 func BuildServiceServingCertificate(namespace, serviceName, secretName string) *unstructured.Unstructured {
-	dnsNames := []any{
-		serviceName,
-		fmt.Sprintf("%s.%s", serviceName, namespace),
-		fmt.Sprintf("%s.%s.svc", serviceName, namespace),
-		ServiceFQDN(serviceName, namespace),
-		"*." + ServiceFQDN(serviceName, namespace),
+	names := ServiceCertificateNames(serviceName, namespace)
+	dnsNames := make([]any, len(names))
+	for i, name := range names {
+		dnsNames[i] = name
 	}
 
 	return &unstructured.Unstructured{

@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -341,5 +342,52 @@ func TestCreateVolume_RetryRecoversFromBrokenVolume(t *testing.T) {
 	}
 	if matches != 1 {
 		t.Errorf("expected exactly one volume named %q after recovery, found %d", pvName, matches)
+	}
+}
+
+// A volume moved ten times keeps its first handle, so its retired copies sit
+// up to ten hops out. The cleanup walk was capped at 8 hops -- the cap the
+// chain walks lost on 2026-10-03 -- and left the ninth retired copy behind.
+func TestDeleteVolumeRemovesEveryRetiredReplicaOfALongChain(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+
+	const moves = 10
+	member := func(i int) string {
+		if i == 0 {
+			return testReplVolumeID
+		}
+		return fmt.Sprintf("99999999-0000-0000-0000-%012d", i)
+	}
+	active := member(moves)
+	for i := 1; i <= moves; i++ {
+		mock.volumes[member(i)] = &mockVolume{UUID: member(i), Name: fmt.Sprintf("hop-%d", i), Size: 1 << 30}
+	}
+	for i := 0; i < moves; i++ {
+		mock.replicationRelationship[member(i)] = map[string]any{
+			"replication_id":    fmt.Sprintf("aaaaaaaa-bbbb-cccc-dddd-%012d", i),
+			"direction":         "to_target",
+			"mode":              "migration",
+			"state":             "cutover_done",
+			"is_source":         true,
+			"source_cluster_id": sanityClusterID, "source_lvol_id": member(i),
+			"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": member(i + 1),
+			"target_nqn": "nqn.test", "target_ns_id": 1,
+			"active": "target", "active_lvol_id": active,
+		}
+	}
+	delete(mock.volumes, testReplVolumeID)
+
+	if _, err := cs.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: testReplVolID}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i < moves; i++ {
+		if _, ok := mock.volumes[member(i)]; ok {
+			t.Errorf("retired copy %d of %d still exists", i, moves-1)
+		}
+	}
+	if _, ok := mock.volumes[active]; !ok {
+		t.Error("the ACTIVE volume was deleted")
 	}
 }

@@ -38,8 +38,9 @@ func aMigrationWorld(
 	target := aWorker(opsTarget, true)
 	target.Status.Addresses[0].Address = targetWorkerAddress
 
-	objects := make([]client.Object, 0, 4+len(operations))
-	objects = append(objects, anOpsCluster(), anOpsNode(), source, target)
+	objects := make([]client.Object, 0, 6+len(operations))
+	objects = append(objects, anOpsCluster(), anOpsNode(), source, target,
+		anAgentPodOn(opsWorker, sourceWorkerAddress), anAgentPodOn(opsTarget, targetWorkerAddress))
 	for _, operation := range operations {
 		objects = append(objects, operation)
 	}

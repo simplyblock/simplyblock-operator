@@ -121,6 +121,9 @@ func (v *StorageNodeValidator) admitCreate(
 	if denial := deviceClassDenial(&node.Spec.Config, &cluster); denial != "" {
 		return admission.Denied(denial)
 	}
+	if denial := dataInterfacesDenial(&node.Spec.Config, &cluster); denial != "" {
+		return admission.Denied(denial)
+	}
 
 	// The operator writes a node's sizing itself, and a rolling hardware upgrade
 	// is the case where it deliberately differs from the fleet's. A user's node is
@@ -347,4 +350,19 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// dataInterfacesDenial refuses a node that names host NICs on a cluster whose SPDK
+// pods are not on the host network. A cluster that states no network is the legacy
+// host-network mode, so it admits them.
+func dataInterfacesDenial(config *simplyblockv1alpha2.StorageNodeConfig, cluster *simplyblockv1alpha2.StorageCluster) string {
+	if len(config.DataInterfaces) == 0 || cluster.Spec.StorageNodes == nil {
+		return ""
+	}
+	network := cluster.Spec.StorageNodes.Network
+	if network == nil || network.SpdkOnHostNetwork {
+		return ""
+	}
+	return fmt.Sprintf("spec.config.dataInterfaces is allowed only when StorageCluster %q runs its SPDK pods "+
+		"on the host network (spec.storageNodes.network.spdkOnHostNetwork)", cluster.Name)
 }

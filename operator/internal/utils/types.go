@@ -85,4 +85,26 @@ type StorageNodeSetAddParams struct {
 	// ForceFormat wipes partitioned lblk devices at add-node time; node_configure.py
 	// --force-format only marks them selectable, this flag does the actual wipe.
 	ForceFormat bool `json:"force_format,omitempty"`
+	// Networks are the networks the SPDK pod attaches to, with the address it
+	// takes on each. Unset for a node on the host network, and then the request
+	// is what it always was.
+	Networks []NodeNetworkParams `json:"networks,omitempty"`
+	// PodNetwork puts the SPDK pod on the pod network with no attachment, fronted
+	// by a Service the control plane keeps. Exclusive with Networks.
+	PodNetwork bool `json:"pod_network,omitempty"`
+}
+
+// NodeNetworkParams is one network the SPDK pod attaches to, as the control
+// plane's node-add takes it.
+type NodeNetworkParams struct {
+	Name      string   `json:"name"`
+	Namespace string   `json:"namespace,omitempty"`
+	Interface string   `json:"interface"`
+	IPs       []string `json:"ips,omitempty"`
+	// Resource is the extended resource a device plugin hands the interface's
+	// device out under, from the definition's k8s.v1.cni.cncf.io/resourceName
+	// annotation (an SR-IOV VF pool, for example). The SPDK pod requests one of
+	// it, without which the plugin allocates nothing and Multus has no device to
+	// attach. Not part of the Multus network selection element.
+	Resource string `json:"resource,omitempty"`
 }

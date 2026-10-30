@@ -50,7 +50,6 @@ spec:
           args:
             - --leader-elect
             - --health-probe-bind-address=:8081
-            - --cluster-dns-domain={{ .Values.clusterDnsDomain }}
             - --csi-link
             - --csi-link-bind-address=:{{ .Values.csiLink.port }}
             - --csi-link-audience={{ .Values.csiLink.audience }}

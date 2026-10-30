@@ -388,9 +388,6 @@ const twoNodeEventCollectorBinary = "/usr/local/bin/sb-event-collector"
 // monitoringServices are the watchers the control plane runs: one per subject it
 // keeps state about. They are one pod rather than ten because each is a small
 // polling loop and the pod is what shares the cluster file and the log level.
-//
-// The pod runs on the host network, which is how the node and device monitors
-// reach the storage nodes' management addresses directly.
 func monitoringServices() []service {
 	return []service{
 		{name: "storage-node-monitor", module: "simplyblock_core/services/storage_node_monitor.py"},
@@ -467,11 +464,7 @@ func servicePoolDeployment(
 
 	spec := corev1.PodSpec{
 		ServiceAccountName: serviceAccountName,
-		// The processes here reach the storage nodes' management addresses
-		// directly, which are host addresses rather than Service names.
-		HostNetwork: true,
-		DNSPolicy:   corev1.DNSClusterFirstWithHostNet,
-		Containers:  containers(services, managed, localImage(cp), pullPolicyOf(managed)),
+		Containers:         containers(services, managed, localImage(cp), pullPolicyOf(managed)),
 		Volumes: append([]corev1.Volume{clusterFileVolumeSource()},
 			tlsVolume(managed)...),
 	}
@@ -517,8 +510,6 @@ func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploy
 
 	spec := corev1.PodSpec{
 		ServiceAccountName: serviceAccountName,
-		HostNetwork:        true,
-		DNSPolicy:          corev1.DNSClusterFirstWithHostNet,
 		Affinity:           spreadAcrossHosts(ComponentAdminControl),
 		Containers: []corev1.Container{{
 			Name:            "simplyblock-control",

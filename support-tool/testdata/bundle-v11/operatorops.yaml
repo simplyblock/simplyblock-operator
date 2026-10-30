@@ -1,0 +1,22 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: discover-fleet-02
+  namespace: simplyblock
+  creationTimestamp: "2026-10-24T09:00:00Z"
+spec:
+  action: Discover
+  discover:
+    networkAttachment:
+      management: storage-mgmt
+      data: storage-data
+status:
+  environment: K3s
+  step: {}
+  workers:
+    - worker-01
+    - worker-02
+    - worker-03
+  phase: Succeeded
+  configRef: discovered-discover-fleet-02
+  message: wrote discovered-discover-fleet-02 awaiting approval

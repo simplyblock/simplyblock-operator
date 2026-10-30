@@ -39,7 +39,10 @@ import (
 
 	"github.com/simplyblock/atlas/conntrack"
 	"github.com/simplyblock/atlas/conntrack/conntrackrpc"
+	"github.com/simplyblock/atlas/inventory"
 	"github.com/simplyblock/atlas/link"
+	"github.com/simplyblock/atlas/netcheck"
+	"github.com/simplyblock/atlas/netcheck/netcheckrpc"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/storage"
 	"github.com/simplyblock/atlas/storage/storagerpc"
@@ -247,14 +250,29 @@ func startLink(ctx context.Context, conf *config.Config) (*link.Agent, error) {
 		if err != nil {
 			return nil, fmt.Errorf("node flows: %w", err)
 		}
+		// The node answers the operator's host checks: the addresses of a NIC
+		// before a storage pod takes it, and whether a connection from the host
+		// to a storage listener succeeds. Both read the host's namespace, which
+		// is this process's.
+		checks, err := netcheckrpc.NewServer(
+			func(sel netcheck.Selector) (netcheck.Report, error) {
+				return netcheck.Interface(inventory.Config{}, sel)
+			},
+			netcheck.Connect,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("node host checks: %w", err)
+		}
 		// No export service: exports are assembled in the metadata server's
 		// guest, never on a node.
 		cfg.ID = link.NodePeer(conf.NodeID)
 		cfg.Register = func(r grpc.ServiceRegistrar) {
 			srv.Register(r)
 			flows.Register(r)
+			checks.Register(r)
 		}
 		cfg.Capabilities = append(storagerpc.Capabilities(), conntrackrpc.Capabilities()...)
+		cfg.Capabilities = append(cfg.Capabilities, netcheckrpc.Capabilities()...)
 
 	case conf.IsControllerServer:
 		if conf.PodName == "" {

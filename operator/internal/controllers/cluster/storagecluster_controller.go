@@ -815,6 +815,7 @@ func (r *StorageClusterReconciler) sync(
 	}
 
 	tasks := r.readTasks(readCtx, cluster)
+	serviceClasses, serviceClassesRead := r.applyServiceClasses(readCtx, cluster)
 
 	stretched, err := r.stretchedStatus(ctx, cluster, reading)
 	if err != nil {
@@ -836,6 +837,9 @@ func (r *StorageClusterReconciler) sync(
 		status.Phase = phaseFor(reading.Status, reading.Rebalancing, reading.Shrinking)
 		status.Tasks = tasks
 		status.Stretched = stretched
+		if serviceClassesRead {
+			status.ServiceClasses = serviceClasses
+		}
 	})
 	if err != nil {
 		return ctrl.Result{}, err

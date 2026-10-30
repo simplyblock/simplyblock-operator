@@ -22,9 +22,7 @@ import (
 	"slices"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -33,13 +31,10 @@ import (
 	"github.com/simplyblock/atlas/kube"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/multus"
 )
 
 const (
-	// NetworksAnnotation is Multus's: the networks a pod is attached to beside
-	// its default one.
-	NetworksAnnotation = "k8s.v1.cni.cncf.io/networks"
-
 	// MDSDataRangeAnnotation records the address range of the data network on
 	// the metadata server's pod template. The range lives in the
 	// NetworkAttachmentDefinition, which Multus reads only when a pod starts,
@@ -58,13 +53,6 @@ const (
 	// the metadata server can run on is attached to.
 	ReasonNoDataNetworkNode = "NoDataNetworkNode"
 )
-
-// nadGroupVersionKind is Multus's NetworkAttachmentDefinition, read and
-// written unstructured: the operator does not depend on Multus's API module
-// for one object of one kind.
-var nadGroupVersionKind = schema.GroupVersionKind{
-	Group: "k8s.cni.cncf.io", Version: "v1", Kind: "NetworkAttachmentDefinition",
-}
 
 // MDSDataAttachment is how the metadata server pod joins the data network: the
 // NetworkAttachmentDefinition, and the host interface its macvlan sits on,
@@ -110,12 +98,11 @@ func EnsureMDSDataNetwork(
 			Message: fmt.Sprintf("spec.pnfs.mds.dataNetwork.subnet %q is not a CIDR", network.Subnet)}
 	}
 
-	nad := &unstructured.Unstructured{}
-	nad.SetGroupVersionKind(nadGroupVersionKind)
+	nad := multus.NewDefinition()
 	key := client.ObjectKey{Namespace: d.Namespace, Name: MDSDataNetworkName(d)}
 	found := true
 	switch err := c.Get(ctx, key, nad); {
-	case meta.IsNoMatchError(err):
+	case multus.KindNotServed(err):
 		return nil, &MDSDataNetworkFallback{Reason: ReasonMDSDataNetworkUnavailable,
 			Message: "spec.pnfs.mds.dataNetwork is set, but the cluster has no NetworkAttachmentDefinition " +
 				"kind (Multus), so the metadata server reaches the storage nodes through the pod network"}
@@ -252,7 +239,7 @@ func dataNetworkPodSpec(
 	if err != nil {
 		return fmt.Errorf("encoding the networks annotation: %w", err)
 	}
-	template.Annotations[NetworksAnnotation] = string(networks)
+	template.Annotations[multus.NetworksAnnotation] = string(networks)
 	template.Annotations[MDSDataRangeAnnotation] = network.RangeStart + "-" + network.RangeEnd
 	template.Spec.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
 		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{

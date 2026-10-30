@@ -14,10 +14,12 @@ spec:
     maxSubsystemCount: 30
     minHugePagesSize: 34G
     name: discovered-discover-size-20-cluster
+    network:
+      spdkOnHostNetwork: true
     stripe:
       dataChunks: 2
       parityChunks: 1
-    vcpuCount: 16
+    vcpuCount: 30
   environment: K3s
   hostOS:
     distro: ubuntu

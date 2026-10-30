@@ -2,6 +2,7 @@ package volumemigration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -93,15 +94,12 @@ func (c Connection) target() nvmeof.Target {
 // reading controller state under sysRoot — the host's /sys, mounted into the Job,
 // rather than the container's own.
 //
-// nvme-cli runs through sudo because the rebalancer image runs as an unprivileged
-// uid to satisfy the OpenShift SCC and Red Hat certification requirements, and its
-// sudoers rule is what gets the fabrics device open. The container being privileged
-// is not enough on its own: those capabilities are dropped on the way to a non-root
-// uid.
+// nvme-cli runs directly: the Job is privileged and runs as root
+// (PrivilegedAsRoot), like the CSI node plugin.
 func connector(sysRoot string) *nvmeof.CLIConnector {
 	return nvmeof.NewCLIConnectorWithRunner(
 		nvme.NewSysfsSubsystemResolver(nvme.SysfsConfig{SysRoot: sysRoot}),
-		nvmeof.SudoRunner,
+		nvmeof.NvmeRunner,
 	)
 }
 
@@ -158,6 +156,55 @@ func SettleMigrationPaths(ctx context.Context, sysRoot, nqn string) error {
 	ctx, cancel := context.WithTimeout(ctx, pathSettleTimeout)
 	defer cancel()
 	return nvmeof.WaitForPathsToServe(ctx, resolver(sysRoot), nqn)
+}
+
+// EnsureAllMigrationPaths connects every path in conns and fails unless each one
+// ends up live.
+//
+// EnsureMigrationPaths succeeds as soon as one path of a subsystem is live. That
+// is enough for a migration validation, but not for a replication preconnect:
+// conns there holds the source paths the host already has alongside the target
+// paths it must gain, so "one live path" is satisfied by the source alone and a
+// preconnect that attached nothing reported success. The cutover then removed the
+// source paths from under a host holding no target path (fio EIO, 2026-10-23).
+func EnsureAllMigrationPaths(ctx context.Context, sysRoot string, conns []Connection) error {
+	c := connector(sysRoot)
+	for _, nqn := range subsystemOrder(conns) {
+		targets := make([]nvmeof.Target, 0, len(conns))
+		for _, conn := range conns {
+			if conn.NQN == nqn {
+				targets = append(targets, conn.target())
+			}
+		}
+		results, err := c.ConnectPaths(ctx, targets)
+		if err != nil {
+			return err
+		}
+		if err := requireAllLive(nqn, results); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// requireAllLive returns an error naming every path of nqn that is not live.
+func requireAllLive(nqn string, results []nvmeof.PathResult) error {
+	var down []error
+	for _, r := range results {
+		if r.Live {
+			continue
+		}
+		reason := r.Err
+		if reason == nil {
+			reason = fmt.Errorf("%s:%d not live", r.Target.Address, r.Target.Port)
+		}
+		down = append(down, reason)
+	}
+	if len(down) == 0 {
+		return nil
+	}
+	return fmt.Errorf("connect %s: %d of %d path(s) not live: %w",
+		nqn, len(down), len(results), errors.Join(down...))
 }
 
 // subsystemOrder returns the distinct NQNs of conns, in first-seen order.

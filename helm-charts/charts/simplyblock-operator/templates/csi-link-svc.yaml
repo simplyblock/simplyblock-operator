@@ -52,7 +52,6 @@ spec:
     - {{ .Values.csiLink.serviceName }}
     - {{ .Values.csiLink.serviceName }}.{{ .Release.Namespace }}
     - {{ $dnsName }}
-    - {{ $dnsName }}.{{ .Values.clusterDnsDomain }}
   usages:
     - digital signature
     - key encipherment

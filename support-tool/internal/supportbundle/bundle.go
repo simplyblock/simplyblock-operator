@@ -31,7 +31,7 @@ import (
 )
 
 // SupportedReportVersions are the probe report versions this tool reads.
-var SupportedReportVersions = []int{9, 10}
+var SupportedReportVersions = []int{9, 10, 11}
 
 // MaxEntryBytes is the largest file a bundle may hold. A bundle is mostly YAML
 // and logs, and a limit keeps a hostile or broken archive from exhausting
@@ -87,6 +87,11 @@ type Report struct {
 // KernelReported reports whether the report's version carries the kernel facts,
 // which arrived at version 10. Before it, an empty kernel is not a reading.
 func (r Report) KernelReported() bool { return r.Version >= 10 }
+
+// NetworkAttachmentsReported reports whether the report's version carries the
+// NetworkAttachmentDefinitions, which arrived at version 11. Before it, an
+// absent reading is not a cluster without Multus.
+func (r Report) NetworkAttachmentsReported() bool { return r.Version >= 11 }
 
 // Read reads a bundle from a .tar.gz stream.
 //

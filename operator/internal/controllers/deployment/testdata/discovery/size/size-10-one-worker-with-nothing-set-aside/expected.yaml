@@ -12,10 +12,12 @@ spec:
     enableDriveFormat: true
     maxSubsystemCount: 30
     name: discovered-discover-size-10-cluster
+    network:
+      spdkOnHostNetwork: true
     stripe:
       dataChunks: 1
       parityChunks: 1
-    vcpuCount: 8
+    vcpuCount: 14
   environment: K3s
   hostOS:
     distro: ubuntu

@@ -17,7 +17,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -25,6 +24,7 @@ import (
 	"github.com/simplyblock/atlas/kube"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/multus"
 )
 
 const (
@@ -67,8 +67,8 @@ func TestMDSPodAttachesToTheDataNetwork(t *testing.T) {
 	pod := sts.Spec.Template
 
 	var networks []map[string]string
-	if err := json.Unmarshal([]byte(pod.Annotations[NetworksAnnotation]), &networks); err != nil {
-		t.Fatalf("networks annotation %q: %v", pod.Annotations[NetworksAnnotation], err)
+	if err := json.Unmarshal([]byte(pod.Annotations[multus.NetworksAnnotation]), &networks); err != nil {
+		t.Fatalf("networks annotation %q: %v", pod.Annotations[multus.NetworksAnnotation], err)
 	}
 	if len(networks) != 1 || networks[0]["name"] != "simplyblock-mds-data" ||
 		networks[0]["interface"] != MDSDataInterface {
@@ -132,7 +132,7 @@ func TestMDSPodTemplateChangesWithTheAddressRange(t *testing.T) {
 // template, and with it the running guest, stays as it was.
 func TestMDSPodWithoutADataNetworkHasNoAttachment(t *testing.T) {
 	_, sts := mdsObjects(t, withMDS(testDriver("simplyblock")))
-	if v, found := sts.Spec.Template.Annotations[NetworksAnnotation]; found {
+	if v, found := sts.Spec.Template.Annotations[multus.NetworksAnnotation]; found {
 		t.Errorf("networks annotation = %q, want none", v)
 	}
 	if sts.Spec.Template.Spec.Affinity != nil {
@@ -147,7 +147,7 @@ func TestMDSPodWithoutADataNetworkHasNoAttachment(t *testing.T) {
 
 // ── the NetworkAttachmentDefinition ─────────────────────────────────────────
 
-var nadGVK = schema.GroupVersionKind{Group: "k8s.cni.cncf.io", Version: "v1", Kind: "NetworkAttachmentDefinition"}
+var nadGVK = multus.DefinitionGVK
 
 func dataNetworkScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()

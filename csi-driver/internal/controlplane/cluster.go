@@ -256,6 +256,9 @@ type CreateLVolData struct {
 	// Site is the site a volume of a stretched, sync-replicated cluster is born
 	// led from. The control plane refuses it on any other cluster.
 	Site string `json:"site,omitempty"`
+	// PriorityClass is the I/O service class, by name or by the control
+	// plane's number; absent is Default.
+	PriorityClass string `json:"priority_class,omitempty"`
 }
 
 // CreateVolume creates a logical volume and returns volume ID

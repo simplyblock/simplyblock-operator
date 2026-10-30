@@ -188,7 +188,6 @@ func TestASuperclusterDocumentCreatesTheSuperclusterAndAMemberPerNodeSet(t *test
 	if len(recorded.Status.Members) != 2 {
 		t.Fatalf("status.members = %+v, want one per node set", recorded.Status.Members)
 	}
-	interfaces := map[string]string{"fast": "eth1", "dense": "eth3"}
 	for _, entry := range recorded.Status.Members {
 		if !strings.HasPrefix(entry.Cluster, theCluster+"-"+entry.NodeSet+"-") || len(entry.Cluster) != len(theCluster+"-"+entry.NodeSet+"-xyz") {
 			t.Errorf("member of node set %s is named %q, want %s-%s-<suffix>", entry.NodeSet, entry.Cluster, theCluster, entry.NodeSet)
@@ -201,10 +200,6 @@ func TestASuperclusterDocumentCreatesTheSuperclusterAndAMemberPerNodeSet(t *test
 			member.Spec.DeviceClass != simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock {
 			t.Errorf("member %s: mode %q class %q, want the template's Single and its node set's block",
 				member.Name, member.Spec.ClusterMode, member.Spec.DeviceClass)
-		}
-		if member.Spec.StorageNodes == nil || member.Spec.StorageNodes.MgmtInterface != interfaces[entry.NodeSet] {
-			t.Errorf("member %s does not run on its node set's interface %s: %+v",
-				member.Name, interfaces[entry.NodeSet], member.Spec.StorageNodes)
 		}
 	}
 }

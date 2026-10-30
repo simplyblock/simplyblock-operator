@@ -67,6 +67,10 @@ type Worker struct {
 	DataInterfaces []string `json:"dataInterfaces,omitempty"`
 	Devices        []string `json:"devices"`
 
+	// NetworkAttachment attaches the worker's storage node through
+	// NetworkAttachmentDefinitions in place of the interfaces above.
+	NetworkAttachment *simplyblockv1alpha2.NetworkAttachmentSelection `json:"networkAttachment,omitempty"`
+
 	// Mode is the device class this worker's devices are named in, and empty
 	// for the request's own. A document may name NVMe devices in one node set
 	// and block devices in another, and an edit keeps each.
@@ -166,7 +170,7 @@ func prefillFromCDC(b *supportbundle.Bundle) Request {
 				req.Workers = append(req.Workers, Worker{
 					Name: worker, NodeSet: set.Name, FailureDomain: g.FailureDomain,
 					MgmtInterface: g.MgmtInterface, DataInterfaces: slices.Clone(g.DataInterfaces),
-					Devices: slices.Clone(devices), Mode: mode,
+					Devices: slices.Clone(devices), Mode: mode, NetworkAttachment: g.NetworkAttachment.DeepCopy(),
 				})
 			}
 		}
@@ -224,6 +228,14 @@ func prefillFromReports(b *supportbundle.Bundle) Request {
 			}
 		}
 	}
+	// The run's attachment, by the rule the run applies: a cluster without
+	// Multus keeps host networking.
+	var run *simplyblockv1alpha2.DiscoverSpec
+	if b.Run != nil {
+		run = b.Run.Spec.Discover
+	}
+	attachment, _ := discovery.NetworkingOf(run, reports)
+
 	devicesPerWorker := 0
 	var vcpus int32
 	for _, r := range reports {
@@ -232,11 +244,15 @@ func prefillFromReports(b *supportbundle.Bundle) Request {
 			continue
 		}
 		node := nodes[r.Node]
-		mgmt, data := discovery.Planes(r, discovery.KubeNodeOf(node).InternalIP)
-		req.Workers = append(req.Workers, Worker{
+		worker := Worker{
 			Name: r.Node, NodeSet: defaultNodeSet, FailureDomain: node.Labels[failureDomainLabel],
-			MgmtInterface: mgmt.Name, DataInterfaces: data, Devices: devices,
-		})
+			Devices: devices, NetworkAttachment: attachment.DeepCopy(),
+		}
+		if attachment == nil {
+			mgmt, data := discovery.Planes(r, discovery.KubeNodeOf(node).InternalIP)
+			worker.MgmtInterface, worker.DataInterfaces = mgmt.Name, data
+		}
+		req.Workers = append(req.Workers, worker)
 		if devicesPerWorker == 0 || len(devices) < devicesPerWorker {
 			devicesPerWorker = len(devices)
 		}
@@ -502,7 +518,8 @@ func nodeSetsOf(
 		// workers one group: workers whose groups state different ones stay
 		// apart, and those whose groups state the same ones keep them.
 		key := strings.Join([]string{setName, mode, strings.Join(devices, ","), w.MgmtInterface,
-			strings.Join(w.DataInterfaces, ","), w.FailureDomain, hiddenSettings(baseGroup[w.Name])}, "|")
+			strings.Join(w.DataInterfaces, ","), attachmentKey(w.NetworkAttachment), w.FailureDomain,
+			hiddenSettings(baseGroup[w.Name])}, "|")
 		if gi, ok := groupIndex[key]; ok {
 			g := &sets[si].Groups[gi]
 			g.Workers = append(g.Workers, w.Name)
@@ -512,7 +529,8 @@ func nodeSetsOf(
 			Name:    groupName(len(sets[si].Groups)+1, mode, devices, reports[w.Name]),
 			Workers: []string{w.Name}, MgmtInterface: w.MgmtInterface,
 			DataInterfaces: w.DataInterfaces, FailureDomain: w.FailureDomain,
-			Devices: &simplyblockv1alpha2.DeviceSelection{},
+			NetworkAttachment: w.NetworkAttachment.DeepCopy(),
+			Devices:           &simplyblockv1alpha2.DeviceSelection{},
 		}
 		if mode == ModeNVMe {
 			g.Devices.NVMe = devices
@@ -575,4 +593,12 @@ func humanSize(bytes uint64) string {
 // Render is a document as YAML to apply: no status and no server-set metadata.
 func Render(cdc *simplyblockv1alpha2.ClusterDeploymentConfig) ([]byte, error) {
 	return manifest.Render(cdc, simplyblockv1alpha2.GroupVersion.String(), "ClusterDeploymentConfig")
+}
+
+// attachmentKey is a worker's attachment as part of its group key.
+func attachmentKey(attachment *simplyblockv1alpha2.NetworkAttachmentSelection) string {
+	if attachment == nil {
+		return ""
+	}
+	return attachment.Management + "/" + attachment.Data
 }

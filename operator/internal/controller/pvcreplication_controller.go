@@ -103,7 +103,10 @@ func (r *PVCAnnotationWatcher) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{RequeueAfter: pvcReplRequeueDetaching}, nil
 		}
 
-		if currentSlot.Spec.PolicyRef == desiredPolicy {
+		// "pol" and "<ns>/pol" can name the same policy; only a different
+		// policy replaces the slot.
+		if utils.CanonicalRef(currentSlot.Spec.PolicyRef, pvc.Namespace) ==
+			utils.CanonicalRef(desiredPolicy, pvc.Namespace) {
 			return ctrl.Result{}, nil
 		}
 
@@ -136,8 +139,11 @@ func (r *PVCAnnotationWatcher) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{RequeueAfter: pvcReplRequeueUnbound}, nil
 	}
 
+	// The policy may live in another namespace ("<namespace>/<name>"), usually
+	// the StorageCluster's; the slot stays beside the claim that owns it.
+	policyNS, policyName := utils.SplitRef(desiredPolicy, pvc.Namespace)
 	var policy simplyblockv1alpha1.ReplicationPolicy
-	if err := r.Get(ctx, types.NamespacedName{Name: desiredPolicy, Namespace: pvc.Namespace}, &policy); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: policyName, Namespace: policyNS}, &policy); err != nil {
 		if apierrors.IsNotFound(err) {
 			log.Info("ReplicationPolicy not found; waiting", "policy", desiredPolicy, "pvc", pvc.Name)
 			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
@@ -209,7 +215,9 @@ func (r *PVCAnnotationWatcher) resolveVolumeHandle(ctx context.Context, pvName s
 }
 
 // createSlot creates a ReplicationSlot CR for the given PVC and policy.
-// The slot is named "<policy>-<pvc>" and owned by the PVC.
+// The slot lives in the PVC's namespace, is owned by the PVC, and is named
+// after the policy's name and the PVC's (replicationSlotName). spec.policyRef
+// keeps the reference as written, which may name another namespace.
 func (r *PVCAnnotationWatcher) createSlot(
 	ctx context.Context,
 	pvc *corev1.PersistentVolumeClaim,
@@ -217,7 +225,7 @@ func (r *PVCAnnotationWatcher) createSlot(
 ) error {
 	slot := &simplyblockv1alpha1.ReplicationSlot{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      replicationSlotName(policyName, pvc.Name),
+			Name:      replicationSlotName(refName(policyName), pvc.Name),
 			Namespace: pvc.Namespace,
 		},
 		Spec: simplyblockv1alpha1.ReplicationSlotSpec{
@@ -233,6 +241,12 @@ func (r *PVCAnnotationWatcher) createSlot(
 		return fmt.Errorf("create ReplicationSlot %q: %w", slot.Name, err)
 	}
 	return nil
+}
+
+// refName is the name part of a possibly namespace-qualified reference.
+func refName(ref string) string {
+	_, name := utils.SplitRef(ref, "")
+	return name
 }
 
 // replicationSlotName returns the deterministic name for a ReplicationSlot.

@@ -14,6 +14,8 @@ spec:
     maxSubsystemCount: 30
     minHugePagesSize: 16G
     name: discovered-discover-fail-08-cluster
+    network:
+      spdkOnHostNetwork: true
     stripe:
       dataChunks: 2
       parityChunks: 1

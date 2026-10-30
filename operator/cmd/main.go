@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -272,10 +273,19 @@ func main() {
 	flag.StringVar(&latencyPercentile, "latency-percentile", "p50",
 		"fio write-latency percentile driving the volume-rebalancing deviation signal: "+
 			"\"p50\" (median, stable) or \"p99\" (tail, noisy).")
-	var clusterDNSDomain string
-	flag.StringVar(&clusterDNSDomain, "cluster-dns-domain", utils.DefaultClusterDNSDomain,
-		"The cluster's DNS domain, the suffix after <service>.<namespace>.svc. Every "+
-			"in-cluster address and certificate name the operator builds uses it.")
+	var enableDeviceHealth bool
+	var deviceHealthInterval, deviceHealthWindow, deviceSMARTInterval time.Duration
+	flag.BoolVar(&enableDeviceHealth, "enable-device-health", true,
+		"Assess every storage device's performance against its fleet and read its SMART health log, "+
+			"publish the verdicts on the StorageDevice, and report them to the control plane's alerts "+
+			"endpoint as device_slow and device_unhealthy.")
+	flag.DurationVar(&deviceHealthInterval, "device-health-interval", nodecontroller.DefaultDeviceHealthInterval,
+		"How often the storage devices are assessed against their fleet.")
+	flag.DurationVar(&deviceHealthWindow, "device-health-window", nodecontroller.DefaultDeviceHealthWindow,
+		"The window each performance assessment averages device IO over.")
+	flag.DurationVar(&deviceSMARTInterval, "device-smart-interval", nodecontroller.DefaultSMARTInterval,
+		"How often each storage device's SMART health log is read. A StorageDeviceOps with action "+
+			"CheckHealth reads one immediately.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -284,9 +294,12 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	if err := utils.SetClusterDNSDomain(clusterDNSDomain); err != nil {
-		setupLog.Error(err, "invalid --cluster-dns-domain")
-		os.Exit(1)
+	clusterDNSDomain, err := utils.DetectClusterDNSDomain()
+	if err != nil {
+		setupLog.Info("falling back to the default cluster DNS domain",
+			"domain", clusterDNSDomain, "reason", err.Error())
+	} else {
+		setupLog.Info("detected the cluster DNS domain", "domain", clusterDNSDomain)
 	}
 
 	nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
@@ -928,7 +941,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeClaim")
 		os.Exit(1)
 	}
-	if err := (&nodecontroller.StorageNodeReconciler{
+	storageNodeReconciler := &nodecontroller.StorageNodeReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagenode-controller"),
@@ -940,7 +953,13 @@ func main() {
 		DeviceScopes: deviceScopes,
 		Capacity:     nodeCapacity,
 		Workload:     storageNodeWorkload,
-	}).SetupWithManager(ctrlMgr); err != nil {
+	}
+	// The host checks go to the CSI node plugins over the link. Without it a
+	// node on a network waits for them.
+	if csiPeers != nil {
+		storageNodeReconciler.HostCheck = csilink.NewHostCheck(csilink.RegistryNodePeers(csiPeers))
+	}
+	if err := storageNodeReconciler.SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
 	}
@@ -1010,12 +1029,41 @@ func main() {
 	// whole of why the kind exists (design-storagedevice.md §6). Its three other
 	// actions wait on control-plane verbs the v2 API does not offer, and the
 	// TODO beside their constants in storagedeviceops_types.go is the list.
-	if err := (&nodecontroller.StorageDeviceOpsReconciler{
+	// Device health: each device measured against the others of its cluster
+	// and its health log read on a schedule, both published on the device and
+	// reported to the control plane, whose alerts endpoint raises them. The
+	// CheckHealth operation reads a log through the same monitor, so a read on
+	// demand is judged and reported exactly as a scheduled one.
+	var deviceHealth *nodecontroller.StorageDeviceHealthMonitor
+	if enableDeviceHealth {
+		deviceHealth = &nodecontroller.StorageDeviceHealthMonitor{
+			Client:        mgr.GetClient(),
+			Recorder:      mgr.GetEventRecorder("storagedevice-health"),
+			API:           backupAPI,
+			Interval:      deviceHealthInterval,
+			Window:        deviceHealthWindow,
+			SMARTInterval: deviceSMARTInterval,
+		}
+		if provider, err := atlasprom.New(prometheusURL); err != nil {
+			setupLog.Error(err, "storage-device performance will not be assessed", "prometheusURL", prometheusURL)
+		} else {
+			deviceHealth.IO = provider
+		}
+		if err := mgr.Add(deviceHealth); err != nil {
+			setupLog.Error(err, "unable to add the storage device health monitor")
+			os.Exit(1)
+		}
+	}
+	deviceOps := &nodecontroller.StorageDeviceOpsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagedeviceops-controller"),
 		API:      backupAPI,
-	}).SetupWithManager(ctrlMgr); err != nil {
+	}
+	if deviceHealth != nil {
+		deviceOps.Health = deviceHealth
+	}
+	if err := deviceOps.SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageDeviceOps")
 		os.Exit(1)
 	}

@@ -127,10 +127,12 @@ func TestTheValuesFileIsTheOverridesOnly(t *testing.T) {
 	}
 }
 
-func TestTheFirstValueCarriesItsOwnCommentNotTheFilesHeader(t *testing.T) {
-	f := field(t, Fields(), "clusterDnsDomain")
-	if !strings.HasPrefix(f.Help, "The cluster's DNS domain") || strings.Contains(f.Help, "SPDX") || strings.Contains(f.Help, "Copyright") {
-		t.Errorf("clusterDnsDomain's help is %q", f.Help)
+// image, the file's first value, has no comment of its own, so its help is
+// empty rather than the license header above it.
+func TestTheFirstValueDoesNotCarryTheFilesHeader(t *testing.T) {
+	f := field(t, Fields(), "image")
+	if f.Help != "" {
+		t.Errorf("image's help is %q", f.Help)
 	}
 }
 

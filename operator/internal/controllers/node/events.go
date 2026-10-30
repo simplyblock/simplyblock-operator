@@ -60,6 +60,23 @@ const (
 	// the one Kubernetes-side failure a node's own status cannot show.
 	PodSchedulingFailed = "PodSchedulingFailed"
 
+	// The storage network reasons, raised on the StorageNode. Each one holds the
+	// node in Pending or takes it out of service for a named cause, because the
+	// phase alone cannot tell a cluster without Multus from a mistyped
+	// definition name.
+	NetworkAttachmentUnsupported = "NetworkAttachmentUnsupported"
+	NetworkAttachmentNotFound    = "NetworkAttachmentNotFound"
+	NetworkAttachmentFailed      = "NetworkAttachmentFailed"
+	NetworkAddressPoolExhausted  = "NetworkAddressPoolExhausted"
+	NetworkHostCheckUnavailable  = "NetworkHostCheckUnavailable"
+	NetworkInterfaceNoAddress    = "NetworkInterfaceNoAddress"
+	NetworkAddressMismatch       = "NetworkAddressMismatch"
+	DataNetworkHostUnreachable   = "DataNetworkHostUnreachable"
+	NetworkAttachmentLost        = "NetworkAttachmentLost"
+
+	// NetworkAttached says every declared network is attached and verified.
+	NetworkAttached = "NetworkAttached"
+
 	// The operation reasons, raised on the StorageNodeOps rather than the node.
 	//
 	// OperationSucceeded is one reason for all seven actions rather than one

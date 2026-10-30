@@ -14,10 +14,12 @@ spec:
     maxSubsystemCount: 30
     minHugePagesSize: 16G
     name: discovered-discover-numa-13-cluster
+    network:
+      spdkOnHostNetwork: true
     stripe:
       dataChunks: 2
       parityChunks: 1
-    vcpuCount: 8
+    vcpuCount: 14
   environment: K3s
   hostOS:
     distro: ubuntu

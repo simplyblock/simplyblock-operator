@@ -70,7 +70,9 @@ atlas/
 │   │                       (Inventory.NVMeControllers comes from pci/, see below)
 │   ├── nvmeformats.go      ReadNVMeFormats: the LBA formats of every kernel-driven NVMe controller
 │   ├── hostos.go           ReadHostOS: the worker's distro, family, version, and architecture
-│   └── environment.go      DetectEnvironment: OpenShift / Talos / K3s / Rancher / Vanilla, with the evidence
+│   ├── environment.go      DetectEnvironment: OpenShift / Talos / K3s / Rancher / Vanilla, with the evidence
+│   └── netattach.go        CollectNetworkAttachments: whether Multus's kind is served, a namespace's
+│                           definitions, and the host interface each CNI configuration builds on
 ├── lvm/                    Linux LVM commands + content-based identity
 │   ├── doc.go              Why identity is read from content, and how scoping is decided
 │   ├── lvm.go              Manager, Run (the escape hatch)
@@ -156,6 +158,11 @@ atlas/
 │   └── conntrackrpc/       FlowService: served by the CSI node plugin, called by the operator
 │       ├── conntrackrpc.go NewServer(conntrack.Forget), Remote(conn).Forget
 │       └── conntrackv1/    the FlowService protocol (buf-generated, committed)
+├── netcheck/               Ask the host's namespace about its network: a NIC's addresses, a TCP connect
+│   ├── netcheck.go         Selector (name or PCI address), Report, Lookup, Interface, Connect
+│   └── netcheckrpc/        CheckService: served by the CSI node plugin, called by the operator
+│       ├── netcheckrpc.go  NewServer(read, connect), Remote(conn).InterfaceAddresses/.Connect, ErrUnavailable
+│       └── netcheckv1/     the CheckService protocol (buf-generated, committed)
 ├── placement/
 │   └── placementrpc/       PlacementService: served by the operator, called by the CSI controller
 │       ├── placementrpc.go NewServer(Placer), Remote(conn).Place; controllers only
@@ -669,6 +676,13 @@ inv, err := inventory.Collect(ctx, inventory.Config{
     Kubernetes: inventory.KubernetesSources{
         Discovery: clientset.Discovery(),
         Nodes:     nodes.Items,
+        // The Multus definitions one namespace holds. Independent of the two
+        // above: giving it does not conclude the environment.
+        NetworkAttachments: inventory.NetworkAttachmentSource{
+            Discovery: clientset.Discovery(),
+            Dynamic:   dynamicClient,
+            Namespace: "simplyblock",
+        },
     },
 })
 if err != nil {
@@ -686,6 +700,8 @@ inv.HostOS.Family               // Debian / RedHat / SUSE / Alpine / Arch; which
 inv.HostOS.Architecture         // uname's machine: x86_64, aarch64
 inv.Environment.Distribution    // OpenShift / Talos / K3s / Rancher / Vanilla
 inv.Environment.Evidence        // what it rested on, for the reviewer who corrects it
+inv.NetworkAttachments.State    // Served / NotServed (no Multus) / Unread; empty when not asked
+inv.NetworkAttachments.Definitions // .Name, .Config.Type, .Config.HostInterface, .ResourceName
 
 // Every block device is returned, refused ones included, so that an
 // administrator can be told why the disk they expected is not a candidate.
@@ -1471,6 +1487,38 @@ for _, p := range registry.PeersOfKind(link.PeerKindNode) {
 *Today:* the operator's `NFSExport` reconciler asks for it when a pNFS metadata
 server pod goes away, through `operator/internal/csilink/flows.go`, and
 `csi-driver/internal/driver/driver.go` serves it on every node plugin.
+
+#### Read a host NIC's address and test a connection from the host
+
+A NIC that a `host-device` definition moves into a pod holds its address in the
+host's namespace until the pod takes it, and the kernel NVMe/TCP initiator
+connects from that same namespace. Only a process on the host's network sees
+either, so the operator asks the CSI node plugin, which runs there:
+
+```go
+// On the node (the CSI node plugin, host network, privileged):
+srv, err := netcheckrpc.NewServer(
+    func(sel netcheck.Selector) (netcheck.Report, error) { return netcheck.Interface(inventory.Config{}, sel) },
+    netcheck.Connect,
+)
+cfg.Register = func(r grpc.ServiceRegistrar) { storageSrv.Register(r); srv.Register(r) }
+cfg.Capabilities = append(storagerpc.Capabilities(), netcheckrpc.Capabilities()...)
+
+// From the operator, for the worker's own peer:
+report, err := netcheckrpc.Remote(p.Conn()).InterfaceAddresses(ctx, netcheck.Selector{Name: "ens4"})
+res, err := netcheckrpc.Remote(p.Conn()).Connect(ctx, "10.10.100.200", 4426, 5*time.Second)
+```
+
+An interface the host lacks, a refused connection, and a timeout are answers
+(`Found` false, `Connected` false with a reason), and only a call that fails is
+an error. A worker with no linked plugin that advertises
+`netcheckrpc.CapabilityCheck` is `netcheckrpc.ErrUnavailable`, which a caller
+treats as not yet verifiable and never as passed.
+
+*Today:* the storage node reconciler reads the NIC address before a node is added
+and runs the reachability gate after it is online, through
+`operator/internal/csilink/hostcheck.go`, and `csi-driver/internal/driver/driver.go`
+serves it on every node plugin.
 
 ### Cross-cutting
 

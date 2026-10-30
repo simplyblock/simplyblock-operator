@@ -22,6 +22,11 @@ import (
 // resolve to an existing resource for the given spec.scope:
 //   - scope=policy or scope=target: ref must name an existing ReplicationPolicy.
 //   - scope=volume:                 ref must name an existing ReplicationSlot.
+//   - scope=cluster:                ref must name a StorageCluster, the action must
+//     be migration, and spec.policyRef must name a ReplicationPolicy in mode migration.
+//
+// spec.policyRef is refused outside scope=cluster, and spec.dryRun outside
+// action=migration.
 //
 // Catching this at admission time gives the user an immediate, actionable error
 // instead of a ReplicationOps stuck in phase=Failed with an opaque message.
@@ -44,6 +49,10 @@ func (v *ReplicationOpsValidator) Handle(ctx context.Context, req admission.Requ
 
 	ns := ops.Namespace
 	ref := ops.Spec.Ref
+
+	if msg := migrationSpecError(&ops); msg != "" {
+		return admission.Denied(msg)
+	}
 
 	switch ops.Spec.Scope {
 	case utils.ReplicationOpsScopeTarget:
@@ -81,7 +90,45 @@ func (v *ReplicationOpsValidator) Handle(ctx context.Context, req admission.Requ
 		if err != nil {
 			return admission.Errored(http.StatusInternalServerError, err)
 		}
+
+	case utils.ReplicationOpsScopeCluster:
+		if _, err := utils.ResolveClusterUUID(ctx, v.Client, ns, ref); err != nil {
+			return admission.Denied(fmt.Sprintf(
+				"spec.ref %q does not name a StorageCluster in namespace %q (scope=cluster)",
+				ref, ns))
+		}
+		var policy simplyblockv1alpha1.ReplicationPolicy
+		err := v.Client.Get(ctx, types.NamespacedName{Name: ops.Spec.PolicyRef, Namespace: ns}, &policy)
+		if apierrors.IsNotFound(err) {
+			return admission.Denied(fmt.Sprintf(
+				"spec.policyRef %q does not name a ReplicationPolicy in namespace %q",
+				ops.Spec.PolicyRef, ns))
+		}
+		if err != nil {
+			return admission.Errored(http.StatusInternalServerError, err)
+		}
+		if policy.Spec.Mode != utils.ReplicationPolicyModeMigration {
+			return admission.Denied(fmt.Sprintf(
+				"spec.policyRef %q is in mode %q; a cluster migration needs a policy in mode %q",
+				ops.Spec.PolicyRef, policy.Spec.Mode, utils.ReplicationPolicyModeMigration))
+		}
 	}
 
 	return admission.Allowed("")
+}
+
+// migrationSpecError checks the fields that only a migration accepts.
+func migrationSpecError(ops *simplyblockv1alpha1.ReplicationOps) string {
+	migration := ops.Spec.Action == "migration"
+	switch {
+	case ops.Spec.Scope == utils.ReplicationOpsScopeCluster && !migration:
+		return "scope=cluster is only valid with action=migration"
+	case ops.Spec.Scope == utils.ReplicationOpsScopeCluster && ops.Spec.PolicyRef == "":
+		return "scope=cluster requires spec.policyRef, the migration policy to enroll volumes under"
+	case ops.Spec.Scope != utils.ReplicationOpsScopeCluster && ops.Spec.PolicyRef != "":
+		return "spec.policyRef is only valid with scope=cluster"
+	case ops.Spec.DryRun && !migration:
+		return "spec.dryRun is only valid with action=migration"
+	}
+	return ""
 }

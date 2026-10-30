@@ -19,6 +19,7 @@ import (
 	"github.com/simplyblock/atlas/conntrack"
 	"github.com/simplyblock/atlas/conntrack/conntrackrpc"
 	"github.com/simplyblock/atlas/link"
+	"github.com/simplyblock/atlas/netcheck/netcheckrpc"
 )
 
 const (
@@ -36,7 +37,9 @@ const (
 type NodePeer struct {
 	Name      string
 	CanForget bool
-	Conn      grpc.ClientConnInterface
+	// CanCheck is whether the plugin answers host network checks.
+	CanCheck bool
+	Conn     grpc.ClientConnInterface
 }
 
 // RegistryNodePeers lists the registry's node peers.
@@ -48,6 +51,7 @@ func RegistryNodePeers(reg *link.Registry) func() []NodePeer {
 			out = append(out, NodePeer{
 				Name:      p.ID.Name,
 				CanForget: p.HasCapability(conntrackrpc.CapabilityFlows),
+				CanCheck:  p.HasCapability(netcheckrpc.CapabilityCheck),
 				Conn:      p.Conn(),
 			})
 		}

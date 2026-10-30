@@ -343,3 +343,41 @@ func TestANodeWaitsForItsClusterToExistInTheControlPlane(t *testing.T) {
 		t.Error("the node says nothing about what it is waiting for")
 	}
 }
+
+// A node names its own NICs, because a fleet's workers do not agree on what their
+// NICs are called. The cluster's fields are what a node created without them gets.
+func TestTheAddNamesTheNodesOwnInterfaces(t *testing.T) {
+	cluster := anOpsCluster()
+	cluster.Spec.StorageNodes = &simplyblockv1alpha2.StorageNodesSpec{
+		MgmtInterface:  "eth0",
+		DataInterfaces: []string{"eth1"},
+		Network:        &simplyblockv1alpha2.StorageNetworkSpec{SpdkOnHostNetwork: true},
+	}
+	node := anUnprovisionedNode(stepPosting)
+	node.Spec.Config.MgmtInterface = "ens5f0"
+	node.Spec.Config.DataInterfaces = []string{"ens6f0", "ens6f1"}
+
+	r, _ := aSteadyNode(t, aControlPlane())
+	params := r.addParams(context.Background(), node, cluster)
+
+	if params.InterfaceName != "ens5f0" {
+		t.Errorf("interface_name = %q, want the node's ens5f0", params.InterfaceName)
+	}
+	if got := params.DataNics; len(got) != 2 || got[0] != "ens6f0" || got[1] != "ens6f1" {
+		t.Errorf("data_nics = %v, want the node's [ens6f0 ens6f1]", got)
+	}
+}
+
+func TestTheAddFallsBackToTheClustersInterfaces(t *testing.T) {
+	cluster := anOpsCluster()
+	cluster.Spec.StorageNodes = &simplyblockv1alpha2.StorageNodesSpec{
+		MgmtInterface: "eth0", DataInterfaces: []string{"eth1"},
+	}
+
+	r, _ := aSteadyNode(t, aControlPlane())
+	params := r.addParams(context.Background(), anUnprovisionedNode(stepPosting), cluster)
+
+	if params.InterfaceName != "eth0" || len(params.DataNics) != 1 || params.DataNics[0] != "eth1" {
+		t.Errorf("params = %+v, want the cluster's eth0 and [eth1]", params)
+	}
+}

@@ -453,6 +453,36 @@ func TestTheServicePoolsRunWhatTheyDeclare(t *testing.T) {
 	}
 }
 
+// No control plane workload runs on the host network. The pools reach the
+// storage nodes through the per-pod DNS names the operator publishes, so nothing
+// they dial is a host address, and a pod on the host network would claim a port
+// of every worker it lands on.
+func TestNoControlPlaneWorkloadRunsOnTheHostNetwork(t *testing.T) {
+	cp := localControlPlane()
+
+	objects := managementAPIObjects(cp)
+	checked := 0
+	for _, obj := range objects {
+		spec := podSpecOf(obj)
+		if spec == nil {
+			continue
+		}
+		checked++
+		if spec.HostNetwork {
+			t.Errorf("%s runs on the host network", obj.GetName())
+		}
+		if spec.DNSPolicy == corev1.DNSClusterFirstWithHostNet {
+			t.Errorf("%s keeps the host network's DNS policy", obj.GetName())
+		}
+	}
+	for _, name := range []string{ComponentTasks, ComponentMonitoring, ComponentAdminControl} {
+		findDeployment(t, objects, name)
+	}
+	if checked == 0 {
+		t.Fatal("no workload was checked")
+	}
+}
+
 // Regression: the tasks-runner-backup-merge container must name the module the
 // control-plane image ships, or it crash-loops ("python3: can't open file") and
 // pins the whole tasks pod. sbcli main's task-runner rework (#1226) ships it as

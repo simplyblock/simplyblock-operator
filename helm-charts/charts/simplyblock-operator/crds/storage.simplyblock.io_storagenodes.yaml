@@ -474,6 +474,17 @@ spec:
                     node exists, deleting it changes nothing, and editing it reaches only nodes
                     created afterward.
                   properties:
+                    dataInterfaces:
+                      description: |-
+                        DataInterfaces are the host NICs this node serves data on, for a cluster
+                        whose data network is a hostInterface. Unset, the cluster's
+                        spec.storageNodes.dataInterfaces applies.
+                      items:
+                        type: string
+                      type: array
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     deviceNames:
                       description: |-
                         DeviceNames names the devices to use. An entry is a PCI address
@@ -544,6 +555,15 @@ spec:
                           minimum: 1
                           type: integer
                       type: object
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                    mgmtInterface:
+                      description: |-
+                        MgmtInterface is the management NIC this node binds. Unset, the cluster's
+                        spec.storageNodes.mgmtInterface applies, which is what a node created before
+                        the interface was stated per node carries.
+                      type: string
                       x-kubernetes-validations:
                         - message: field is immutable
                           rule: self == oldSelf
@@ -682,6 +702,10 @@ spec:
                       rule: '!has(oldSelf.journalManager) || has(self.journalManager)'
                     - message: field deviceNames is immutable once set
                       rule: '!has(oldSelf.deviceNames) || has(self.deviceNames)'
+                    - message: field mgmtInterface is immutable once set
+                      rule: '!has(oldSelf.mgmtInterface) || has(self.mgmtInterface)'
+                    - message: field dataInterfaces is immutable once set
+                      rule: '!has(oldSelf.dataInterfaces) || has(self.dataInterfaces)'
                     - message: field pcieDenyList is immutable once set
                       rule: '!has(oldSelf.pcieDenyList) || has(self.pcieDenyList)'
                     - message: field pcieModel is immutable once set
@@ -838,6 +862,62 @@ spec:
                     Message is the reason the phase is what it is: one sentence, replaced as the
                     node moves, and never a log.
                   type: string
+                network:
+                  description: |-
+                    Network records, per storage network, what the node's SPDK pod reported
+                    and whether the attachment matches the declaration. A node on the host
+                    network has no entries.
+                  items:
+                    description: NodeNetworkStatus is what a node's SPDK pod reports for one network.
+                    properties:
+                      address:
+                        description: Address is the address the pod reported.
+                        type: string
+                      assigned:
+                        description: |-
+                          Assigned is the node's address on the network, with its prefix length: the
+                          one the operator took from the network's address pool, or, for a network
+                          with no pool, the one the NIC the definition moves holds on the worker. It
+                          is chosen once, before the node is added, and never changes, so the node
+                          keeps it across restarts and reboots. It is empty until it is chosen.
+                        type: string
+                      hostReachable:
+                        description: |-
+                          HostReachable is whether the initiators on the workers can reach the
+                          address, which a volume attach needs. It is unset until the reachability
+                          gate has run.
+                        type: boolean
+                      interface:
+                        description: Interface is the interface's name inside the pod.
+                        type: string
+                      network:
+                        description: Network is the name of the cluster network.
+                        type: string
+                      phase:
+                        description: Phase is where the attachment stands.
+                        enum:
+                          - Pending
+                          - Attached
+                          - Mismatched
+                          - Unavailable
+                        type: string
+                      resource:
+                        description: |-
+                          Resource is the extended resource the SPDK pod requests for the network's
+                          device, from the definition's k8s.v1.cni.cncf.io/resourceName annotation:
+                          a device plugin (an SR-IOV VF pool) hands the device out only to a pod
+                          that requests it. It is recorded with the address, before the node is
+                          added, and is empty for a definition whose plugin creates the interface
+                          itself or names its device.
+                        type: string
+                    required:
+                      - network
+                      - phase
+                    type: object
+                  type: array
+                  x-kubernetes-list-map-keys:
+                    - network
+                  x-kubernetes-list-type: map
                 nodeAddTaskID:
                   description: |-
                     NodeAddTaskID is the control-plane task the last add of this node created. It is how
@@ -1035,7 +1115,7 @@ spec:
                   type: object
                   x-kubernetes-validations:
                     - message: unknown step
-                      rule: '!has(self.state) || self.state in [''CheckingHost'',''CheckingConfig'',''AwaitingSlot'',''Posting'',''Resolving'',''Adopting'',''AwaitingWorker'']'
+                      rule: '!has(self.state) || self.state in [''CheckingHost'',''CheckingConfig'',''CheckingNetwork'',''AwaitingSlot'',''Posting'',''Resolving'',''Adopting'',''AwaitingWorker'']'
                 uptime:
                   description: Uptime is the node uptime as the control plane reports it.
                   type: string

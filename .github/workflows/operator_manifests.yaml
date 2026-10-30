@@ -46,6 +46,11 @@ jobs:
           make manifests generate
           git diff --exit-code || (echo "Generated files are out of date. Run 'make manifests generate' and commit the result." && exit 1)
 
+      # make bundle runs this check too, but only on release, so an unlisted
+      # CRD would otherwise surface only when a release is cut.
+      - name: Check every generated CRD is listed in the CRD kustomization
+        run: make verify-crd-kustomization
+
       - name: Build installer
         run: |
           make build-installer

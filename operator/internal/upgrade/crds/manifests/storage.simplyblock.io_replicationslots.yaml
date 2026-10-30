@@ -65,8 +65,10 @@ spec:
               replication slot.
             properties:
               policyRef:
-                description: PolicyRef is the name of the ReplicationPolicy governing
-                  this slot. Immutable.
+                description: |-
+                  PolicyRef names the ReplicationPolicy governing this slot: its name in the
+                  slot's own namespace, or "<namespace>/<name>" for a policy in another
+                  namespace, usually the StorageCluster's. Immutable.
                 type: string
               pvcRef:
                 description: PVCRef is the name of the PVC being replicated. Immutable.

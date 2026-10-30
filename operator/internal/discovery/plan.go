@@ -77,6 +77,16 @@ type Plan struct {
 	// the reason. It is the run's account of itself.
 	Refusals []Refusal
 
+	// Unattached reports whether the kept workers are drafted with no network
+	// attachment, so the template states their network itself.
+	Unattached bool
+
+	// DataNetworks is how many data interfaces most kept workers carry, which the
+	// template states as the cluster's host-interface data networks. The names are
+	// each group's own. It is zero for a fleet with no data interface, which the
+	// template puts on the pod network.
+	DataNetworks int
+
 	// Findings are what the draft leaves for a reviewer to correct: topology
 	// the Kubernetes API does not carry for every worker, or carries in a
 	// shape the draft cannot use.
@@ -539,6 +549,8 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 	}
 
 	plan := Plan{Class: class}
+	attachment, found := NetworkingOf(run, reports)
+	plan.Findings = append(plan.Findings, found...)
 
 	ordered := slices.Clone(reports)
 	slices.SortFunc(ordered, func(a, b nodeprobe.Report) int { return cmp.Compare(a.Node, b.Node) })
@@ -554,6 +566,15 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 				Worker: report.Node, Rule: refused, Reason: why,
 			})
 			continue
+		}
+
+		if attachment != nil {
+			if ok, why := AdmitAttachment(report, attachment); !ok {
+				plan.Refusals = append(plan.Refusals, Refusal{
+					Worker: report.Node, Rule: NetworkAttachmentRule, Reason: why,
+				})
+				continue
+			}
 		}
 
 		chosen, why := placement.Choose(report, admitted)
@@ -576,8 +597,14 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 			}
 		}
 
+		// An attached worker names no host interface: the definition is what
+		// its storage node binds, on whichever interface Multus gives the pod.
 		kube := p.KubeNodes[report.Node]
-		mgmt, data := Planes(report, kube.InternalIP)
+		var mgmt Management
+		var data []string
+		if attachment == nil {
+			mgmt, data = Planes(report, kube.InternalIP)
+		}
 		plan.Workers = append(plan.Workers, Worker{
 			Name:            report.Node,
 			Report:          report,
@@ -587,6 +614,7 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 			Kube:            kube,
 			Mgmt:            mgmt,
 			Data:            data,
+			Attachment:      attachment,
 		})
 	}
 
@@ -596,6 +624,10 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 	plan.assignFailureDomains(failureDomainLabelOf(run))
 	plan.noteMultipath()
 
+	if len(plan.Workers) > 0 && plan.Workers[0].Attachment == nil {
+		plan.Unattached = true
+		plan.DataNetworks = commonDataInterfaceCount(plan.Workers)
+	}
 	if len(plan.Workers) > 0 {
 		var found []Finding
 		plan.NodeSets, found = splitMembers(builder.Build(grouper.Group(plan.Workers)), plan.Workers, grouper, p.SlotsPerWorker)
@@ -718,4 +750,20 @@ func ParseSize(text string) (uint64, error) {
 		return 0, fmt.Errorf("%q is not a size", text)
 	}
 	return value * unit, nil
+}
+
+// commonDataInterfaceCount is the number of data interfaces held by the most
+// workers, and the larger number for a tie.
+func commonDataInterfaceCount(workers []Worker) int {
+	held := map[int]int{}
+	for _, worker := range workers {
+		held[len(worker.Data)]++
+	}
+	best, support := 0, 0
+	for count, workers := range held {
+		if workers > support || (workers == support && count > best) {
+			best, support = count, workers
+		}
+	}
+	return best
 }

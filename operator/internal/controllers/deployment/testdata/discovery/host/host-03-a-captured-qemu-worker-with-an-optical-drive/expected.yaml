@@ -14,6 +14,8 @@ spec:
     enableJournalDevice: true
     maxSubsystemCount: 30
     name: discovered-discover-host-03-cluster
+    network:
+      podNetwork: true
     stripe:
       dataChunks: 1
       parityChunks: 0

@@ -52,15 +52,16 @@ func TestNoEmptyStringIsSent(t *testing.T) {
 // StorageClass actually asked for.
 func TestAStatedValueIsSent(t *testing.T) {
 	body, err := json.Marshal(&CreateLVolData{
-		LvolName:    "pvc-0d3a",
-		Size:        "1073741824",
-		LvsName:     "pool1",
-		Fabric:      "rdma",
-		MaxRWIOPS:   "1000",
-		MaxRWmBytes: "100",
-		HostID:      "node-7",
-		LvolID:      "3f9c",
-		PvcName:     "ns/claim",
+		LvolName:      "pvc-0d3a",
+		Size:          "1073741824",
+		LvsName:       "pool1",
+		Fabric:        "rdma",
+		MaxRWIOPS:     "1000",
+		MaxRWmBytes:   "100",
+		HostID:        "node-7",
+		LvolID:        "3f9c",
+		PvcName:       "ns/claim",
+		PriorityClass: "gold",
 	})
 	if err != nil {
 		t.Fatalf("marshalling the create request: %v", err)
@@ -72,15 +73,16 @@ func TestAStatedValueIsSent(t *testing.T) {
 	}
 
 	for key, want := range map[string]string{
-		"fabric":        "rdma",
-		"max_rw_iops":   "1000",
-		"max_rw_mbytes": "100",
-		"host_id":       "node-7",
-		"uid":           "3f9c",
-		"pvc_name":      "ns/claim",
-		"name":          "pvc-0d3a",
-		"size":          "1073741824",
-		"pool":          "pool1",
+		"fabric":         "rdma",
+		"max_rw_iops":    "1000",
+		"max_rw_mbytes":  "100",
+		"host_id":        "node-7",
+		"uid":            "3f9c",
+		"pvc_name":       "ns/claim",
+		"priority_class": "gold",
+		"name":           "pvc-0d3a",
+		"size":           "1073741824",
+		"pool":           "pool1",
 	} {
 		if sent[key] != want {
 			t.Errorf("%s was sent as %v, want %q", key, sent[key], want)

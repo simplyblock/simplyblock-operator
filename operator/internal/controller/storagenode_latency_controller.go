@@ -328,7 +328,6 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 	conn benchmarkConnInfo,
 	image string,
 ) error {
-	privileged := true
 	ttl := baselineJobTTLSeconds
 	backoffLimit := int32(2)
 	hostDevPath := "/dev"
@@ -361,6 +360,8 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 					// from its taints, and a fleet with a dedicated storage
 					// plane taints every machine this can run on.
 					Tolerations: storageNodeTolerations(snode),
+					// The measurement connects over NVMe/TCP, which a reconnect
+					// moves to the host's network namespace.
 					HostNetwork: true,
 					Volumes: []corev1.Volume{
 						{
@@ -384,7 +385,7 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 								"--termination-log=/tmp/termination-log",
 							},
 							TerminationMessagePath: "/tmp/termination-log",
-							SecurityContext:        &corev1.SecurityContext{Privileged: &privileged},
+							SecurityContext:        volumemigration.PrivilegedAsRoot(),
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "host-dev", MountPath: "/dev"},
 							},
