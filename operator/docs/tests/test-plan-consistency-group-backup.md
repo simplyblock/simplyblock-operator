@@ -125,13 +125,14 @@ The harness boundary: the webhook validator runs against a fake client, no API s
 
 The harness boundary: the reconciler drives the whole Restore graph against a fake control plane and a fake API server, the same harness the single-volume restore uses. These prove the group path end to end.
 
-| #    | Scenario                                                                                                                                               | Type     | Test                                                 |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------------------------------------------------------|
-| E-12 | A group restore walks `Validating → Restoring → AwaitingVolumes → Binding` and produces one labeled claim per member                                   | Positive | `TestGroupRestoreRunsTheWholeGraphAndProducesClaims` |
-| E-14 | A group restore emits GroupRestoreStarted and GroupRestored on the operation (§10)                                                                     | Positive | `TestGroupRestoreEmitsItsOwnEvents`                  |
-| E-22 | A restore by `groupBackupRef` restores the group backup its `StorageGroupBackup` produced, members read beside it, and records it in `status.backupID` | Positive | `TestGroupRestoreByReferenceRestoresTheGroupBackup`  |
-| E-23 | A restore by `groupBackupRef` holds at `Validating` while the `StorageGroupBackup` is in progress or its members are not placed beside it yet          | Boundary | `TestGroupRestoreByReferenceWaitsForTheGroupBackup`  |
-| E-24 | A change to a `StorageGroupBackup` wakes the restores that name it                                                                                     | Positive | `TestAGroupBackupWakesTheRestoresNamingIt`           |
+| #    | Scenario                                                                                                                                               | Type       | Test                                                 |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------------------|------------|------------------------------------------------------|
+| E-12 | A group restore walks `Validating → Restoring → AwaitingVolumes → Binding` and produces one labeled claim per member                                   | Positive   | `TestGroupRestoreRunsTheWholeGraphAndProducesClaims` |
+| E-14 | A group restore emits GroupRestoreStarted and GroupRestored on the operation (§10)                                                                     | Positive   | `TestGroupRestoreEmitsItsOwnEvents`                  |
+| E-22 | A restore by `groupBackupRef` restores the group backup its `StorageGroupBackup` produced, members read beside it, and records it in `status.backupID` | Positive   | `TestGroupRestoreByReferenceRestoresTheGroupBackup`  |
+| E-23 | A restore by `groupBackupRef` holds at `Validating` while the `StorageGroupBackup` is in progress or its members are not placed beside it yet          | Boundary   | `TestGroupRestoreByReferenceWaitsForTheGroupBackup`  |
+| E-24 | A change to a `StorageGroupBackup` wakes the restores that name it                                                                                     | Positive   | `TestAGroupBackupWakesTheRestoresNamingIt`           |
+| E-39 | A group restore of Block members produces Block volumes and claims (2026-10-28-restore-volume-mode)                                                    | Regression | `TestGroupRestoreOfBlockMembersProducesBlockClaims`  |
 
 The rule that exactly one of `backupRef` and `groupBackupID` is set, and the `groupBackupID` immutability, are CEL rules on the generated CRD, rejected by the API server. An envtest covering them is a gap (§7), as is E-6 (abort-after-volume) and the group-restore unwind.
 

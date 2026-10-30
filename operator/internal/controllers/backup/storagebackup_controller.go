@@ -837,6 +837,9 @@ func (r *StorageBackupReconciler) resolveSource(
 	pv := &volumes.Items[0]
 	taken.PersistentVolumeName = pv.Name
 	taken.FSType = pv.Spec.CSI.FSType
+	if pv.Spec.VolumeMode != nil {
+		taken.VolumeMode = *pv.Spec.VolumeMode
+	}
 	if handle, ok := lvol.ParseHandle(lvol.VolumeHandle(pv.Spec.CSI.VolumeHandle)); ok {
 		// The pool segment is a UUID on a volume provisioned since the v2 API
 		// and a name on an older one, and both occur indefinitely because a
