@@ -10,6 +10,8 @@
 // design-storagedevice.md §6 specifies five actions. Two are served by the
 // control plane's v2 API and are built. The other three are blocked on verbs
 // that API does not offer, and the TODO beside their constants is the ask.
+// CheckHealth, from design-device-health.md, reads the device's health log on
+// demand and changes nothing on the device.
 //
 // **The enum admits only what the operator can perform.** Declaring the other
 // three now would accept an object whose first reconcile can only fail, and an
@@ -31,7 +33,7 @@ import (
 // There is no Add: a device that appears is discovered. There is no bare Remove
 // either: a removal is a step of Replace and of Migrate, and taking a device out
 // of the data path without replacing it is Fail.
-// +kubebuilder:validation:Enum=Restart;Fail
+// +kubebuilder:validation:Enum=Restart;Fail;CheckHealth
 type StorageDeviceOpsAction string
 
 const (
@@ -48,6 +50,13 @@ const (
 	// The removal alone is reversible and the failure is not, which is why the
 	// graph splits them and declares the abort edge on the first.
 	StorageDeviceOpsActionFail StorageDeviceOpsAction = "Fail"
+
+	// StorageDeviceOpsActionCheckHealth reads the device's health log now,
+	// rather than at the next scheduled read, and records it and its verdict in
+	// the device's status.health.smart. It takes the device out of nothing and
+	// changes nothing on it: it is the way to confirm a suspicion, or a
+	// replacement, without waiting hours for the schedule.
+	StorageDeviceOpsActionCheckHealth StorageDeviceOpsAction = "CheckHealth"
 
 	// TODO(storagedeviceops): EXTERNAL DEPENDENCY. The three actions below wait
 	// on control-plane verbs the v2 API does not offer. It serves restart,

@@ -71,13 +71,13 @@ func TestTheDeviceCELRuleCoversEveryDeclaredState(t *testing.T) {
 // fail, which is the thing the narrowed enum exists to prevent.
 func TestTheActionEnumAdmitsOnlyWhatAGraphDeclares(t *testing.T) {
 	declared := storageDeviceOpsGraphs()
-	for _, action := range []statemachine.Action{actionDeviceRestart, actionDeviceFail} {
+	for _, action := range []statemachine.Action{actionDeviceRestart, actionDeviceFail, actionDeviceCheckHealth} {
 		if _, ok := declared[action]; !ok {
 			t.Errorf("%s is in the Enum marker and no graph declares it", action)
 		}
 	}
-	if len(declared) != 2 {
-		t.Errorf("%d graphs are declared and the Enum marker admits two actions; an action "+
+	if len(declared) != 3 {
+		t.Errorf("%d graphs are declared and the Enum marker admits three actions; an action "+
 			"with a graph and no enum member is one nobody can ask for", len(declared))
 	}
 }

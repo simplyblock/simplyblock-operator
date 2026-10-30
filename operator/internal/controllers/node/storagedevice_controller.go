@@ -356,11 +356,15 @@ func nodeIsDown(node *simplyblockv1alpha2.StorageNode) bool {
 	}
 }
 
+// unknownValue is the label value, and the control-plane spelling, of a state
+// or verdict nobody has established yet.
+const unknownValue = "unknown"
+
 // nodeState is the node's control-plane status folded to lower case, or
 // "unknown" when it has none yet.
 func nodeState(node *simplyblockv1alpha2.StorageNode) string {
 	if node.Status.Status == "" {
-		return "unknown"
+		return unknownValue
 	}
 	return strings.ToLower(node.Status.Status)
 }
@@ -465,6 +469,10 @@ func (r *StorageDeviceReconciler) upsert(
 		// field over is what stops an unrelated event releasing a lock its
 		// holder still believes it has.
 		status.ActiveOpsRef = sd.Status.ActiveOpsRef
+		// The health block is the health monitor's for the same reason: the
+		// device stream says nothing about it, so rebuilding it here would clear
+		// a slow or failing verdict on every unrelated event.
+		status.Health = sd.Status.Health
 		if !reflect.DeepEqual(sd.Status, status) {
 			sd.Status = status
 			if err := r.Status().Update(ctx, &sd); err != nil {

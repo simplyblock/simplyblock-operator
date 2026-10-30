@@ -500,6 +500,33 @@ func TestTheMirrorDoesNotClearTheOperationLock(t *testing.T) {
 	}
 }
 
+// The health block is written by the health monitor and by nothing else. A
+// mirror that rebuilt it from the device stream would clear a slow or failing
+// verdict on every unrelated device event, and the alert it backs would resolve
+// while the device is still bad.
+func TestTheMirrorDoesNotClearTheHealthVerdict(t *testing.T) {
+	held := existingDevice(simplyblockv1alpha2.StorageDevicePhaseOnline, "online")
+	held.Status.Health = &simplyblockv1alpha2.DeviceHealth{
+		Performance: &simplyblockv1alpha2.DevicePerformance{Verdict: simplyblockv1alpha2.DevicePerformanceSlow},
+		SMART:       &simplyblockv1alpha2.DeviceSMART{Verdict: simplyblockv1alpha2.DeviceSMARTFailing},
+	}
+
+	r := sdReconciler(t, sdOnlineCache(), sdNodeWithStatus(utils.NodeStatusOnline), sdNodeSet(), held)
+	if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	sd, err := getSD(t, r.Client)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if sd.Status.Health == nil || sd.Status.Health.Performance == nil ||
+		sd.Status.Health.Performance.Verdict != simplyblockv1alpha2.DevicePerformanceSlow ||
+		sd.Status.Health.SMART == nil || sd.Status.Health.SMART.Verdict != simplyblockv1alpha2.DeviceSMARTFailing {
+		t.Errorf("health = %+v, want the monitor's verdicts left alone", sd.Status.Health)
+	}
+}
+
 // A zero is the reading of an empty device rather than the absence of a reading,
 // so a device the control plane reports no size for carries no capacity block at
 // all. The alternative publishes a drive of zero bytes, which is a size nothing

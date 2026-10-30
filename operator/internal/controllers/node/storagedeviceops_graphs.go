@@ -2,6 +2,7 @@
 //
 //	Restart  Requesting ──► Awaiting
 //	Fail     Removing ──► Failing ──► Awaiting
+//	CheckHealth  Requesting
 //
 // Two actions are declared, because two are what the control plane's v2 API can
 // serve. The other three of design-storagedevice.md §6 are blocked on verbs it
@@ -42,6 +43,8 @@ const (
 const (
 	actionDeviceRestart = statemachine.Action(simplyblockv1alpha2.StorageDeviceOpsActionRestart)
 	actionDeviceFail    = statemachine.Action(simplyblockv1alpha2.StorageDeviceOpsActionFail)
+
+	actionDeviceCheckHealth = statemachine.Action(simplyblockv1alpha2.StorageDeviceOpsActionCheckHealth)
 )
 
 // How long each step may take before the operation is reported as stuck.
@@ -123,6 +126,15 @@ func storageDeviceOpsGraphs() statemachine.MultiConfig[deviceStep] {
 				stepDeviceAwaiting: {OnEnter: deviceDeadline(awaitingFailureDeadline)},
 			},
 		},
+		actionDeviceCheckHealth: {
+			Initial: stepDeviceRequesting,
+			States: map[deviceStep]statemachine.StateDef[deviceStep]{
+				// One read and no side effect on the device, so the step is its
+				// own terminal state and stays abortable throughout: stopping a
+				// read leaves nothing to unwind.
+				stepDeviceRequesting: {Abortable: true, OnEnter: deviceDeadline(requestingDeviceDeadline)},
+			},
+		},
 	}
 }
 
@@ -142,6 +154,8 @@ func deviceDeadline(d time.Duration) statemachine.TransitionFunc[deviceStep] {
 var initialDeviceDeadlines = map[statemachine.Action]time.Duration{
 	actionDeviceRestart: requestingDeviceDeadline,
 	actionDeviceFail:    removingDeviceDeadline,
+
+	actionDeviceCheckHealth: requestingDeviceDeadline,
 }
 
 // UnabortableDeviceSteps are the steps a running operation cannot be stopped in,
