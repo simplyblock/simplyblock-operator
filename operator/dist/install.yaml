@@ -11952,6 +11952,15 @@ spec:
                       - Mismatched
                       - Unavailable
                       type: string
+                    resource:
+                      description: |-
+                        Resource is the extended resource the SPDK pod requests for the network's
+                        device, from the definition's k8s.v1.cni.cncf.io/resourceName annotation:
+                        a device plugin (an SR-IOV VF pool) hands the device out only to a pod
+                        that requests it. It is recorded with the address, before the node is
+                        added, and is empty for a definition whose plugin creates the interface
+                        itself or names its device.
+                      type: string
                   required:
                   - network
                   - phase

@@ -688,6 +688,15 @@ type NodeNetworkStatus struct {
 	// +optional
 	Assigned string `json:"assigned,omitempty"`
 
+	// Resource is the extended resource the SPDK pod requests for the network's
+	// device, from the definition's k8s.v1.cni.cncf.io/resourceName annotation:
+	// a device plugin (an SR-IOV VF pool) hands the device out only to a pod
+	// that requests it. It is recorded with the address, before the node is
+	// added, and is empty for a definition whose plugin creates the interface
+	// itself or names its device.
+	// +optional
+	Resource string `json:"resource,omitempty"`
+
 	// Address is the address the pod reported.
 	// +optional
 	Address string `json:"address,omitempty"`

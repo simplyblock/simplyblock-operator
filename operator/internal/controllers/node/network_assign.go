@@ -43,7 +43,7 @@ func pooledNetworks(network *simplyblockv1alpha2.StorageNetworkSpec) []simplyblo
 // two nodes settle on two addresses without a lock.
 func (r *StorageNodeReconciler) assignAddresses(
 	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
-	cluster *simplyblockv1alpha2.StorageCluster, configs map[string]inventory.NetworkAttachmentConfig,
+	cluster *simplyblockv1alpha2.StorageCluster, definitions map[string]definition,
 ) error {
 	networks := pooledNetworks(networkOf(cluster))
 	var siblings []simplyblockv1alpha2.StorageNode
@@ -64,6 +64,7 @@ func (r *StorageNodeReconciler) assignAddresses(
 			index = len(next) - 1
 		}
 		entry := &next[index]
+		entry.Resource = definitions[n.Name()].Resource
 
 		var held []string
 		if n.Pool() != nil {
@@ -78,7 +79,7 @@ func (r *StorageNodeReconciler) assignAddresses(
 			continue
 		}
 
-		address, err := r.chooseAddress(ctx, node, cluster, n, held, configs[n.Name()])
+		address, err := r.chooseAddress(ctx, node, cluster, n, held, definitions[n.Name()].Config)
 		if err != nil {
 			return err
 		}

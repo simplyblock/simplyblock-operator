@@ -60,6 +60,18 @@ func assignedAddresses(status []simplyblockv1alpha2.NodeNetworkStatus) map[strin
 	return assigned
 }
 
+// assignedResources is the device resource recorded for each network that has
+// one, by network name.
+func assignedResources(status []simplyblockv1alpha2.NodeNetworkStatus) map[string]string {
+	resources := map[string]string{}
+	for _, n := range status {
+		if n.Resource != "" {
+			resources[n.Network] = n.Resource
+		}
+	}
+	return resources
+}
+
 // BuildAttachments turns the declaration and a node's assigned addresses into
 // its attachment list: mgmt0 first, then data0 onward in the declared order. A
 // host interface network has no element.
