@@ -312,12 +312,17 @@ through the endpoint's existing lifecycle, so each transition is one
 | `DeviceSMARTRecovered`       | `Normal`  | `StorageDevice` |
 | `DeviceHealthCheckFailed`    | `Warning` | `StorageDevice` |
 
-| Gauge                                         | Labels                                 |
-|-----------------------------------------------|----------------------------------------|
-| `simplyblock_storagedevice_performance_state` | `cluster`, `node`, `device`, `verdict` |
-| `simplyblock_storagedevice_smart_state`       | `cluster`, `node`, `device`, `verdict` |
-| `simplyblock_storagedevice_latency_ratio`     | `cluster`, `node`, `device`            |
-| `simplyblock_storagedevice_iops_share_ratio`  | `cluster`, `node`, `device`            |
+| Gauge                                                 | Labels                                 |
+|-------------------------------------------------------|----------------------------------------|
+| `simplyblock_storagedevice_performance_state`         | `cluster`, `node`, `device`, `verdict` |
+| `simplyblock_storagedevice_smart_state`               | `cluster`, `node`, `device`, `verdict` |
+| `simplyblock_storagedevice_relative_latency_count`    | `cluster`, `node`, `device`            |
+| `simplyblock_storagedevice_relative_iops_share_count` | `cluster`, `node`, `device`            |
+
+The two relative gauges are dimensionless ratios: 1 is the fleet median latency,
+and 1 is the device's full weighted IOPS share. They end in `count` because
+§7.12 of design-crd-model.md allows no `ratio` suffix, and `count` is its suffix
+for a gauge.
 
 An Alertmanager rule on `simplyblock_storagedevice_performance_state{verdict="Slow"} == 1`
 or `simplyblock_storagedevice_smart_state{verdict="Failing"} == 1` is how a

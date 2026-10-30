@@ -36,16 +36,16 @@ var (
 
 	deviceLatencyRatio = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "simplyblock_storagedevice_latency_ratio",
-			Help: "Mean IO latency of the storage device over its fleet's median, from the last assessment.",
+			Name: "simplyblock_storagedevice_relative_latency_count",
+			Help: "Mean IO latency of the storage device over its fleet's median, a dimensionless ratio (1 is the median), from the last assessment.",
 		},
 		deviceLabelNames,
 	)
 
 	deviceIOPSShareRatio = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "simplyblock_storagedevice_iops_share_ratio",
-			Help: "IOPS of the storage device over the share its weight entitles it to, from the last assessment.",
+			Name: "simplyblock_storagedevice_relative_iops_share_count",
+			Help: "IOPS of the storage device over the share its weight entitles it to, a dimensionless ratio (1 is its full share), from the last assessment.",
 		},
 		deviceLabelNames,
 	)
