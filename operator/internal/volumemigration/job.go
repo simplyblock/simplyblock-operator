@@ -96,7 +96,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					NodeSelector:  map[string]string{"kubernetes.io/hostname": p.Hostname},
-					Tolerations:   p.Tolerations,
+					Tolerations:   pinnedNodeTolerations(p.Tolerations),
 					// NVMe connections are made here, and a reconnect leaves a pod's
 					// network namespace for the host's.
 					HostNetwork: true,
@@ -196,6 +196,22 @@ func RecordVolumeMoved(
 		return nil
 	})
 	return name, err
+}
+
+// pinnedNodeTolerations adds a toleration of every NoSchedule taint to the
+// cluster's own. A Job built here is pinned by hostname to one node, which is a
+// node chosen because it already runs the work the Job serves (the consumer of
+// a volume, or a storage node), so that node's NoSchedule taints are the
+// workload's own. Carrying only the storage nodes' tolerations left preconnect
+// and validation Jobs Pending on a tainted client worker, and a cutover then
+// proceeded on its timeout with no target path connected. NoExecute is not
+// tolerated: it marks a node that is going away.
+func pinnedNodeTolerations(cluster []corev1.Toleration) []corev1.Toleration {
+	out := append([]corev1.Toleration(nil), cluster...)
+	return append(out, corev1.Toleration{
+		Operator: corev1.TolerationOpExists,
+		Effect:   corev1.TaintEffectNoSchedule,
+	})
 }
 
 // JobPlacementOf returns what the StorageCluster reporting clusterUUID says

@@ -1,6 +1,8 @@
 package volumemigration
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/simplyblock/atlas/nvmeof"
@@ -76,5 +78,35 @@ func TestSubsystemOrder(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("subsystemOrder = %v, want %v (first-seen order)", got, want)
 		}
+	}
+}
+
+func TestRequireAllLive(t *testing.T) {
+	src := nvmeof.Target{NQN: "nqn.x", Address: "10.0.0.1", Port: 4420}
+	tgt := nvmeof.Target{NQN: "nqn.x", Address: "10.0.0.2", Port: 4428}
+
+	if err := requireAllLive("nqn.x", []nvmeof.PathResult{
+		{Target: src, Live: true, AlreadyPresent: true},
+		{Target: tgt, Live: true},
+	}); err != nil {
+		t.Fatalf("all live: got %v, want nil", err)
+	}
+
+	// The 2026-10-23 preconnect: the source path was already there, the target
+	// attach failed. One live path must not read as success.
+	err := requireAllLive("nqn.x", []nvmeof.PathResult{
+		{Target: src, Live: true, AlreadyPresent: true},
+		{Target: tgt, Err: errors.New("sudo: a password is required")},
+	})
+	if err == nil {
+		t.Fatal("source live, target down: got nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "1 of 2") || !strings.Contains(err.Error(), "sudo") {
+		t.Errorf("error %q should count the down path and carry its reason", err)
+	}
+
+	if err := requireAllLive("nqn.x", []nvmeof.PathResult{{Target: tgt}}); err == nil ||
+		!strings.Contains(err.Error(), "10.0.0.2:4428") {
+		t.Errorf("down path without a reason: got %v, want one naming the endpoint", err)
 	}
 }

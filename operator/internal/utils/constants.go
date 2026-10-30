@@ -11,13 +11,21 @@ const (
 	FinalizerReplicationSlot   = "storage.simplyblock.io/replicationslot-finalizer"
 
 	// AnnotationReplicationPolicy is the annotation key on StorageClass or PVC that
-	// opts volumes into a named ReplicationPolicy CR.
+	// opts volumes into a named ReplicationPolicy CR: its name in the claim's own
+	// namespace, or "<namespace>/<name>" for a policy in another namespace.
 	AnnotationReplicationPolicy = "storage.simplyblock.io/replication-policy"
 
 	// ReplicationOps scope values.
 	ReplicationOpsScopeTarget = "target"
 	ReplicationOpsScopePolicy = "policy"
 	ReplicationOpsScopeVolume = "volume"
+	// ReplicationOpsScopeCluster selects every claim whose volume lives on one
+	// source storage cluster. Only the migration action accepts it.
+	ReplicationOpsScopeCluster = "cluster"
+
+	// ReplicationPolicyModeMigration is the ReplicationPolicy mode for a
+	// planned online move to the target cluster.
+	ReplicationPolicyModeMigration = "migration"
 
 	// ReplicationBackendStateReplicating is the backend API state string for a
 	// volume that is actively replicating snapshots to the target cluster.

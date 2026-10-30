@@ -44,7 +44,9 @@ const (
 
 // ReplicationSlotSpec defines the identity of a per-volume replication slot.
 type ReplicationSlotSpec struct {
-	// PolicyRef is the name of the ReplicationPolicy governing this slot. Immutable.
+	// PolicyRef names the ReplicationPolicy governing this slot: its name in the
+	// slot's own namespace, or "<namespace>/<name>" for a policy in another
+	// namespace, usually the StorageCluster's. Immutable.
 	// +kubebuilder:validation:Required
 	PolicyRef string `json:"policyRef"`
 

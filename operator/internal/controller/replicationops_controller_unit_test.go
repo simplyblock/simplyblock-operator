@@ -2,8 +2,6 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
-	"io"
 	"net/http"
 	"testing"
 
@@ -17,6 +15,9 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
+
+// testReplOpsName is the ReplicationOps the unit tests in this file reconcile.
+const testReplOpsName = "ops1"
 
 // newOpsReplReconciler creates a ReplicationOpsReconciler backed by a fake client.
 // A StorageCluster (testClusterName → testClusterUUID) is pre-populated so that
@@ -38,9 +39,7 @@ func newOpsReplReconciler(t *testing.T, objects ...client.Object) (*ReplicationO
 			&simplyblockv1alpha1.ReplicationPair{},
 		).
 		WithObjects(allObjects...).
-		WithIndex(&simplyblockv1alpha1.ReplicationSlot{}, "spec.policyRef", func(obj client.Object) []string {
-			return []string{obj.(*simplyblockv1alpha1.ReplicationSlot).Spec.PolicyRef}
-		}).
+		WithIndex(&simplyblockv1alpha1.ReplicationSlot{}, "spec.policyRef", slotPolicyRefIndex).
 		WithIndex(&simplyblockv1alpha1.ReplicationOps{}, "spec.ref", func(obj client.Object) []string {
 			return []string{obj.(*simplyblockv1alpha1.ReplicationOps).Spec.Ref}
 		}).
@@ -78,7 +77,7 @@ func opsRequest(name string) ctrl.Request {
 func getOps(t *testing.T, cl client.Client) *simplyblockv1alpha1.ReplicationOps {
 	t.Helper()
 	o := &simplyblockv1alpha1.ReplicationOps{}
-	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "ops1"}, o); err != nil {
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: testReplOpsName}, o); err != nil {
 		t.Fatalf("get ReplicationOps: %v", err)
 	}
 	return o
@@ -99,7 +98,7 @@ func readyPolicyForOps(name string) *simplyblockv1alpha1.ReplicationPolicy {
 // slotForPolicy creates a ReplicationSlot that belongs to policy "pol" with a valid volume handle.
 func slotForPolicy() *simplyblockv1alpha1.ReplicationSlot {
 	return &simplyblockv1alpha1.ReplicationSlot{
-		ObjectMeta: metav1.ObjectMeta{Name: "pol-pvc1", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: testPolicySlotPVC1, Namespace: "default"},
 		Spec: simplyblockv1alpha1.ReplicationSlotSpec{
 			PolicyRef: "pol",
 			PVCRef:    "pvc1",
@@ -130,14 +129,14 @@ func TestOps_IgnoreNotFound(t *testing.T) {
 func TestOps_AddsFinalizer(t *testing.T) {
 	pol := readyPolicyForOps("pol")
 	ops := &simplyblockv1alpha1.ReplicationOps{
-		ObjectMeta: metav1.ObjectMeta{Name: "ops1", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: testReplOpsName, Namespace: "default"},
 		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
 			Action: "failover", Scope: utils.ReplicationOpsScopePolicy, Ref: "pol",
 		},
 	}
 	r, cl := newOpsReplReconciler(t, pol, ops)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
-	_, _ = r.Reconcile(context.Background(), opsRequest("ops1"))
+	_, _ = r.Reconcile(context.Background(), opsRequest(testReplOpsName))
 
 	got := getOps(t, cl)
 	if !contains(got.Finalizers, finalizerReplicationOps) {
@@ -151,7 +150,7 @@ func TestOps_TerminalSucceeded_NoOp(t *testing.T) {
 	pol := readyPolicyForOps("pol")
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
+			Name: testReplOpsName, Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec:   simplyblockv1alpha1.ReplicationOpsSpec{Action: "failover", Scope: "policy", Ref: "pol"},
@@ -160,7 +159,7 @@ func TestOps_TerminalSucceeded_NoOp(t *testing.T) {
 	r, _ := newOpsReplReconciler(t, pol, ops)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
-	res, err := r.Reconcile(context.Background(), opsRequest("ops1"))
+	res, err := r.Reconcile(context.Background(), opsRequest(testReplOpsName))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -173,7 +172,7 @@ func TestOps_TerminalFailed_NoOp(t *testing.T) {
 	pol := readyPolicyForOps("pol")
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
+			Name: testReplOpsName, Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec:   simplyblockv1alpha1.ReplicationOpsSpec{Action: "failover", Scope: "policy", Ref: "pol"},
@@ -182,7 +181,7 @@ func TestOps_TerminalFailed_NoOp(t *testing.T) {
 	r, _ := newOpsReplReconciler(t, pol, ops)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
-	res, err := r.Reconcile(context.Background(), opsRequest("ops1"))
+	res, err := r.Reconcile(context.Background(), opsRequest(testReplOpsName))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -196,7 +195,7 @@ func TestOps_TerminalFailed_NoOp(t *testing.T) {
 func TestOps_PolicyNotFound_Fails(t *testing.T) {
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
+			Name: testReplOpsName, Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
@@ -206,7 +205,7 @@ func TestOps_PolicyNotFound_Fails(t *testing.T) {
 	r, cl := newOpsReplReconciler(t, ops)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
-	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
+	_, err := r.Reconcile(context.Background(), opsRequest(testReplOpsName))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -224,7 +223,7 @@ func TestOps_MutualExclusion_WaitsIfLocked(t *testing.T) {
 	pol.Status.ActiveOpsRef = "other-ops" // set before WithObjects so it's seeded
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
+			Name: testReplOpsName, Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
@@ -234,7 +233,7 @@ func TestOps_MutualExclusion_WaitsIfLocked(t *testing.T) {
 	r, cl := newOpsReplReconciler(t, pol, ops)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
-	res, err := r.Reconcile(context.Background(), opsRequest("ops1"))
+	res, err := r.Reconcile(context.Background(), opsRequest(testReplOpsName))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -253,7 +252,7 @@ func TestOps_UnknownAction_Fails(t *testing.T) {
 	pol := readyPolicyForOps("pol")
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
+			Name: testReplOpsName, Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
@@ -263,7 +262,7 @@ func TestOps_UnknownAction_Fails(t *testing.T) {
 	r, cl := newOpsReplReconciler(t, pol, ops)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
-	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
+	_, err := r.Reconcile(context.Background(), opsRequest(testReplOpsName))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -280,7 +279,7 @@ func TestOps_Failover_ScopePolicy_Success(t *testing.T) {
 	slot := slotForPolicy()
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
+			Name: testReplOpsName, Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
@@ -295,7 +294,7 @@ func TestOps_Failover_ScopePolicy_Success(t *testing.T) {
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
-	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
+	_, err := r.Reconcile(context.Background(), opsRequest(testReplOpsName))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -315,7 +314,7 @@ func TestOps_Failover_ScopeTarget_Success(t *testing.T) {
 	slot := slotForPolicy()
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
+			Name: testReplOpsName, Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
@@ -330,7 +329,7 @@ func TestOps_Failover_ScopeTarget_Success(t *testing.T) {
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
-	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
+	_, err := r.Reconcile(context.Background(), opsRequest(testReplOpsName))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -347,17 +346,17 @@ func TestOps_Failover_ScopeVolume_Success(t *testing.T) {
 	// resolveAffectedPolicyName also returns ops.Spec.Ref, so the reconciler
 	// tries to find a policy with that name. Create one as a workaround.
 	pol := readyPolicyForOps("pol")
-	slot := slotForPolicy() // named "pol-pvc1"
+	slot := slotForPolicy() // named testPolicySlotPVC1
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
+			Name: testReplOpsName, Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
-			Action: "failover", Scope: utils.ReplicationOpsScopeVolume, Ref: "pol-pvc1",
+			Action: "failover", Scope: utils.ReplicationOpsScopeVolume, Ref: testPolicySlotPVC1,
 		},
 	}
-	polForVolume := readyPolicyForOps("pol-pvc1")
+	polForVolume := readyPolicyForOps(testPolicySlotPVC1)
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), pol, slot, ops, polForVolume)
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -366,7 +365,7 @@ func TestOps_Failover_ScopeVolume_Success(t *testing.T) {
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
-	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
+	_, err := r.Reconcile(context.Background(), opsRequest(testReplOpsName))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -384,7 +383,7 @@ func TestOps_Failback_Success(t *testing.T) {
 	slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateFailedOver)
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
+			Name: testReplOpsName, Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
@@ -409,7 +408,7 @@ func TestOps_Failback_Success(t *testing.T) {
 
 	// Phase 1 — commit: ops posts failback+commit per slot, marks slots
 	// cutover_pending, advances subphase to WaitingForSlots.
-	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
+	_, err := r.Reconcile(context.Background(), opsRequest(testReplOpsName))
 	if err != nil {
 		t.Fatalf("commit phase: unexpected error: %v", err)
 	}
@@ -434,7 +433,7 @@ func TestOps_Failback_Success(t *testing.T) {
 	}
 
 	// Phase 2 — wait: all slots are replicating/source → ops succeeds.
-	_, err = r.Reconcile(context.Background(), opsRequest("ops1"))
+	_, err = r.Reconcile(context.Background(), opsRequest(testReplOpsName))
 	if err != nil {
 		t.Fatalf("wait phase: unexpected error: %v", err)
 	}
@@ -455,7 +454,7 @@ func TestOps_Failback_PartialFailure(t *testing.T) {
 	slot.Spec.VolumeID = "bad-handle" // invalid handle → fails failback
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
+			Name: testReplOpsName, Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
@@ -465,7 +464,7 @@ func TestOps_Failback_PartialFailure(t *testing.T) {
 	r, cl := newOpsReplReconciler(t, pol, slot, ops)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
-	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
+	_, err := r.Reconcile(context.Background(), opsRequest(testReplOpsName))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -479,10 +478,10 @@ func TestOps_Failback_PartialFailure(t *testing.T) {
 
 func TestOps_SucceedOps_ReleasesLock(t *testing.T) {
 	pol := readyPolicyForOps("pol")
-	pol.Status.ActiveOpsRef = "ops1"
+	pol.Status.ActiveOpsRef = testReplOpsName
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
+			Name: testReplOpsName, Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec:   simplyblockv1alpha1.ReplicationOpsSpec{Action: "failover", Scope: "policy", Ref: "pol"},
@@ -504,95 +503,14 @@ func TestOps_SucceedOps_ReleasesLock(t *testing.T) {
 	}
 }
 
-// ---------- migration action ----------
-
-func TestOps_Migration_ScopePolicy_Success(t *testing.T) {
-	pol := readyPolicyForOps("pol")
-	slot := slotForPolicy()
-	ops := &simplyblockv1alpha1.ReplicationOps{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
-			Finalizers: []string{finalizerReplicationOps},
-		},
-		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
-			Action: "migration", Scope: utils.ReplicationOpsScopePolicy, Ref: "pol",
-		},
-	}
-	r, cl := newOpsReplReconciler(t, readyPairForOps(), pol, slot, ops)
-
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
-		if req.Method == http.MethodPost {
-			w.WriteHeader(http.StatusAccepted) // 202 = commit accepted
-			return
-		}
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	})
-	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
-
-	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	got := getOps(t, cl)
-	if got.Status.Phase != string(simplyblockv1alpha1.ReplicationOpsPhaseSucceeded) {
-		t.Errorf("phase = %q, want Succeeded", got.Status.Phase)
-	}
-	if len(got.Status.Results) != 1 || got.Status.Results[0].Status != string(simplyblockv1alpha1.ReplicationOpsResultSucceeded) {
-		t.Errorf("results = %+v, want 1 Succeeded result", got.Status.Results)
-	}
-
-	// reconcileMigration immediately patches the slot to cutover_pending once commit is accepted.
-	gotSlot := &simplyblockv1alpha1.ReplicationSlot{}
-	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "pol-pvc1"}, gotSlot); err != nil {
-		t.Fatalf("get slot: %v", err)
-	}
-	if gotSlot.Status.State != string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending) {
-		t.Errorf("slot state = %q, want CutoverPending after commit accepted", gotSlot.Status.State)
-	}
-}
-
-func TestOps_Migration_DeleteSource_PassedInBody(t *testing.T) {
-	pol := readyPolicyForOps("pol")
-	slot := slotForPolicy()
-	ops := &simplyblockv1alpha1.ReplicationOps{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
-			Finalizers: []string{finalizerReplicationOps},
-		},
-		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
-			Action: "migration", Scope: utils.ReplicationOpsScopePolicy, Ref: "pol",
-			DeleteSource: true,
-		},
-	}
-	r, _ := newOpsReplReconciler(t, readyPairForOps(), pol, slot, ops)
-
-	var gotBody map[string]interface{}
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
-		if req.Method == http.MethodPost {
-			raw, _ := io.ReadAll(req.Body)
-			_ = json.Unmarshal(raw, &gotBody)
-			w.WriteHeader(http.StatusAccepted)
-			return
-		}
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	})
-	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
-
-	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if v, ok := gotBody["delete_source"]; !ok || v != true {
-		t.Errorf("commit body = %v, want delete_source=true", gotBody)
-	}
-}
+// ---------- migration action (see replicationops_migration_test.go for the plan flow) ----------
 
 func TestOps_Migration_PairNotFound_Fails(t *testing.T) {
 	// readyPolicyForOps references "pair1" but no ReplicationPair CR is provided.
 	pol := readyPolicyForOps("pol")
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
+			Name: testReplOpsName, Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
@@ -602,7 +520,7 @@ func TestOps_Migration_PairNotFound_Fails(t *testing.T) {
 	r, cl := newOpsReplReconciler(t, pol, ops) // no pair
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
-	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
+	_, err := r.Reconcile(context.Background(), opsRequest(testReplOpsName))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -617,7 +535,7 @@ func TestOps_Migration_BackendError_Fails(t *testing.T) {
 	slot := slotForPolicy()
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
+			Name: testReplOpsName, Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
@@ -631,7 +549,7 @@ func TestOps_Migration_BackendError_Fails(t *testing.T) {
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
-	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
+	_, err := r.Reconcile(context.Background(), opsRequest(testReplOpsName))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -647,7 +565,7 @@ func TestOps_Migration_InvalidVolumeID_Fails(t *testing.T) {
 	slot.Spec.VolumeID = "bad-handle" // invalid: only two colon-separated parts
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
+			Name: testReplOpsName, Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
@@ -657,7 +575,7 @@ func TestOps_Migration_InvalidVolumeID_Fails(t *testing.T) {
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), pol, slot, ops)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
-	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
+	_, err := r.Reconcile(context.Background(), opsRequest(testReplOpsName))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -671,10 +589,10 @@ func TestOps_Migration_InvalidVolumeID_Fails(t *testing.T) {
 
 func TestOps_FailOps_ReleasesLock(t *testing.T) {
 	pol := readyPolicyForOps("pol")
-	pol.Status.ActiveOpsRef = "ops1"
+	pol.Status.ActiveOpsRef = testReplOpsName
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ops1", Namespace: "default",
+			Name: testReplOpsName, Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec:   simplyblockv1alpha1.ReplicationOpsSpec{Action: "failover", Scope: "policy", Ref: "pol"},
