@@ -70,24 +70,18 @@ jobs:
             VERSION=${{ steps.version.outputs.bundle_version }} \
             IMG_TAG=${{ steps.version.outputs.tag }}
 
-      # The bundle image is what `operator-sdk run bundle` and a CatalogSource
-      # install from, outside Red Hat's catalog. It is tagged with the bundle
-      # version, which is the CSV's, so the tag and the CSV name agree.
       - name: Log in to Quay.io
-        uses: ./.github/actions/registry-login
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
-          dockerhub: "false"
-          ecr: "false"
-          internal: "false"
-          quay: "true"
-          quay-username: ${{ secrets.QUAY_USERNAME }}
-          quay-password: ${{ secrets.QUAY_PASSWORD }}
+          registry: quay.io
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
 
       - name: Build and push bundle image
         run: |
-          BUNDLE_IMG="quay.io/simplyblock-io/simplyblock-operator-bundle:${{ steps.version.outputs.bundle_version }}"
-          docker build -f bundle.Dockerfile -t "$BUNDLE_IMG" .
-          docker push "$BUNDLE_IMG"
+          IMG="quay.io/simplyblock-io/simplyblock-operator-bundle:${{ steps.version.outputs.bundle_version }}"
+          docker build -f bundle.Dockerfile -t "$IMG" .
+          docker push "$IMG"
 
       - name: Package bundle as release asset
         run: |

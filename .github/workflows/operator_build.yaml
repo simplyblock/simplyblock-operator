@@ -18,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      tag: ${{ steps.image_tag.outputs.tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -108,9 +110,8 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
-  # An OLM bundle for the branch's images, so an OLM install can be tried before
-  # a release. Release runs publish their bundle through operator_release.yaml,
-  # which pins digests on Quay, so this job only runs for branch builds.
+  # An OLM bundle for the branch's images. A release pushes its own, with
+  # digests, from operator_release.yaml.
   bundle:
     name: "Build and push (bundle)"
     if: inputs.version == ''
@@ -122,20 +123,16 @@ jobs:
       run:
         working-directory: operator
     env:
-      BUNDLE_REPO: docker.io/simplyblock/simplyblock-operator-bundle
-      IMAGE_REPO_PREFIX: docker.io/simplyblock
-
+      TAG: ${{ needs.build-and-push.outputs.tag }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Log in to Docker Hub
-        uses: ./.github/actions/registry-login
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
-          ecr: "false"
-          dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
-          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
-          internal: "false"
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -156,32 +153,14 @@ jobs:
           make kustomize
           echo "${{ github.workspace }}/operator/bin" >> "$GITHUB_PATH"
 
-      # Same sanitization as the image tag in build-and-push, so the bundle's
-      # tag matches the images it references.
-      - name: Compute image tag
-        id: image_tag
-        run: |
-          tag="$(printf %s "${{ github.ref_name }}" | tr -c 'a-zA-Z0-9_.-' '-' | cut -c1-128)"
-          tag="$(printf %s "$tag" | sed 's/^[^a-zA-Z0-9_]*//')"
-          if [ -z "$tag" ]; then
-            echo "::error::branch name ${{ github.ref_name }} sanitizes to an empty image tag"
-            exit 1
-          fi
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-
-      # A CSV name must be a SemVer, so the bundle is 0.0.0-<run>; the branch
-      # lives in the image tag.
-      - name: Generate bundle
+      # A ClusterServiceVersion name must be SemVer, so the run number stands in
+      # for the version and the branch is in the image tag.
+      - name: Build and push the bundle image
         run: |
           make bundle-dev \
-            VERSION=0.0.0-${{ github.run_number }} \
-            IMG_TAG=${{ steps.image_tag.outputs.tag }} \
-            IMG_BASE=${IMAGE_REPO_PREFIX}/simplyblock-operator \
-            REBALANCER_IMG_BASE=${IMAGE_REPO_PREFIX}/simplyblock-rebalancer \
-            CLUSTER_IMAGE_BASE=${IMAGE_REPO_PREFIX}/simplyblock \
-            CLUSTER_IMAGE_TAG=main
-
-      - name: Build and push bundle image
-        run: |
-          docker build -f bundle.Dockerfile -t "${BUNDLE_REPO}:${{ steps.image_tag.outputs.tag }}" .
-          docker push "${BUNDLE_REPO}:${{ steps.image_tag.outputs.tag }}"
+            VERSION=0.0.0-${{ github.run_number }} IMG_TAG="$TAG" \
+            IMG_BASE=docker.io/simplyblock/simplyblock-operator \
+            REBALANCER_IMG_BASE=docker.io/simplyblock/simplyblock-rebalancer \
+            CLUSTER_IMAGE_BASE=docker.io/simplyblock/simplyblock CLUSTER_IMAGE_TAG=main
+          docker build -f bundle.Dockerfile -t "docker.io/simplyblock/simplyblock-operator-bundle:$TAG" .
+          docker push "docker.io/simplyblock/simplyblock-operator-bundle:$TAG"

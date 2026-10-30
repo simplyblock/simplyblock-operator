@@ -9,7 +9,6 @@ resources:
 - role_binding.yaml
 - leader_election_role.yaml
 - leader_election_role_binding.yaml
-# The probe Jobs of a discovery run write their report as this account.
 - nodeprobe.yaml
 # The following RBAC configurations are used to protect
 # the metrics endpoint with authn/authz. These configurations

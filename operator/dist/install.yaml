@@ -16240,10 +16240,6 @@ metadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-operator
-    storage.simplyblock.io/component: nodeprobe
   name: simplyblock-operator-nodeprobe
   namespace: simplyblock-operator-system
 ---
@@ -16291,10 +16287,6 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-operator
-    storage.simplyblock.io/component: nodeprobe
   name: simplyblock-operator-nodeprobe
   namespace: simplyblock-operator-system
 rules:
@@ -17283,10 +17275,6 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-operator
-    storage.simplyblock.io/component: nodeprobe
   name: simplyblock-operator-nodeprobe
   namespace: simplyblock-operator-system
 roleRef:
