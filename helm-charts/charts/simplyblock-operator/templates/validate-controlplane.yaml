@@ -60,9 +60,15 @@ those objects carries a keep policy, so the upgrade would take the fleet's state
 with it and the operator would then build an empty one.
 
 The lookup finds nothing on a fresh install, so only an upgrade can trip this.
+
+The keep policy is what the message asks for, so the check is whether it is
+there. Testing only for the release annotation refused every upgrade, including
+the one the administrator had just prepared as instructed.
 */}}
 {{- $running := lookup "apps/v1" "Deployment" .Release.Namespace "simplyblock-webappapi" -}}
-{{- if and $running (index $running.metadata.annotations "meta.helm.sh/release-name") -}}
+{{- $annotations := dict -}}
+{{- if $running -}}{{- $annotations = $running.metadata.annotations | default dict -}}{{- end -}}
+{{- if and $running (index $annotations "meta.helm.sh/release-name") (ne (index $annotations "helm.sh/resource-policy" | default "") "keep") -}}
 {{- fail "this namespace holds a control plane installed by an earlier release of this chart, and upgrading in place would delete it, FoundationDB included. Annotate what it owns so Helm keeps it first:\n\n  for k in deployment/simplyblock-webappapi deployment/simplyblock-tasks deployment/simplyblock-monitoring deployment/simplyblock-admin-control deployment/simplyblock-fdb-controller-manager deployment/simplyblock-fdb-exporter statefulset/simplyblock-minio foundationdbcluster/simplyblock-fdb-cluster; do\n    kubectl -n <namespace> annotate $k helm.sh/resource-policy=keep --overwrite\n  done\n\nthen upgrade. The operator adopts them in place." -}}
 {{- end -}}
 

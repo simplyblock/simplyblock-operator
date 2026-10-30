@@ -339,6 +339,33 @@ func TestConversionServiceReferenceCorrectsACRDThatAppearsLater(t *testing.T) {
 	}
 }
 
+// An upgrade applies the CRDs after the conversion webhook has started, so the
+// bundle it injected at start is not on them: the stanza arrives with none. The
+// standalone webhook runs no rotator, so the correction is the only thing left to
+// put its CA there, and it has to carry it.
+func TestConversionServiceReferenceRestoresTheCAAnAppliedCRDLacks(t *testing.T) {
+	crdName := ConvertedKindCRDNames()[0]
+	ca := []byte("webhook-ca")
+
+	crd := convertedCRD(crdName)
+	crd.Spec.Conversion.Webhook.ClientConfig.CABundle = nil
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(crd).Build()
+	r := &conversionServiceReconciler{client: c, apiReader: c, namespace: "tenant-a", ca: ca}
+
+	if err := r.reconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcileOnce: %v", err)
+	}
+
+	var got apiextensionsv1.CustomResourceDefinition
+	if err := c.Get(context.Background(), types.NamespacedName{Name: crdName}, &got); err != nil {
+		t.Fatalf("get crd: %v", err)
+	}
+	if string(got.Spec.Conversion.Webhook.ClientConfig.CABundle) != string(ca) {
+		t.Errorf("the applied CRD has caBundle %q, want %q: the API server cannot verify the webhook",
+			got.Spec.Conversion.Webhook.ClientConfig.CABundle, ca)
+	}
+}
+
 // The correction has to tolerate a CRD that is absent or carries no conversion
 // strategy, for the same reason the CA injection does: the operator and its CRDs
 // are applied by separate steps.
