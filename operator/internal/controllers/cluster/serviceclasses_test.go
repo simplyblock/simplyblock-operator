@@ -13,10 +13,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
-	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 func withServiceClasses(c *simplyblockv1alpha2.StorageCluster) {
@@ -46,7 +46,7 @@ func TestServiceClassesThatDifferAreApplied(t *testing.T) {
 	current := ServiceClassConfig{DefaultWeight: 100, ReplicationWeight: 10}
 	var sent []ServiceClassConfig
 	api := &fakeControlPlane{
-		cluster:        func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster:        func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		serviceClasses: func(string) (ServiceClassConfig, error) { return current, nil },
 		setServiceClasses: func(_ string, cfg ServiceClassConfig) error {
 			sent = append(sent, cfg)
@@ -82,7 +82,7 @@ func TestServiceClassesThatDifferAreApplied(t *testing.T) {
 
 func TestServiceClassesThatMatchAreNotRewritten(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster:        func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster:        func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		serviceClasses: func(string) (ServiceClassConfig, error) { return appliedConfig(), nil },
 	}
 	rec := &recorder{}
@@ -101,7 +101,7 @@ func TestServiceClassesThatMatchAreNotRewritten(t *testing.T) {
 func TestOmittedDefaultsAreTheDocumentedOnes(t *testing.T) {
 	var sent ServiceClassConfig
 	api := &fakeControlPlane{
-		cluster:        func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster:        func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		serviceClasses: func(string) (ServiceClassConfig, error) { return ServiceClassConfig{}, nil },
 		setServiceClasses: func(_ string, cfg ServiceClassConfig) error {
 			sent = cfg
@@ -125,7 +125,7 @@ func TestOmittedDefaultsAreTheDocumentedOnes(t *testing.T) {
 
 func TestAClusterWithoutServiceClassesLeavesTheControlPlaneAlone(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 	}
 	r := newClusterReconciler(t, api, &recorder{}, newTestCluster())
 
@@ -139,7 +139,7 @@ func TestAClusterWithoutServiceClassesLeavesTheControlPlaneAlone(t *testing.T) {
 
 func TestARefusedServiceClassChangeCarriesTheControlPlanesReason(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster:        func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster:        func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		serviceClasses: func(string) (ServiceClassConfig, error) { return ServiceClassConfig{}, nil },
 		setServiceClasses: func(string, ServiceClassConfig) error {
 			return &ControlPlaneError{Status: http.StatusConflict, Body: "classes still used by volumes: silver"}
@@ -163,7 +163,7 @@ func TestARefusedServiceClassChangeCarriesTheControlPlanesReason(t *testing.T) {
 
 func TestAControlPlaneWithoutServiceClassesIsReported(t *testing.T) {
 	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
 		serviceClasses: func(string) (ServiceClassConfig, error) {
 			return ServiceClassConfig{}, &ControlPlaneError{Status: http.StatusNotFound, Body: "Not Found"}
 		},

@@ -39,7 +39,10 @@ import (
 
 	"github.com/simplyblock/atlas/conntrack"
 	"github.com/simplyblock/atlas/conntrack/conntrackrpc"
+	"github.com/simplyblock/atlas/inventory"
 	"github.com/simplyblock/atlas/link"
+	"github.com/simplyblock/atlas/netcheck"
+	"github.com/simplyblock/atlas/netcheck/netcheckrpc"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/storage"
 	"github.com/simplyblock/atlas/storage/storagerpc"
@@ -149,8 +152,14 @@ func Run(conf *config.Config) {
 	if conf.LinkEnabled {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		if err := startLink(ctx, conf); err != nil {
+		agent, err := startLink(ctx, conf)
+		if err != nil {
 			klog.Fatalf("failed to start the operator link: %s", err)
+		}
+		// The controller asks the operator over the link which member of a
+		// supercluster a volume goes to (design-superclusters.md §7.2).
+		if cs != nil {
+			cs.SetPlacer(csilink.Placement{Agent: agent})
 		}
 	}
 
@@ -180,16 +189,19 @@ func Run(conf *config.Config) {
 	s.Wait()
 }
 
-// startLink dials the operator as whichever peer this process is.
+// startLink dials the operator as whichever peer this process is, and returns
+// the agent holding the link.
 //
 // A node plugin serves its local NVMe state on the link, which is the point of
 // linking it, and is identified by the node it runs on. A controller plugin
-// links as itself and currently serves nothing. It is registered so the
-// operator can see it, and so services can be added without new plumbing.
-func startLink(ctx context.Context, conf *config.Config) error {
+// links as itself and serves nothing: it calls the operator's placement
+// service over the link instead.
+func startLink(ctx context.Context, conf *config.Config) (*link.Agent, error) {
 	cfg := csilink.Config{
 		HubAddress:  conf.LinkHubAddress,
 		CAFile:      conf.LinkCAFile,
+		CertFile:    conf.LinkCertFile,
+		KeyFile:     conf.LinkKeyFile,
 		ServerName:  conf.LinkServerName,
 		TokenFile:   conf.LinkTokenFile,
 		InstanceUID: conf.PodUID,
@@ -198,7 +210,7 @@ func startLink(ctx context.Context, conf *config.Config) error {
 	switch {
 	case conf.IsNodeServer:
 		if conf.NodeID == "" {
-			return fmt.Errorf("link needs the node name (--nodeid); the operator verifies it")
+			return nil, fmt.Errorf("link needs the node name (--nodeid); the operator verifies it")
 		}
 		// storage.Local reads this node through sysfs. It must be the local
 		// one: serving a remote accessor would make this node a proxy for
@@ -206,14 +218,27 @@ func startLink(ctx context.Context, conf *config.Config) error {
 		local := storage.Local(nvme.SysfsConfig{})
 		srv, err := storagerpc.NewServer(local)
 		if err != nil {
-			return fmt.Errorf("node storage: %w", err)
+			return nil, fmt.Errorf("node storage: %w", err)
 		}
 		// The node forgets the connection-tracking entries translated to a dead
 		// pNFS metadata server pod when the operator asks. It runs on the host's
 		// network, so the table it reaches is the host's.
 		flows, err := conntrackrpc.NewServer(conntrack.Forget)
 		if err != nil {
-			return fmt.Errorf("node flows: %w", err)
+			return nil, fmt.Errorf("node flows: %w", err)
+		}
+		// The node answers the operator's host checks: the addresses of a NIC
+		// before a storage pod takes it, and whether a connection from the host
+		// to a storage listener succeeds. Both read the host's namespace, which
+		// is this process's.
+		checks, err := netcheckrpc.NewServer(
+			func(sel netcheck.Selector) (netcheck.Report, error) {
+				return netcheck.Interface(inventory.Config{}, sel)
+			},
+			netcheck.Connect,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("node host checks: %w", err)
 		}
 		// No export service: exports are assembled in the metadata server's
 		// guest, never on a node.
@@ -221,21 +246,22 @@ func startLink(ctx context.Context, conf *config.Config) error {
 		cfg.Register = func(r grpc.ServiceRegistrar) {
 			srv.Register(r)
 			flows.Register(r)
+			checks.Register(r)
 		}
 		cfg.Capabilities = append(storagerpc.Capabilities(), conntrackrpc.Capabilities()...)
+		cfg.Capabilities = append(cfg.Capabilities, netcheckrpc.Capabilities()...)
 
 	case conf.IsControllerServer:
 		if conf.PodName == "" {
-			return fmt.Errorf("link needs the pod name (--pod-name); the operator verifies it")
+			return nil, fmt.Errorf("link needs the pod name (--pod-name); the operator verifies it")
 		}
 		cfg.ID = link.ControllerPeer(conf.PodName)
 
 	default:
-		return fmt.Errorf("link needs either --node or --controller")
+		return nil, fmt.Errorf("link needs either --node or --controller")
 	}
 
-	_, err := csilink.Start(ctx, cfg)
-	return err
+	return csilink.Start(ctx, cfg)
 }
 
 // startNodeServer builds the node service and starts the background loops that
@@ -279,6 +305,7 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	go advertiseVDOCapability(kubeClient, nodeName)
 	go advertiseKVMCapability(kubeClient, nodeName)
 	go advertiseSubnets(kubeClient, nodeName)
+	go advertiseHostNQN(kubeClient, nodeName)
 
 	return ns, nil
 }
@@ -309,6 +336,16 @@ func advertiseSubnets(kubeClient kubernetes.Interface, nodeName string) {
 	err := node.AdvertiseSubnets(context.Background(), kubeClient, nodeName)
 	if err != nil {
 		klog.Errorf("failed to advertise subnets for node %s: %v", nodeName, err)
+	}
+}
+
+// advertiseHostNQN publishes the kernel's default NVMe host NQN, which the
+// control plane revokes on the peer when it fences this node's host on a
+// two-node cluster, in the background for the same reason as the VDO probe.
+func advertiseHostNQN(kubeClient kubernetes.Interface, nodeName string) {
+	err := node.AdvertiseHostNQN(context.Background(), kubeClient, nodeName)
+	if err != nil {
+		klog.Errorf("failed to advertise the NVMe host NQN for node %s: %v", nodeName, err)
 	}
 }
 

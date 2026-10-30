@@ -2,6 +2,7 @@ package utils
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -244,5 +245,59 @@ func TestClusterRebalancing(t *testing.T) {
 				t.Errorf("ClusterRebalancing() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// U-115: a supercluster has no backend cluster, so its identifier is one the
+// control plane does not know. Resolving it is refused with a named error
+// rather than handed to a caller that would send it to the control plane and
+// read the 404 as a missing cluster. It is refused before the supercluster
+// has written its identifier too, because "not ready yet" would have the
+// caller wait for a UUID that is never a backend cluster's.
+func TestResolvingASuperclusterIsRefused(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := simplyblockv1alpha2.AddToScheme(s); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	const aggregateID = "0d6f1b2e-1f0a-4c71-9a0e-5b7d2c3e4f50"
+	reported := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "prod", Namespace: "ns1"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			Supercluster: &simplyblockv1alpha2.SuperclusterSpec{},
+		},
+		Status: simplyblockv1alpha2.StorageClusterStatus{UUID: aggregateID},
+	}
+	fresh := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "staging", Namespace: "ns1"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			Supercluster: &simplyblockv1alpha2.SuperclusterSpec{},
+		},
+	}
+	member := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "prod-dense-kqv", Namespace: "ns1"},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{SuperclusterRef: "prod"},
+		Status: simplyblockv1alpha2.StorageClusterStatus{
+			UUID: "4f0c1e70-9a2b-4d51-b1c7-2f6e0d9a4c88",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(reported, fresh, member).Build()
+	ctx := context.Background()
+
+	for _, name := range []string{"prod", "staging"} {
+		if got, err := ResolveClusterUUID(ctx, c, "ns1", name); !errors.Is(err, ErrAggregateCluster) {
+			t.Errorf("ResolveClusterUUID(%s) = %q, %v, want ErrAggregateCluster", name, got, err)
+		}
+		if got, err := ResolveClusterIdentifier(ctx, c, "ns1", name); !errors.Is(err, ErrAggregateCluster) {
+			t.Errorf("ResolveClusterIdentifier(%s) = %q, %v, want ErrAggregateCluster", name, got, err)
+		}
+	}
+	if got, err := ResolveClusterIdentifier(ctx, c, "ns1", aggregateID); !errors.Is(err, ErrAggregateCluster) {
+		t.Errorf("ResolveClusterIdentifier(aggregate id) = %q, %v, want ErrAggregateCluster", got, err)
+	}
+
+	// A member is an ordinary cluster with a backend UUID of its own.
+	if got, err := ResolveClusterUUID(ctx, c, "ns1", "prod-dense-kqv"); err != nil || got != member.Status.UUID {
+		t.Errorf("ResolveClusterUUID(member) = %q, %v, want %q", got, err, member.Status.UUID)
 	}
 }

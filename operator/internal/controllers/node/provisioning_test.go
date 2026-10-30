@@ -199,6 +199,7 @@ func TestAnUnstatedJournalShareIsTheDefaultAndTheCountIsNot(t *testing.T) {
 func TestAFaultGroupIsSentAsTheIndexTheClusterMapsItTo(t *testing.T) {
 	r, _ := aSteadyNode(t, aControlPlane())
 	cluster := anOpsCluster()
+	cluster.Spec.EnableFailureDomains = ptr.To(true)
 	cluster.Status.FailureDomains = []simplyblockv1alpha2.FailureDomainIndex{
 		{Name: "rack-1", Index: 3},
 		{Name: "2", Index: 5},
@@ -231,6 +232,28 @@ func TestAFaultGroupIsSentAsTheIndexTheClusterMapsItTo(t *testing.T) {
 
 	if index := r.addParams(context.Background(), anUnprovisionedNode(stepPosting), cluster).FailureDomain; index != nil {
 		t.Errorf("failureDomain = %v, want none for a node that declares no group", index)
+	}
+}
+
+// Regression: 2026-10-24-node-add-failure-domain-on-a-cluster-without — discovery
+// gives every worker the failure domain its zone label names, and leaves
+// enableFailureDomains off when the layout cannot activate with it. The node add
+// still sent the mapped index, the control plane refuses a failure domain on a
+// cluster created without the feature, and no node of the cluster ever came
+// online (GCP lblk e2e run 40065167557).
+func TestAFaultGroupIsNotSentToAClusterWithoutFailureDomains(t *testing.T) {
+	r, _ := aSteadyNode(t, aControlPlane())
+	cluster := anOpsCluster()
+	cluster.Spec.EnableFailureDomains = ptr.To(false)
+	cluster.Status.FailureDomains = []simplyblockv1alpha2.FailureDomainIndex{{Name: "default", Index: 0}}
+
+	for _, label := range []string{"default", "3"} {
+		node := anUnprovisionedNode(stepPosting)
+		node.Spec.Config.FailureDomain = label
+		if index := r.addParams(context.Background(), node, cluster).FailureDomain; index != nil {
+			t.Errorf("failureDomain for %q = %d, want none on a cluster without failure domains",
+				label, *index)
+		}
 	}
 }
 
@@ -291,5 +314,43 @@ func TestANodeWaitsForItsClusterToExistInTheControlPlane(t *testing.T) {
 
 	if message := nodeRead(t, apiClient).Status.Message; message == "" {
 		t.Error("the node says nothing about what it is waiting for")
+	}
+}
+
+// A node names its own NICs, because a fleet's workers do not agree on what their
+// NICs are called. The cluster's fields are what a node created without them gets.
+func TestTheAddNamesTheNodesOwnInterfaces(t *testing.T) {
+	cluster := anOpsCluster()
+	cluster.Spec.StorageNodes = &simplyblockv1alpha2.StorageNodesSpec{
+		MgmtInterface:  "eth0",
+		DataInterfaces: []string{"eth1"},
+		Network:        &simplyblockv1alpha2.StorageNetworkSpec{SpdkOnHostNetwork: true},
+	}
+	node := anUnprovisionedNode(stepPosting)
+	node.Spec.Config.MgmtInterface = "ens5f0"
+	node.Spec.Config.DataInterfaces = []string{"ens6f0", "ens6f1"}
+
+	r, _ := aSteadyNode(t, aControlPlane())
+	params := r.addParams(context.Background(), node, cluster)
+
+	if params.InterfaceName != "ens5f0" {
+		t.Errorf("interface_name = %q, want the node's ens5f0", params.InterfaceName)
+	}
+	if got := params.DataNics; len(got) != 2 || got[0] != "ens6f0" || got[1] != "ens6f1" {
+		t.Errorf("data_nics = %v, want the node's [ens6f0 ens6f1]", got)
+	}
+}
+
+func TestTheAddFallsBackToTheClustersInterfaces(t *testing.T) {
+	cluster := anOpsCluster()
+	cluster.Spec.StorageNodes = &simplyblockv1alpha2.StorageNodesSpec{
+		MgmtInterface: "eth0", DataInterfaces: []string{"eth1"},
+	}
+
+	r, _ := aSteadyNode(t, aControlPlane())
+	params := r.addParams(context.Background(), anUnprovisionedNode(stepPosting), cluster)
+
+	if params.InterfaceName != "eth0" || len(params.DataNics) != 1 || params.DataNics[0] != "eth1" {
+		t.Errorf("params = %+v, want the cluster's eth0 and [eth1]", params)
 	}
 }

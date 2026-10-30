@@ -31,13 +31,16 @@ import (
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	ctrlbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	atlasnet "github.com/simplyblock/atlas/net"
 	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/atlas/statemachine"
@@ -226,7 +229,11 @@ type CSIClusterEntry struct {
 // rather than within the next interval.
 func (r *StorageClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	builder := ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha2.StorageCluster{}).
+		For(&simplyblockv1alpha2.StorageCluster{},
+			ctrlbuilder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
+				cluster, ok := obj.(*simplyblockv1alpha2.StorageCluster)
+				return ok && !isSupercluster(cluster)
+			}))).
 		Named("storagecluster")
 	if r.Clusters != nil {
 		builder = builder.WatchesRawSource(
@@ -246,6 +253,13 @@ func (r *StorageClusterReconciler) Reconcile(
 	if err := r.Get(ctx, req.NamespacedName, &cluster); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	// A supercluster has no backend cluster to create or read; it is
+	// SuperclusterReconciler's. The watch predicate keeps it from arriving
+	// here, and this keeps a stream trigger or a stale request from acting on
+	// it anyway.
+	if isSupercluster(&cluster) {
+		return ctrl.Result{}, nil
+	}
 
 	if !cluster.DeletionTimestamp.IsZero() {
 		return r.teardown(ctx, &cluster)
@@ -258,6 +272,15 @@ func (r *StorageClusterReconciler) Reconcile(
 
 	if cluster.Status.UUID == "" {
 		return r.create(ctx, &cluster)
+	}
+
+	// A cluster created before the workload names were recorded is given the
+	// constant ones it was registered under, once, and then reads them like
+	// any other record.
+	if cluster.Status.WorkloadNames == nil {
+		if err := r.recordConstantWorkloadNames(ctx, &cluster); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// The cluster exists in the control plane, so its streams can be opened.
@@ -281,8 +304,7 @@ func (r *StorageClusterReconciler) create(
 	if err != nil {
 		// An unrecognized step is a downgrade or a hand-edited object, and
 		// neither resolves by reconciling again.
-		return ctrl.Result{}, r.reportPhase(ctx, cluster,
-			simplyblockv1alpha2.StorageClusterPhaseUnavailable,
+		return ctrl.Result{}, r.reportUnavailable(ctx, cluster,
 			fmt.Sprintf("the creation cannot be resumed: %v", err))
 	}
 	defer machine.Close()
@@ -291,12 +313,18 @@ func (r *StorageClusterReconciler) create(
 	// optimistic-lock patch succeeds for one reconciler and returns 409 to the
 	// rest, so exactly one of them goes on to POST.
 	if cluster.Status.Step.State == "" {
-		return r.claim(ctx, cluster), nil
+		// A member creates nothing before the Services it is reached through
+		// exist, and those are its supercluster's (§5.4, §6.2).
+		if cluster.Spec.SuperclusterRef != "" {
+			if held, err := r.awaitSuperclusterServices(ctx, cluster); held || err != nil {
+				return ctrl.Result{RequeueAfter: memberServicesPoll}, err
+			}
+		}
+		return r.claim(ctx, cluster)
 	}
 
 	if machine.TimeoutReached() {
-		return ctrl.Result{RequeueAfter: clusterRetry}, r.reportPhase(ctx, cluster,
-			simplyblockv1alpha2.StorageClusterPhaseUnavailable,
+		return ctrl.Result{RequeueAfter: clusterRetry}, r.reportUnavailable(ctx, cluster,
 			fmt.Sprintf("creation step %s outlived its deadline", machine.CurrentState()))
 	}
 
@@ -344,8 +372,7 @@ func (r *StorageClusterReconciler) create(
 		return r.adopt(ctx, cluster, machine)
 
 	default:
-		return ctrl.Result{}, r.reportPhase(ctx, cluster,
-			simplyblockv1alpha2.StorageClusterPhaseUnavailable,
+		return ctrl.Result{}, r.reportUnavailable(ctx, cluster,
 			fmt.Sprintf("creation step %s belongs to no path", machine.CurrentState()))
 	}
 }
@@ -353,16 +380,29 @@ func (r *StorageClusterReconciler) create(
 // claim is the machine's first transition and the mutex that makes creation
 // single-shot.
 //
-// It returns no error, which is the point: a failed patch here is a 409 saying
+// A failed patch returns no error, which is the point: it is a 409 saying
 // another reconciler owns the claim, and that is an ordinary outcome to back
 // off from rather than a failure to report. Returning an error would requeue
 // with backoff and log a line per race.
 func (r *StorageClusterReconciler) claim(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
-) ctrl.Result {
+) (ctrl.Result, error) {
+	// The workload names go into the claim, so they are recorded before the
+	// workload reconciler builds anything from them and before the backend
+	// cluster exists. A restarted creation keeps the names it recorded.
+	names := cluster.Status.WorkloadNames
+	if names == nil {
+		chosen, err := r.chooseWorkloadNames(ctx, cluster)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		names = utils.WorkloadNamesStatus(chosen)
+	}
+
 	deadline := metav1.NewTime(time.Now().Add(creationStepDeadline))
 	patch := client.MergeFromWithOptions(cluster.DeepCopy(),
 		client.MergeFromWithOptimisticLock{})
+	cluster.Status.WorkloadNames = names
 	cluster.Status.Phase = simplyblockv1alpha2.StorageClusterPhaseCreating
 	cluster.Status.Step = statemachine.KubeSnapshot{
 		State:    string(simplyblockv1alpha2.StorageClusterStepClaiming),
@@ -374,10 +414,10 @@ func (r *StorageClusterReconciler) claim(
 		logf.FromContext(ctx).Info(
 			"another reconciler holds the creation claim; backing off",
 			"cluster", cluster.Name)
-		return ctrl.Result{RequeueAfter: claimBackoff}
+		return ctrl.Result{RequeueAfter: claimBackoff}, nil
 	}
 	r.observePhase(cluster)
-	return ctrl.Result{RequeueAfter: time.Second}
+	return ctrl.Result{RequeueAfter: time.Second}, nil
 }
 
 // claimBackoff is how long a reconciler whose creation claim was refused waits
@@ -426,12 +466,12 @@ func (r *StorageClusterReconciler) postCluster(
 	if err != nil {
 		existing, found, lookupErr := r.API.ClusterByName(ctx, cluster.Name)
 		if lookupErr != nil || !found {
-			var refusal *ControlPlaneError
+			var refusal *atlascp.StatusError
 			if errors.As(err, &refusal) {
 				r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
 					ClusterCreationFailed, ClusterCreationFailed,
 					"The control plane refused the cluster (status=%d): %s",
-					refusal.Status, refusal.Body)
+					refusal.StatusCode, refusal.Body)
 			} else {
 				r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
 					ClusterCreationFailed, ClusterCreationFailed,
@@ -440,7 +480,7 @@ func (r *StorageClusterReconciler) postCluster(
 			return ctrl.Result{RequeueAfter: clusterRetry}, r.note(ctx, cluster, err.Error())
 		}
 		log.Info("the cluster already exists in the control plane; adopting it",
-			"cluster", cluster.Name, "uuid", existing.UUID)
+			"cluster", cluster.Name, "uuid", existing.ID)
 		if _, err := r.enterCreationStep(ctx, cluster, machine,
 			simplyblockv1alpha2.StorageClusterStepAdopting); err != nil {
 			return ctrl.Result{}, err
@@ -453,13 +493,14 @@ func (r *StorageClusterReconciler) postCluster(
 		return ctrl.Result{}, err
 	}
 	return r.persist(ctx, cluster, adoption{
-		UUID:   created.UUID,
+		UUID:   created.ID,
 		Secret: created.Secret,
 		NQN:    created.NQN,
 		Status: created.Status,
 		NDCS:   created.NDCS,
 		NPCS:   created.NPCS,
 		FTT:    created.MaxFaultTolerance,
+		Names:  created.WorkloadNames,
 	}, false)
 }
 
@@ -474,6 +515,10 @@ type adoption struct {
 	NDCS   int
 	NPCS   int
 	FTT    int
+
+	// Names are the workload names the control plane recorded for the
+	// cluster, which persist checks against the cluster's own record.
+	Names atlascp.ClusterWorkloadNames
 }
 
 // adopt takes over a backend cluster the operator did not create.
@@ -503,8 +548,9 @@ func (r *StorageClusterReconciler) adopt(
 			return ctrl.Result{RequeueAfter: clusterRetry}, r.restartCreation(ctx, cluster)
 		}
 		found = adoption{
-			UUID: entry.UUID, Secret: entry.Secret, NQN: entry.NQN,
+			UUID: entry.ID, Secret: entry.Secret, NQN: entry.NQN,
 			Status: entry.Status, NDCS: entry.NDCS, NPCS: entry.NPCS,
+			Names: entry.WorkloadNames,
 		}
 	}
 
@@ -526,18 +572,11 @@ func (r *StorageClusterReconciler) adopt(
 func (r *StorageClusterReconciler) upgradeClaim(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) (adoption, bool, error) {
-	var secret corev1.Secret
-	key := types.NamespacedName{
-		Name:      fmt.Sprintf("simplyblock-%s-upgrade", cluster.Name),
-		Namespace: cluster.Namespace,
-	}
-	if err := r.Get(ctx, key, &secret); err != nil {
-		return adoption{}, false, client.IgnoreNotFound(err)
+	secret, found, err := r.upgradeSecret(ctx, cluster)
+	if err != nil || !found {
+		return adoption{}, false, err
 	}
 	uuid, clusterSecret := string(secret.Data["uuid"]), string(secret.Data["secret"])
-	if uuid == "" || clusterSecret == "" {
-		return adoption{}, false, nil
-	}
 
 	// This read authenticates as the cluster itself, using the secret the
 	// upgrade Secret names, rather than as this operator's own Kubernetes
@@ -545,7 +584,7 @@ func (r *StorageClusterReconciler) upgradeClaim(
 	// ControlPlane.spec.source.managed one, on a different Kubernetes
 	// cluster, where a Kubernetes TokenReview of this operator's own
 	// service-account token can never succeed.
-	found, err := r.API.Cluster(webapi.WithBearerToken(ctx, clusterSecret), uuid)
+	reading, err := r.API.Cluster(webapi.WithBearerToken(ctx, clusterSecret), uuid)
 	if err != nil {
 		// The Secret names a cluster the control plane does not have. That is
 		// worth retrying rather than failing: the control plane may be
@@ -553,14 +592,34 @@ func (r *StorageClusterReconciler) upgradeClaim(
 		// one somebody meant to adopt.
 		return adoption{}, false, fmt.Errorf("read the cluster named by the upgrade secret: %w", err)
 	}
-	if found.Secret != "" {
-		clusterSecret = found.Secret
+	if reading.Secret != "" {
+		clusterSecret = reading.Secret
 	}
 	return adoption{
-		UUID: found.UUID, Secret: clusterSecret, NQN: found.NQN,
-		Status: found.Status, NDCS: found.NDCS, NPCS: found.NPCS,
-		FTT: found.MaxFaultTolerance,
+		UUID: reading.ID, Secret: clusterSecret, NQN: reading.NQN,
+		Status: reading.Status, NDCS: reading.NDCS, NPCS: reading.NPCS,
+		FTT: reading.MaxFaultTolerance, Names: reading.WorkloadNames,
 	}, true, nil
+}
+
+// upgradeSecret reads the Secret that migrates a Helm deployment into this
+// cluster, and reports whether there is a usable one: it carries both the UUID
+// and the cluster secret.
+func (r *StorageClusterReconciler) upgradeSecret(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+) (*corev1.Secret, bool, error) {
+	var secret corev1.Secret
+	key := types.NamespacedName{
+		Name:      fmt.Sprintf("simplyblock-%s-upgrade", cluster.Name),
+		Namespace: cluster.Namespace,
+	}
+	if err := r.Get(ctx, key, &secret); err != nil {
+		return nil, false, client.IgnoreNotFound(err)
+	}
+	if len(secret.Data["uuid"]) == 0 || len(secret.Data["secret"]) == 0 {
+		return nil, false, nil
+	}
+	return &secret, true, nil
 }
 
 // persist writes the per-cluster Secret, the CSI credentials entry, and the
@@ -573,6 +632,14 @@ func (r *StorageClusterReconciler) persist(
 	found adoption,
 	adopted bool,
 ) (ctrl.Result, error) {
+	missing, err := r.backendMissesWorkloadNames(ctx, cluster, found)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if missing {
+		return ctrl.Result{RequeueAfter: clusterRetry}, r.recordHeldBackend(ctx, cluster, found)
+	}
+
 	// A credential is the one thing this step cannot invent, and the one the
 	// name lookup cannot supply: ClusterDTO.secret is write-only in the
 	// control plane's own schema, so the cluster list carries none. Writing
@@ -762,7 +829,7 @@ func (r *StorageClusterReconciler) reading(
 		return subscriptions.ClusterDTO{}, err
 	}
 	return subscriptions.ClusterDTO{
-		ID:                response.UUID,
+		ID:                response.ID,
 		NQN:               response.NQN,
 		Status:            response.Status,
 		Rebalancing:       response.Rebalancing,
@@ -890,6 +957,25 @@ func (r *StorageClusterReconciler) reportedTasks(
 	return r.API.Tasks(ctx, clusterID)
 }
 
+// backendClusterGone reports whether the control plane, asked as the operator,
+// no longer lists the cluster. A forced delete can finish after the client gave
+// up, and the retry, sent with the cluster's own secret, which went with the
+// cluster, is answered 401 rather than with the cluster missing. A list that
+// cannot be read says nothing, and the delete is retried.
+func (r *StorageClusterReconciler) backendClusterGone(ctx context.Context, uuid string) bool {
+	clusters, err := r.API.Clusters(ctx)
+	if err != nil {
+		return false
+	}
+	for _, c := range clusters {
+		if c.ID == uuid {
+			return false
+		}
+	}
+	logf.FromContext(ctx).Info("the backend cluster is already gone", "uuid", uuid)
+	return true
+}
+
 // teardown deletes the backend cluster and then lets the object go.
 //
 // On any refusal it requeues and retries rather than removing the finalizer,
@@ -904,8 +990,14 @@ func (r *StorageClusterReconciler) teardown(
 		return ctrl.Result{}, nil
 	}
 
-	if cluster.Status.UUID != "" {
-		r.closeStreams(cluster.Status.UUID)
+	// A cluster held before its status recorded the backend cluster still has
+	// one, and its UUID is in the cluster's Secret (recordHeldBackend).
+	uuid := cluster.Status.UUID
+	if uuid == "" {
+		uuid = r.recordedBackendUUID(ctx, cluster)
+	}
+	if uuid != "" {
+		r.closeStreams(uuid)
 		// Authenticates as this cluster, using its own recorded secret, for
 		// the same reason sync() does: the control plane this cluster
 		// belongs to may be a ControlPlane.spec.source.managed one, on a
@@ -914,12 +1006,12 @@ func (r *StorageClusterReconciler) teardown(
 		if secret, err := r.clusterSecret(ctx, cluster); err == nil && secret != "" {
 			deleteCtx = webapi.WithBearerToken(ctx, secret)
 		}
-		if err := r.API.DeleteCluster(deleteCtx, cluster.Status.UUID); err != nil {
+		if err := r.API.DeleteCluster(deleteCtx, uuid); err != nil && !r.backendClusterGone(ctx, uuid) {
 			log.Error(err, "the cluster could not be deleted; retrying",
-				"cluster", cluster.Name, "uuid", cluster.Status.UUID)
+				"cluster", cluster.Name, "uuid", uuid)
 			return ctrl.Result{RequeueAfter: clusterRetry}, nil
 		}
-		if err := r.removeCSICredentials(ctx, cluster.Status.UUID); err != nil {
+		if err := r.removeCSICredentials(ctx, uuid); err != nil {
 			log.Error(err, "the CSI credentials entry could not be removed; retrying",
 				"cluster", cluster.Name)
 			return ctrl.Result{RequeueAfter: clusterRetry}, nil
@@ -949,20 +1041,20 @@ func (r *StorageClusterReconciler) teardown(
 // a persisted step.
 func (r *StorageClusterReconciler) creationParams(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
-) (utils.ClusterAddParams, error) {
+) (atlascp.CreateClusterParams, error) {
 	backup, err := r.backupConfig(ctx, cluster)
 	if err != nil {
 		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
 			BackupCredentialsError, BackupCredentialsError,
 			"The backup credentials could not be resolved: %v", err)
-		return utils.ClusterAddParams{}, err
+		return atlascp.CreateClusterParams{}, err
 	}
 
 	vault, err := vaultConfig(cluster.Spec.KMS)
 	if err != nil {
 		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
 			InvalidConfig, InvalidConfig, "The key store is not usable: %v", err)
-		return utils.ClusterAddParams{}, err
+		return atlascp.CreateClusterParams{}, err
 	}
 
 	// minHugePagesSize is optional: left unset, the control plane computes the
@@ -974,33 +1066,34 @@ func (r *StorageClusterReconciler) creationParams(
 		hugePages = utils.ParseSize(raw, "si/iec", "", false)
 	}
 
-	return utils.ClusterAddParams{
-		Name:                   cluster.Name,
-		CapWarn:                capacityThreshold(cluster.Spec.WarningThreshold),
-		CapCrit:                capacityThreshold(cluster.Spec.CriticalThreshold),
-		ProvCapWarn:            provisionedCapacityThreshold(cluster.Spec.WarningThreshold),
-		ProvCapCrit:            provisionedCapacityThreshold(cluster.Spec.CriticalThreshold),
-		DistrNdcs:              stripeDataChunks(cluster.Spec.Stripe),
-		DistrNpcs:              StripeParityChunks(cluster.Spec.Stripe),
-		SpdkVcpuCount:          ptr.IntFrom(cluster.Spec.VCPUCount, 8),
-		HugepagesMem:           ptr.Int64From(hugePages, 0),
-		MaxSubsys:              uint(ptr.IntFrom(cluster.Spec.MaxSubsystemCount, 10)), //nolint:gosec // bounded by the CRD to 10..75
-		EnableNodeAffinity:     ptr.BoolFromOrFalse(cluster.Spec.EnableNodeAffinity),
-		Fabric:                 cluster.Spec.FabricType,
-		CRName:                 cluster.Name,
-		CRNameSpace:            cluster.Namespace,
-		CRPlural:               "storageclusters",
-		ClientDataIfname:       cluster.Spec.ClientDataIfname,
-		NvmfBasePort:           ptr.IntFrom(cluster.Spec.NvmfBasePort, 4420),
-		RpcBasePort:            ptr.IntFrom(cluster.Spec.RpcBasePort, 8080),
-		SnodeApiPort:           ptr.IntFrom(cluster.Spec.SnodeApiPort, 50001),
-		BackupConfig:           backup,
-		HashicorpVaultSettings: vault,
-		EnableFailureDomain:    ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains),
-		InlineChecksum:         ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
-		Atomic4k:               ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
-		DeviceMode:             deviceMode(cluster.Spec.DeviceClass),
-		IsSingleNode:           cluster.Spec.ClusterMode == simplyblockv1alpha2.ClusterModeSingle,
+	return atlascp.CreateClusterParams{
+		WorkloadNames:       backendWorkloadNamesOf(cluster),
+		Name:                cluster.Name,
+		CapWarn:             capacityThreshold(cluster.Spec.WarningThreshold),
+		CapCrit:             capacityThreshold(cluster.Spec.CriticalThreshold),
+		ProvCapWarn:         provisionedCapacityThreshold(cluster.Spec.WarningThreshold),
+		ProvCapCrit:         provisionedCapacityThreshold(cluster.Spec.CriticalThreshold),
+		NDCS:                stripeDataChunks(cluster.Spec.Stripe),
+		NPCS:                StripeParityChunks(cluster.Spec.Stripe),
+		SpdkVCPUCount:       ptr.IntFrom(cluster.Spec.VCPUCount, 8),
+		HugepagesMemBytes:   ptr.Int64From(hugePages, 0),
+		MaxSubsys:           ptr.IntFrom(cluster.Spec.MaxSubsystemCount, 10),
+		EnableNodeAffinity:  ptr.BoolFromOrFalse(cluster.Spec.EnableNodeAffinity),
+		Fabric:              cluster.Spec.FabricType,
+		CRName:              cluster.Name,
+		CRNamespace:         cluster.Namespace,
+		CRPlural:            "storageclusters",
+		ClientDataNIC:       cluster.Spec.ClientDataIfname,
+		NvmfBasePort:        ptr.IntFrom(cluster.Spec.NvmfBasePort, 4420),
+		RPCBasePort:         ptr.IntFrom(cluster.Spec.RpcBasePort, 8080),
+		SnodeAPIPort:        ptr.IntFrom(cluster.Spec.SnodeApiPort, 50001),
+		Backup:              backup,
+		VaultBaseURL:        vault,
+		EnableFailureDomain: ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains),
+		InlineChecksum:      ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
+		Atomic4K:            ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
+		DeviceMode:          deviceMode(cluster.Spec.DeviceClass),
+		SingleNode:          cluster.Spec.ClusterMode == simplyblockv1alpha2.ClusterModeSingle,
 	}, nil
 }
 
@@ -1022,7 +1115,7 @@ func deviceMode(class simplyblockv1alpha2.StorageClusterDeviceClass) string {
 // and applies its own defaults now that the operator stops sending them (§12).
 func (r *StorageClusterReconciler) backupConfig(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
-) (*utils.BackupConfig, error) {
+) (*atlascp.ClusterBackup, error) {
 	store := cluster.Spec.Backup
 	if store == nil {
 		return nil, nil
@@ -1065,28 +1158,26 @@ func (r *StorageClusterReconciler) backupConfig(
 		return nil, fmt.Errorf("spec.backup.endpoint: %w", err)
 	}
 
-	return &utils.BackupConfig{
-		Credentials: &utils.BackupCredentials{
-			AccessKeyID:     string(accessKeyID),
-			SecretAccessKey: string(secretAccessKey),
-		},
-		Endpoint:   store.Endpoint,
-		BucketName: store.Bucket,
-		Region:     store.Region,
+	return &atlascp.ClusterBackup{
+		AccessKeyID:     string(accessKeyID),
+		SecretAccessKey: string(secretAccessKey),
+		Endpoint:        store.Endpoint,
+		BucketName:      store.Bucket,
+		Region:          store.Region,
 	}, nil
 }
 
-// vaultConfig maps the key store onto the control plane's own name for it. The
-// regrouping under spec.kms is Kubernetes-side only: the control plane keeps
-// hashicorp_vault_settings.base_url, and this is where the two meet.
-func vaultConfig(kms *simplyblockv1alpha2.KMSSpec) (*utils.HashicorpVaultConfig, error) {
+// vaultConfig is the key store's endpoint. The regrouping under spec.kms is
+// Kubernetes-side only: the control plane keeps hashicorp_vault_settings.base_url,
+// and this is where the two meet.
+func vaultConfig(kms *simplyblockv1alpha2.KMSSpec) (string, error) {
 	if kms == nil || kms.Vault == nil || kms.Vault.Endpoint == "" {
-		return nil, nil
+		return "", nil
 	}
 	if err := atlasnet.ValidateExternalURL(kms.Vault.Endpoint); err != nil {
-		return nil, fmt.Errorf("spec.kms.vault.endpoint: %w", err)
+		return "", fmt.Errorf("spec.kms.vault.endpoint: %w", err)
 	}
-	return &utils.HashicorpVaultConfig{BaseURL: kms.Vault.Endpoint}, nil
+	return kms.Vault.Endpoint, nil
 }
 
 // writeClusterSecret records the cluster's UUID and secret beside the object
@@ -1095,7 +1186,7 @@ func (r *StorageClusterReconciler) writeClusterSecret(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, found adoption,
 ) error {
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-		Name:      fmt.Sprintf("simplyblock-cluster-%s", cluster.Name),
+		Name:      clusterSecretName(cluster),
 		Namespace: cluster.Namespace,
 	}}
 	if err := controllerutil.SetControllerReference(cluster, secret, r.Scheme); err != nil {
@@ -1115,14 +1206,29 @@ func (r *StorageClusterReconciler) writeClusterSecret(
 	return nil
 }
 
+// clusterSecretName is the Secret beside a cluster that records its backend
+// cluster's UUID and secret.
+func clusterSecretName(cluster *simplyblockv1alpha2.StorageCluster) string {
+	return fmt.Sprintf("simplyblock-cluster-%s", cluster.Name)
+}
+
 // clusterSecret reads the secret back, and reports the empty string when there
 // is none.
 func (r *StorageClusterReconciler) clusterSecret(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) (string, error) {
+	return readClusterSecret(ctx, r.Client, cluster)
+}
+
+// readClusterSecret reads the secret a cluster's control-plane reads
+// authenticate with. A supercluster reads each member's capacity with it, so
+// it is a function of the client rather than of this reconciler.
+func readClusterSecret(
+	ctx context.Context, r client.Reader, cluster *simplyblockv1alpha2.StorageCluster,
+) (string, error) {
 	var secret corev1.Secret
 	key := types.NamespacedName{
-		Name:      fmt.Sprintf("simplyblock-cluster-%s", cluster.Name),
+		Name:      clusterSecretName(cluster),
 		Namespace: cluster.Namespace,
 	}
 	if err := r.Get(ctx, key, &secret); err != nil {
@@ -1171,7 +1277,7 @@ func (r *StorageClusterReconciler) upsertCSICredentials(
 // mergeCSICredentials writes own into creds and, when the control plane's
 // cluster list was read, one non-local entry per other cluster of that
 // list, pruning non-local entries the list no longer has.
-func mergeCSICredentials(creds *CSICredentials, own CSIClusterEntry, peers []utils.ClusterListEntry, listed bool) {
+func mergeCSICredentials(creds *CSICredentials, own CSIClusterEntry, peers []atlascp.Cluster, listed bool) {
 	replaced := false
 	for i := range creds.Clusters {
 		if creds.Clusters[i].ClusterID == own.ClusterID {
@@ -1187,14 +1293,14 @@ func mergeCSICredentials(creds *CSICredentials, own CSIClusterEntry, peers []uti
 	}
 	known := map[string]bool{}
 	for _, p := range peers {
-		known[p.UUID] = true
-		if p.UUID == own.ClusterID {
+		known[p.ID] = true
+		if p.ID == own.ClusterID {
 			continue
 		}
-		entry := CSIClusterEntry{ClusterID: p.UUID, ClusterEndpoint: own.ClusterEndpoint, ClusterSecret: p.Secret}
+		entry := CSIClusterEntry{ClusterID: p.ID, ClusterEndpoint: own.ClusterEndpoint, ClusterSecret: p.Secret}
 		found := false
 		for i := range creds.Clusters {
-			if creds.Clusters[i].ClusterID != p.UUID {
+			if creds.Clusters[i].ClusterID != p.ID {
 				continue
 			}
 			found = true
@@ -1310,15 +1416,14 @@ func (r *StorageClusterReconciler) note(
 	})
 }
 
-// reportPhase writes a phase and the sentence explaining it.
-func (r *StorageClusterReconciler) reportPhase(
+// reportUnavailable writes the Unavailable phase and the sentence explaining it.
+func (r *StorageClusterReconciler) reportUnavailable(
 	ctx context.Context,
 	cluster *simplyblockv1alpha2.StorageCluster,
-	phase simplyblockv1alpha2.StorageClusterPhase,
 	message string,
 ) error {
 	err := r.writeStatus(ctx, cluster, func(status *simplyblockv1alpha2.StorageClusterStatus) {
-		status.Phase = phase
+		status.Phase = simplyblockv1alpha2.StorageClusterPhaseUnavailable
 		status.Message = message
 	})
 	r.observePhase(cluster)
@@ -1353,10 +1458,31 @@ var allPhases = []simplyblockv1alpha2.StorageClusterPhase{
 
 // writeStatus applies the mutation and patches only when something changed, so
 // a cluster whose state has not moved produces no writes.
+//
+// Every write also records the cluster's role within a supercluster, which is
+// a fact about its spec and so is never stale when the rest of the status is
+// current.
 func (r *StorageClusterReconciler) writeStatus(
 	ctx context.Context,
 	cluster *simplyblockv1alpha2.StorageCluster,
 	mutate func(*simplyblockv1alpha2.StorageClusterStatus),
+) error {
+	return writeClusterStatus(ctx, r.Client, cluster,
+		func(fresh *simplyblockv1alpha2.StorageCluster, status *simplyblockv1alpha2.StorageClusterStatus) {
+			mutate(status)
+			status.Role = roleOf(fresh)
+		})
+}
+
+// writeClusterStatus is the status write both reconcilers of this kind use:
+// re-read, apply the mutation, and patch with an optimistic lock only when
+// something changed. The mutation sees the fresh object, because what it
+// writes may depend on the spec as it is now.
+func writeClusterStatus(
+	ctx context.Context,
+	r client.Client,
+	cluster *simplyblockv1alpha2.StorageCluster,
+	mutate func(*simplyblockv1alpha2.StorageCluster, *simplyblockv1alpha2.StorageClusterStatus),
 ) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var fresh simplyblockv1alpha2.StorageCluster
@@ -1365,7 +1491,7 @@ func (r *StorageClusterReconciler) writeStatus(
 		}
 
 		desired := *fresh.Status.DeepCopy()
-		mutate(&desired)
+		mutate(&fresh, &desired)
 		desired.ObservedGeneration = fresh.Generation
 
 		if equality.Semantic.DeepEqual(fresh.Status, desired) {

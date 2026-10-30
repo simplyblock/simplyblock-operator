@@ -73,6 +73,9 @@ File: `operator/internal/controllers/driver/simplyblockdriver_controller_unit_te
 | U-98  | `enableTLS` alone mounts the CA bundle only, at the provider's shape                 | Positive | `TestTLSVolumeShape`                                   |
 | U-99  | `enableMutualTLS` mounts each plugin's own client-certificate Secret, by name        | Positive | `TestTLSVolumeShape`                                   |
 | U-100 | `enableMutualTLS` with `enableTLS` unset is ignored, the same as the chart           | Boundary | `TestTLSConnectMode`                                   |
+| U-108 | The cluster serves no snapshot API: `status.snapshotSupport` is `Missing`            | Positive | `TestACrdlessClusterReportsMissing`                    |
+| U-109 | `Missing` becomes `Detected` when the API appears                                    | Boundary | `TestMissingBecomesDetectedWhenTheAPIAppears`          |
+| U-110 | A deployment that disabled snapshots reports nothing                                 | Negative | `TestSnapshotsDisabledReportsNothing`                  |
 
 `U-44` holds the boundary design §4.1 draws. The `csi-snapshotter` sidecar is part
 of this driver's controller plugin, and the detection applies to the cluster's
@@ -276,7 +279,7 @@ defaulting rules are admission and cannot be exercised any other way.
 |----------|------------------------------------------------------------------------------|--------------|-------------------------------------------------------------|
 | I-01     | `spec.driverName` changed after creation: rejected as immutable              | Negative     | —                                                           |
 | I-02     | `spec.driverName` unset: defaulted to `csi.simplyblock.io`                   | Boundary     | —                                                           |
-| I-03     | `spec.image` outside the trusted registries: rejected by the pattern         | Negative     | —                                                           |
+| I-03     | `spec.image` not a well-formed reference: rejected by the pattern            | Negative     | —                                                           |
 | I-04     | `spec.image` omitted: rejected as `Required`                                 | Negative     | —                                                           |
 | I-05     | `spec.controllerReplicas` of 0: rejected by the minimum                      | Boundary     | —                                                           |
 | I-06     | `spec.controllerReplicas` unset: defaulted to 1                              | Boundary     | —                                                           |
@@ -296,7 +299,7 @@ defaulting rules are admission and cannot be exercised any other way.
 | I-20     | The first `SimplyblockDriver` in an empty cluster: admitted                  | Positive     | —                                                           |
 | I-21     | The only object updated, not created: admitted, since the rule is CREATE     | Boundary     | —                                                           |
 | I-22     | The only object deleted and another created: admitted                        | Boundary     | —                                                           |
-| I-23     | A `spec.sidecarImages` entry outside the trusted registries: rejected        | Negative     | —                                                           |
+| I-23     | A malformed `spec.sidecarImages` entry: rejected                             | Negative     | —                                                           |
 | I-24     | `spec.image` of the empty string: rejected, since Required admits it         | Negative     | —                                                           |
 | I-25     | The chart's object admitted while the operator is not yet serving            | Regression   | `TestBootstrapDriverIsAdmittedWhileTheOperatorIsNotServing` |
 
@@ -466,8 +469,9 @@ reconcile with a live cache.
 |                   | Driver older                           | U-31, U-32                      |
 |                   | Driver newer                           | U-22, E-05, M-01                |
 |                   | Unknown                                | U-25                            |
-| Snapshot support  | Detected                               | U-04, U-39                      |
+| Snapshot support  | Detected                               | U-04, U-39, U-109               |
 |                   | Installed                              | U-05, U-40, E-08                |
+|                   | Missing                                | U-108, U-109                    |
 | Control plane     | Present and `Ready`                    | U-26, E-01                      |
 |                   | Absent                                 | U-29                            |
 |                   | Present, not `Ready`                   | U-30                            |
@@ -484,7 +488,7 @@ reconcile with a live cache.
 | Sidecar images    | Pinned by the adopted release          | U-83                            |
 |                   | Left at the chart version's default    | U-84                            |
 |                   | Unset on a fresh object                | U-85, U-56                      |
-|                   | Outside the trusted registries         | I-23                            |
+|                   | Malformed reference                    | I-23                            |
 
 **The version-ordering axis is the one this kind exists for.** `U-22`, `E-05`, and
 `M-01` cover the reported ordering, and `U-31` covers the supported one. Design §1

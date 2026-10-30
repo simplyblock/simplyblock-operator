@@ -17,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/simplyblock/atlas/crdtypes"
 	"github.com/simplyblock/atlas/statemachine"
 )
 
@@ -207,12 +208,11 @@ func (l *LocalControlPlane) TLSProvider() ControlPlaneTLSProvider {
 // so the ownership spine starts at a real edge rather than at a Helm release.
 type LocalControlPlane struct {
 	// Image is the management API and control-plane image.
-	// Must reference one of the trusted registries (`quay.io/simplyblock-io`,
-	// `docker.io/simplyblock`, `public.ecr.aws/simply-block`); digest pinning
+	// Any registry is accepted, mirrors included, as long as the value is a
+	// well-formed reference carrying a tag, a digest, or both. Digest pinning
 	// (@sha256:...) is recommended.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +kubebuilder:validation:Required
-	Image string `json:"image"`
+	Image crdtypes.ImageReference `json:"image"`
 
 	// ImagePullPolicy controls when that image is pulled.
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
@@ -253,7 +253,14 @@ type LocalControlPlane struct {
 	// The block is defaulted to its own zero value rather than left absent, so
 	// that the field defaults inside it are applied to an object that does not
 	// mention TLS at all.
+	//
+	// It cannot change once the object exists. The database and every storage
+	// node are built with it, so turning TLS off on a live control plane leaves
+	// peers that still demand it and callers that no longer present anything.
+	// Changing it means recreating the control plane, which deletes the
+	// FoundationDB behind it.
 	// +kubebuilder:default={}
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="tls is immutable once the control plane exists"
 	// +optional
 	TLS ControlPlaneTLS `json:"tls,omitempty"`
 
@@ -360,9 +367,8 @@ type ManagedControlPlane struct {
 	// there is no equivalent to fall back to without this field -- every
 	// StorageCluster on a managed deployment must get an image from here or
 	// from its own spec.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
-	StorageNodeImage string `json:"storageNodeImage,omitempty"`
+	StorageNodeImage crdtypes.ImageReference `json:"storageNodeImage,omitempty"`
 }
 
 // ControlPlaneSource selects whether this cluster hosts its control plane or is

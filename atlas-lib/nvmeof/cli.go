@@ -91,15 +91,11 @@ func NewCLIConnectorWithRunner(
 	return c
 }
 
-// SudoRunner runs nvme-cli through sudo, for an image whose process is not root
-// and reaches the fabric through a sudoers rule for the `nvme` binary.
-//
-// The privilege is needed even in a privileged container: the capabilities a
-// privileged container grants are dropped when the entrypoint runs as an
-// unprivileged uid, so writing /dev/nvme-fabrics fails on permissions with
-// nothing in the container's configuration to suggest why.
-func SudoRunner(ctx context.Context, args ...string) ([]byte, error) {
-	return bounded.CombinedOutput(ctx, cliTimeout, CommandKey(args), "sudo", append([]string{"nvme"}, args...)...)
+// NvmeRunner runs nvme-cli directly. The containers that use it are privileged and
+// run as root (see volumemigration.PrivilegedAsRoot), as the CSI node plugin does:
+// there is no sudo hop, which fails PAM in a privileged container on some hosts.
+func NvmeRunner(ctx context.Context, args ...string) ([]byte, error) {
+	return bounded.CombinedOutput(ctx, cliTimeout, CommandKey(args), "nvme", args...)
 }
 
 // connect establishes one path with `nvme connect`.

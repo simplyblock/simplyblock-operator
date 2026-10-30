@@ -56,6 +56,11 @@ const (
 	// LabelKeyName is the part of a label key after the slash, bounded at 63
 	// bytes and holding to the same syntax as a label value.
 	LabelKeyName
+
+	// DNSLabel is a name that becomes one segment of a DNS name, as a
+	// Service's does: bounded at 63 bytes, lower case, and without the dots an
+	// object name may carry.
+	DNSLabel
 )
 
 // limit reports the byte budget the kind is held to.
@@ -76,11 +81,17 @@ var unsafeForObjectName = regexp.MustCompile(`[^a-z0-9.-]+`)
 // looser of the two, since a label value keeps its case and admits underscores.
 var unsafeForLabel = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
+// unsafeForDNSLabel matches everything one DNS segment may not carry.
+var unsafeForDNSLabel = regexp.MustCompile(`[^a-z0-9-]+`)
+
 // sanitize replaces every character the kind forbids and trims the ends, which
 // may not carry a separator whichever kind it is.
 func (k Kind) sanitize(s string) string {
-	if k == ObjectName {
+	switch k {
+	case ObjectName:
 		return strings.Trim(unsafeForObjectName.ReplaceAllString(strings.ToLower(s), "-"), ".-")
+	case DNSLabel:
+		return strings.Trim(unsafeForDNSLabel.ReplaceAllString(strings.ToLower(s), "-"), "-")
 	}
 	return strings.Trim(unsafeForLabel.ReplaceAllString(s, "-"), "._-")
 }
@@ -93,6 +104,8 @@ func (k Kind) validate(s string) []string {
 		return validation.IsDNS1123Subdomain(s)
 	case LabelKeyName:
 		return validation.IsQualifiedName(s)
+	case DNSLabel:
+		return validation.IsDNS1123Label(s)
 	default:
 		return validation.IsValidLabelValue(s)
 	}

@@ -3,6 +3,7 @@ package twonode
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -30,6 +31,32 @@ type fakeAPI struct {
 	err       error
 	reports   []string // "<node>=<fenced>" per ReportFencing call
 	reportErr error
+	// settings, clientHosts and releases record the host-fencing calls.
+	settings    []string // "<arbitration>,<hostFencing>"
+	clientHosts map[string][]string
+	releases    []string
+	releaseErr  error
+}
+
+func (f *fakeAPI) SetTwoNodeSettings(_ context.Context, _ *simplyblockv1alpha2.StorageCluster, arb, hf bool) error {
+	f.settings = append(f.settings, fmt.Sprintf("%t,%t", arb, hf))
+	return nil
+}
+
+func (f *fakeAPI) SetClientHosts(_ context.Context, _ *simplyblockv1alpha2.StorageCluster, id string, nqns []string) error {
+	if f.clientHosts == nil {
+		f.clientHosts = map[string][]string{}
+	}
+	f.clientHosts[id] = nqns
+	return nil
+}
+
+func (f *fakeAPI) ReleaseHostFence(_ context.Context, _ *simplyblockv1alpha2.StorageCluster, id string) error {
+	if f.releaseErr != nil {
+		return f.releaseErr
+	}
+	f.releases = append(f.releases, id)
+	return nil
 }
 
 func (f *fakeAPI) ReportFencing(_ context.Context, _ *simplyblockv1alpha2.StorageCluster, id string, fenced bool) error {
@@ -70,7 +97,7 @@ func setup(t *testing.T, api *fakeAPI, extraTaint *corev1.Taint) (*ArbitrationRe
 	}
 	scheme := testsupport.NewScheme(t, clientgoscheme.AddToScheme)
 	c := testsupport.NewClient(t, scheme,
-		[]client.Object{&simplyblockv1alpha2.StorageCluster{}, &simplyblockv1alpha2.StorageNode{}}, objs...)
+		[]client.Object{&simplyblockv1alpha2.StorageCluster{}, &simplyblockv1alpha2.StorageNode{}, &corev1.Node{}}, objs...)
 	fixed := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	return &ArbitrationReconciler{Client: c, Scheme: scheme, API: api, Now: func() time.Time { return fixed }}, c
 }
@@ -250,5 +277,33 @@ func TestFailedFencingReportIsRetried(t *testing.T) {
 	_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "sn-b"}, &sn)
 	if rf := sn.Status.Remediation.ReportedFenced; rf == nil || !*rf {
 		t.Fatalf("reportedFenced %v", rf)
+	}
+}
+
+// I-08: a supercluster has no nodes and no backend cluster, so arbitration
+// neither reads it nor writes its status, which belongs to the supercluster
+// reconciler.
+func TestArbitrationLeavesASuperclusterAlone(t *testing.T) {
+	r, c := setup(t, &fakeAPI{}, nil)
+	var cluster simplyblockv1alpha2.StorageCluster
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cluster); err != nil {
+		t.Fatal(err)
+	}
+	cluster.Spec = simplyblockv1alpha2.StorageClusterSpec{Supercluster: &simplyblockv1alpha2.SuperclusterSpec{}}
+	if err := c.Update(context.Background(), &cluster); err != nil {
+		t.Fatal(err)
+	}
+	cluster.Status.Arbitration = &simplyblockv1alpha2.ArbitrationStatus{Message: "left by somebody else"}
+	if err := c.Status().Update(context.Background(), &cluster); err != nil {
+		t.Fatal(err)
+	}
+
+	reconcile(t, r)
+
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cluster); err != nil {
+		t.Fatal(err)
+	}
+	if cluster.Status.Arbitration == nil {
+		t.Error("arbitration rewrote the status of a supercluster")
 	}
 }

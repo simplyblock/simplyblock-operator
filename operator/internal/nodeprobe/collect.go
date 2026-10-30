@@ -17,6 +17,7 @@ import (
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/inventory"
+	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/pci"
 )
 
@@ -28,19 +29,47 @@ import (
 // which part of the answer is missing.
 func FromInventory(node string, at time.Time, inv inventory.Inventory, unreadable error) Report {
 	return Report{
-		Version:         ReportVersion,
-		Node:            node,
-		ProbedAt:        metav1.NewTime(at),
-		CPU:             cpuOf(inv.CPU),
-		Memory:          memoryOf(inv.Memory),
-		HugePages:       hugePagesOf(inv.HugePages),
-		Interfaces:      interfacesOf(inv.Interfaces),
-		Devices:         devicesOf(inv.Devices),
-		NVMeControllers: controllersOf(inv.NVMeControllers),
-		Reclaimed:       controllersOf(inv.Reclaimed),
-		HostOS:          hostOSOf(inv.HostOS),
-		Unreadable:      sentences(unreadable),
+		Version:            ReportVersion,
+		Node:               node,
+		ProbedAt:           metav1.NewTime(at),
+		CPU:                cpuOf(inv.CPU),
+		Memory:             memoryOf(inv.Memory),
+		HugePages:          hugePagesOf(inv.HugePages),
+		Interfaces:         interfacesOf(inv.Interfaces),
+		Devices:            devicesOf(inv.Devices),
+		NVMeControllers:    controllersOf(inv.NVMeControllers, inv.NVMeFormats),
+		Reclaimed:          controllersOf(inv.Reclaimed, nil),
+		HostOS:             hostOSOf(inv.HostOS),
+		NetworkAttachments: networkAttachmentsOf(inv.NetworkAttachments),
+		Unreadable:         sentences(unreadable),
 	}
+}
+
+// networkAttachmentsOf renders the definitions, or nothing for a collection
+// that was given no cluster to read them from.
+func networkAttachmentsOf(attachments inventory.NetworkAttachments) *NetworkAttachments {
+	if attachments.State == "" {
+		return nil
+	}
+	out := &NetworkAttachments{
+		State:     string(attachments.State),
+		Detail:    attachments.Detail,
+		Namespace: attachments.Namespace,
+	}
+	for _, definition := range attachments.Definitions {
+		out.Definitions = append(out.Definitions, NetworkAttachment{
+			Namespace:     definition.Namespace,
+			Name:          definition.Name,
+			Type:          definition.Config.Type,
+			HostInterface: definition.Config.HostInterface,
+			PCIAddress:    definition.Config.PCIAddress,
+			Mode:          definition.Config.Mode,
+			IPAM:          definition.Config.IPAM,
+			ResourceName:  definition.ResourceName,
+			Problem:       definition.Config.Problem,
+		})
+	}
+	return out
 }
 
 // hostOSOf renders the OS reading, which is five strings and no judgment:
@@ -53,7 +82,29 @@ func hostOSOf(os inventory.HostOS) HostOS {
 		Version:      os.Version,
 		PrettyName:   os.PrettyName,
 		Architecture: os.Architecture,
+		Kernel: Kernel{
+			Release:       os.Kernel.Release,
+			Version:       kernelVersionOf(os.Kernel.Version),
+			NVMeMultipath: Fact{State: string(os.Kernel.NVMeMultipath.State), Detail: os.Kernel.NVMeMultipath.Detail},
+			KVM:           capabilityOf(os.Kernel.KVM),
+			TUN:           capabilityOf(os.Kernel.TUN),
+			PNFSBlock:     capabilityOf(os.Kernel.PNFSBlock),
+		},
 	}
+}
+
+// kernelVersionOf is the kernel version in the report, or nil for one that was
+// not read.
+func kernelVersionOf(version inventory.KernelVersion) *KernelVersion {
+	if version == (inventory.KernelVersion{}) {
+		return nil
+	}
+	return &KernelVersion{Major: version.Major, Minor: version.Minor, Patch: version.Patch}
+}
+
+// capabilityOf is one optional kernel capability in the report's vocabulary.
+func capabilityOf(capability inventory.Capability) Fact {
+	return Fact{State: string(capability.State), Detail: capability.Detail}
 }
 
 func cpuOf(cpu inventory.CPU) CPU {
@@ -188,16 +239,58 @@ func devicesOf(candidates []blockdev.Candidate) []Device {
 	return out
 }
 
-func controllersOf(devices []pci.Device) []Controller {
+// controllersOf renders the controllers, each with the LBA formats read from
+// it. The formats are joined by PCI address, which is the key both readings
+// share.
+func controllersOf(devices []pci.Device, formats []inventory.NVMeControllerFormats) []Controller {
+	byAddress := make(map[string][]NamespaceFormats, len(formats))
+	for _, controller := range formats {
+		for _, namespace := range controller.Namespaces {
+			// A namespace with no formats says nothing a reader can use.
+			if len(namespace.Formats) == 0 {
+				continue
+			}
+			byAddress[controller.Address] = append(byAddress[controller.Address], namespaceFormatsOf(namespace))
+		}
+	}
+
 	out := make([]Controller, 0, len(devices))
 	for _, device := range devices {
 		out = append(out, Controller{
-			Address:  device.Address,
-			Driver:   device.Driver,
-			Vendor:   device.Vendor,
-			Product:  device.Product,
-			NUMANode: device.NUMANode,
-			InUse:    device.InUse,
+			Address:    device.Address,
+			Driver:     device.Driver,
+			Vendor:     device.Vendor,
+			Product:    device.Product,
+			NUMANode:   device.NUMANode,
+			InUse:      device.InUse,
+			LBAFormats: byAddress[device.Address],
+		})
+	}
+	return out
+}
+
+// namespaceFormatsOf renders one namespace's formats. The broadcast NSID
+// becomes Common, because 4294967295 in a report reads as a namespace.
+func namespaceFormatsOf(namespace nvme.NamespaceFormats) NamespaceFormats {
+	out := NamespaceFormats{
+		Formats:          make([]LBAFormat, 0, len(namespace.Formats)),
+		ExtendedMetadata: namespace.ExtendedMetadata,
+	}
+	if namespace.NSID == nvme.NSIDAll {
+		out.Common = true
+	} else {
+		out.NSID = uint32(namespace.NSID)
+	}
+	if namespace.InUse >= 0 {
+		current := namespace.InUse
+		out.Current = &current
+	}
+	for _, format := range namespace.Formats {
+		out.Formats = append(out.Formats, LBAFormat{
+			Index:               format.Index,
+			DataSize:            format.DataSize,
+			MetadataSize:        format.MetadataSize,
+			RelativePerformance: format.RelativePerformance.String(),
 		})
 	}
 	return out

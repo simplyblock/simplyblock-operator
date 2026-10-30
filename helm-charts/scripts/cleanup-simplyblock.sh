@@ -285,6 +285,41 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 0b. Remove the OperatorOps while the operator still runs
+# ---------------------------------------------------------------------------
+section "Removing OperatorOps in '$NAMESPACE'"
+
+# The chart renders the initial discovery run as an OperatorOps that Helm
+# deletes on uninstall, and only the operator clears its finalizer. Step 0
+# stops the operator, so one left until step 1 holds `helm uninstall --wait`
+# until it times out, and the script exits with everything still deployed.
+ops_kind="operatorops.$CRD_GROUP"
+if ! $KUBECTL get crd "$ops_kind" >/dev/null 2>&1; then
+    info "No OperatorOps CRD installed."
+else
+    ops=$($KUBECTL get "$ops_kind" -n "$NAMESPACE" \
+        -o jsonpath='{.items[*].metadata.name}' 2>/dev/null) || \
+        abort_before_uninstall "Could not list the OperatorOps in '$NAMESPACE'."
+    if [[ -z "$ops" ]]; then
+        info "No OperatorOps in '$NAMESPACE'."
+    fi
+    for name in $ops; do
+        info "Deleting OperatorOps $name..."
+        $KUBECTL delete "$ops_kind" "$name" -n "$NAMESPACE" --ignore-not-found \
+            --wait=false >/dev/null 2>&1 || warn "  Could not delete OperatorOps $name"
+    done
+    for name in $ops; do
+        if ! $KUBECTL wait "$ops_kind" "$name" -n "$NAMESPACE" --for=delete \
+            --timeout=60s >/dev/null 2>&1; then
+            warn "  OperatorOps $name was not removed within 60s; clearing its finalizer."
+            $KUBECTL patch "$ops_kind" "$name" -n "$NAMESPACE" \
+                --type=merge -p '{"metadata":{"finalizers":[]}}' >/dev/null 2>&1 || \
+                warn "  Could not clear the finalizer of OperatorOps $name"
+        fi
+    done
+fi
+
+# ---------------------------------------------------------------------------
 # 0. Release simplyblock volumes while the CSI node plugin still runs
 # ---------------------------------------------------------------------------
 section "Releasing simplyblock volumes mounted in namespace '$NAMESPACE'"

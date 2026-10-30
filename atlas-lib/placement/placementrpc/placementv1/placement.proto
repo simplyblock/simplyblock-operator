@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+// Package atlas.placement.v1 answers which member of a supercluster a new
+// volume is created in.
+//
+// The operator serves it on its end of the link and the CSI controller calls
+// it, the one service that runs from a peer to the hub after the handshake. The
+// operator answers because it holds what the answer is made of: the members,
+// their capacity readings, their topology, and the placements it made since
+// the last reading.
+package atlas.placement.v1;
+
+option go_package = "github.com/simplyblock/atlas/placement/placementrpc/placementv1;placementv1";
+
+// PlacementService chooses a member for a new volume.
+service PlacementService {
+  // Place answers the member a volume is created in. It is idempotent per
+  // claim: the member is recorded on the claim before the answer, and a retry
+  // for the same claim answers the recorded member.
+  //
+  // Errors: NotFound for an aggregate that names no supercluster,
+  // InvalidArgument for a clone whose source is not in a member,
+  // FailedPrecondition for a request without its claim or a consistency group
+  // whose member cannot take it, ResourceExhausted when no member has room,
+  // and Unavailable when the answer cannot be recorded or a member cannot be
+  // asked whether it already holds the volume.
+  rpc Place(PlaceRequest) returns (PlaceResponse);
+}
+
+// Topology is one CSI topology segment set.
+message Topology {
+  map<string, string> segments = 1;
+}
+
+// PlaceRequest is one CreateVolume, as the CSI controller received it.
+message PlaceRequest {
+  // aggregate_id is the supercluster's identifier, as the class names it in
+  // cluster_id.
+  string aggregate_id = 1;
+
+  // pool_name is the pool the volume is created in, by name, which every
+  // member holds.
+  string pool_name = 2;
+
+  // volume_name is the CSI volume name, the name the volume is created under.
+  string volume_name = 3;
+
+  // size_bytes is the requested capacity.
+  int64 size_bytes = 4;
+
+  // preferred and requisite are the request's accessibility requirements.
+  repeated Topology preferred = 5;
+  repeated Topology requisite = 6;
+
+  // claim_name and claim_namespace name the PersistentVolumeClaim, from the
+  // provisioner's extra create metadata. The placement is recorded on it.
+  string claim_name = 7;
+  string claim_namespace = 8;
+
+  // consistency_group is the claim's consistency-group label, empty when it
+  // carries none.
+  string consistency_group = 9;
+
+  // source_cluster_id is the backend cluster of the snapshot or volume a
+  // clone or restore is made from, empty for a new volume. The control plane
+  // clones only within one cluster, so the answer is that cluster, and a
+  // source outside the supercluster is InvalidArgument.
+  string source_cluster_id = 10;
+}
+
+// PlaceResponse names the chosen member.
+message PlaceResponse {
+  // cluster_id is the member's backend cluster UUID, the first component of
+  // the volume handle.
+  string cluster_id = 1;
+}

@@ -1,0 +1,1 @@
+worker-01: declined by network attachment because the NetworkAttachmentDefinition storage-data (ipvlan) builds on eth1, which this worker does not have

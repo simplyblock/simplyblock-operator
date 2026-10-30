@@ -39,6 +39,14 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - nodes/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
   - persistentvolumeclaims
   verbs:
   - create
@@ -263,6 +271,7 @@ rules:
   verbs:
   - create
   - get
+  - list
   - update
 - apiGroups:
   - operator.openshift.io
@@ -342,6 +351,14 @@ rules:
   - list
   - watch
 - apiGroups:
+  - storage.k8s.io
+  resources:
+  - volumeattachments
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - storage.simplyblock.io
   resources:
   - backupimports
@@ -402,6 +419,7 @@ rules:
   - storageclusterops/finalizers
   - storageclusters/finalizers
   - storagedeviceops/finalizers
+  - storagefenceremediations/finalizers
   - storagenodeops/finalizers
   - storagenodes/finalizers
   - storagepoolops/finalizers
@@ -436,6 +454,8 @@ rules:
   - storageclusters/status
   - storagedeviceops/status
   - storagedevices/status
+  - storagefenceremediations/status
+  - storagegroupbackups/status
   - storagenodeops/status
   - storagenodes/status
   - storagenodesets/status
@@ -464,6 +484,18 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - storagefenceremediations
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagefenceremediationtemplates
+  - storagegroupbackups
   - storagenodesets
   - volumegroupsnapshotops
   verbs:

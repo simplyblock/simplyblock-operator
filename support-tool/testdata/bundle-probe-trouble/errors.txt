@@ -1,0 +1,2 @@
+kubectl get pods -A -l control-plane=simplyblock-operator -o jsonpath={range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}
+  Error from server (Forbidden): pods is forbidden: User "support" cannot list resource "pods" in API group "" at the cluster scope

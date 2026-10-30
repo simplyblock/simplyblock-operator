@@ -15,8 +15,8 @@ worker-1/nbd7: declined by whole disk because it is a Network rather than a whol
 worker-1/nbd8: declined by whole disk because it is a Network rather than a whole disk
 worker-1/nbd9: declined by whole disk because it is a Network rather than a whole disk
 worker-1/sda: declined by available because the probe refused it: Partitioned
-worker-1/sda1: declined by available because the probe refused it: NotAWholeDisk
-worker-1/sda2: declined by available because the probe refused it: NotAWholeDisk
-worker-1/sda3: declined by available because the probe refused it: NotAWholeDisk
-worker-1/sda4: declined by available because the probe refused it: NotAWholeDisk
+worker-1/sda1: declined by available because the probe refused it: NotAWholeDisk, Unreadable
+worker-1/sda2: declined by available because the probe refused it: NotAWholeDisk, Unreadable
+worker-1/sda3: declined by available because the probe refused it: NotAWholeDisk, Unreadable
+worker-1/sda4: declined by available because the probe refused it: NotAWholeDisk, Unreadable
 worker-1/sr0: declined by available because the probe refused it: Removable

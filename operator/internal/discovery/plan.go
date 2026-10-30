@@ -55,6 +55,11 @@ type Planner struct {
 	// KubeNodesOf. It is optional: a plan without it is built from the probe
 	// reports alone, and the workers carry a zero KubeNode.
 	KubeNodes map[string]KubeNode
+
+	// SlotsPerWorker is how many storage nodes each worker runs, which decides
+	// how many workers a member holds. Zero is one, the layout of a draft that
+	// states none; a discovery run states none.
+	SlotsPerWorker int32
 }
 
 // Plan is what a run concluded: the draft to write, and why it looks like that.
@@ -71,6 +76,60 @@ type Plan struct {
 	// Refusals is every device and every worker declined, with the rule and
 	// the reason. It is the run's account of itself.
 	Refusals []Refusal
+
+	// Unattached reports whether the kept workers are drafted with no network
+	// attachment, so the template states their network itself.
+	Unattached bool
+
+	// DataNetworks is how many data interfaces most kept workers carry, which the
+	// template states as the cluster's host-interface data networks. The names are
+	// each group's own. It is zero for a fleet with no data interface, which the
+	// template puts on the pod network.
+	DataNetworks int
+
+	// Findings are what the draft leaves for a reviewer to correct: topology
+	// the Kubernetes API does not carry for every worker, or carries in a
+	// shape the draft cannot use.
+	Findings []Finding
+
+	// FailureDomains reports whether every worker carries a failure domain, so
+	// that the template enables them.
+	FailureDomains bool
+}
+
+// The reasons a finding is raised under.
+const (
+	// TopologyIncomplete names the workers without a failure domain in a fleet
+	// where others have one.
+	TopologyIncomplete = "TopologyIncomplete"
+
+	// FailureDomainInvalid names a worker whose failure-domain label carries a
+	// value the failureDomain field does not accept.
+	FailureDomainInvalid = "FailureDomainInvalid"
+
+	// PlacementGroupLabelIncomplete names the workers without a placement-group
+	// label in a partition where others carry one.
+	PlacementGroupLabelIncomplete = "PlacementGroupLabelIncomplete"
+
+	// PlacementGroupInvalid names a placement-group value that cannot be a node
+	// set name, or whose workers cannot share a member.
+	PlacementGroupInvalid = "PlacementGroupInvalid"
+
+	// NVMeMultipathUnavailable names a worker whose kernel is known to lack
+	// native NVMe multipath, which can host a storage node and cannot mount a
+	// volume over more than one path.
+	NVMeMultipathUnavailable = "NVMeMultipathUnavailable"
+)
+
+// PlacementGroupLabel assigns a worker to a member: workers carrying one value
+// form one node set named by the value.
+const PlacementGroupLabel = "storage.simplyblock.io/placement-group"
+
+// Finding is one thing the draft leaves for a reviewer, under the reason its
+// event is raised with.
+type Finding struct {
+	Reason  string
+	Message string
 }
 
 // Summary is the sentence a run's status carries.
@@ -490,6 +549,8 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 	}
 
 	plan := Plan{Class: class}
+	attachment, found := NetworkingOf(run, reports)
+	plan.Findings = append(plan.Findings, found...)
 
 	ordered := slices.Clone(reports)
 	slices.SortFunc(ordered, func(a, b nodeprobe.Report) int { return cmp.Compare(a.Node, b.Node) })
@@ -505,6 +566,15 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 				Worker: report.Node, Rule: refused, Reason: why,
 			})
 			continue
+		}
+
+		if attachment != nil {
+			if ok, why := AdmitAttachment(report, attachment); !ok {
+				plan.Refusals = append(plan.Refusals, Refusal{
+					Worker: report.Node, Rule: NetworkAttachmentRule, Reason: why,
+				})
+				continue
+			}
 		}
 
 		chosen, why := placement.Choose(report, admitted)
@@ -527,8 +597,14 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 			}
 		}
 
+		// An attached worker names no host interface: the definition is what
+		// its storage node binds, on whichever interface Multus gives the pod.
 		kube := p.KubeNodes[report.Node]
-		mgmt, data := Planes(report, kube.InternalIP)
+		var mgmt Management
+		var data []string
+		if attachment == nil {
+			mgmt, data = Planes(report, kube.InternalIP)
+		}
 		plan.Workers = append(plan.Workers, Worker{
 			Name:            report.Node,
 			Report:          report,
@@ -538,15 +614,24 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 			Kube:            kube,
 			Mgmt:            mgmt,
 			Data:            data,
+			Attachment:      attachment,
 		})
 	}
 
 	var misaligned []Refusal
 	plan.Workers, misaligned = alignNetworks(plan.Workers)
 	plan.Refusals = append(plan.Refusals, misaligned...)
+	plan.assignFailureDomains(failureDomainLabelOf(run))
+	plan.noteMultipath()
 
+	if len(plan.Workers) > 0 && plan.Workers[0].Attachment == nil {
+		plan.Unattached = true
+		plan.DataNetworks = commonDataInterfaceCount(plan.Workers)
+	}
 	if len(plan.Workers) > 0 {
-		plan.NodeSets = builder.Build(grouper.Group(plan.Workers))
+		var found []Finding
+		plan.NodeSets, found = splitMembers(builder.Build(grouper.Group(plan.Workers)), plan.Workers, grouper, p.SlotsPerWorker)
+		plan.Findings = append(plan.Findings, found...)
 	}
 	return plan
 }
@@ -665,4 +750,20 @@ func ParseSize(text string) (uint64, error) {
 		return 0, fmt.Errorf("%q is not a size", text)
 	}
 	return value * unit, nil
+}
+
+// commonDataInterfaceCount is the number of data interfaces held by the most
+// workers, and the larger number for a tie.
+func commonDataInterfaceCount(workers []Worker) int {
+	held := map[int]int{}
+	for _, worker := range workers {
+		held[len(worker.Data)]++
+	}
+	best, support := 0, 0
+	for count, workers := range held {
+		if workers > support || (workers == support && count > best) {
+			best, support = count, workers
+		}
+	}
+	return best
 }

@@ -902,6 +902,12 @@ type AttachedClaim struct {
 	// +optional
 	PersistentVolumeName string `json:"persistentVolumeName,omitempty"`
 
+	// ClusterID is the backend cluster the claim's volume is in, whose policy
+	// it is attached to. For a policy on a supercluster it says which
+	// member's policy covers the claim (design-superclusters.md §9.5).
+	// +optional
+	ClusterID string `json:"clusterID,omitempty"`
+
 	// AttachedAt is when the claim started matching the selector.
 	// +optional
 	AttachedAt *metav1.Time `json:"attachedAt,omitempty"`

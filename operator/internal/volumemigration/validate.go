@@ -93,15 +93,12 @@ func (c Connection) target() nvmeof.Target {
 // reading controller state under sysRoot — the host's /sys, mounted into the Job,
 // rather than the container's own.
 //
-// nvme-cli runs through sudo because the rebalancer image runs as an unprivileged
-// uid to satisfy the OpenShift SCC and Red Hat certification requirements, and its
-// sudoers rule is what gets the fabrics device open. The container being privileged
-// is not enough on its own: those capabilities are dropped on the way to a non-root
-// uid.
+// nvme-cli runs directly: the Job is privileged and runs as root
+// (PrivilegedAsRoot), like the CSI node plugin.
 func connector(sysRoot string) *nvmeof.CLIConnector {
 	return nvmeof.NewCLIConnectorWithRunner(
 		nvme.NewSysfsSubsystemResolver(nvme.SysfsConfig{SysRoot: sysRoot}),
-		nvmeof.SudoRunner,
+		nvmeof.NvmeRunner,
 	)
 }
 

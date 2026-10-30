@@ -25,11 +25,13 @@ package node
 import (
 	"context"
 	"fmt"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
@@ -44,9 +46,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	atlaskube "github.com/simplyblock/atlas/kube"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
+
+// memberServicesPoll is how often a member looks again for its supercluster's
+// Services, which are not its own objects and so send it no event.
+const memberServicesPoll = 10 * time.Second
 
 // SingletonControlPlaneName is the one ControlPlane a deployment has, which is
 // where a cluster that states no storage-node image takes one from.
@@ -62,9 +70,11 @@ type StorageNodeWorkloadReconciler struct {
 	// singleton the default image comes from lives.
 	Namespace string
 
-	TLSEnabled       bool
-	TLSMutualEnabled bool
-	TLSProvider      string
+	// TLS answers what the installation's ControlPlane states, per reconcile.
+	// Nil is plaintext. It is read each time rather than once at startup, so a
+	// ControlPlane created after the operator started takes effect on the next
+	// pass.
+	TLS controlplane.TLSResolver
 
 	// Workload writes the per-node ConfigMap, which is the one object here whose
 	// contents come from the nodes rather than from the cluster.
@@ -85,7 +95,11 @@ type StorageNodeWorkloadReconciler struct {
 // reach both before its pod can start.
 func (r *StorageNodeWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha2.StorageCluster{}).
+		For(&simplyblockv1alpha2.StorageCluster{},
+			builder.WithPredicates(predicate.NewPredicateFuncs(func(object client.Object) bool {
+				cluster, ok := object.(*simplyblockv1alpha2.StorageCluster)
+				return ok && cluster.Spec.Supercluster == nil
+			}))).
 		Named("storagenode-workload").
 		Owns(&appsv1.DaemonSet{}).
 		Owns(&corev1.Service{}).
@@ -112,6 +126,11 @@ func (r *StorageNodeWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error
 		Watches(&corev1.Pod{},
 			handler.EnqueueRequestsFromMapFunc(r.clusterOfProxyPod),
 			builder.WithPredicates(isSpdkProxyPod())).
+		// The agent's endpoint carries the pod's own address once the cluster
+		// declares a network, and a restarted pod comes back on a new one.
+		Watches(&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(r.clusterOfAgentPod),
+			builder.WithPredicates(isAgentPod())).
 		Complete(r)
 }
 
@@ -138,6 +157,30 @@ func isSpdkProxyPod() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(object client.Object) bool {
 		return object.GetLabels()["role"] == utils.LabelSpdkProxyRole
 	})
+}
+
+// isAgentPod admits the storage-node agent pods, which carry the app label the
+// DaemonSet sets.
+func isAgentPod() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(object client.Object) bool {
+		return object.GetLabels()[atlaskube.LabelApp] == atlaskube.AppStorageNode
+	})
+}
+
+// clusterOfAgentPod maps an agent pod to the cluster its DaemonSet belongs to,
+// which the pod's own label names.
+func (r *StorageNodeWorkloadReconciler) clusterOfAgentPod(
+	_ context.Context, object client.Object,
+) []reconcile.Request {
+	labels := object.GetLabels()
+	cluster := labels[atlaskube.LabelSimplyblockCluster]
+	if labels[atlaskube.LabelApp] != atlaskube.AppStorageNode || cluster == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Name:      cluster,
+		Namespace: object.GetNamespace(),
+	}}}
 }
 
 // clusterOfProxyPod maps an spdk-proxy pod to the clusters whose workload pass
@@ -183,6 +226,38 @@ func (r *StorageNodeWorkloadReconciler) Reconcile(
 	// a cluster on its way out needs nothing done to it here.
 	if !cluster.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
+	}
+
+	// A supercluster has no storage nodes, and the watch predicate keeps it
+	// from arriving; this keeps a stale request from building it a workload
+	// under names a standalone cluster is reached by.
+	if cluster.Spec.Supercluster != nil {
+		return ctrl.Result{}, nil
+	}
+
+	// Every object here is named from the cluster's workload names, which its
+	// own reconciler records before anything else. Until then there is nothing
+	// to build, and the status write that records them brings the cluster back.
+	if _, recorded := utils.WorkloadNamesOf(&cluster); !recorded {
+		logf.FromContext(ctx).V(1).Info("the cluster has not recorded its workload names yet",
+			"cluster", cluster.Name)
+		return ctrl.Result{}, nil
+	}
+
+	// A member is reached through its supercluster's Services, so nothing of
+	// its workload starts before they and their certificates exist: a node
+	// that came up first would wait on a name that resolves to nothing. Those
+	// objects are the supercluster's and wake nothing here, so the wait polls.
+	if cluster.Spec.SuperclusterRef != "" {
+		ready, waiting, err := utils.WorkloadServicesReady(ctx, r.Client, &cluster, r.TLS.Settings(ctx).Enabled)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !ready {
+			logf.FromContext(ctx).V(1).Info("the member waits for its supercluster's Services",
+				"cluster", cluster.Name, "waiting", waiting)
+			return ctrl.Result{RequeueAfter: memberServicesPoll}, nil
+		}
 	}
 
 	// One reading of the node set feeds both halves that depend on it. The
@@ -322,13 +397,14 @@ func (r *StorageNodeWorkloadReconciler) reconcileDaemonSet(
 	if err != nil {
 		return err
 	}
-	secretVersion, err := r.tlsSecretVersion(ctx, cluster.Namespace)
+	secretVersion, err := r.tlsSecretVersion(ctx, cluster)
 	if err != nil {
 		return err
 	}
 
+	tls := r.TLS.Settings(ctx)
 	desired := utils.BuildStorageNodeDaemonSet(cluster,
-		r.TLSEnabled, r.TLSMutualEnabled, r.TLSProvider, secretVersion, image)
+		tls.Enabled, tls.Mutual, tls.Provider, secretVersion, image)
 	if err := controllerutil.SetControllerReference(cluster, desired, r.Scheme); err != nil {
 		return err
 	}
@@ -364,7 +440,7 @@ func (r *StorageNodeWorkloadReconciler) image(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) (string, error) {
 	if wl := cluster.Spec.StorageNodes; wl != nil && wl.Image != "" {
-		return wl.Image, nil
+		return string(wl.Image), nil
 	}
 
 	// Read at v1alpha2, the stored version, rather than at the retired v1alpha1. A
@@ -380,14 +456,14 @@ func (r *StorageNodeWorkloadReconciler) image(
 			SingletonControlPlaneName, err)
 	}
 	if local := controlPlane.Spec.Source.Local; local != nil && local.Image != "" {
-		return local.Image, nil
+		return string(local.Image), nil
 	}
 	// A managed control plane is a different Kubernetes cluster's install and
 	// carries no image of its own here to fall back to -- spec.source.managed
 	// says where the control plane is, not what this cluster's storage nodes
 	// should run. StorageNodeImage is the only source of a default left.
 	if managed := controlPlane.Spec.Source.Managed; managed != nil && managed.StorageNodeImage != "" {
-		return managed.StorageNodeImage, nil
+		return string(managed.StorageNodeImage), nil
 	}
 	return "", fmt.Errorf(
 		"spec.storageNodes.image is unset and ControlPlane %s states no managed image",
@@ -396,13 +472,14 @@ func (r *StorageNodeWorkloadReconciler) image(
 
 // tlsSecretVersion is what a certificate rotation is noticed by.
 func (r *StorageNodeWorkloadReconciler) tlsSecretVersion(
-	ctx context.Context, namespace string,
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) (string, error) {
-	if !r.TLSEnabled {
+	if !r.TLS.Settings(ctx).Enabled {
 		return "", nil
 	}
+	names, _ := utils.WorkloadNamesOf(cluster)
 	var secret corev1.Secret
-	key := types.NamespacedName{Namespace: namespace, Name: utils.SecretNameStorageNodeSetAPITLS}
+	key := types.NamespacedName{Namespace: cluster.Namespace, Name: names.NodeAPITLSSecret}
 	err := r.Get(ctx, key, &secret)
 	if apierrors.IsNotFound(err) {
 		return "", nil
@@ -413,37 +490,16 @@ func (r *StorageNodeWorkloadReconciler) tlsSecretVersion(
 	return secret.ResourceVersion, nil
 }
 
-// reconcileService applies the headless Service the per-pod DNS names hang off.
+// reconcileService applies the headless Services the per-pod DNS names hang off.
+// A member's are its supercluster's, which the supercluster applies (§6.2).
 func (r *StorageNodeWorkloadReconciler) reconcileService(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
-	for _, desired := range []*corev1.Service{
-		utils.BuildStorageNodeService(cluster, r.TLSEnabled, r.TLSProvider),
-		utils.BuildSpdkProxyService(cluster, r.TLSEnabled, r.TLSProvider),
-	} {
-		if err := controllerutil.SetControllerReference(cluster, desired, r.Scheme); err != nil {
-			return err
-		}
-		var existing corev1.Service
-		err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
-		if apierrors.IsNotFound(err) {
-			if err := r.Create(ctx, desired); err != nil {
-				return err
-			}
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		// The cluster IP is assigned by Kubernetes and may not be rewritten, so
-		// it is carried forward rather than re-stated.
-		desired.ResourceVersion = existing.ResourceVersion
-		desired.Spec.ClusterIP = existing.Spec.ClusterIP
-		if err := r.Update(ctx, desired); err != nil {
-			return err
-		}
+	if cluster.Spec.SuperclusterRef != "" {
+		return nil
 	}
-	return nil
+	tls := r.TLS.Settings(ctx)
+	return utils.ApplyWorkloadServices(ctx, r.Client, r.Scheme, cluster, tls.Enabled, tls.Provider)
 }
 
 // reconcileEndpointSlice publishes one per-pod DNS name per worker the cluster's
@@ -473,7 +529,7 @@ func (r *StorageNodeWorkloadReconciler) reconcileEndpointSlice(
 			if _, known := addresses[worker]; known || worker == "" {
 				continue
 			}
-			address, err := r.workerAddress(ctx, worker)
+			address, err := r.agentAddress(ctx, cluster, worker)
 			if err != nil || address == "" {
 				log.V(1).Info("a worker has no internal address yet and is not published",
 					"worker", worker)
@@ -566,17 +622,24 @@ func (r *StorageNodeWorkloadReconciler) clusterOfOperation(
 	return r.clusterOf(ctx, &node)
 }
 
-// workerAddress is the worker's internal IP, which is what an endpoint carries.
-func (r *StorageNodeWorkloadReconciler) workerAddress(
-	ctx context.Context, worker string,
+// agentAddress is what the storage-node API endpoint of a worker carries: the
+// agent pod's own IP, because the agent is in the pod network.
+func (r *StorageNodeWorkloadReconciler) agentAddress(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, worker string,
 ) (string, error) {
-	var object corev1.Node
-	if err := r.Get(ctx, types.NamespacedName{Name: worker}, &object); err != nil {
-		return "", client.IgnoreNotFound(err)
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods,
+		client.InNamespace(cluster.Namespace),
+		client.MatchingLabels{
+			atlaskube.LabelApp:                atlaskube.AppStorageNode,
+			atlaskube.LabelSimplyblockCluster: cluster.Name,
+		},
+	); err != nil {
+		return "", fmt.Errorf("list the storage-node agent pods: %w", err)
 	}
-	for _, address := range object.Status.Addresses {
-		if address.Type == corev1.NodeInternalIP {
-			return address.Address, nil
+	for i := range pods.Items {
+		if pods.Items[i].Spec.NodeName == worker {
+			return pods.Items[i].Status.PodIP, nil
 		}
 	}
 	return "", nil
@@ -591,11 +654,7 @@ func (r *StorageNodeWorkloadReconciler) workerAddress(
 func (r *StorageNodeWorkloadReconciler) reconcileRBAC(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
-	account := utils.BuildStorageNodeSetServiceAccount(cluster.Namespace)
-	if err := controllerutil.SetControllerReference(cluster, account, r.Scheme); err != nil {
-		return err
-	}
-	if err := r.apply(ctx, account); err != nil {
+	if err := r.shareServiceAccount(ctx, cluster); err != nil {
 		return err
 	}
 
@@ -607,34 +666,60 @@ func (r *StorageNodeWorkloadReconciler) reconcileRBAC(
 	return r.apply(ctx, utils.BuildStorageNodeSetClusterRoleBinding(cluster.Namespace))
 }
 
-// reconcileCertificates applies the serving certificates cert-manager issues for
-// the two Services, where the deployment uses cert-manager at all. OpenShift's
-// service-ca issues its own from an annotation on the Service, so there is nothing
-// to apply there.
+// shareServiceAccount makes the cluster an owner of the ServiceAccount the
+// storage-node pods run as.
+//
+// The control plane's SPDK pod template names the account, so every cluster in a
+// namespace runs as the same one. Each cluster owns it without controlling it,
+// which is what keeps it until the last of them is deleted: a controller
+// reference would let the second cluster take it from the first, and deleting
+// the second would then take it from the first one's pods. An owner reference
+// written as a controller by an earlier operator is rewritten as a plain one.
+func (r *StorageNodeWorkloadReconciler) shareServiceAccount(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+) error {
+	account := utils.BuildStorageNodeSetServiceAccount(cluster.Namespace)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var existing corev1.ServiceAccount
+		err := r.Get(ctx, client.ObjectKeyFromObject(account), &existing)
+		if apierrors.IsNotFound(err) {
+			desired := account.DeepCopy()
+			if err := controllerutil.SetOwnerReference(cluster, desired, r.Scheme); err != nil {
+				return err
+			}
+			return r.Create(ctx, desired)
+		}
+		if err != nil {
+			return err
+		}
+		before := len(existing.OwnerReferences)
+		controlled := metav1.GetControllerOf(&existing) != nil
+		if err := controllerutil.SetOwnerReference(cluster, &existing, r.Scheme); err != nil {
+			return err
+		}
+		for i := range existing.OwnerReferences {
+			existing.OwnerReferences[i].Controller = nil
+		}
+		if len(existing.OwnerReferences) == before && !controlled {
+			return nil
+		}
+		return r.Update(ctx, &existing)
+	})
+}
+
+// reconcileCertificates applies the serving certificates of the two Services.
+// A member's are its supercluster's, as its Services are.
 func (r *StorageNodeWorkloadReconciler) reconcileCertificates(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
-	if !r.TLSEnabled || !utils.IsCertManagerTLSProvider(r.TLSProvider) {
+	if cluster.Spec.SuperclusterRef != "" {
 		return nil
 	}
-
-	for _, certificate := range []struct{ service, secret string }{
-		{"simplyblock-storage-node-api", utils.SecretNameStorageNodeSetAPITLS},
-		{"simplyblock-spdk-proxy", utils.SecretNameSpdkProxyTLS},
-	} {
-		object := utils.BuildServiceServingCertificate(
-			cluster.Namespace, certificate.service, certificate.secret)
-		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, object, func() error {
-			desired := utils.BuildServiceServingCertificate(
-				cluster.Namespace, certificate.service, certificate.secret)
-			object.Object["spec"] = desired.Object["spec"]
-			return controllerutil.SetControllerReference(cluster, object, r.Scheme)
-		})
-		if err != nil {
-			return fmt.Errorf("apply the serving certificate for %s: %w", certificate.service, err)
-		}
+	tls := r.TLS.Settings(ctx)
+	if err := utils.ApplyServingCertificates(ctx, r.Client, r.Scheme, cluster, tls.Enabled, tls.Provider); err != nil {
+		return err
 	}
-	return nil
+	return utils.OwnServingSecrets(ctx, r.Client, r.Scheme, cluster, tls.Enabled)
 }
 
 // apply creates an object or updates it in place, which is what every object here

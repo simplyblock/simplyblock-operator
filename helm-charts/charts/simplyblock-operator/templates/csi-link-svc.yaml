@@ -8,6 +8,14 @@
 # The Service selects every operator replica, not only the leader — a follower
 # accepts the connection and answers the handshake with Unavailable, and the
 # agent redials until it lands on the replica that is leading.
+#
+# With tls.enabled the link's serving certificate is issued here as well, the
+# same way the operator issues the control plane's: a Certificate from the
+# chart's ClusterIssuer under cert-manager, the serving-cert annotation on
+# OpenShift. A certificate the deployer names in csiLink.certSecret replaces
+# both.
+{{- $issue := and .Values.tls.enabled (not .Values.csiLink.certSecret) }}
+{{- $dnsName := printf "%s.%s.svc" .Values.csiLink.serviceName .Release.Namespace }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -15,6 +23,10 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     app: simplyblock-operator
+  {{- if and $issue (eq .Values.tls.provider "openshift") }}
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: {{ include "simplyblock.csiLinkCertSecret" . }}
+  {{- end }}
 spec:
   type: ClusterIP
   selector:
@@ -24,3 +36,27 @@ spec:
       port: {{ .Values.csiLink.port }}
       targetPort: csi-link
       protocol: TCP
+{{- if and $issue (eq .Values.tls.provider "cert-manager") }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.csiLink.serviceName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: simplyblock-operator
+spec:
+  secretName: {{ include "simplyblock.csiLinkCertSecret" . }}
+  commonName: {{ .Values.csiLink.serviceName }}
+  dnsNames:
+    - {{ .Values.csiLink.serviceName }}
+    - {{ .Values.csiLink.serviceName }}.{{ .Release.Namespace }}
+    - {{ $dnsName }}
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+  issuerRef:
+    kind: ClusterIssuer
+    name: simplyblock-certificate-authority-issuer
+{{- end }}

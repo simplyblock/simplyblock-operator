@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
+	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
@@ -301,6 +302,17 @@ func TestNodePluginKeepsThePrivilegeItNeeds(t *testing.T) {
 	}
 }
 
+// The controller plugin speaks only to the control plane, the link hub, and the
+// API server, all of them Services, so it has no use for a worker's network.
+func TestTheControllerPluginRunsOnThePodNetwork(t *testing.T) {
+	spec := controllerStatefulSet(testDriver("simplyblock"), testImage).Spec.Template.Spec
+
+	if spec.HostNetwork || spec.DNSPolicy == corev1.DNSClusterFirstWithHostNet {
+		t.Errorf("hostNetwork = %v with dnsPolicy %q, want the pod network",
+			spec.HostNetwork, spec.DNSPolicy)
+	}
+}
+
 // The postStart hook loads the NVMe-oF transports and gives the host a stable
 // NVMe identity, and does not probe for VDO: that moved into the node plugin,
 // where what it finds reaches the pod's log instead of nowhere
@@ -402,5 +414,19 @@ func TestBothPluginsAreShippedToTheLogCollector(t *testing.T) {
 			t.Errorf("%s pod template %s = %q, want \"true\"",
 				name, utils.AnnotationLogCollector, got)
 		}
+	}
+}
+
+// The hook writes the host NQN the CSI node plugin reads back with
+// nqn.DefaultHost and publishes for a two-node fence, so both spell it from
+// the same rule.
+func TestNodePostStartScriptWritesTheDefaultHostNQN(t *testing.T) {
+	want := `echo "` + nqn.NVMeHost("$(cat /etc/nvme/hostid)") + `" > ` + nqn.DefaultHostNQNFile
+	if !strings.Contains(nodePostStartScript, want) {
+		t.Errorf("postStart script does not write %q:\n%s", want, nodePostStartScript)
+	}
+	if !strings.Contains(nodePostStartScript, "uuidgen > "+nqn.PersistedHostIDFile) {
+		t.Errorf("postStart script does not persist the hostid in %s:\n%s",
+			nqn.PersistedHostIDFile, nodePostStartScript)
 	}
 }

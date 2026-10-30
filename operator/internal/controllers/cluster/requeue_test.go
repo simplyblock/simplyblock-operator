@@ -80,7 +80,11 @@ func TestALostCreationClaimBacksOffByTheContentionInterval(t *testing.T) {
 	}
 	stale.ResourceVersion = "1"
 
-	if got := r.claim(ctx, &stale); got.RequeueAfter != claimBackoff {
+	got, err := r.claim(ctx, &stale)
+	if err != nil {
+		t.Fatalf("a refused claim returned an error: %v", err)
+	}
+	if got.RequeueAfter != claimBackoff {
 		t.Errorf("RequeueAfter = %v, want the contention interval %v",
 			got.RequeueAfter, claimBackoff)
 	}

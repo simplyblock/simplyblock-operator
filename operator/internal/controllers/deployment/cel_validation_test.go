@@ -15,10 +15,14 @@ package deployment
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/ptr"
@@ -311,6 +315,52 @@ func TestAnOpenShiftBlockNeedsAnOpenShiftEnvironment(t *testing.T) {
 	}
 }
 
+// The kubelet and CPU topology flags are the environment's to decide everywhere
+// but Vanilla, whose workers it does not describe, so a document states them
+// only for a Vanilla fleet.
+func TestTheKubeletAndTopologyFlagsNeedAVanillaEnvironment(t *testing.T) {
+	apiClient := apiServer(t)
+	for _, set := range []func(*simplyblockv1alpha2.ClusterTemplate){
+		func(c *simplyblockv1alpha2.ClusterTemplate) { c.EnableKubeletConfiguration = ptr.To(false) },
+		func(c *simplyblockv1alpha2.ClusterTemplate) { c.EnableCpuTopology = ptr.To(true) },
+	} {
+		config := aStoredDocument(t, apiClient, fmt.Sprintf("vanilla-flags-%d", time.Now().UnixNano()))
+		set(config.Spec.Cluster)
+		config.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentTalos
+
+		err := apiClient.Update(context.Background(), config)
+		if err == nil {
+			t.Fatal("a Talos document stated a flag Talos decides")
+		}
+		if !strings.Contains(err.Error(), "Vanilla") {
+			t.Errorf("the refusal does not say what is wrong: %v", err)
+		}
+
+		config.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentVanilla
+		if err := apiClient.Update(context.Background(), config); err != nil {
+			t.Fatalf("a Vanilla document was refused the flag: %v", err)
+		}
+	}
+}
+
+// A discovery run writes the managed service it detected into the document, so
+// the schema has to take every one of them.
+func TestTheSchemaTakesTheManagedServices(t *testing.T) {
+	apiClient := apiServer(t)
+	for _, environment := range []simplyblockv1alpha2.KubernetesEnvironment{
+		simplyblockv1alpha2.KubernetesEnvironmentEKS,
+		simplyblockv1alpha2.KubernetesEnvironmentGKE,
+		simplyblockv1alpha2.KubernetesEnvironmentAKS,
+		simplyblockv1alpha2.KubernetesEnvironmentOKE,
+	} {
+		config := aStoredDocument(t, apiClient, "environment-"+strings.ToLower(string(environment)))
+		config.Spec.Environment = environment
+		if err := apiClient.Update(context.Background(), config); err != nil {
+			t.Errorf("the %s document was refused: %v", environment, err)
+		}
+	}
+}
+
 // The cluster template carries the cluster's arbitration settings, and the
 // schema refuses them on a template that is not Dual, as it does on the
 // StorageCluster they are copied to: the document is where the mistake can
@@ -367,5 +417,166 @@ func TestATemplateTakesArbitrationOnlyWhenDual(t *testing.T) {
 				_ = apiClient.Delete(context.Background(), config)
 			}
 		})
+	}
+}
+
+// Each node set of a supercluster's document becomes a member with a DaemonSet
+// of its own, so the device class is one per node set rather than one per
+// document (design-superclusters.md §5.1): two node sets may differ, and two
+// groups of one node set may not.
+func TestTheDeviceClassIsOnePerNodeSet(t *testing.T) {
+	apiClient := apiServer(t)
+	group := func(name, worker string, devices simplyblockv1alpha2.DeviceSelection) simplyblockv1alpha2.NodeGroup {
+		return simplyblockv1alpha2.NodeGroup{Name: name, Workers: []string{worker}, Devices: &devices}
+	}
+	nvme := simplyblockv1alpha2.DeviceSelection{NVMe: []string{"0000:00:02.0"}}
+	block := simplyblockv1alpha2.DeviceSelection{Block: []string{"/dev/sdb"}}
+
+	config := aStoredDocument(t, apiClient, "per-set-class")
+	config.Spec.NodeSets = []simplyblockv1alpha2.NodeSet{
+		{Name: "fast", Groups: []simplyblockv1alpha2.NodeGroup{group("g", "worker-1", nvme)}},
+		{Name: "dense", Groups: []simplyblockv1alpha2.NodeGroup{group("g", "worker-2", block)}},
+	}
+	if err := apiClient.Update(context.Background(), config); err != nil {
+		t.Fatalf("two node sets of two device classes were refused: %v", err)
+	}
+
+	config.Spec.NodeSets[1].Groups = append(config.Spec.NodeSets[1].Groups, group("h", "worker-3", nvme))
+	err := apiClient.Update(context.Background(), config)
+	if err == nil || !strings.Contains(err.Error(), "device class") {
+		t.Errorf("a node set mixing device classes was admitted, or refused for another reason: %v", err)
+	}
+}
+
+// A node set overrides the cluster template only where the node set is a
+// member of its own: a document of one node set creating one cluster states
+// that cluster's sizing in the template (design-superclusters.md §5.8).
+func TestANodeSetOverridesTheTemplateOnlyWhenItIsAMember(t *testing.T) {
+	apiClient := apiServer(t)
+	group := simplyblockv1alpha2.NodeGroup{
+		Name: "g", Workers: []string{"worker-1"},
+		Devices: &simplyblockv1alpha2.DeviceSelection{NVMe: []string{"0000:00:02.0"}},
+	}
+	overrides := &simplyblockv1alpha2.NodeSetClusterOverrides{VCPUCount: ptr.To(int32(8))}
+
+	config := aStoredDocument(t, apiClient, "overrides")
+	config.Spec.NodeSets[0].Cluster = overrides
+	err := apiClient.Update(context.Background(), config)
+	if err == nil || !strings.Contains(err.Error(), "overrides the cluster template") {
+		t.Errorf("a single node set overriding the template was admitted, or refused for another reason: %v", err)
+	}
+
+	config = aStoredDocument(t, apiClient, "member-overrides")
+	config.Spec.NodeSets = append(config.Spec.NodeSets,
+		simplyblockv1alpha2.NodeSet{Name: "dense", Groups: []simplyblockv1alpha2.NodeGroup{group}, Cluster: overrides})
+	if err := apiClient.Update(context.Background(), config); err != nil {
+		t.Errorf("a member's node set overriding the template was refused: %v", err)
+	}
+}
+
+// An override is held to the floor the template is: four vCPUs.
+func TestANodeSetsVCPUOverrideIsHeldToTheTemplatesFloor(t *testing.T) {
+	apiClient := apiServer(t)
+	group := simplyblockv1alpha2.NodeGroup{
+		Name: "g", Workers: []string{"worker-1"},
+		Devices: &simplyblockv1alpha2.DeviceSelection{NVMe: []string{"0000:00:02.0"}},
+	}
+	for _, tc := range []struct {
+		vcpu  int32
+		admit bool
+	}{{4, true}, {3, false}} {
+		config := aStoredDocument(t, apiClient, fmt.Sprintf("vcpu-floor-%d", tc.vcpu))
+		config.Spec.NodeSets = append(config.Spec.NodeSets, simplyblockv1alpha2.NodeSet{
+			Name: "dense", Groups: []simplyblockv1alpha2.NodeGroup{group},
+			Cluster: &simplyblockv1alpha2.NodeSetClusterOverrides{VCPUCount: ptr.To(tc.vcpu)},
+		})
+		err := apiClient.Update(context.Background(), config)
+		if tc.admit && err != nil {
+			t.Errorf("vcpuCount %d was refused: %v", tc.vcpu, err)
+		}
+		if !tc.admit && (err == nil || !strings.Contains(err.Error(), "vcpuCount")) {
+			t.Errorf("vcpuCount %d was admitted, or refused for another reason: %v", tc.vcpu, err)
+		}
+	}
+}
+
+// withGroups replaces a stored document's node sets with the given groups,
+// written unstructured so that the fields under test are stated the way a
+// manifest states them.
+func withGroups(t *testing.T, config *simplyblockv1alpha2.ClusterDeploymentConfig, groups ...map[string]any) *unstructured.Unstructured {
+	t.Helper()
+	content, err := runtime.DefaultUnstructuredConverter.ToUnstructured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := &unstructured.Unstructured{Object: content}
+	doc.SetGroupVersionKind(simplyblockv1alpha2.GroupVersion.WithKind("ClusterDeploymentConfig"))
+	list := make([]any, 0, len(groups))
+	for _, group := range groups {
+		list = append(list, group)
+	}
+	if err := unstructured.SetNestedSlice(doc.Object, []any{map[string]any{"name": "discovered", "groups": list}},
+		"spec", "nodeSets"); err != nil {
+		t.Fatal(err)
+	}
+	return doc
+}
+
+// aGroup is a group of one worker with one NVMe device and the network fields
+// given.
+func aGroup(name, worker string, network map[string]any) map[string]any {
+	group := map[string]any{
+		"name":    name,
+		"workers": []any{worker},
+		"devices": map[string]any{"nvme": []any{"0000:00:02.0"}},
+	}
+	for key, value := range network {
+		group[key] = value
+	}
+	return group
+}
+
+// A group names the NetworkAttachmentDefinitions its storage nodes are attached
+// through, in place of host interfaces.
+func TestAGroupNamesItsNetworkAttachments(t *testing.T) {
+	apiClient := apiServer(t)
+	config := aStoredDocument(t, apiClient, "attached")
+
+	doc := withGroups(t, config, aGroup("g", "worker-1", map[string]any{
+		"networkAttachment": map[string]any{"management": "storage-mgmt", "data": "storage-data"},
+	}))
+	if err := apiClient.Update(context.Background(), doc, client.FieldValidation("Strict")); err != nil {
+		t.Fatalf("a group naming its network attachments was refused: %v", err)
+	}
+}
+
+// Host networking and network attachments do not mix within a group.
+func TestAGroupNamingInterfacesAndAttachmentsIsRefused(t *testing.T) {
+	apiClient := apiServer(t)
+	config := aStoredDocument(t, apiClient, "both-in-group")
+
+	doc := withGroups(t, config, aGroup("g", "worker-1", map[string]any{
+		"mgmtInterface":     "eth0",
+		"networkAttachment": map[string]any{"management": "storage-mgmt"},
+	}))
+	err := apiClient.Update(context.Background(), doc, client.FieldValidation("Strict"))
+	if err == nil || !strings.Contains(err.Error(), "not both") {
+		t.Errorf("a group naming an interface and an attachment was admitted, or refused for another reason: %v", err)
+	}
+}
+
+// Nor within a document: every storage node of a deployment is on host
+// networking, or every one is attached.
+func TestADocumentMixingHostNetworkingAndAttachmentsIsRefused(t *testing.T) {
+	apiClient := apiServer(t)
+	config := aStoredDocument(t, apiClient, "mixed")
+
+	doc := withGroups(t, config,
+		aGroup("g", "worker-1", map[string]any{"mgmtInterface": "eth0"}),
+		aGroup("h", "worker-2", map[string]any{"networkAttachment": map[string]any{"management": "storage-mgmt"}}),
+	)
+	err := apiClient.Update(context.Background(), doc, client.FieldValidation("Strict"))
+	if err == nil || !strings.Contains(err.Error(), "host networking") {
+		t.Errorf("a document mixing host networking and attachments was admitted, or refused for another reason: %v", err)
 	}
 }

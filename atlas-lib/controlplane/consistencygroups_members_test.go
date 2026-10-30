@@ -2,12 +2,42 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/lvol"
 )
+
+func TestConsistencyGroupByNameReturnsTheCompositeID(t *testing.T) {
+	const group = "c9c9c9c9-c9c9-4c9c-8c9c-c9c9c9c9c9c9"
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":"` + group + `","cluster_id":"` + testCluster +
+			`","name":"app-group","last_group_seq":3,"member_count":2}]`))
+	})
+
+	got, err := c.ConsistencyGroupByName(context.Background(), testCluster, "app-group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := testCluster + "/" + group; got != want {
+		t.Errorf("group id = %q, want the composite %q", got, want)
+	}
+}
+
+func TestConsistencyGroupByNameReportsNotFound(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	})
+
+	if _, err := c.ConsistencyGroupByName(context.Background(), testCluster, "missing"); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
 
 // The member listing carries bare lvol ids; the handles need the pool, which
 // the group's first member is probed for across the cluster's pools. Here it

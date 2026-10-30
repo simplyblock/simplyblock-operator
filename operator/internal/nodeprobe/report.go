@@ -51,7 +51,18 @@ import (
 // for the same reason. A version-8 address names no network, so a reader
 // comparing the networks of two workers would find nothing to compare and pass
 // a fleet whose links cannot reach each other.
-const ReportVersion = 9
+//
+// Version 10 carries the kernel's release and capabilities, and is a bump
+// because a version-9 report decodes with every kernel fact empty. A reader
+// that warns about a worker whose native NVMe multipath is not enabled would
+// find nothing to warn about, and pass a worker that cannot mount a volume
+// over more than one path.
+//
+// Version 11 carries the NetworkAttachmentDefinitions the run's namespace
+// holds, and is a bump because a version-10 report decodes with none. A run
+// asked to attach its storage nodes through a definition would read that as a
+// worker in a cluster without Multus and plan it onto host networking.
+const ReportVersion = 11
 
 // Report is one worker's inventory as the probe found it.
 type Report struct {
@@ -116,6 +127,17 @@ type Report struct {
 	// list.
 	Reclaimed []Controller `json:"reclaimed,omitempty"`
 
+	// NetworkAttachments is the Multus NetworkAttachmentDefinitions the run's
+	// namespace holds, read by this probe through the API.
+	//
+	// It is in a worker's report although the definitions are the cluster's,
+	// because what each one builds on is the worker's: a definition whose master
+	// interface this machine does not have cannot attach a pod on it, and
+	// Interfaces above is the evidence that is checked against. It is absent for
+	// a probe that was given no cluster to ask, which is not a cluster without
+	// the kind.
+	NetworkAttachments *NetworkAttachments `json:"networkAttachments,omitempty"`
+
 	// Unreadable is what the probe could not read, one sentence each. It is
 	// separate from a device's own rejections: this is the machine refusing to
 	// answer, where a rejection is an answer.
@@ -150,6 +172,50 @@ type HostOS struct {
 	// Architecture is uname's machine field: `x86_64`, `aarch64`. It says whether
 	// the images this product ships would run on the worker at all.
 	Architecture string `json:"architecture,omitempty"`
+
+	// Kernel is what the kernel the worker boots offers.
+	Kernel Kernel `json:"kernel"`
+}
+
+// Kernel is the worker's kernel and the capabilities it offers, each with the
+// evidence it was concluded from.
+type Kernel struct {
+	// Release is what `uname -r` prints, such as
+	// `6.1.155-176.282.amzn2023.x86_64`. It is empty when it could not be read,
+	// and Unreadable then says why.
+	Release string `json:"release,omitempty"`
+
+	// Version is the upstream version the release opens with, and is absent
+	// when the release does not open with one.
+	Version *KernelVersion `json:"version,omitempty"`
+
+	// NVMeMultipath is `Enabled`, `Disabled`, `NotBuilt`, or `Unknown`. A worker
+	// on which it is not Enabled can host a storage node and cannot mount a
+	// volume over more than one path: each path is a disk of its own.
+	NVMeMultipath Fact `json:"nvmeMultipath"`
+
+	// KVM, TUN, and PNFSBlock are `Available`, `Loadable`, `Absent`, or
+	// `Unknown`: /dev/kvm, /dev/net/tun, and the pNFS block layout driver.
+	KVM       Fact `json:"kvm"`
+	TUN       Fact `json:"tun"`
+	PNFSBlock Fact `json:"pnfsBlock"`
+}
+
+// KernelVersion is the upstream kernel version, `6.1.155` as three numbers. A
+// distribution backports fixes without changing it, so it places a kernel in
+// upstream's history and does not say which fixes the kernel carries.
+type KernelVersion struct {
+	Major int `json:"major"`
+	Minor int `json:"minor"`
+	Patch int `json:"patch"`
+}
+
+// Fact is one conclusion about the kernel and the evidence for it.
+type Fact struct {
+	State string `json:"state,omitempty"`
+
+	// Detail names the source that answered and what it said.
+	Detail string `json:"detail,omitempty"`
 }
 
 // CPU is what the probe found out about the machine's processors.
@@ -339,6 +405,65 @@ type VXLAN struct {
 	VNI int `json:"vni"`
 }
 
+// NetworkAttachments is what the run's namespace offers.
+type NetworkAttachments struct {
+	// State is `Served`, `NotServed` for a cluster that does not register the
+	// kind, or `Unread` for a reading that failed, in the spelling
+	// inventory.NetworkAttachmentsState uses.
+	State string `json:"state"`
+
+	// Detail is why the reading failed.
+	Detail string `json:"detail,omitempty"`
+
+	// Namespace is the namespace that was listed.
+	Namespace string `json:"namespace,omitempty"`
+
+	// Definitions are the namespace's definitions, ascending by name.
+	Definitions []NetworkAttachment `json:"definitions,omitempty"`
+}
+
+// NetworkAttachment is one NetworkAttachmentDefinition and what its CNI
+// configuration says about the host.
+type NetworkAttachment struct {
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+
+	// Type is the CNI plugin that creates the interface: ipvlan, macvlan,
+	// host-device, bridge, or sriov.
+	Type string `json:"type,omitempty"`
+
+	// HostInterface is the host interface the plugin builds on, and PCIAddress
+	// the slot a host-device names instead. Both are empty for a plugin whose
+	// device comes from ResourceName.
+	HostInterface string `json:"hostInterface,omitempty"`
+	PCIAddress    string `json:"pciAddress,omitempty"`
+
+	// Mode is the ipvlan or macvlan mode, and IPAM the address plugin.
+	Mode string `json:"mode,omitempty"`
+	IPAM string `json:"ipam,omitempty"`
+
+	// ResourceName is the device plugin resource the definition asks the
+	// scheduler for.
+	ResourceName string `json:"resourceName,omitempty"`
+
+	// Problem says why nothing could be read from the configuration.
+	Problem string `json:"problem,omitempty"`
+}
+
+// NetworkAttachment returns the definition of that name, when the report
+// carries one.
+func (r Report) NetworkAttachment(name string) (NetworkAttachment, bool) {
+	if r.NetworkAttachments == nil {
+		return NetworkAttachment{}, false
+	}
+	for _, definition := range r.NetworkAttachments.Definitions {
+		if definition.Name == name {
+			return definition, true
+		}
+	}
+	return NetworkAttachment{}, false
+}
+
 // Device is one block device and whether it may be handed to a storage cluster.
 type Device struct {
 	// Name is the kernel name and Path is the /dev path. A logical
@@ -459,6 +584,53 @@ type Controller struct {
 	// Held and Free, which are the two questions a reader has and neither of
 	// which is the negation of the other.
 	InUse *bool `json:"inUse,omitempty"`
+
+	// LBAFormats is the block sizes each of the controller's namespaces can be
+	// formatted with, and the one each is formatted with. It is empty for a
+	// controller the kernel does not drive, which cannot be asked, and for one
+	// that did not answer, whose failure is in Unreadable.
+	//
+	// It is additive within version 10: no reader acts on it, so a report that
+	// lacks it is one that says nothing about formats, not one that says
+	// something wrong.
+	LBAFormats []NamespaceFormats `json:"lbaFormats,omitempty"`
+}
+
+// NamespaceFormats is the LBA formats one namespace of a controller supports.
+type NamespaceFormats struct {
+	// NSID is the namespace the formats were read from. It is absent when
+	// Common is set.
+	NSID uint32 `json:"nsid,omitempty"`
+
+	// Common reports that the controller had no namespace attached and these
+	// are the formats a namespace created on it could take.
+	Common bool `json:"common,omitempty"`
+
+	// Formats is every format the controller supports, ascending by index.
+	Formats []LBAFormat `json:"formats"`
+
+	// Current is the index of the format the namespace is formatted with, and
+	// is absent for Common.
+	Current *int `json:"current,omitempty"`
+
+	// ExtendedMetadata reports that the metadata is transferred at the end of
+	// each block rather than in a separate buffer.
+	ExtendedMetadata bool `json:"extendedMetadata,omitempty"`
+}
+
+// LBAFormat is one block size and metadata size combination.
+type LBAFormat struct {
+	// Index is the number a Format NVM command takes.
+	Index int `json:"index"`
+
+	// DataSize is one logical block, in bytes, and MetadataSize the metadata
+	// carried with it.
+	DataSize     uint32 `json:"dataSize"`
+	MetadataSize uint16 `json:"metadataSize"`
+
+	// RelativePerformance is the controller's ranking: best, better, good, or
+	// degraded.
+	RelativePerformance string `json:"relativePerformance"`
 }
 
 // Held reports whether something is known to hold the controller open.

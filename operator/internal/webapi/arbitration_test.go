@@ -81,3 +81,70 @@ func TestReportArbitrationRemediation(t *testing.T) {
 		t.Fatalf("body %v", got)
 	}
 }
+
+// sbcli docs/design/two-node-kubernetes-fencing.md §3.5: the host-fencing
+// fields of the record and the three calls the operator makes.
+func TestHostFencingAPI(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		b, _ := json.Marshal(body)
+		got = append(got, r.Method+" "+r.URL.Path+" "+string(b))
+		switch {
+		case r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"cluster_id": "c1", "epoch": 7, "state": "degraded", "enabled": true, "host_fencing": true,
+				"host_fences": map[string]any{"b": map[string]any{"state": "revoked", "on": "a", "epoch": 7,
+					"since": 1761130000000, "host_nqns": []string{"nqn.x"}}},
+				"client_hosts": map[string]any{"b": []string{"nqn.x"}},
+			})
+		case r.URL.Path == "/api/v2/clusters/c1/arbitration/host-fence/release":
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL)
+	ctx := context.Background()
+
+	rec, err := c.GetClusterArbitration(ctx, "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := rec.HostFences["b"]
+	if !rec.HostFencing || f.State != HostFenceRevoked || f.On != "a" || !f.Effective() || rec.ClientHosts["b"][0] != "nqn.x" {
+		t.Fatalf("record %+v", rec)
+	}
+	if err := c.SetArbitrationClientHosts(ctx, "c1", "b", []string{"nqn.x", "nqn.y"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ReleaseHostFence(ctx, "c1", "b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetTwoNodeSettings(ctx, "c1", true, true); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		`GET /api/v2/clusters/c1/arbitration null`,
+		`PUT /api/v2/clusters/c1/arbitration/client-host {"host_nqns":["nqn.x","nqn.y"],"node_id":"b"}`,
+		`POST /api/v2/clusters/c1/arbitration/host-fence/release {"node_id":"b"}`,
+		`PUT /api/v2/clusters/c1/ {"two_node_arbitration":true,"two_node_host_fencing":true}`,
+	}
+	for i := range want {
+		if i >= len(got) || got[i] != want[i] {
+			t.Fatalf("call %d = %q, want %q (all: %q)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestReleaseHostFenceNotYetReleasableIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+	}))
+	defer srv.Close()
+	if err := NewClient(srv.URL).ReleaseHostFence(context.Background(), "c1", "b"); err == nil {
+		t.Fatal("409 must be an error so the operator retries")
+	}
+}

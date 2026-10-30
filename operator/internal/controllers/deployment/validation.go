@@ -25,9 +25,13 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/erasurecoding"
 )
 
 // finding is one thing validation found, carrying the reason its event is raised
@@ -47,6 +51,22 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) ([]finding, error) {
 	var findings []finding
+
+	// A document adding members to a supercluster creates each of them, so it is
+	// checked as a document creating them, at the sizing it states
+	// (design-superclusters.md §5.6).
+	members, err := AddsMembers(ctx, r.Client, config)
+	if err != nil {
+		return nil, err
+	}
+	if members && config.Spec.ClusterRef != "" {
+		if config.Spec.Cluster == nil {
+			findings = append(findings, finding{reason: MemberSizingUnstated, message: fmt.Sprintf(
+				"spec.clusterRef names supercluster %s, and the members the document adds have no "+
+					"sizing: state it in spec.cluster", config.Spec.ClusterRef)})
+		}
+		config = asCreation(config)
+	}
 
 	missing, err := r.missingWorkers(ctx, config)
 	if err != nil {
@@ -99,26 +119,50 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 		})
 	}
 
-	stripe, err := StripeChecks(ctx, r.Client, config.Namespace, config)
+	// What spans one cluster spans one node set of a supercluster's document,
+	// since each node set becomes a member cluster (design-superclusters.md
+	// §5.1): its stripe, its interfaces, and its limits.
+	stripe, err := ClusterStripeChecks(ctx, r.Client, config.Namespace, config)
 	if err != nil {
 		return nil, err
 	}
 	for _, check := range stripe {
 		findings = append(findings, finding{reason: check.Reason, message: check.Message})
 	}
-
-	occupied, err := r.namespaceAlreadyHasACluster(ctx, config)
+	for _, scope := range clusterScopes(config, members) {
+		if found := conflictingInterfaces(scope.document); found != "" {
+			findings = append(findings, finding{reason: WorkerNotFound, message: scope.prefix + found})
+		}
+		if found := blockDevicesWithoutJournalDevice(scope.document); found != "" {
+			findings = append(findings, finding{reason: JournalDeviceRequired, message: scope.prefix + found})
+		}
+		if found := failureDomainLayoutRefusal(scope.document); found != "" {
+			findings = append(findings, finding{reason: FailureDomainLayout, message: scope.prefix + found})
+		}
+	}
+	findings = append(findings, memberLimits(config, members)...)
+	topology, err := r.topologyFindings(ctx, config)
 	if err != nil {
 		return nil, err
 	}
-	if occupied != "" {
-		findings = append(findings, finding{reason: ClusterExists, message: occupied})
+	findings = append(findings, topology...)
+	grown, err := r.growthLimit(ctx, config, members)
+	if err != nil {
+		return nil, err
 	}
-
-	if found := conflictingInterfaces(config); found != "" {
-		findings = append(findings, finding{reason: WorkerNotFound, message: found})
+	if grown != "" {
+		findings = append(findings, finding{reason: MemberTooLarge, message: grown})
 	}
-	if groups := groupsWithoutManagementInterface(config); len(groups) > 0 {
+	if groups := groupsWithNetworkAttachments(config); len(groups) > 0 {
+		findings = append(findings, finding{
+			reason: NetworkAttachmentNotDeployable,
+			message: fmt.Sprintf(
+				"group(s) %s attach their storage nodes through NetworkAttachmentDefinitions, "+
+					"and this operator does not build storage nodes on network attachments yet",
+				strings.Join(groups, ", ")),
+		})
+	}
+	if groups := groupsWithoutManagementInterface(config); len(groups) > 0 && (!onANetwork(config) || onHostNICs(config)) {
 		findings = append(findings, finding{
 			reason: NoManagementInterface,
 			message: fmt.Sprintf(
@@ -144,7 +188,7 @@ func groupsWithoutManagementInterface(
 	var missing []string
 	for _, set := range config.Spec.NodeSets {
 		for _, group := range set.Groups {
-			if group.MgmtInterface == "" {
+			if group.MgmtInterface == "" && group.NetworkAttachment == nil {
 				missing = append(missing, group.Name)
 			}
 		}
@@ -188,8 +232,12 @@ func duplicateWorkers(config *simplyblockv1alpha2.ClusterDeploymentConfig) []str
 func conflictingInterfaces(config *simplyblockv1alpha2.ClusterDeploymentConfig) string {
 	mgmt := map[string]struct{}{}
 	data := map[string]struct{}{}
+	attachments := map[string]struct{}{}
 	for _, set := range config.Spec.NodeSets {
 		for _, group := range set.Groups {
+			if attachment := group.NetworkAttachment; attachment != nil {
+				attachments[attachmentLabel(attachment)] = struct{}{}
+			}
 			if group.MgmtInterface != "" {
 				mgmt[group.MgmtInterface] = struct{}{}
 			}
@@ -211,7 +259,21 @@ func conflictingInterfaces(config *simplyblockv1alpha2.ClusterDeploymentConfig) 
 				"every node of a cluster, so they cannot differ",
 			strings.Join(sortedKeys(data), "; "))
 	}
+	if len(attachments) > 1 {
+		return fmt.Sprintf(
+			"the groups name different network attachments (%s), and one DaemonSet serves "+
+				"every node of a cluster, so they cannot differ",
+			strings.Join(sortedKeys(attachments), "; "))
+	}
 	return ""
+}
+
+// attachmentLabel is a group's attachment as a reader compares it.
+func attachmentLabel(attachment *simplyblockv1alpha2.NetworkAttachmentSelection) string {
+	if attachment.Data == "" {
+		return "management " + attachment.Management
+	}
+	return "management " + attachment.Management + ", data " + attachment.Data
 }
 
 // missingWorkers names every worker the document lists that is not a node of this
@@ -387,6 +449,37 @@ func (r *ClusterDeploymentConfigReconciler) failureDomainsRequired(
 	return cluster.Spec.EnableFailureDomains != nil && *cluster.Spec.EnableFailureDomains
 }
 
+// failureDomainLayoutRefusal is why the control plane would refuse to activate
+// the cluster a document creates in failure-domain mode, or nothing. The control
+// plane checks the layout at a fresh activation alone, after the cluster has
+// been created and every node added, so a growth document is not held to it.
+func failureDomainLayoutRefusal(config *simplyblockv1alpha2.ClusterDeploymentConfig) string {
+	template := config.Spec.Cluster
+	if config.Spec.ClusterRef != "" || template == nil || !ptr.BoolFromOrFalse(template.EnableFailureDomains) {
+		return ""
+	}
+	hosts := map[string]map[string]struct{}{}
+	for _, set := range config.Spec.NodeSets {
+		for _, group := range set.Groups {
+			if group.FailureDomain == "" {
+				// Reported by missingFailureDomains; the layout is not known.
+				return ""
+			}
+			if hosts[group.FailureDomain] == nil {
+				hosts[group.FailureDomain] = map[string]struct{}{}
+			}
+			for _, worker := range group.Workers {
+				hosts[group.FailureDomain][worker] = struct{}{}
+			}
+		}
+	}
+	layout := make(map[string]int, len(hosts))
+	for domain, workers := range hosts {
+		layout[domain] = len(workers)
+	}
+	return erasurecoding.FailureDomainViolation(erasurecoding.SchemeOf(template.Stripe), layout)
+}
+
 // summarize renders the findings for status.message: one sentence, which is what
 // the field is for, with the rest countable.
 func summarize(findings []finding) string {
@@ -419,54 +512,136 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-// namespaceAlreadyHasACluster reports a document that would put a second
-// StorageCluster in a namespace that already holds one.
-//
-// A namespace holds one because the workload a cluster renders is named for the
-// namespace rather than for the cluster: the storage-node Service, its TLS
-// secret, and the serving certificate over it are constants, so the second
-// cluster cannot take ownership of them. Its workload pass stops at the
-// certificate, four steps before the DaemonSet, and what is left is a cluster
-// whose storage nodes wait on a hostname with no pod behind it.
-//
-// The admission webhook refuses the cluster as well, and that is the guard. This
-// is the same fact said at the only point it can still be acted on: admission
-// refuses during CreatingCluster, which is after approval has made the document
-// immutable, and the step then retries to its deadline so the failure that lands
-// names the deadline rather than the reason.
-//
-// A growth document is not this. It names the cluster that is there, which is
-// the precondition it was written against rather than a collision, and neither
-// is the document that created the cluster in the first place: it is validated
-// again on every pass after it has been expanded.
-func (r *ClusterDeploymentConfigReconciler) namespaceAlreadyHasACluster(
-	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
-) (string, error) {
-	if config.Spec.ClusterRef != "" {
-		return "", nil
-	}
+// clusterScope is the part of a document one cluster is built from, and the
+// words a finding about it opens with.
+type clusterScope struct {
+	document *simplyblockv1alpha2.ClusterDeploymentConfig
+	prefix   string
+}
 
-	var clusters simplyblockv1alpha2.StorageClusterList
-	if err := r.List(ctx, &clusters, client.InNamespace(config.Namespace)); err != nil {
-		return "", fmt.Errorf("listing the namespace's storage clusters: %w", err)
+// clusterScopes are the clusters a document builds: the whole document for one
+// cluster, and one node set per member for a members document.
+func clusterScopes(config *simplyblockv1alpha2.ClusterDeploymentConfig, members bool) []clusterScope {
+	if !members {
+		return []clusterScope{{document: config}}
 	}
-
-	mine := config.Status.ClusterRef
-	if mine == "" && config.Spec.Cluster != nil {
-		mine = config.Spec.Cluster.Name
+	scopes := make([]clusterScope, 0, len(config.Spec.NodeSets))
+	for _, set := range config.Spec.NodeSets {
+		scopes = append(scopes, clusterScope{
+			document: memberView(config, set),
+			prefix:   fmt.Sprintf("node set %s: ", set.Name),
+		})
 	}
+	return scopes
+}
 
-	for i := range clusters.Items {
-		if other := clusters.Items[i].Name; other != mine {
-			return fmt.Sprintf(
-				"namespace %s already holds StorageCluster %s, and a namespace holds one: "+
-					"the storage-node Service, its TLS secret, and its serving certificate "+
-					"are named for the namespace rather than for the cluster, so a second "+
-					"cluster here would come up with storage nodes and no workload behind "+
-					"them. Write this deployment into a namespace of its own, or set "+
-					"spec.clusterRef to add its workers to %s",
-				config.Namespace, other, other), nil
+// maxStorageNodesPerCluster bounds a cluster's exposure to concurrent failures:
+// its fault tolerance is its stripe's and does not grow with its node count,
+// while the chance that more nodes fail at once than the stripe tolerates grows
+// with every node (design-superclusters.md §5.2).
+const maxStorageNodesPerCluster = 32
+
+// memberLimits reports node sets over the storage-node limit, and the members a
+// supercluster's document would name with something that is not a name.
+func memberLimits(config *simplyblockv1alpha2.ClusterDeploymentConfig, members bool) []finding {
+	var findings []finding
+	for _, set := range config.Spec.NodeSets {
+		// The node set's own layout, its overrides merged into the template.
+		slots := int32(1)
+		if template := memberView(config, set).Spec.Cluster; template != nil {
+			slots = slotsOf(template.SocketsToUse, template.NodesPerSocket)
+		}
+		workers := 0
+		for _, group := range set.Groups {
+			workers += len(group.Workers)
+		}
+		if nodes := workers * int(slots); nodes > maxStorageNodesPerCluster {
+			findings = append(findings, finding{reason: MemberTooLarge, message: fmt.Sprintf(
+				"node set %s makes %d storage nodes, and a cluster holds at most %d: split its "+
+					"workers into node sets of at most %d workers, each a member of a supercluster",
+				set.Name, nodes, maxStorageNodesPerCluster, maxStorageNodesPerCluster/int(slots))})
+		}
+		if !members {
+			continue
+		}
+		name := memberName(superclusterName(config), set.Name, "abc")
+		if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
+			findings = append(findings, finding{reason: MemberNameInvalid, message: fmt.Sprintf(
+				"node set %s makes a member named like %s, which a StorageCluster cannot be "+
+					"named (%s): shorten the node set's name or the cluster's",
+				set.Name, name, strings.Join(errs, "; "))})
 		}
 	}
-	return "", nil
+	return findings
+}
+
+// growthLimit reports a document that grows a cluster past the storage-node
+// limit, counting the nodes the cluster already has. A document adding members
+// is held to the limit per member by memberLimits instead.
+func (r *ClusterDeploymentConfigReconciler) growthLimit(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig, members bool,
+) (string, error) {
+	if members || config.Spec.ClusterRef == "" {
+		return "", nil
+	}
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: config.Namespace, Name: config.Spec.ClusterRef}
+	switch err := r.Get(ctx, key, &cluster); {
+	case apierrors.IsNotFound(err):
+		// The expansion refuses this with ClusterNotFound.
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("reading StorageCluster %s: %w", config.Spec.ClusterRef, err)
+	}
+	held, err := existingFootprint(ctx, r.Client, config.Namespace, cluster.Name)
+	if err != nil {
+		return "", err
+	}
+	total := newFootprint()
+	total.merge(held)
+	total.merge(plannedFootprint(config, slotsPerWorker(&cluster)))
+	if total.nodes() <= maxStorageNodesPerCluster {
+		return "", nil
+	}
+	return fmt.Sprintf(
+		"the document adds %d storage nodes to cluster %s, which has %d, and a cluster holds at most %d",
+		total.nodes()-held.nodes(), cluster.Name, held.nodes(), maxStorageNodesPerCluster), nil
+}
+
+// blockDevicesWithoutJournalDevice reports a cluster of logical block devices
+// whose template does not put the journal on a device of its own. The control
+// plane refuses every node add of such a cluster ("lblk device mode requires
+// --enable-journal-device"), which lands after the cluster exists. A growth
+// document carries no template, and its cluster's setting already holds.
+func blockDevicesWithoutJournalDevice(config *simplyblockv1alpha2.ClusterDeploymentConfig) string {
+	template := config.Spec.Cluster
+	if config.Spec.ClusterRef != "" || template == nil ||
+		DeviceClassOf(config) != simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock {
+		return ""
+	}
+	if template.EnableJournalDevice != nil && *template.EnableJournalDevice {
+		return ""
+	}
+	return "the groups name logical block devices, and the control plane runs those only with " +
+		"the journal on a device of its own: set spec.cluster.enableJournalDevice, which takes " +
+		"one of each worker's devices, and choose a stripe the rest carry"
+}
+
+// groupsWithNetworkAttachments names the groups that attach their storage nodes
+// through NetworkAttachmentDefinitions.
+//
+// The document states the attachment and the storage nodes are not yet built
+// with it: they run on host networking and would bind no management interface,
+// which the control plane refuses inside node_add. Holding the document here
+// says so before anything is created.
+func groupsWithNetworkAttachments(config *simplyblockv1alpha2.ClusterDeploymentConfig) []string {
+	var attached []string
+	for _, set := range config.Spec.NodeSets {
+		for _, group := range set.Groups {
+			if group.NetworkAttachment != nil {
+				attached = append(attached, group.Name)
+			}
+		}
+	}
+	return attached
 }

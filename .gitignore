@@ -17,3 +17,8 @@ local.mk
 !/helm-charts/charts/simplyblock-operator/
 /csi-driver/charts/spdk-csi/*
 !/csi-driver/charts/spdk-csi/latest/
+
+# Support bundles hold a cluster's logs, node labels, and addresses, and are
+# never a fixture: the fixtures are unpacked directories under
+# support-tool/testdata.
+simplyblock-bundle-*.tar.gz

@@ -49,6 +49,9 @@
 //	                another node's.
 //	conntrack       Forget a host's connection-tracking entries for one dead
 //	                backend; conntrack/conntrackrpc serves it over a link.
+//	placement/placementrpc
+//	                Which member of a supercluster a new volume goes to: the
+//	                operator serves it, the CSI controller calls it.
 //	prometheus      Read the telemetry simplyblock exports about itself:
 //	                capacity, per-volume load, and node write latency.
 //	errs            Sentinel errors shared across atlas, matched with errors.Is.
@@ -64,6 +67,8 @@
 //	net             Reject URLs that are unsafe to forward to the backend.
 //	ptr             Pointers to values, for the optional fields of generated
 //	                request bodies and Kubernetes types.
+//	crdtypes        Validated value types custom resource fields share across
+//	                API groups and versions, so a validation rule is written once.
 //
 // Everything under internal/ (sysfs scanning, the generated control-plane API
 // client, and build metadata) is implementation detail and carries no

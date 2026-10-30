@@ -30,7 +30,8 @@ atlas/
 │   ├── sysfs_scan.go       sysfs tree walk + attribute parsing
 │   ├── siblings.go         Siblings (same volume, other paths) + CoTenants (other volumes, same subsystem)
 │   ├── multinamespace.go   IsMultiNamespace / Controller.MaxNamespaces (MNAN)
-│   └── identify*.go        Identify Controller ioctl (Linux) + field decoding
+│   ├── identify*.go        Identify Controller and Identify Namespace ioctls (Linux) + MNAN decoding
+│   └── lbaformat.go        LBAFormat, ReadNamespaceFormats, ControllerNamespaceIDs, NSIDAll
 ├── nvmeof/                 NVMe-oF fabric connect/disconnect (TCP)
 │   ├── connector.go        Connector iface; Target, Targets + TargetOptions
 │   ├── fabrics.go          local impl: NewFabricsConnector (/dev/nvme-fabrics)
@@ -40,6 +41,7 @@ atlas/
 │   ├── detach.go           DetachDevice: disconnect unless the subsystem is shared
 │   └── multipath.go        the halves: ConnectPaths (ordered per-path connect) + PathResult
 ├── nqn/                    Build & parse simplyblock lvol NQNs
+│   └── default_host.go     DefaultHost: the node's nvme-cli default host NQN; NVMeHost
 ├── fiemap/                 What a byte range of a file is made of: data, unwritten, delalloc, or hole
 ├── nfsclient/              The kernel NFS client's own view of its mounts
 │   └── mountstats.go       Mount, ParseMountstats, ReadMountstats: op counts, layout types, reconnects
@@ -66,8 +68,11 @@ atlas/
 │   ├── hugepages.go        HugePages: per size and per NUMA node, allocated and free
 │   ├── netiface.go         Interface: link speed, state, driver, PCI slot, NUMA node
 │   │                       (Inventory.NVMeControllers comes from pci/, see below)
+│   ├── nvmeformats.go      ReadNVMeFormats: the LBA formats of every kernel-driven NVMe controller
 │   ├── hostos.go           ReadHostOS: the worker's distro, family, version, and architecture
-│   └── environment.go      DetectEnvironment: OpenShift / Talos / K3s / Rancher / Vanilla, with the evidence
+│   ├── environment.go      DetectEnvironment: OpenShift / Talos / K3s / Rancher / Vanilla, with the evidence
+│   └── netattach.go        CollectNetworkAttachments: whether Multus's kind is served, a namespace's
+│                           definitions, and the host interface each CNI configuration builds on
 ├── lvm/                    Linux LVM commands + content-based identity
 │   ├── doc.go              Why identity is read from content, and how scoping is decided
 │   ├── lvm.go              Manager, Run (the escape hatch)
@@ -118,7 +123,11 @@ atlas/
 │   ├── volumes.go          create / clone / list / resize / delete / connection
 │   ├── pools.go            storage pools (incl. by-name lookup)
 │   ├── storagenodes.go     storage nodes + their data NICs
-│   └── migrations.go       subsystem migrations: create / get / list / continue / cancel, of a volume or a whole subsystem
+│   ├── consistencygroups.go consistency groups: by members, by name, member handles
+│   ├── migrations.go       subsystem migrations: create / get / list / continue / cancel, of a volume or a whole subsystem
+│   ├── volumemove.go       moving a volume to another cluster: start / stop / commit / release the cutover
+│   ├── chain.go            WalkChain: from a handle to the volume serving it, across relationships
+│   └── tasks.go            control-plane tasks: read one, as a caller waiting on queued work
 ├── link/                   gRPC operator ↔ CSI, over connections the CSI driver opens
 │   ├── doc.go              why the connection runs backwards, and how gRPC still works on it
 │   ├── session.go          Session: yamux-multiplexed link, gRPC server + client on both ends
@@ -126,9 +135,10 @@ atlas/
 │   ├── agent.go            Agent: the CSI side; dials, identifies, serves, reconnects
 │   ├── registry.go         Registry: who is linked right now (ErrNoSession when not)
 │   ├── peer.go             PeerKind/PeerID/Claim/Identity/Peer
+│   ├── peercontext.go      hub services: refused before Hello, PeerFromContext names the caller
 │   ├── auth.go             Authenticator iface, bearer-token plumbing, TokenSource
 │   ├── kubeauth.go         KubeAuthenticator: TokenReview → the pod's node, not the peer's word
-│   ├── dial.go             TLSDialer / InsecureDialer
+│   ├── dial.go             TLSFileDialer / TLSDialer / InsecureDialer
 │   └── linkv1/             the Hello handshake protocol (buf-generated, committed)
 ├── storage/                one node's storage as one value, with no gRPC in here
 │   ├── accessor.go         Accessor: every lookup flat, plus the questions that re-scan
@@ -144,6 +154,15 @@ atlas/
 │   └── conntrackrpc/       FlowService: served by the CSI node plugin, called by the operator
 │       ├── conntrackrpc.go NewServer(conntrack.Forget), Remote(conn).Forget
 │       └── conntrackv1/    the FlowService protocol (buf-generated, committed)
+├── netcheck/               Ask the host's namespace about its network: a NIC's addresses, a TCP connect
+│   ├── netcheck.go         Selector (name or PCI address), Report, Lookup, Interface, Connect
+│   └── netcheckrpc/        CheckService: served by the CSI node plugin, called by the operator
+│       ├── netcheckrpc.go  NewServer(read, connect), Remote(conn).InterfaceAddresses/.Connect, ErrUnavailable
+│       └── netcheckv1/     the CheckService protocol (buf-generated, committed)
+├── placement/
+│   └── placementrpc/       PlacementService: served by the operator, called by the CSI controller
+│       ├── placementrpc.go NewServer(Placer), Remote(conn).Place; controllers only
+│       └── placementv1/    the PlacementService protocol (buf-generated, committed)
 ├── prometheus/             The telemetry simplyblock exports about itself (PromQL)
 │   ├── doc.go              Why this is not part of controlplane, and how fresh a value is
 │   ├── client.go           Provider, New, NewWithAPI (the test seam), query helpers
@@ -158,6 +177,8 @@ atlas/
 │   └── claim.go            KubeClaim + WithClaim: fire a state's side effect once, under a leased claim
 ├── net/                    Outbound URL validation (SSRF guard)
 ├── ptr/                    Pointer/optional-field helpers for generated + K8s types
+├── crdtypes/               Validated value types CRD fields share; the markers sit on the type
+│   └── image.go            ImageReference: any registry, a tag, a digest, or both
 ├── bounded/                Hard deadlines for calls no context reaches
 │   ├── bounded.go          Call/Do: a sysfs read, ioctl, or open under a deadline + the stuck-key guard
 │   └── command.go          CombinedOutput/Output: a child process that returns even when it cannot be reaped
@@ -651,6 +672,13 @@ inv, err := inventory.Collect(ctx, inventory.Config{
     Kubernetes: inventory.KubernetesSources{
         Discovery: clientset.Discovery(),
         Nodes:     nodes.Items,
+        // The Multus definitions one namespace holds. Independent of the two
+        // above: giving it does not conclude the environment.
+        NetworkAttachments: inventory.NetworkAttachmentSource{
+            Discovery: clientset.Discovery(),
+            Dynamic:   dynamicClient,
+            Namespace: "simplyblock",
+        },
     },
 })
 if err != nil {
@@ -668,6 +696,8 @@ inv.HostOS.Family               // Debian / RedHat / SUSE / Alpine / Arch; which
 inv.HostOS.Architecture         // uname's machine: x86_64, aarch64
 inv.Environment.Distribution    // OpenShift / Talos / K3s / Rancher / Vanilla
 inv.Environment.Evidence        // what it rested on, for the reviewer who corrects it
+inv.NetworkAttachments.State    // Served / NotServed (no Multus) / Unread; empty when not asked
+inv.NetworkAttachments.Definitions // .Name, .Config.Type, .Config.HostInterface, .ResourceName
 
 // Every block device is returned, refused ones included, so that an
 // administrator can be told why the disk they expected is not a candidate.
@@ -1069,6 +1099,10 @@ A host NQN is the same story from the other end. `nqn.Host(nodeUID)` composes
 the identity an access-controlled pool authorizes, and `nqn.HostUUID` reads it
 back out — which is what a `--hostid` has to be derived from, since the kernel
 pairs hostid with hostnqn by comparison.
+`nqn.DefaultHost` reads the node's other host identity, the one nvme-cli
+presents on a connect that names none: `/etc/nvme/hostnqn`, or the persisted
+hostid in `/var/lib/nvme/hostid` composed with `nqn.NVMeHost` while that file
+is not written yet.
 
 _Today:_ the CSI driver builds every host NQN with `nqn.Host` (its node service
 and its reconnect loop), derives the DHCHAP `--hostid` with `nqn.HostUUID`
@@ -1076,6 +1110,9 @@ and its reconnect loop), derives the DHCHAP `--hostid` with `nqn.HostUUID`
 subsystem NQN with `nqn.Parse` (`internal/controlplane`, `internal/initiator`,
 `internal/reconnect`). It kept its own copies of the last two until the
 `internal/csi/common` split, when they were adopted and deleted.
+The CSI node plugin publishes `nqn.DefaultHost` on its Node
+(`internal/csi/node/host_nqn.go`), so the operator can name both identities
+when a two-node fence revokes them.
 
 #### Assemble an LVM stack on a device
 
@@ -1343,8 +1380,16 @@ go hub.Serve(ctx)
 CSI side, one call for the whole lifecycle — dial, identify, serve, reconnect:
 
 ```go
+// The files are read on every attempt: they are mounted from Secrets that can
+// be populated after the pod starts, and rotated in place later. A missing
+// file fails the attempt and never downgrades it to plaintext.
+dial, err := link.TLSFileDialer("simplyblock-csi-link.simplyblock.svc:9500", link.TLSFiles{
+    CAFile:   "/etc/simplyblock/tls/ca.crt",
+    CertFile: "/etc/simplyblock/tls/tls.crt", // mutual TLS only
+    KeyFile:  "/etc/simplyblock/tls/tls.key",
+})
 agent, err := link.NewAgent(link.AgentConfig{
-    Dial:        link.TLSDialer("simplyblock-operator-link:9443", clientTLS),
+    Dial:        dial,
     ID:          link.NodePeer(os.Getenv("NODE_NAME")),   // downward API
     InstanceUID: os.Getenv("POD_UID"),                    // supersedes a stale session
     Token:       link.TokenFile("/var/run/secrets/atlas/link/token"),
@@ -1438,6 +1483,38 @@ for _, p := range registry.PeersOfKind(link.PeerKindNode) {
 *Today:* the operator's `NFSExport` reconciler asks for it when a pNFS metadata
 server pod goes away, through `operator/internal/csilink/flows.go`, and
 `csi-driver/internal/driver/driver.go` serves it on every node plugin.
+
+#### Read a host NIC's address and test a connection from the host
+
+A NIC that a `host-device` definition moves into a pod holds its address in the
+host's namespace until the pod takes it, and the kernel NVMe/TCP initiator
+connects from that same namespace. Only a process on the host's network sees
+either, so the operator asks the CSI node plugin, which runs there:
+
+```go
+// On the node (the CSI node plugin, host network, privileged):
+srv, err := netcheckrpc.NewServer(
+    func(sel netcheck.Selector) (netcheck.Report, error) { return netcheck.Interface(inventory.Config{}, sel) },
+    netcheck.Connect,
+)
+cfg.Register = func(r grpc.ServiceRegistrar) { storageSrv.Register(r); srv.Register(r) }
+cfg.Capabilities = append(storagerpc.Capabilities(), netcheckrpc.Capabilities()...)
+
+// From the operator, for the worker's own peer:
+report, err := netcheckrpc.Remote(p.Conn()).InterfaceAddresses(ctx, netcheck.Selector{Name: "ens4"})
+res, err := netcheckrpc.Remote(p.Conn()).Connect(ctx, "10.10.100.200", 4426, 5*time.Second)
+```
+
+An interface the host lacks, a refused connection, and a timeout are answers
+(`Found` false, `Connected` false with a reason), and only a call that fails is
+an error. A worker with no linked plugin that advertises
+`netcheckrpc.CapabilityCheck` is `netcheckrpc.ErrUnavailable`, which a caller
+treats as not yet verifiable and never as passed.
+
+*Today:* the storage node reconciler reads the NIC address before a node is added
+and runs the reachability gate after it is online, through
+`operator/internal/csilink/hostcheck.go`, and `csi-driver/internal/driver/driver.go`
+serves it on every node plugin.
 
 ### Cross-cutting
 

@@ -210,8 +210,8 @@ File: `operator/internal/controllers/controlplane/dnsdomain_test.go`
 | #     | Scenario                                                                          | Type       | Test                                                          |
 |-------|-----------------------------------------------------------------------------------|------------|---------------------------------------------------------------|
 | U-519 | The database names its coordinators under the cluster DNS domain, not the default | Regression | `TestTheDatabaseNamesItsCoordinatorsUnderTheClusterDNSDomain` |
-| U-520 | The management API endpoint is under the cluster DNS domain                       | Positive   | `TestTheManagementAPIEndpointIsUnderTheClusterDNSDomain`      |
-| U-521 | The peer certificate names the database's pods under the cluster DNS domain       | Positive   | `TestThePeerCertificateNamesTheClusterDNSDomain`              |
+| U-520 | The management API endpoint carries no cluster DNS domain                         | Regression | `TestTheManagementAPIEndpointCarriesNoClusterDomain`          |
+| U-521 | The peer certificate names the database's pods in both spellings                  | Positive   | `TestThePeerCertificateNamesBothSpellings`                    |
 
 ### Deletion (design §4.4)
 
@@ -289,7 +289,7 @@ installation rows additionally need the FoundationDB CRDs installed into
 | I-02 | Both `managed` and `external` set: rejected by the CEL rule                          | Negative | —                                                 |
 | I-03 | Neither set: rejected by the same rule                                               | Boundary | —                                                 |
 | I-04 | `spec.source` changed from `managed` to `external`: rejected as immutable            | Negative | —                                                 |
-| I-05 | `spec.source.managed.image` outside the trusted registries: rejected                 | Negative | —                                                 |
+| I-05 | `spec.source.managed.image` not a well-formed reference: rejected                    | Negative | —                                                 |
 | I-06 | `spec.source.external.endpoint` malformed: rejected by the pattern                   | Negative | —                                                 |
 | I-07 | `spec.source.external.credentialsSecretRef` omitted: rejected as `Required`          | Negative | —                                                 |
 | I-08 | `spec.source.managed.foundationDB.replicas` of 0: rejected by the minimum            | Boundary | —                                                 |

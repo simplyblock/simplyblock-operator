@@ -212,8 +212,8 @@ func TestEveryConsumingHostIsCheckedBeforeTheCutover(t *testing.T) {
 		testOperation(), testClusterObject(), testNodeObject(),
 		claimedVolume(testPVName, "data-0"),
 		claimedVolume("pvc-"+siblingVolume, "data-1"),
-		runningPodOn("worker-1", "app", "data-0"),
-		runningPodOn("worker-2", "app", "data-1"),
+		runningPodOn("worker-1", "data-0"),
+		runningPodOn("worker-2", "data-1"),
 	)
 
 	for range 3 {
@@ -604,9 +604,9 @@ func claimedVolume(name, claim string) *corev1.PersistentVolume {
 	return pv
 }
 
-func runningPodOn(node, namespace, claim string) *corev1.Pod {
+func runningPodOn(node, claim string) *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "app-" + claim, Namespace: namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: "app-" + claim, Namespace: consumerNamespace},
 		Spec: corev1.PodSpec{
 			NodeName: node,
 			Volumes: []corev1.Volume{{

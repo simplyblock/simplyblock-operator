@@ -18,3 +18,11 @@ work out that there was a choice at all.
 {{-     end -}}
 {{-   end -}}
 {{- end -}}
+{{/*
+A serving certificate for the CSI link means nothing with TLS off. The CSI pods
+take their link TLS from the same switch as the rest of their TLS, so they
+would dial plaintext into a hub that serves TLS only, and never link.
+*/}}
+{{- if and .Values.csiLink.certSecret (not .Values.tls.enabled) -}}
+{{-   fail "csiLink.certSecret serves the CSI link over TLS, and with tls.enabled=false the CSI pods have no CA to verify it with and dial plaintext. Set tls.enabled=true, or leave csiLink.certSecret empty to serve the link without TLS." -}}
+{{- end -}}

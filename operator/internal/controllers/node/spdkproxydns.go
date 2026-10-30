@@ -2,7 +2,8 @@
 //
 // A storage node's SPDK process answers RPC on its own port, and the control
 // plane reaches it at
-// <worker>.simplyblock-spdk-proxy.<namespace>.svc.<cluster DNS domain>:<rpc port>.
+// <worker>.<spdk proxy service>.<namespace>.svc:<rpc port>,
+// where the Service is the one the cluster's workload names record.
 // That name is a headless Service plus one EndpointSlice per port, each endpoint
 // carrying the worker's name as its hostname -- the Service on its own resolves
 // nothing.
@@ -26,6 +27,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -41,9 +43,24 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
-// spdkProxyServiceName is the headless Service these slices attach to, and it is
-// a literal because the control plane's own address template is.
-const spdkProxyServiceName = "simplyblock-spdk-proxy"
+// spdkPodName is how the control plane names an SPDK pod since sbcli 25.10.5:
+// its RPC port and the first six characters of its cluster's UUID.
+var spdkPodName = regexp.MustCompile(`^snode-spdk-pod-[0-9]+-([0-9a-f]{6})$`)
+
+// spdkPodOfCluster reports whether a pod is one of the cluster's SPDK pods. A
+// namespace may hold several clusters, and each publishes only its own. A pod
+// named by an older template carries no cluster at all, and comes from a
+// deployment that predates both the workload names and two clusters in a
+// namespace, so it belongs to the cluster under the constant names, and to no
+// cluster with names of its own.
+func spdkPodOfCluster(pod *corev1.Pod, cluster *simplyblockv1alpha2.StorageCluster) bool {
+	match := spdkPodName.FindStringSubmatch(pod.Name)
+	if match == nil {
+		names, _ := utils.WorkloadNamesOf(cluster)
+		return names.IsConstant()
+	}
+	return strings.HasPrefix(cluster.Status.UUID, match[1])
+}
 
 // reconcileSpdkProxyEndpoints publishes one EndpointSlice per RPC port.
 func (r *StorageNodeWorkloadReconciler) reconcileSpdkProxyEndpoints(
@@ -68,6 +85,9 @@ func (r *StorageNodeWorkloadReconciler) reconcileSpdkProxyEndpoints(
 	anyPod := map[int32]bool{}
 	for i := range pods.Items {
 		pod := &pods.Items[i]
+		if !spdkPodOfCluster(pod, cluster) {
+			continue
+		}
 		rpcPort, ok := spdkProxyRPCPort(pod)
 		if !ok {
 			log.Info("an spdk-proxy pod names no RPC port and is not published",
@@ -131,10 +151,11 @@ func (r *StorageNodeWorkloadReconciler) pruneProxySlices(
 	cluster *simplyblockv1alpha2.StorageCluster,
 	anyPod map[int32]bool,
 ) error {
+	names, _ := utils.WorkloadNamesOf(cluster)
 	var slices discoveryv1.EndpointSliceList
 	if err := r.List(ctx, &slices,
 		client.InNamespace(cluster.Namespace),
-		client.MatchingLabels{"kubernetes.io/service-name": spdkProxyServiceName},
+		client.MatchingLabels{discoveryv1.LabelServiceName: names.SpdkProxyService},
 	); err != nil {
 		return fmt.Errorf("list the published spdk-proxy EndpointSlices: %w", err)
 	}

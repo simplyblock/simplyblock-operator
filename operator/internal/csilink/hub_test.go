@@ -15,6 +15,7 @@ import (
 	"encoding/pem"
 	"maps"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -189,5 +190,201 @@ func TestMDSKindIsClosedWithoutItsServiceAccount(t *testing.T) {
 	})
 	if _, open := accounts[link.PeerKindMDS]; open {
 		t.Errorf("MDS kind open without a ServiceAccount: %v", accounts)
+	}
+}
+
+// linkCA signs the hub's serving certificate and the peers' client
+// certificates in the listener tests.
+type linkCA struct {
+	cert *x509.Certificate
+	key  *ecdsa.PrivateKey
+}
+
+func newLinkCA(t *testing.T) *linkCA {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate CA key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "csi-link-test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create CA certificate: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse CA certificate: %v", err)
+	}
+	return &linkCA{cert: cert, key: key}
+}
+
+func (ca *linkCA) pem() []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.cert.Raw})
+}
+
+// issue signs a leaf for name and returns it as PEM, certificate then key.
+func (ca *linkCA) issue(t *testing.T, name string, usage x509.ExtKeyUsage) ([]byte, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: name},
+		DNSNames:     []string{name},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{usage},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
+	if err != nil {
+		t.Fatalf("issue certificate: %v", err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+}
+
+func writeFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// handshake dials the listener once as a peer verifying "hub.test" against
+// roots, presenting client when it is set, and returns the error the hub's
+// side of the handshake ended with. Under TLS 1.3 the client finishes first,
+// so only the hub's side says whether the peer was let in.
+func handshake(t *testing.T, listener net.Listener, roots *x509.CertPool, client *tls.Certificate) error {
+	t.Helper()
+	serverErr := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		serverErr <- conn.(*tls.Conn).Handshake()
+	}()
+
+	cfg := &tls.Config{RootCAs: roots, ServerName: "hub.test", MinVersion: tls.VersionTLS13}
+	if client != nil {
+		cfg.Certificates = []tls.Certificate{*client}
+	}
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp",
+		listener.Addr().String(), cfg)
+	if err == nil {
+		// Reading makes the client wait for the hub's verdict on its
+		// certificate rather than closing before the hub has given one.
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		_, _ = conn.Read(make([]byte, 1))
+		_ = conn.Close()
+	}
+
+	select {
+	case err := <-serverErr:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("the hub saw no handshake")
+		return nil
+	}
+}
+
+// The serving certificate is issued in the cluster and mounted from an optional
+// Secret, so the operator starts before it exists. The hub has to come up
+// anyway and begin serving TLS once it lands. Plaintext in the meantime is not
+// an option: the peers would hand it their tokens.
+func TestHubStartsBeforeItsCertificateExists(t *testing.T) {
+	ca := newLinkCA(t)
+	dir := t.TempDir()
+	cfg := Config{
+		BindAddress: "127.0.0.1:0",
+		CertFile:    filepath.Join(dir, "tls.crt"),
+		KeyFile:     filepath.Join(dir, "tls.key"),
+	}
+
+	listener, err := listen(cfg)
+	if err != nil {
+		t.Fatalf("listen before the certificate exists: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	roots := x509.NewCertPool()
+	roots.AddCert(ca.cert)
+	if err := handshake(t, listener, roots, nil); err == nil {
+		t.Fatal("the hub completed a handshake with no certificate to serve")
+	}
+
+	certPEM, keyPEM := ca.issue(t, "hub.test", x509.ExtKeyUsageServerAuth)
+	writeFile(t, cfg.CertFile, certPEM)
+	writeFile(t, cfg.KeyFile, keyPEM)
+	if err := handshake(t, listener, roots, nil); err != nil {
+		t.Fatalf("handshake once the certificate arrived: %v", err)
+	}
+}
+
+// Under mutual TLS the hub admits a peer only with a client certificate its CA
+// issued to one of the CSI identities. The token still says which pod and node
+// the peer is, and the certificate says the connection comes from a component
+// the install issued one to.
+func TestHubRequiresAClientCertificateFromItsCA(t *testing.T) {
+	ca := newLinkCA(t)
+	dir := t.TempDir()
+	cfg := Config{
+		BindAddress:  "127.0.0.1:0",
+		CertFile:     filepath.Join(dir, "tls.crt"),
+		KeyFile:      filepath.Join(dir, "tls.key"),
+		ClientCAFile: filepath.Join(dir, "ca.crt"),
+		ClientNames:  []string{"simplyblock-csi-node", "simplyblock-csi-controller"},
+	}
+	certPEM, keyPEM := ca.issue(t, "hub.test", x509.ExtKeyUsageServerAuth)
+	writeFile(t, cfg.CertFile, certPEM)
+	writeFile(t, cfg.KeyFile, keyPEM)
+	writeFile(t, cfg.ClientCAFile, ca.pem())
+
+	listener, err := listen(cfg)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	roots := x509.NewCertPool()
+	roots.AddCert(ca.cert)
+
+	clientCert := func(ca *linkCA, name string) *tls.Certificate {
+		certPEM, keyPEM := ca.issue(t, name, x509.ExtKeyUsageClientAuth)
+		pair, err := tls.X509KeyPair(certPEM, keyPEM)
+		if err != nil {
+			t.Fatalf("client keypair: %v", err)
+		}
+		return &pair
+	}
+
+	if err := handshake(t, listener, roots, clientCert(ca, "simplyblock-csi-node")); err != nil {
+		t.Errorf("a CSI node certificate from the hub's CA was refused: %v", err)
+	}
+	if err := handshake(t, listener, roots, nil); err == nil {
+		t.Error("a peer with no client certificate was admitted")
+	}
+	if err := handshake(t, listener, roots, clientCert(ca, "simplyblock-prometheus")); err == nil {
+		t.Error("a client certificate issued to another component was admitted")
+	}
+	if err := handshake(t, listener, roots, clientCert(newLinkCA(t), "simplyblock-csi-node")); err == nil {
+		t.Error("a client certificate from another CA was admitted")
 	}
 }

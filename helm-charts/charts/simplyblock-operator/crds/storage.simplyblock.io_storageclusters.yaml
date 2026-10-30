@@ -593,6 +593,13 @@ spec:
         - jsonPath: .status.phase
           name: Phase
           type: string
+        - jsonPath: .status.role
+          name: Role
+          type: string
+        - jsonPath: .status.memberCount
+          name: Members
+          priority: 1
+          type: integer
         - jsonPath: .status.step.state
           name: Step
           type: string
@@ -616,9 +623,10 @@ spec:
       schema:
         openAPIV3Schema:
           description: |-
-            StorageCluster is one simplyblock backend cluster. It owns the storage nodes
-            beneath it, the pools carved out of it, and the Kubernetes workload its nodes
-            run as.
+            StorageCluster is one simplyblock backend cluster, or a supercluster that
+            aggregates several of them. A backend cluster owns the storage nodes beneath
+            it, the pools carved out of it, and the Kubernetes workload its nodes run as.
+            A supercluster has no nodes: its members do.
           properties:
             apiVersion:
               description: |-
@@ -655,6 +663,17 @@ spec:
                       maximum: 4500
                       minimum: 500
                       type: integer
+                    hostFencing:
+                      description: |-
+                        HostFencing lets Kubernetes follow the arbiter's fence of a node whose
+                        state is unknown. The control plane revokes the node's NVMe host
+                        identities on its peer, the operator sets the StorageFenced condition on
+                        its Kubernetes node, and a NodeHealthCheck with a
+                        StorageFenceRemediationTemplate applies the out-of-service taint, so its
+                        pods and VMs restart on the peer within seconds. A partition then has a
+                        winner instead of stopping I/O on both nodes. Requires the NodeHealthCheck
+                        operator.
+                      type: boolean
                     leaseTtlMs:
                       description: |-
                         LeaseTtlMs is how long a lease from the arbiter stays valid. It only
@@ -779,6 +798,12 @@ spec:
                     cannot be turned off, since a drain, a rebalance, and a device
                     replacement are all performed by moving volumes.
                   type: boolean
+                disablePlacement:
+                  description: |-
+                    DisablePlacement stops new volumes being placed in this member. Volumes
+                    already in it stay where they are and keep working. Valid only on a
+                    member.
+                  type: boolean
                 enableArbitration:
                   description: |-
                     EnableArbitration turns on the control plane's two-node arbitration:
@@ -898,8 +923,9 @@ spec:
                     node. It is the cluster's and no node carries a copy: every node's
                     configuration is generated from this field, so changing it reaches the
                     nodes that already exist as each of them next restarts.
-                    Required: it sizes huge pages, and a node that receives no value fails
-                    config generation outright rather than falling back to a default.
+                    Required on every cluster except a supercluster: it sizes huge pages, and
+                    a node that receives no value fails config generation outright rather
+                    than falling back to a default.
                   format: int32
                   maximum: 75
                   minimum: 10
@@ -1146,7 +1172,7 @@ spec:
                       description: |-
                         Image is the storage-node container image. Defaults to the ControlPlane
                         singleton's spec.image when unset, so a deployment states the version once.
-                      pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                      pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                       type: string
                     imagePullPolicy:
                       default: Always
@@ -1227,6 +1253,110 @@ spec:
                       x-kubernetes-validations:
                         - message: field is immutable
                           rule: self == oldSelf
+                    network:
+                      description: |-
+                        Network states the networks the storage nodes' SPDK pods attach to, as
+                        references to networks rather than interface names. It replaces
+                        dataInterfaces, which are allowed only with network.spdkOnHostNetwork. The
+                        management interface is still mgmtInterface. It is set when the cluster is created and never added,
+                        changed, or removed afterward: the control plane resolves a node's networks
+                        when it adds the node and does not revisit them, and a cluster created
+                        without it keeps its pods on the host network.
+                      properties:
+                        data:
+                          description: |-
+                            Data are the Multus networks the storage nodes serve volumes on, each a
+                            NetworkAttachmentDefinition the pod attaches to besides the pod network, which
+                            podNetwork must therefore state.
+                          items:
+                            description: |-
+                              StorageNetwork is one data network a storage node's SPDK pod attaches to
+                              through a NetworkAttachmentDefinition.
+                            properties:
+                              networkAttachmentRef:
+                                description: |-
+                                  NetworkAttachmentRef is the Multus NetworkAttachmentDefinition in the
+                                  namespace of the storage cluster, and the key the nodes' addresses and
+                                  status use. The pod attaches to it and takes the interface the definition's
+                                  plugin creates.
+                                properties:
+                                  addressPool:
+                                    description: |-
+                                      AddressPool is the range the operator takes each node's address on this
+                                      network from. Unset, the network takes the address the NIC the definition
+                                      moves holds on the worker.
+                                    properties:
+                                      first:
+                                        description: |-
+                                          First is the lowest address the operator may hand out. Unset, the range
+                                          starts at the subnet's first host address. It is set together with Last.
+                                        maxLength: 15
+                                        pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                        type: string
+                                      last:
+                                        description: |-
+                                          Last is the highest address the operator may hand out. Unset, the range
+                                          ends at the subnet's last host address. It is set together with First.
+                                        maxLength: 15
+                                        pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                        type: string
+                                      subnet:
+                                        description: |-
+                                          Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
+                                          length is the one each node's address carries.
+                                        maxLength: 18
+                                        pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$
+                                        type: string
+                                    required:
+                                      - subnet
+                                    type: object
+                                    x-kubernetes-validations:
+                                      - message: first and last are set together
+                                        rule: has(self.first) == has(self.last)
+                                      - message: first and last must lie inside subnet
+                                        rule: '!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first)) && cidr(self.subnet).containsIP(ip(self.last)))'
+                                  name:
+                                    description: Name is the definition's name.
+                                    maxLength: 253
+                                    minLength: 1
+                                    type: string
+                                required:
+                                  - name
+                                type: object
+                            required:
+                              - networkAttachmentRef
+                            type: object
+                          maxItems: 8
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        podNetwork:
+                          description: |-
+                            PodNetwork puts the SPDK pods on the cluster CNI's network. Alone, the pod's
+                            one interface carries the RPC and the data, and a Service in front of the pod
+                            is the address peers and clients hold, since the pod's own address changes on
+                            every restart. The control plane keeps the Service and the ports it carries.
+                            With data networks, the RPC stays on that interface and the data moves to the
+                            networks' interfaces, whose addresses are stable, so no Service is kept.
+                          type: boolean
+                        spdkOnHostNetwork:
+                          description: |-
+                            SpdkOnHostNetwork runs the SPDK pods on the host network, where they bind
+                            host NICs. The NICs' names are not stated here, because a fleet's workers
+                            do not agree on what their NICs are called: each node names its own in
+                            its spec.config.dataInterfaces, which is allowed only in this mode.
+                          type: boolean
+                      type: object
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                        - message: one of podNetwork and spdkOnHostNetwork must be set
+                          rule: (has(self.podNetwork) && self.podNetwork) || (has(self.spdkOnHostNetwork) && self.spdkOnHostNetwork)
+                        - message: podNetwork and spdkOnHostNetwork are exclusive
+                          rule: '!(has(self.podNetwork) && self.podNetwork && has(self.spdkOnHostNetwork) && self.spdkOnHostNetwork)'
+                        - message: 'data networks require podNetwork: true'
+                          rule: '!has(self.data) || self.data.size() == 0 || (has(self.podNetwork) && self.podNetwork)'
+                        - message: data networks must name distinct NetworkAttachmentDefinitions
+                          rule: '!has(self.data) || self.data.all(a, self.data.exists_one(b, b.networkAttachmentRef.name == a.networkAttachmentRef.name))'
                     nodeProvisioningBudget:
                       default: 1
                       description: |-
@@ -1332,6 +1462,8 @@ spec:
                       rule: '!has(oldSelf.mgmtInterface) || has(self.mgmtInterface)'
                     - message: field dataInterfaces is immutable once set
                       rule: '!has(oldSelf.dataInterfaces) || has(self.dataInterfaces)'
+                    - message: field network is immutable once set
+                      rule: '!has(oldSelf.network) || has(self.network)'
                     - message: field nodesPerSocket is immutable once set
                       rule: '!has(oldSelf.nodesPerSocket) || has(self.nodesPerSocket)'
                     - message: field enableJournalDevice is immutable once set
@@ -1340,6 +1472,8 @@ spec:
                       rule: '!has(oldSelf.enableFormat4K) || has(self.enableFormat4K)'
                     - message: field enableBlockFormat is immutable once set
                       rule: '!has(oldSelf.enableBlockFormat) || has(self.enableBlockFormat)'
+                    - message: dataInterfaces are allowed only with network.spdkOnHostNetwork
+                      rule: '!has(self.dataInterfaces) || !has(self.network) || (has(self.network.spdkOnHostNetwork) && self.network.spdkOnHostNetwork)'
                 stripe:
                   description: |-
                     Stripe is the erasure-coding layout every volume in the cluster is
@@ -1364,6 +1498,37 @@ spec:
                       rule: self == oldSelf
                     - message: the erasure-coding scheme must be one of 1+0, 1+1, 2+1, 4+1, 1+2, 2+2, or 4+2, written as dataChunks+parityChunks, and an unstated half is 1
                       rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks) ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4, 1], [1, 2], [2, 2], [4, 2]]'
+                supercluster:
+                  description: |-
+                    Supercluster makes this cluster a supercluster: one cluster to
+                    Kubernetes, made of the StorageClusters in this namespace whose
+                    superclusterRef names it, each with its own nodes and data. A new volume
+                    is placed in one member and stays there unless it is moved. A supercluster
+                    carries no nodes and no sizing, and may carry only this field and the
+                    capacity thresholds. Set at creation and never added or removed.
+                  properties:
+                    placement:
+                      description: Placement is how new volumes are placed among the members.
+                      properties:
+                        strategy:
+                          default: MostAvailableCapacity
+                          description: |-
+                            Strategy ranks the members that can take a new volume. Defaults to
+                            MostAvailableCapacity.
+                          enum:
+                            - MostAvailableCapacity
+                            - LeastProvisioned
+                            - LeastVolumes
+                          type: string
+                      type: object
+                  type: object
+                superclusterRef:
+                  description: |-
+                    SuperclusterRef makes this cluster a member of the named supercluster in
+                    this namespace. The supercluster has to exist when the member is
+                    created. Set at creation and never changed.
+                  maxLength: 63
+                  type: string
                 vcpuCount:
                   description: |-
                     VCPUCount is the number of vCPUs allocated to SPDK on each storage node,
@@ -1375,7 +1540,8 @@ spec:
 
                     The floor is 4 rather than a hardware limit: a node must carry one core
                     beyond this budget for the system, and the control plane's core layout
-                    assigns no NVMe-oF poller core at all for a 2-vCPU budget.
+                    assigns no NVMe-oF poller core at all for a 2-vCPU budget. Required on
+                    every cluster except a supercluster.
                   format: int32
                   minimum: 4
                   type: integer
@@ -1545,9 +1711,6 @@ spec:
                       format: int64
                       type: integer
                   type: object
-              required:
-                - maxSubsystemCount
-                - vcpuCount
               type: object
               x-kubernetes-validations:
                 - message: field stripe is immutable once set
@@ -1578,6 +1741,20 @@ spec:
                   rule: (has(self.clusterMode) && self.clusterMode == 'Single') == (has(oldSelf.clusterMode) && oldSelf.clusterMode == 'Single')
                 - message: enableAtomicity4K requires enableChecksumValidation to be true
                   rule: '!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)'
+                - message: maxSubsystemCount and vcpuCount are required unless the cluster is a supercluster
+                  rule: has(self.supercluster) || (has(self.maxSubsystemCount) && has(self.vcpuCount))
+                - message: spec.storageNodes.network is set when the cluster is created and cannot be added or removed afterward
+                  rule: (has(self.storageNodes) && has(self.storageNodes.network)) == (has(oldSelf.storageNodes) && has(oldSelf.storageNodes.network))
+                - message: a cluster cannot become a supercluster, or stop being one, after creation
+                  rule: has(self.supercluster) == has(oldSelf.supercluster)
+                - message: superclusterRef is set at creation and never changed
+                  rule: has(self.superclusterRef) == has(oldSelf.superclusterRef) && (!has(self.superclusterRef) || self.superclusterRef == oldSelf.superclusterRef)
+                - message: a supercluster cannot be a member of another
+                  rule: '!(has(self.supercluster) && has(self.superclusterRef))'
+                - message: disablePlacement is valid only on a member
+                  rule: has(self.superclusterRef) || !has(self.disablePlacement)
+                - message: a data network attached through a NetworkAttachmentDefinition serves NVMe/TCP only
+                  rule: '!has(self.storageNodes) || !has(self.storageNodes.network) || !has(self.storageNodes.network.data) || self.storageNodes.network.data.size() == 0 || !has(self.fabricType) || self.fabricType == ''tcp'''
             status:
               properties:
                 activeOpsRef:
@@ -1587,8 +1764,6 @@ spec:
                   type: string
                 arbitration:
                   description: |-
-                    ObservedGeneration is the generation the rest of this status was computed
-                    from, so a stale status can be told from a current one.
                     Arbitration is the two-node arbiter's record as the operator last read
                     it; set only when spec.enableArbitration is on.
                   properties:
@@ -1603,6 +1778,36 @@ spec:
                       items:
                         type: string
                       type: array
+                    hostFences:
+                      description: HostFences are the control plane's host fences (spec.arbitration.hostFencing).
+                      items:
+                        description: |-
+                          HostFenceStatus is one host fence of the control plane, as the operator last
+                          read it.
+                        properties:
+                          epoch:
+                            description: Epoch is the arbiter's epoch of the verdict that fenced the node.
+                            format: int64
+                            type: integer
+                          node:
+                            description: Node is the Kubernetes node whose host is fenced.
+                            type: string
+                          state:
+                            description: |-
+                              State is the fence's state: revoking, revoked, releasable, restoring or
+                              unavailable (no host NQN known for the node).
+                            type: string
+                          winner:
+                            description: Winner is the Kubernetes node the fence was applied on.
+                            type: string
+                        required:
+                          - node
+                          - state
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                        - node
+                      x-kubernetes-list-type: map
                     message:
                       description: Message explains why the record could not be read or applied.
                       type: string
@@ -1615,6 +1820,22 @@ spec:
                         State is the arbiter's state: steady, deciding, partitioned, degraded or
                         healing.
                       type: string
+                  type: object
+                capacity:
+                  description: Capacity is the members' capacity summed, on a supercluster only.
+                  properties:
+                    provisionedBytes:
+                      description: ProvisionedBytes is the capacity promised to volumes.
+                      format: int64
+                      type: integer
+                    totalBytes:
+                      description: TotalBytes is the physical capacity.
+                      format: int64
+                      type: integer
+                    usedBytes:
+                      description: UsedBytes is the physical capacity in use.
+                      format: int64
+                      type: integer
                   type: object
                 clusterName:
                   description: ClusterName is the resolved backend name.
@@ -1684,6 +1905,64 @@ spec:
                     violating redundancy, as the control plane reports it.
                   format: int32
                   type: integer
+                memberCount:
+                  description: MemberCount is the number of members, on a supercluster only.
+                  format: int32
+                  type: integer
+                members:
+                  description: Members is each member as last read, on a supercluster only.
+                  items:
+                    description: SuperclusterMemberStatus is one member as the supercluster last read it.
+                    properties:
+                      capacity:
+                        description: Capacity is the member's own capacity reading.
+                        properties:
+                          provisionedBytes:
+                            description: ProvisionedBytes is the capacity promised to volumes.
+                            format: int64
+                            type: integer
+                          totalBytes:
+                            description: TotalBytes is the physical capacity.
+                            format: int64
+                            type: integer
+                          usedBytes:
+                            description: UsedBytes is the physical capacity in use.
+                            format: int64
+                            type: integer
+                        type: object
+                      name:
+                        description: Name is the member StorageCluster.
+                        type: string
+                      phase:
+                        description: Phase is the member's own phase.
+                        enum:
+                          - Pending
+                          - Creating
+                          - Provisioning
+                          - Activating
+                          - Online
+                          - Shrinking
+                          - Rebalancing
+                          - Degraded
+                          - Unavailable
+                          - Suspended
+                        type: string
+                      placementEligible:
+                        description: |-
+                          PlacementEligible says whether new volumes may be placed in this member:
+                          placement not disabled, not being removed, serving, and holding every pool
+                          of the supercluster.
+                        type: boolean
+                      uuid:
+                        description: UUID is the member's backend cluster UUID, empty until it is created.
+                        type: string
+                    required:
+                      - name
+                    type: object
+                  type: array
+                  x-kubernetes-list-map-keys:
+                    - name
+                  x-kubernetes-list-type: map
                 message:
                   description: |-
                     Message is the reason the phase is what it is: one sentence, replaced as
@@ -1693,6 +1972,9 @@ spec:
                   description: NQN is the cluster subsystem qualified name.
                   type: string
                 observedGeneration:
+                  description: |-
+                    ObservedGeneration is the generation the rest of this status was computed
+                    from, so a stale status can be told from a current one.
                   format: int64
                   type: integer
                 phase:
@@ -1824,6 +2106,15 @@ spec:
                     - imbalancePercent
                     - maxDeviationPct
                   type: object
+                role:
+                  description: |-
+                    Role is what this cluster is within a supercluster: Standalone,
+                    Supercluster, or PlacementGroup for a member.
+                  enum:
+                    - Standalone
+                    - Supercluster
+                    - PlacementGroup
+                  type: string
                 serviceClasses:
                   description: |-
                     ServiceClasses are the cluster's service classes besides Default as the
@@ -1956,7 +2247,9 @@ spec:
                 uuid:
                   description: |-
                     UUID is the backend cluster UUID. Empty means the cluster has not been
-                    created or adopted, and non-empty means steady state.
+                    created or adopted, and non-empty means steady state. On a supercluster
+                    it is the aggregate's identifier, the object's metadata.uid, which a
+                    StorageClass names in cluster_id and the control plane does not know.
                   type: string
                 volumeMoveGeneration:
                   description: |-
@@ -1964,6 +2257,42 @@ spec:
                     successful terminal phase and by nothing else, so it only grows.
                   format: int64
                   type: integer
+                workloadNames:
+                  description: |-
+                    WorkloadNames are the names this cluster's workload is reached by,
+                    recorded before the workload exists and never changed afterward,
+                    because every storage node's hostname is built from them. A cluster
+                    created before they were recorded is given the constant names.
+                  properties:
+                    nodeAPIService:
+                      description: NodeAPIService is the headless Service of the storage-node API.
+                      maxLength: 63
+                      type: string
+                    nodeAPITLSSecret:
+                      description: NodeAPITLSSecret is the storage-node API's serving-certificate Secret.
+                      maxLength: 253
+                      type: string
+                    nodeLabelSuffix:
+                      description: |-
+                        NodeLabelSuffix is appended to a node's hostname in both Services, so
+                        that members of one supercluster on one worker have distinct hostnames.
+                        Empty for every other cluster.
+                      maxLength: 4
+                      type: string
+                    spdkProxyService:
+                      description: SpdkProxyService is the headless Service of the SPDK proxy.
+                      maxLength: 63
+                      type: string
+                    spdkProxyTLSSecret:
+                      description: SpdkProxyTLSSecret is the SPDK proxy's serving-certificate Secret.
+                      maxLength: 253
+                      type: string
+                  required:
+                    - nodeAPIService
+                    - nodeAPITLSSecret
+                    - spdkProxyService
+                    - spdkProxyTLSSecret
+                  type: object
               type: object
           type: object
           x-kubernetes-validations:

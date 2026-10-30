@@ -8,14 +8,22 @@ spec:
     spec:
       containers:
       - name: manager
-        # Serve the webhook cert from controller-runtime's default location
-        # (/tmp/k8s-webhook-server/serving-certs). The operator writes the cert
-        # here at runtime (self-signed via cert-controller, or read from the
-        # cert-manager-issued Secret when SB_TLS_PROVIDER=cert-manager), so this
-        # must be a writable volume — the container runs with a read-only root fs.
+        # The webhook server reads its certificate from controller-runtime's
+        # default location (/tmp/k8s-webhook-server/serving-certs). This install
+        # sets no SB_TLS_PROVIDER, so the certificate is self-signed by
+        # cert-controller, which writes it into the webhook-server-cert Secret
+        # and waits for the kubelet to project the files here. It never writes
+        # the files itself, so an emptyDir here leaves the webhook server unstarted
+        # and the pod unready. A deployment patched to SB_TLS_PROVIDER=cert-manager
+        # needs an emptyDir instead, because the operator then writes the files.
         volumeMounts:
         - mountPath: /tmp/k8s-webhook-server/serving-certs
           name: webhook-certs
+          readOnly: true
       volumes:
+      # optional:true lets the pod start before the operator has created and
+      # populated the Secret, and kubelet syncs the files in once it exists.
       - name: webhook-certs
-        emptyDir: {}
+        secret:
+          secretName: webhook-server-cert
+          optional: true

@@ -408,6 +408,29 @@ func recoverPathsWithANA(clusterID, lvolID, devicePath string, activePaths []ini
 	optConn := expectedConns[0]
 	nonOptConns := expectedConns[1:]
 
+	// Repair first, connect second, and the order is the point.
+	//
+	// A reconcile can only connect what is missing, and the failure that matters
+	// most is not a missing controller: it is a controller that exists, is live,
+	// and contributes no path to this namespace. `nvme connect` refuses it with
+	// `already connected`, so a reconcile alone re-issues a connect that never
+	// reaches the target and the volume stays below its published redundancy
+	// indefinitely. Repairing that needs a teardown.
+	//
+	// Running the teardown before the reconciles makes it a repair instead of a
+	// hole: whatever it removes, the two passes below connect again in this same
+	// tick. It also stops the repair diagnosing a controller a reconcile created
+	// microseconds earlier, which is how a healthy path was destroyed on
+	// 2026-09-12 (the repair's connect grace covers the same race across ticks).
+	//
+	// What it tears down has to come out of activePaths before the passes run.
+	// That slice is the snapshot the monitor took before this function was
+	// called, and missingEndpoints counts an endpoint as attached on presence
+	// alone, so a controller just torn down would still look attached and its
+	// connect would be skipped.
+	tornDown := fabric.HealMonitoredVolume(context.Background(), subsystemNQN, lvolID, expectedConns)
+	activePaths = withoutEndpoints(activePaths, tornDown)
+
 	activeOpt := filterByANA(activePaths, initiator.ANAStateOptimized)
 
 	var activeNonOpt []initiator.Path
@@ -419,14 +442,6 @@ func recoverPathsWithANA(clusterID, lvolID, devicePath string, activePaths []ini
 
 	reconcileOptimizedPath(sbcClient, nodeInfo, devicePath, optConn, activeOpt, ctrlLossTmo)
 	reconcileNonOptimizedPaths(sbcClient, nodeInfo, devicePath, nonOptConns, activeNonOpt, ctrlLossTmo)
-
-	// The reconciles above can only connect what is missing, and the failure that
-	// matters most is not a missing controller: it is a controller that exists,
-	// is live, and contributes no path to this namespace. `nvme connect` refuses
-	// it with `already connected`, so the reconcile re-issues a connect that never
-	// reaches the target and the volume stays below its published redundancy
-	// indefinitely. Repairing that needs a teardown, which is what this does.
-	fabric.HealMonitoredVolume(context.Background(), subsystemNQN, lvolID, expectedConns)
 
 	return nil
 }
@@ -543,8 +558,9 @@ func reconcileNonOptimizedPaths(
 // A controller that is attached but cannot serve, whether stuck connecting or live and
 // exporting no namespace, still counts as attached here, and deliberately: connecting
 // its endpoint again would add a second controller for one endpoint rather than replace
-// the broken one. Those are repaired by tearing them down, which healMonitoredVolume does
-// through atlas, and reconnected by the tick after that.
+// the broken one. Those are repaired by tearing them down, which HealMonitoredVolume does
+// through atlas before the reconcile passes, and reconnected by those passes in the same
+// tick once withoutEndpoints has taken them out of the snapshot.
 func missingEndpoints(conns []*controlplane.LvolConnectResp, active []initiator.Path) []*controlplane.LvolConnectResp {
 	attached := make(map[string]bool, len(active))
 	for _, p := range active {
@@ -560,6 +576,29 @@ func missingEndpoints(conns []*controlplane.LvolConnectResp, active []initiator.
 		}
 	}
 	return missing
+}
+
+// withoutEndpoints drops the paths whose endpoint is in the given "ip:port" list. It
+// takes a repair's teardown out of the path snapshot the monitor captured before the
+// repair ran, so the reconcile that follows in the same tick sees the endpoint as
+// missing and connects it again.
+func withoutEndpoints(paths []initiator.Path, endpoints []string) []initiator.Path {
+	if len(endpoints) == 0 {
+		return paths
+	}
+	gone := make(map[string]bool, len(endpoints))
+	for _, e := range endpoints {
+		gone[e] = true
+	}
+	kept := make([]initiator.Path, 0, len(paths))
+	for _, p := range paths {
+		ip, port := parseEndpoint(p.Address)
+		if ip != "" && port != "" && gone[net.JoinHostPort(ip, port)] {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	return kept
 }
 
 // parseEndpoint splits an NVMe controller address attribute into its target address and

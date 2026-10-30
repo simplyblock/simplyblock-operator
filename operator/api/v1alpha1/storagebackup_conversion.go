@@ -68,6 +68,11 @@ const (
 	annoBackupAllowedHosts       = "storage.simplyblock.io/conversion-status.allowedHosts"
 	annoBackupSnapshotRequest    = "storage.simplyblock.io/conversion-spec.snapshotName"
 	annoBackupSourceRequest      = "storage.simplyblock.io/conversion-spec.sourceClusterUUID"
+	// annoBackupSourceGroup stashes status.source.group, which the hub added for
+	// consistency-group backups and this version has no field for: a v1alpha1
+	// client that reads a group member and writes it back would otherwise drop
+	// the group identity.
+	annoBackupSourceGroup = "storage.simplyblock.io/conversion-status.source.group"
 )
 
 var storageBackupPhaseToHub = map[string]string{
@@ -118,6 +123,19 @@ func (src *StorageBackup) ConvertTo(dstRaw conversion.Hub) error {
 	}
 	if err := unstash(&dst.ObjectMeta, annoBackupObservedGeneration, &dst.Status.ObservedGeneration); err != nil {
 		return err
+	}
+	// status.source.group is a hub-only field this version cannot represent. If
+	// this object was last written by the hub, it rides in the stash. Restore it
+	// onto the source, allocating one when the group is all the source holds.
+	var sourceGroup *v1alpha2.BackupGroup
+	if err := unstash(&dst.ObjectMeta, annoBackupSourceGroup, &sourceGroup); err != nil {
+		return err
+	}
+	if sourceGroup != nil {
+		if dst.Status.Source == nil {
+			dst.Status.Source = &v1alpha2.BackupSource{}
+		}
+		dst.Status.Source.Group = sourceGroup
 	}
 
 	// Put this version's own unrepresentable fields where the trip back down can
@@ -243,6 +261,13 @@ func (dst *StorageBackup) ConvertFrom(srcRaw conversion.Hub) error {
 		return err
 	}
 	if err := stash(&dst.ObjectMeta, annoBackupObservedGeneration, src.Status.ObservedGeneration); err != nil {
+		return err
+	}
+	var sourceGroup *v1alpha2.BackupGroup
+	if source := src.Status.Source; source != nil {
+		sourceGroup = source.Group
+	}
+	if err := stash(&dst.ObjectMeta, annoBackupSourceGroup, sourceGroup); err != nil {
 		return err
 	}
 

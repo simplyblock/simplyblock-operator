@@ -64,6 +64,9 @@ type cgMembershipWatcher struct {
 	// pool; production wires clusters.Client, tests substitute a stub.
 	clientFor func(ctx context.Context, clusterID, poolRef string) (membershipClient, error)
 	recorder  record.EventRecorder
+	// listClusters lists the clusters of the driver's secret, where a group
+	// the volume's own cluster lacks is looked for; nil reads the secret.
+	listClusters func() ([]string, error)
 	// migrations runs the pre-join live migration of a volume off its group's
 	// pinned node (co-location design §5); nil disables it, and an off-pin
 	// join stays refused as before.
@@ -171,7 +174,7 @@ func (w *cgMembershipWatcher) reconcile(ctx context.Context, pvc *corev1.Persist
 
 	switch {
 	case label != "" && groupID == "":
-		return w.join(ctx, client, pvc, pv.Name, label, handle.VolumeID)
+		return w.join(ctx, client, pvc, pv.Name, label, handle.ClusterID, handle.VolumeID)
 	case label == "" && groupID != "":
 		return w.detach(ctx, client, pvc, groupID, handle.VolumeID)
 	case label != "" && groupID != "":
@@ -200,13 +203,22 @@ func preJoinMigrationName(lvolID string) string { return "cg-join-" + lvolID }
 
 func (w *cgMembershipWatcher) join(
 	ctx context.Context, client membershipClient,
-	pvc *corev1.PersistentVolumeClaim, pvName, label, lvolID string,
+	pvc *corev1.PersistentVolumeClaim, pvName, label, clusterID, lvolID string,
 ) error {
 	group, err := client.ResolveConsistencyGroupByName(ctx, label)
 	if err != nil {
 		return fmt.Errorf("resolve consistency group %q: %w", label, err)
 	}
 	if group == nil {
+		// A group lives in one backend cluster. In a supercluster the label
+		// may name a group another member holds, which this volume cannot
+		// join where it is (design-superclusters.md §9.3).
+		if holder := w.clusterHolding(ctx, label, clusterID); holder != "" {
+			w.recorder.Eventf(pvc, corev1.EventTypeWarning, "ConsistencyGroupInAnotherCluster",
+				"consistency group %q lives in cluster %s, and this volume is in cluster %s; "+
+					"relocate the volume into cluster %s before it can join", label, holder, clusterID, holder)
+			return nil
+		}
 		// A group is born from its first provisioned labeled volume (§4.1);
 		// the watcher never creates one. Hold, visibly, until it exists.
 		w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupPending",
@@ -222,6 +234,33 @@ func (w *cgMembershipWatcher) join(
 	w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupJoined",
 		"volume joined consistency group %q; it is included from the next generation", label)
 	return w.colocateMember(ctx, client, pvc, group.ID, label, lvolID)
+}
+
+// clusterHolding is the cluster of the driver's secret, other than the
+// volume's own, that holds a group of the label's name, or empty. A cluster
+// that cannot be asked is skipped: the hold that follows is retried on resync.
+func (w *cgMembershipWatcher) clusterHolding(ctx context.Context, label, ownCluster string) string {
+	list := w.listClusters
+	if list == nil {
+		list = clusters.List
+	}
+	ids, err := list()
+	if err != nil {
+		return ""
+	}
+	for _, id := range ids {
+		if id == ownCluster {
+			continue
+		}
+		other, err := w.clientFor(ctx, id, "")
+		if err != nil {
+			continue
+		}
+		if group, err := other.ResolveConsistencyGroupByName(ctx, label); err == nil && group != nil {
+			return id
+		}
+	}
+	return ""
 }
 
 // joinRefused turns a refused join into the pre-join migration when the only

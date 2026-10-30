@@ -301,3 +301,36 @@ func existingFootprint(
 	}
 	return held, nil
 }
+
+// ClusterStripeChecks is StripeChecks for every cluster the document builds:
+// the document as a whole for one cluster, and each node set of a
+// supercluster's document as the member it becomes, since a member stripes
+// across its own nodes alone (design-superclusters.md §5.4). A finding about a
+// member names its node set. Admission and the controller's validation both
+// read it, so the two cannot disagree about which document is short.
+func ClusterStripeChecks(
+	ctx context.Context,
+	reader client.Reader,
+	namespace string,
+	config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) ([]StripeCheck, error) {
+	members, err := AddsMembers(ctx, reader, config)
+	if err != nil {
+		return nil, err
+	}
+	if members {
+		config = asCreation(config)
+	}
+	var checks []StripeCheck
+	for _, scope := range clusterScopes(config, members) {
+		found, err := StripeChecks(ctx, reader, namespace, scope.document)
+		if err != nil {
+			return nil, err
+		}
+		for _, check := range found {
+			check.Message = scope.prefix + check.Message
+			checks = append(checks, check)
+		}
+	}
+	return checks, nil
+}

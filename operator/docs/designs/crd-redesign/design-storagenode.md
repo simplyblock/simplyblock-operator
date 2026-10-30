@@ -993,6 +993,13 @@ that data first. The controller therefore raises a `StorageNodeOps` with
 `action: Remove`, owned by the `StorageNode` through a controller reference, and
 holds the finalizer until `status.activeOpsRef` is clear.
 
+A node whose `StorageCluster` no longer exists is released without an operation
+and without a call to the control plane. A cluster's finalizer is released only
+after the control plane deleted the backend cluster with force, which shut down
+and deleted every node of it (design-storagecluster.md §4.5), so such a node has
+no backend node left, and a removal raised against it would wait for good on a
+cluster that is not there.
+
 **The entity owns the operation it raised for itself.** That is the one direction
 ownership runs between the two categories
 ([`design-crd-model.md`](design-crd-model.md) §3): an operation never owns its
@@ -3311,9 +3318,8 @@ type OpenShiftSpec struct {
 type StorageNodesSpec struct {
 	// Image is the storage-node container image. Defaults to the ControlPlane
 	// singleton's spec.image when unset, so a deployment states the version once.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
-	Image string `json:"image,omitempty"`
+	Image crdtypes.ImageReference `json:"image,omitempty"`
 
 	// ImagePullPolicy controls when that image is pulled. It defaults to Always
 	// for the reason SimplyblockDriver's does: the images this product ships are

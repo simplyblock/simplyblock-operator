@@ -84,6 +84,11 @@ type StorageNodeReconciler struct {
 	Recorder events.EventRecorder
 	API      ControlPlane
 
+	// HostCheck asks the CSI node plugins, which run on the host network of
+	// their worker, to read a NIC's address and to test a connection to the SPDK
+	// listener (design §8.1). Unset, a node on a network waits for it.
+	HostCheck HostChecker
+
 	// Nodes is the storage-node stream's cache, which steady state is read from
 	// and which adoption matches against. It is optional: a deployment without the
 	// control-plane informer falls back to reading the control plane directly.
@@ -457,6 +462,8 @@ func (r *StorageNodeReconciler) performNodeStep(
 		return r.checkConfig(ctx, node, cluster)
 	case stepAwaitingSlot:
 		return r.awaitSlot(ctx, node, cluster)
+	case stepCheckingNetwork:
+		return r.checkNetwork(ctx, node, cluster)
 	case stepPosting:
 		return stepResolving, true, r.postNode(ctx, node, cluster)
 	case stepResolving:
@@ -550,7 +557,7 @@ func (r *StorageNodeReconciler) checkHost(
 		return stepAdopting, true, nil
 	}
 
-	answers, err := r.Workload.HostAnswers(ctx, node.Namespace, node.Spec.WorkerNode)
+	answers, err := r.Workload.HostAnswers(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode)
 	if err != nil {
 		return stepCheckingHost, false, err
 	}
@@ -581,6 +588,9 @@ func (r *StorageNodeReconciler) checkConfig(
 		return stepCheckingConfig, false, blockedf(FailureDomainMissing,
 			"cluster %s requires a fault group and this node declares none; "+
 				"set spec.config.failureDomain", cluster.Name)
+	}
+	if declaresDefinitions(networkOf(cluster)) {
+		return stepCheckingNetwork, true, nil
 	}
 	return stepAwaitingSlot, true, nil
 }
@@ -720,8 +730,7 @@ func (r *StorageNodeReconciler) awaitSlot(
 		}
 		contenders = append(contenders, sibling.Spec.WorkerNode)
 	}
-	slices.Sort(contenders)
-	contenders = slices.Compact(contenders)
+	contenders = rankContenders(contenders, cluster, slices.Concat(siblings, []simplyblockv1alpha2.StorageNode{*node}), holders)
 
 	if rank := slices.Index(contenders, node.Spec.WorkerNode); int32(rank) >= available {
 		return stepAwaitingSlot, false, blockedf(AwaitingSlot,
@@ -776,6 +785,12 @@ func (r *StorageNodeReconciler) postNode(
 	cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
 	params := r.addParams(ctx, node, cluster)
+	networks, err := r.networkParams(node, cluster)
+	if err != nil {
+		return fmt.Errorf("add node %s on worker %s: %w", node.Name, node.Spec.WorkerNode, err)
+	}
+	params.Networks = networks
+	params.PodNetwork = onPodNetwork(cluster)
 	taskID, err := r.API.AddNode(ctx, cluster.Status.UUID, params)
 	if err != nil {
 		return fmt.Errorf("add node %s on worker %s: %w",
@@ -1001,6 +1016,11 @@ func (r *StorageNodeReconciler) syncStatus(
 	err = r.writeStatus(ctx, node, func(status *simplyblockv1alpha2.StorageNodeStatus) {
 		applyReading(status, reading)
 		status.Phase = phaseOf(reading)
+		// A node on a network is not online until the CSI node plugins reach its
+		// listener: a volume cannot attach to one they cannot reach.
+		if status.Phase == simplyblockv1alpha2.StorageNodePhaseOnline && r.networkGateHolds(node, cluster) {
+			status.Phase = simplyblockv1alpha2.StorageNodePhaseProvisioning
+		}
 		if sampled && worthWriting(status.Resources.Capacity, sample) {
 			status.Resources.Capacity = &simplyblockv1alpha2.StorageNodeCapacity{
 				TotalBytes: ptr.To(sample.Total),
@@ -1011,6 +1031,10 @@ func (r *StorageNodeReconciler) syncStatus(
 	})
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+
+	if err := r.syncNetwork(ctx, node, cluster); err != nil {
+		return ctrl.Result{RequeueAfter: nodeRetry}, err
 	}
 
 	if !wasOnline && node.Status.Phase == simplyblockv1alpha2.StorageNodePhaseOnline {
@@ -1291,6 +1315,22 @@ func (r *StorageNodeReconciler) teardown(
 		}
 		controllerutil.RemoveFinalizer(node, NodeFinalizer)
 		return ctrl.Result{}, r.Update(ctx, node)
+	}
+
+	// A cluster's finalizer is released only after the control plane deleted
+	// the backend cluster with force, which shut down and deleted every node
+	// of it. A node whose StorageCluster is gone has no backend node left,
+	// and a removal raised against it would wait on a cluster that is not
+	// there for as long as the operator ran.
+	var cluster simplyblockv1alpha2.StorageCluster
+	err := r.Get(ctx, client.ObjectKey{Namespace: node.Namespace, Name: node.Spec.ClusterRef}, &cluster)
+	switch {
+	case apierrors.IsNotFound(err):
+		r.unregister(node)
+		controllerutil.RemoveFinalizer(node, NodeFinalizer)
+		return ctrl.Result{}, r.Update(ctx, node)
+	case err != nil:
+		return ctrl.Result{}, err
 	}
 
 	if _, err := r.ensureOps(ctx, node,
@@ -1579,11 +1619,11 @@ func (r *StorageNodeReconciler) addParams(
 	}
 
 	params := utils.StorageNodeSetAddParams{
-		NodeAddress:      r.Workload.NodeAddress(ctx, node.Spec.WorkerNode, node.Namespace),
-		InterfaceName:    workload.MgmtInterface,
+		NodeAddress:      r.Workload.NodeAddress(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode),
+		InterfaceName:    firstNonEmpty(config.MgmtInterface, workload.MgmtInterface),
 		SPDKImage:        config.SpdkImage,
 		SPDKProxyImage:   config.SpdkProxyImage,
-		DataNics:         workload.DataInterfaces,
+		DataNics:         nicsOf(config.DataInterfaces, workload.DataInterfaces),
 		Namespace:        node.Namespace,
 		JMPercent:        journalPercent(config.JournalManager),
 		Partitions:       partitionsPerDevice(workload),
@@ -1597,11 +1637,34 @@ func (r *StorageNodeReconciler) addParams(
 	}
 
 	// The control plane's failure domain is an integer, and this API's is a label.
-	// The cluster's status.failureDomains translates one into the other.
+	// The cluster's status.failureDomains translates one into the other. A cluster
+	// created without failure domains refuses an add that names one, and a node
+	// carries a label there whenever discovery read a zone but left the feature
+	// off, so the label is sent only to a cluster that has the feature.
+	if !ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains) {
+		return params
+	}
 	if index := domainIndex(config.FailureDomain, cluster.Status.FailureDomains); index != nil {
 		params.FailureDomain = index
 	}
 	return params
+}
+
+// firstNonEmpty is the node's own NIC name, or the cluster's for a node created
+// before NICs were stated per node.
+func firstNonEmpty(node, cluster string) string {
+	if node != "" {
+		return node
+	}
+	return cluster
+}
+
+// nicsOf is the node's own data NICs, or the cluster's for a node that names none.
+func nicsOf(node, cluster []string) []string {
+	if len(node) > 0 {
+		return node
+	}
+	return cluster
 }
 
 // domainIndex is the integer the control plane's own field takes for a
@@ -1802,7 +1865,8 @@ func equalNodeStatus(a, b simplyblockv1alpha2.StorageNodeStatus) bool {
 		a.Step.State != b.Step.State || !equalTime(a.Step.Deadline, b.Step.Deadline) {
 		return false
 	}
-	return equalResources(a.Resources, b.Resources) && equalPorts(a.Ports, b.Ports)
+	return equalResources(a.Resources, b.Resources) && equalPorts(a.Ports, b.Ports) &&
+		equalNetworkStatus(a.Network, b.Network)
 }
 
 func equalResources(a, b *simplyblockv1alpha2.StorageNodeResources) bool {

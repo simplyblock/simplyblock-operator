@@ -35,6 +35,17 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
+// ProvisionedByAnnotation is the annotation the external provisioner selects
+// on: it deletes a Released PersistentVolume with reclaim policy Delete only
+// when this names its own driver, and leaves every other PV alone. A restored
+// volume's PV is created by the operator, not provisioned by the driver, so
+// without the annotation a deleted restored claim left its PV Released and
+// its backend volume alive -- three restored members kept their consistency
+// group occupied after the claims were gone, and the next restore into that
+// name was refused (live 2026-10-20, regression_test/24). With it, deleting
+// the claim deletes the volume, which is what reclaim policy Delete promises.
+const ProvisionedByAnnotation = "pv.kubernetes.io/provisioned-by"
+
 // The control plane's volume statuses a restore cares about, in its own
 // spelling. restore_failed is what the tasks runner sets after exhausting every
 // retry of the S3 transfer, and it is the only one of the two that is a verdict.
@@ -47,14 +58,23 @@ const (
 func (r *StorageBackupOpsReconciler) perform(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps, current step,
 ) (bool, error) {
+	group := ops.IsGroupRestore()
 	switch current {
 	case stepValidating:
 		return r.validate(ctx, ops)
 	case stepRestoring:
+		if group {
+			return r.startGroupRestore(ctx, ops)
+		}
 		return r.startRestore(ctx, ops)
 	case stepAwaitingVolume:
 		return r.awaitVolume(ctx, ops)
+	case stepAwaitingVolumes:
+		return r.awaitGroupVolumes(ctx, ops)
 	case stepBinding:
+		if group {
+			return r.bindGroup(ctx, ops)
+		}
 		return r.bind(ctx, ops)
 	default:
 		return false, fatalf("step %s belongs to no action this controller drives", current)
@@ -72,9 +92,16 @@ func (r *StorageBackupOpsReconciler) validate(
 		return false, fatalf("action %s needs a spec.restore block and has none", ops.Spec.Action)
 	}
 
-	clusterID, err := r.clusterIDFor(ctx, ops)
-	if err != nil {
-		return false, fmt.Errorf("resolve cluster %s: %w", ops.Spec.ClusterRef.Name, err)
+	// A group restore names no single backup. It resolves the group backup, the
+	// cluster, and the target pool here; the per-member copies are read by the
+	// control plane rather than one at a time by this operation. It is placed
+	// in the cluster it names, and a supercluster, which names none, refuses it.
+	if ops.IsGroupRestore() {
+		clusterID, err := r.clusterIDFor(ctx, ops)
+		if err != nil {
+			return false, fmt.Errorf("resolve cluster %s: %w", ops.Spec.ClusterRef.Name, err)
+		}
+		return r.validateGroup(ctx, ops, clusterID, restore)
 	}
 
 	var backup simplyblockv1alpha2.StorageBackup
@@ -97,12 +124,9 @@ func (r *StorageBackupOpsReconciler) validate(
 		return false, nil
 	}
 
-	poolUUID, err := utils.ResolvePoolUUID(ctx, r.Client, clusterKey(ops).Namespace, ops.Spec.ClusterRef.Name, restore.TargetPool)
+	clusterID, poolUUID, err := r.restoreTarget(ctx, ops, &backup)
 	if err != nil {
-		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, ReasonPoolNotFound, ReasonPoolNotFound,
-			"The target pool %s could not be resolved: %v", restore.TargetPool, err)
-		return false, fatalf("the target pool %s is not a pool of cluster %s: %v",
-			restore.TargetPool, ops.Spec.ClusterRef.Name, err)
+		return false, err
 	}
 
 	if err := r.refuseExistingClaim(ctx, ops, restore.ClaimName); err != nil {
@@ -115,6 +139,86 @@ func (r *StorageBackupOpsReconciler) validate(
 		status.PoolUUID = poolUUID
 		status.Message = fmt.Sprintf("Restoring backup %s into pool %s", backup.BackupID(), restore.TargetPool)
 	})
+}
+
+// restoreTarget is the backend cluster and pool the restore lands in. A
+// restore into a supercluster is placed among its members like a new volume
+// (design-superclusters.md §9.5), and lands in the chosen member's backend
+// pool of the target pool's name. The choice is recorded with the rest of
+// Validating's results before the control plane is asked for anything, so a
+// restart restores into the member chosen first.
+func (r *StorageBackupOpsReconciler) restoreTarget(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps, backup *simplyblockv1alpha2.StorageBackup,
+) (string, string, error) {
+	restore := ops.Spec.Restore
+	var cluster simplyblockv1alpha2.StorageCluster
+	if err := r.Get(ctx, clusterKey(ops), &cluster); err == nil && cluster.Spec.Supercluster != nil {
+		return r.superclusterTarget(ctx, ops, &cluster, backup)
+	}
+
+	clusterID, err := r.clusterIDFor(ctx, ops)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve cluster %s: %w", ops.Spec.ClusterRef.Name, err)
+	}
+	poolUUID, err := utils.ResolvePoolUUID(ctx, r.Client, clusterKey(ops).Namespace, ops.Spec.ClusterRef.Name, restore.TargetPool)
+	if err != nil {
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, ReasonPoolNotFound, ReasonPoolNotFound,
+			"The target pool %s could not be resolved: %v", restore.TargetPool, err)
+		return "", "", fatalf("the target pool %s is not a pool of cluster %s: %v",
+			restore.TargetPool, ops.Spec.ClusterRef.Name, err)
+	}
+	return clusterID, poolUUID, nil
+}
+
+// superclusterTarget chooses the member a restore into a supercluster lands
+// in, or reads the one already chosen, and the member's backend pool.
+func (r *StorageBackupOpsReconciler) superclusterTarget(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageBackupOps,
+	supercluster *simplyblockv1alpha2.StorageCluster,
+	backup *simplyblockv1alpha2.StorageBackup,
+) (string, string, error) {
+	restore := ops.Spec.Restore
+	var target simplyblockv1alpha2.StoragePool
+	key := client.ObjectKey{Namespace: supercluster.Namespace, Name: restore.TargetPool}
+	if err := r.Get(ctx, key, &target); err != nil || target.Spec.ClusterRef != supercluster.Name {
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, ReasonPoolNotFound, ReasonPoolNotFound,
+			"The target pool %s is not a pool of supercluster %s", restore.TargetPool, supercluster.Name)
+		return "", "", fatalf("the target pool %s is not a pool of supercluster %s", restore.TargetPool, supercluster.Name)
+	}
+
+	memberUUID := ops.Status.ClusterID
+	if memberUUID == "" {
+		if r.Placement == nil {
+			return "", "", fmt.Errorf("no placement service to choose a member of supercluster %s", supercluster.Name)
+		}
+		var size int64
+		if copied := backup.Copy(); copied.Size != nil {
+			size = *copied.Size
+		}
+		chosen, err := r.Placement.Choose(ctx, supercluster, restore.TargetPool, restore.ClaimName, size)
+		if err != nil {
+			return "", "", fmt.Errorf("choose a member of supercluster %s: %w", supercluster.Name, err)
+		}
+		memberUUID = chosen
+	}
+
+	members, err := utils.SuperclusterMembers(ctx, r.Client, supercluster)
+	if err != nil {
+		return "", "", err
+	}
+	for i := range members {
+		if members[i].Status.UUID != memberUUID {
+			continue
+		}
+		for _, row := range target.Status.Members {
+			if row.Cluster == members[i].Name && row.UUID != "" {
+				return memberUUID, row.UUID, nil
+			}
+		}
+		return "", "", fmt.Errorf("pool %s is not in member %s yet", restore.TargetPool, members[i].Name)
+	}
+	return "", "", fmt.Errorf("cluster %s is no member of supercluster %s", memberUUID, supercluster.Name)
 }
 
 // refuseExistingClaim fails the operation when the claim it would produce is
@@ -335,8 +439,9 @@ func (r *StorageBackupOpsReconciler) ensurePersistentVolume(
 	size := restoredSize(backup)
 	volume := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   name,
-			Labels: map[string]string{RestoredByLabel: ops.Name},
+			Name:        name,
+			Labels:      map[string]string{RestoredByLabel: ops.Name},
+			Annotations: map[string]string{ProvisionedByAnnotation: utils.CSIProvisioner},
 		},
 		Spec: corev1.PersistentVolumeSpec{
 			StorageClassName: storageClass,

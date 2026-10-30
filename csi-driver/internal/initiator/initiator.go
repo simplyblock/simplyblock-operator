@@ -765,7 +765,18 @@ func dhchapAuthArgs(connectCmd string) []string {
 	return args
 }
 
-func ConnectViaNVMe(ctx context.Context, conn *controlplane.LvolConnectResp, ctrlLossTmo int, retries int) error {
+// connectArgs is the NVMe connect command line for one path.
+//
+// On a two-node arbitrated cluster the control plane's keep-alive,
+// fast_io_fail and ctrl-loss values are passed as well: a frozen node keeps its
+// TCP connections, so its path is found dead only by the keep-alive, held I/O
+// must be answered before fast_io_fail fails it, and a fenced path must be
+// retried rather than dropped (sbcli docs/design/two-node-arbitration.md §9.1).
+// Every other cluster connects exactly as before.
+func connectArgs(conn *controlplane.LvolConnectResp, ctrlLossTmo int) []string {
+	if conn.TwoNode && conn.CtrlLossTmo > ctrlLossTmo {
+		ctrlLossTmo = conn.CtrlLossTmo
+	}
 	cmd := []string{
 		"nvme", "connect", "-t", strings.ToLower(conn.TargetType),
 		"-a", conn.IP, "-s", strconv.Itoa(conn.Port),
@@ -774,6 +785,14 @@ func ConnectViaNVMe(ctx context.Context, conn *controlplane.LvolConnectResp, ctr
 		"-c", strconv.Itoa(conn.ReconnectDelay),
 		"-i", strconv.Itoa(conn.NrIoQueues),
 	}
+	if conn.TwoNode {
+		if conn.KeepAliveTmo > 0 {
+			cmd = append(cmd, "-k", strconv.Itoa(conn.KeepAliveTmo))
+		}
+		if conn.FastIOFailTmo > 0 {
+			cmd = append(cmd, "--fast_io_fail_tmo="+strconv.Itoa(conn.FastIOFailTmo))
+		}
+	}
 	if conn.HostIface != "" {
 		cmd = append(cmd, "-f", conn.HostIface)
 	}
@@ -781,7 +800,11 @@ func ConnectViaNVMe(ctx context.Context, conn *controlplane.LvolConnectResp, ctr
 	// built for this exact host NQN, and the only source of the DHCHAP and host
 	// identity flags below, since LvolConnectResp carries no separate fields
 	// for them.
-	cmd = append(cmd, dhchapAuthArgs(conn.Connect)...)
+	return append(cmd, dhchapAuthArgs(conn.Connect)...)
+}
+
+func ConnectViaNVMe(ctx context.Context, conn *controlplane.LvolConnectResp, ctrlLossTmo int, retries int) error {
+	cmd := connectArgs(conn, ctrlLossTmo)
 	if err := execWithTimeoutRetry(ctx, cmd, 40, retries); err != nil {
 		if strings.Contains(err.Error(), "already connected") {
 			return nil

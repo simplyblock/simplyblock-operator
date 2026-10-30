@@ -105,4 +105,22 @@ const (
 	// ServiceClassesUnsupported says the control plane is too old to configure
 	// service classes, so spec.serviceClasses is not applied.
 	ServiceClassesUnsupported = "ServiceClassesUnsupported"
+
+	// WorkloadNamesNotRecorded says the control plane created the cluster
+	// without the workload names it was sent, so its nodes would be reached by
+	// names the cluster's Services do not carry.
+	WorkloadNamesNotRecorded = "WorkloadNamesNotRecorded"
+
+	// The supercluster's events, emitted on the supercluster, which is the
+	// object an administrator reads and the one that outlives any member.
+
+	// MemberAdded says a member cluster joined the supercluster.
+	MemberAdded = "MemberAdded"
+
+	// MemberPlacementChanged says a member left placement or returned to it.
+	MemberPlacementChanged = "MemberPlacementChanged"
+
+	// AggregateCapacityThreshold says the members' combined capacity crossed
+	// the supercluster's warning or critical threshold.
+	AggregateCapacityThreshold = "AggregateCapacityThreshold"
 )

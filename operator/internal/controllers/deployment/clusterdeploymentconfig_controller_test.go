@@ -178,8 +178,8 @@ func TestTheClusterIsCreatedWithTheClassReadOffTheGroups(t *testing.T) {
 	if created.Spec.DeviceClass != simplyblockv1alpha2.StorageClusterDeviceClassNVMe {
 		t.Errorf("deviceClass = %q, want NVMe read off the groups", created.Spec.DeviceClass)
 	}
-	if created.Spec.StorageNodes == nil || created.Spec.StorageNodes.MgmtInterface != "eth1" {
-		t.Errorf("the workload did not take the group's interfaces: %+v", created.Spec.StorageNodes)
+	if wl := created.Spec.StorageNodes; wl != nil && wl.MgmtInterface != "" {
+		t.Errorf("the workload carries the group's interface, want the nodes to: %+v", wl)
 	}
 }
 
@@ -447,6 +447,31 @@ func TestANonOpenShiftEnvironmentStatesNoBlock(t *testing.T) {
 
 	if workload := reconcilerFor(t).buildWorkload(config); workload.OpenShift != nil {
 		t.Errorf("a K3s document produced the OpenShift block %+v", workload.OpenShift)
+	}
+}
+
+// A managed service owns its nodes' kubelet configuration and rebuilds it with
+// every node it replaces, so a document naming one states that the storage node
+// leaves it alone, as Talos does.
+func TestAManagedServiceLeavesTheKubeletConfigurationAlone(t *testing.T) {
+	for _, environment := range []simplyblockv1alpha2.KubernetesEnvironment{
+		simplyblockv1alpha2.KubernetesEnvironmentEKS,
+		simplyblockv1alpha2.KubernetesEnvironmentGKE,
+		simplyblockv1alpha2.KubernetesEnvironmentAKS,
+		simplyblockv1alpha2.KubernetesEnvironmentOKE,
+	} {
+		config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+			c.Spec.Environment = environment
+		})
+
+		workload := reconcilerFor(t).buildWorkload(config)
+		if workload.EnableKubeletConfiguration == nil || *workload.EnableKubeletConfiguration {
+			t.Errorf("%s left enableKubeletConfiguration %v, want it stated false",
+				environment, workload.EnableKubeletConfiguration)
+		}
+		if workload.OpenShift != nil {
+			t.Errorf("%s produced the OpenShift block %+v", environment, workload.OpenShift)
+		}
 	}
 }
 

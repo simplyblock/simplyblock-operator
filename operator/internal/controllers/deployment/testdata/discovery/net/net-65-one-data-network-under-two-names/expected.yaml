@@ -9,14 +9,15 @@ metadata:
 spec:
   approved: false
   cluster:
-    clusterMode: Dual
     enableDriveFormat: true
     maxSubsystemCount: 30
     minHugePagesSize: 16G
     name: discovered-discover-net-65-cluster
+    network:
+      spdkOnHostNetwork: true
     stripe:
       dataChunks: 1
-      parityChunks: 1
+      parityChunks: 0
     vcpuCount: 16
   environment: K3s
   hostOS:
@@ -36,6 +37,8 @@ spec:
       name: group-1-nvme-4x3T
       workers:
       - worker-01
+    name: discovered-1
+  - groups:
     - dataInterfaces:
       - ens6f0
       devices:
@@ -45,9 +48,9 @@ spec:
         - 0000:5e:00.2
         - 0000:5e:00.3
       mgmtInterface: eth0
-      name: group-2-nvme-4x3T
+      name: group-1-nvme-4x3T
       workers:
       - worker-02
-    name: discovered
+    name: discovered-2
 status:
   step: {}
