@@ -275,40 +275,21 @@ type ClusterDeviceGrowth struct {
 	// Errors maps the id of each device that could not be grown to the reason.
 	Errors map[string]string
 
-	// Uniform reports whether every data device has grown by the same factor,
-	// so that the device weights keep their relative sizes.
+	// Uniform reports whether every data device has now grown by the same
+	// factor, which is what makes the added capacity fully usable.
 	Uniform bool
-
-	// Rebalance is set when the devices had grown unevenly and a weight update
-	// was asked for.
-	Rebalance *DeviceRebalance
-}
-
-// DeviceRebalance is the weight update and rebalance after an uneven growth.
-type DeviceRebalance struct {
-	// WeightsUpdated: every node places data by the devices' new sizes.
-	WeightsUpdated bool
-	// Started: the cluster rebalance that moves data to the new weights was
-	// queued.
-	Started bool
-	// Reason says why either is missing.
-	Reason string
 }
 
 // GrowClusterDevices grows every online lblk data device of a cluster to the
 // size of its block device, one device at a time. A device that fails does not
-// stop the others; it is reported in Errors. With rebalance, devices that have
-// grown unevenly get weights by their new sizes and the cluster is rebalanced.
-func (c *Client) GrowClusterDevices(
-	ctx context.Context, clusterID string, rebalance bool,
-) (ClusterDeviceGrowth, error) {
+// stop the others; it is reported in Errors.
+func (c *Client) GrowClusterDevices(ctx context.Context, clusterID string) (ClusterDeviceGrowth, error) {
 	cluster, err := parseUUID("cluster id", clusterID)
 	if err != nil {
 		return ClusterDeviceGrowth{}, err
 	}
 
-	resp, err := c.api.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse(ctx, cluster,
-		&cpapi.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams{Rebalance: &rebalance})
+	resp, err := c.api.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse(ctx, cluster)
 	if err != nil {
 		return ClusterDeviceGrowth{}, fmt.Errorf("grow devices of cluster %s: %w", clusterID, err)
 	}
@@ -316,9 +297,6 @@ func (c *Client) GrowClusterDevices(
 		return ClusterDeviceGrowth{}, respError("grow devices of cluster "+clusterID, code, resp.Body)
 	}
 	out := ClusterDeviceGrowth{Errors: resp.JSON200.Errors, Uniform: resp.JSON200.Uniform}
-	if r := resp.JSON200.Rebalance; r != nil {
-		out.Rebalance = &DeviceRebalance{WeightsUpdated: r.WeightsUpdated, Started: r.Started, Reason: r.Reason}
-	}
 	for _, raw := range resp.JSON200.Devices {
 		out.Devices = append(out.Devices, deviceGrowthFromMap(raw))
 	}

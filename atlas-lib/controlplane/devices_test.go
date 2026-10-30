@@ -230,10 +230,9 @@ func TestGrowDeviceReportsARefusal(t *testing.T) {
 }
 
 func TestGrowClusterDevicesReadsEveryDevice(t *testing.T) {
-	var path, query string
+	var path string
 	c := deviceClient(t, func(w http.ResponseWriter, r *http.Request) {
 		path = r.URL.Path
-		query = r.URL.RawQuery
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"devices": []map[string]any{{
@@ -245,48 +244,17 @@ func TestGrowClusterDevicesReadsEveryDevice(t *testing.T) {
 		})
 	})
 
-	got, err := c.GrowClusterDevices(t.Context(), testDeviceCluster, true)
+	got, err := c.GrowClusterDevices(t.Context(), testDeviceCluster)
 	if err != nil {
 		t.Fatalf("growing the devices: %v", err)
 	}
 	if !strings.HasSuffix(path, "/clusters/"+testDeviceCluster+"/grow-devices") {
 		t.Errorf("path = %s, want .../clusters/{id}/grow-devices", path)
 	}
-	if query != "rebalance=true" {
-		t.Errorf("query = %q, want rebalance=true", query)
-	}
-	if got.Rebalance != nil {
-		t.Errorf("Rebalance = %+v, want nil for a uniform growth", got.Rebalance)
-	}
 	if len(got.Devices) != 1 || got.Devices[0].NewSize != 200 || !got.Devices[0].Resized {
 		t.Errorf("Devices = %+v, want the one grown device", got.Devices)
 	}
 	if got.Errors["other"] != "Device must be online" || !got.Uniform {
 		t.Errorf("growth = %+v, want the errors and the uniform flag carried", got)
-	}
-}
-
-func TestGrowClusterDevicesCarriesTheRebalance(t *testing.T) {
-	var query string
-	c := deviceClient(t, func(w http.ResponseWriter, r *http.Request) {
-		query = r.URL.RawQuery
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"devices": []map[string]any{}, "errors": map[string]string{}, "uniform": false,
-			"rebalance": map[string]any{"weights_updated": true, "started": false,
-				"reason": "Weights updated, but no rebalance was queued"},
-		})
-	})
-
-	got, err := c.GrowClusterDevices(t.Context(), testDeviceCluster, false)
-	if err != nil {
-		t.Fatalf("growing the devices: %v", err)
-	}
-	if query != "rebalance=false" {
-		t.Errorf("query = %q, want rebalance=false", query)
-	}
-	if got.Rebalance == nil || !got.Rebalance.WeightsUpdated || got.Rebalance.Started ||
-		!strings.Contains(got.Rebalance.Reason, "no rebalance") {
-		t.Errorf("Rebalance = %+v, want weights updated without a rebalance", got.Rebalance)
 	}
 }

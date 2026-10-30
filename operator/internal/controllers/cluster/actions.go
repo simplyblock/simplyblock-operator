@@ -177,8 +177,7 @@ func (r *StorageClusterOpsReconciler) request(
 func (r *StorageClusterOpsReconciler) requestGrowDevices(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps, clusterID string,
 ) (bool, error) {
-	rebalance := ops.Spec.GrowDevices == nil || !ops.Spec.GrowDevices.SkipRebalance
-	growth, err := r.API.GrowDevices(ctx, clusterID, rebalance)
+	growth, err := r.API.GrowDevices(ctx, clusterID)
 	if err != nil {
 		var refusal *ControlPlaneError
 		if errors.As(err, &refusal) && refusal.Status == http.StatusConflict {
@@ -190,11 +189,6 @@ func (r *StorageClusterOpsReconciler) requestGrowDevices(
 
 	record := &simplyblockv1alpha2.ClusterDeviceGrowthStatus{
 		Errors: growth.Errors, Uniform: growth.Uniform,
-	}
-	if growth.Rebalance != nil {
-		record.WeightsUpdated = growth.Rebalance.WeightsUpdated
-		record.RebalanceStarted = growth.Rebalance.Started
-		record.RebalanceMessage = growth.Rebalance.Reason
 	}
 	for _, d := range growth.Devices {
 		if d.Resized {
@@ -212,20 +206,10 @@ func (r *StorageClusterOpsReconciler) requestGrowDevices(
 	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, DevicesGrown, DevicesGrown,
 		"%d devices of cluster %s grew, %d had not grown, %d could not be grown",
 		record.Grown, ops.Spec.ClusterRef, record.Unchanged, len(record.Errors))
-	switch {
-	case record.RebalanceStarted:
-		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, DevicesReweighted, DevicesReweighted,
-			"the data devices of cluster %s have grown unevenly; their weights were set to the new "+
-				"sizes and the cluster is rebalancing", ops.Spec.ClusterRef)
-	case !growth.Uniform && record.RebalanceMessage != "":
-		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, DeviceGrowthUneven, DeviceGrowthUneven,
-			"the data devices of cluster %s have grown unevenly: %s", ops.Spec.ClusterRef,
-			record.RebalanceMessage)
-	case !growth.Uniform:
+	if !growth.Uniform {
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, DeviceGrowthUneven, DeviceGrowthUneven,
 			"the data devices of cluster %s have grown unevenly; the added capacity is only fully "+
-				"usable once all of them have grown by the same factor or the weights are updated",
-			ops.Spec.ClusterRef)
+				"usable once all of them have grown by the same factor", ops.Spec.ClusterRef)
 	}
 	return true, nil
 }

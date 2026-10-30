@@ -252,23 +252,6 @@ spec:
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
-                growDevices:
-                  description: GrowDevices parameterizes action GrowDevices and is ignored by the others.
-                  properties:
-                    skipRebalance:
-                      description: |-
-                        SkipRebalance keeps the device weights when the devices have grown
-                        unevenly. By default the weights are set to the new device sizes and the
-                        cluster is rebalanced, which moves a large part of the data in the
-                        background.
-                      type: boolean
-                      x-kubernetes-validations:
-                        - message: field is immutable
-                          rule: self == oldSelf
-                  type: object
-                  x-kubernetes-validations:
-                    - message: field skipRebalance is immutable once set
-                      rule: '!has(oldSelf.skipRebalance) || has(self.skipRebalance)'
                 rollingRestart:
                   description: |-
                     RollingRestart parameterizes action RollingRestart and is ignored by the
@@ -306,30 +289,14 @@ spec:
                       description: Grown is how many devices took a new, larger size.
                       format: int32
                       type: integer
-                    rebalanceMessage:
-                      description: |-
-                        RebalanceMessage says why the weights were not updated or the rebalance
-                        was not started after an uneven growth.
-                      type: string
-                    rebalanceStarted:
-                      description: |-
-                        RebalanceStarted reports that the cluster rebalance which moves data to
-                        the new weights was queued. Its progress is in StorageCluster.status.tasks.
-                      type: boolean
                     unchanged:
                       description: Unchanged is how many devices had not grown on their block device.
                       format: int32
                       type: integer
                     uniform:
                       description: |-
-                        Uniform reports whether every data device of the cluster has grown by the
-                        same factor. Then the device weights keep their relative sizes and no
-                        data has to move.
-                      type: boolean
-                    weightsUpdated:
-                      description: |-
-                        WeightsUpdated reports that the devices had grown unevenly and every node
-                        now places data by the devices' new sizes.
+                        Uniform reports whether every data device of the cluster has now grown by
+                        the same factor, which is what makes the added capacity fully usable.
                       type: boolean
                   required:
                     - grown
