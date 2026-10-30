@@ -355,6 +355,19 @@ bundle: yq verify-config-yaml verify-crd-kustomization ## Generate bundle manife
 	OPENSHIFT_VERSION="$(OPENSHIFT_VERSION)" \
 	"$(YQ)" e '$(YQ_ANNOTATIONS_EXPR)' -i bundle/metadata/annotations.yaml;
 
+.PHONY: bundle-dev
+bundle-dev: yq ## Generate a bundle that references images by tag, for branch builds (bundle resolves digests on Quay)
+	@set -e; \
+	operator-sdk generate kustomize manifests -q; \
+	(cd config/manager && kustomize edit set image controller=$(IMG_BASE):$(IMG_TAG)); \
+	kustomize build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION); \
+	OPERATOR_IMG="$(IMG_BASE):$(IMG_TAG)" \
+	OPERATOR_TAGGED_IMG="$(IMG_BASE):$(IMG_TAG)" \
+	CLUSTER_IMG="$(CLUSTER_IMAGE_BASE):$(CLUSTER_IMAGE_TAG)" \
+	SPDK_IMG="$(SPDK_IMAGE_BASE):$(SPDK_IMAGE_TAG)" \
+	REBALANCER_IMG="$(REBALANCER_IMG_BASE):$(IMG_TAG)" \
+	"$(YQ)" e '$(YQ_CSV_EXPR)' -i bundle/manifests/simplyblock-operator.clusterserviceversion.yaml
+
 .PHONY: bundle-build
 bundle-build: bundle
 	docker build -f bundle.Dockerfile -t $(BUNDLE_IMG) .

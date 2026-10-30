@@ -70,6 +70,19 @@ jobs:
             VERSION=${{ steps.version.outputs.bundle_version }} \
             IMG_TAG=${{ steps.version.outputs.tag }}
 
+      - name: Log in to Quay.io
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: quay.io
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Build and push bundle image
+        run: |
+          IMG="quay.io/simplyblock-io/simplyblock-operator-bundle:${{ steps.version.outputs.bundle_version }}"
+          docker build -f bundle.Dockerfile -t "$IMG" .
+          docker push "$IMG"
+
       - name: Package bundle as release asset
         run: |
           TAG="${{ steps.version.outputs.tag }}"

@@ -79,6 +79,17 @@ spec:
           value: controller:latest
         - name: SB_NODEPROBE_IMAGE
           value: controller:latest
+        # The accounts below carry config/default's namePrefix. The management
+        # API trusts only the accounts it is told to, and the chart's operator
+        # account is built in, so a bundle install names its own.
+        - name: SB_NODEPROBE_SERVICE_ACCOUNT
+          value: simplyblock-operator-nodeprobe
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: SB_EXTRA_ADMIN_SERVICE_ACCOUNTS
+          value: system:serviceaccount:$(POD_NAMESPACE):simplyblock-operator-controller-manager
         securityContext:
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
