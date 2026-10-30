@@ -411,7 +411,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Validating'',''Restoring'',''AwaitingVolume'',''AwaitingVolumes'',''Binding'']'
+                  rule: '!has(self.state) || self.state in [''Validating'',''Restoring'',''AwaitingVolume'',''AwaitingVolumes'',''Binding'',''Completed'']'
             type: object
         required:
         - spec

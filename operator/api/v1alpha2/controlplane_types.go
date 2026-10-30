@@ -47,7 +47,7 @@ const (
 
 // ControlPlaneStep is one step of the installation path. There is one graph
 // rather than a MultiConfig, because an entity has no spec.action to key one on.
-// +kubebuilder:validation:Enum=ApplyingFoundationDB;AwaitingFoundationDB;BuildingIndices;ApplyingDatastore;ApplyingAPI;AwaitingAPI
+// +kubebuilder:validation:Enum=ApplyingFoundationDB;AwaitingFoundationDB;BuildingIndices;ApplyingDatastore;ApplyingAPI;AwaitingAPI;Installed
 type ControlPlaneStep string
 
 const (
@@ -75,6 +75,9 @@ const (
 	// ControlPlaneStepAwaitingAPI holds until the readiness probe succeeds,
 	// which is what ends the installation.
 	ControlPlaneStepAwaitingAPI ControlPlaneStep = "AwaitingAPI"
+	// ControlPlaneStepInstalled is the terminal step: the installation is
+	// complete, and the phase reports the control plane's health from here on.
+	ControlPlaneStepInstalled ControlPlaneStep = "Installed"
 )
 
 // FoundationDBSpec is the sizing of the FoundationDB the operator installs.
@@ -440,10 +443,10 @@ type ControlPlaneStatus struct {
 	// +optional
 	Phase ControlPlanePhase `json:"phase,omitempty"`
 
-	// Step is the position of the installation machine within Installing. The
-	// rule repeats the ControlPlaneStep enum because a marker cannot reach a
-	// field of the shared snapshot type.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ApplyingFoundationDB','AwaitingFoundationDB','BuildingIndices','ApplyingDatastore','ApplyingAPI','AwaitingAPI']",message="unknown step"
+	// Step is the position of the installation machine, and Installed once the
+	// installation is complete. The rule repeats the ControlPlaneStep enum
+	// because a marker cannot reach a field of the shared snapshot type.
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ApplyingFoundationDB','AwaitingFoundationDB','BuildingIndices','ApplyingDatastore','ApplyingAPI','AwaitingAPI','Installed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

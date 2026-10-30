@@ -469,7 +469,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Inspecting'',''Probing'',''Writing'']'
+                  rule: '!has(self.state) || self.state in [''Inspecting'',''Probing'',''Writing'',''Completed'']'
               workers:
                 description: |-
                   Workers are the workers this run is inspecting, decided once in

@@ -704,9 +704,9 @@ spec:
                   type: string
                 step:
                   description: |-
-                    Step is the position of the installation machine within Installing. The
-                    rule repeats the ControlPlaneStep enum because a marker cannot reach a
-                    field of the shared snapshot type.
+                    Step is the position of the installation machine, and Installed once the
+                    installation is complete. The rule repeats the ControlPlaneStep enum
+                    because a marker cannot reach a field of the shared snapshot type.
                   properties:
                     claim:
                       description: |-
@@ -746,7 +746,7 @@ spec:
                   type: object
                   x-kubernetes-validations:
                     - message: unknown step
-                      rule: '!has(self.state) || self.state in [''ApplyingFoundationDB'',''AwaitingFoundationDB'',''BuildingIndices'',''ApplyingDatastore'',''ApplyingAPI'',''AwaitingAPI'']'
+                      rule: '!has(self.state) || self.state in [''ApplyingFoundationDB'',''AwaitingFoundationDB'',''BuildingIndices'',''ApplyingDatastore'',''ApplyingAPI'',''AwaitingAPI'',''Installed'']'
                 version:
                   description: Version is the version the management API reports.
                   type: string

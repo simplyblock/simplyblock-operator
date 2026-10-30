@@ -346,4 +346,8 @@ func TestTheRebalancingWaitReadsTheClusterStream(t *testing.T) {
 		t.Errorf("phase = %q, want Succeeded once the rebalance finished (step %q)",
 			ops.Status.Phase, ops.Status.Step.State)
 	}
+	// A succeeded operation reads the terminal step, not the last running one.
+	if got := ops.Status.Step.State; got != string(simplyblockv1alpha2.StorageClusterOpsStepCompleted) {
+		t.Errorf("step = %q, want Completed on a succeeded operation", got)
+	}
 }

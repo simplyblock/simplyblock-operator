@@ -256,7 +256,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Draining'',''Restarting'',''Awaiting'',''Preflight'',''Applying'',''Verifying'',''Requesting'']'
+                  rule: '!has(self.state) || self.state in [''Draining'',''Restarting'',''Awaiting'',''Preflight'',''Applying'',''Verifying'',''Requesting'',''Completed'']'
             type: object
         type: object
     served: true
