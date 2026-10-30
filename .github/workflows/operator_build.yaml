@@ -107,3 +107,81 @@ jobs:
             RELEASE=1
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  # An OLM bundle for the branch's images, so an OLM install can be tried before
+  # a release. Release runs publish their bundle through operator_release.yaml,
+  # which pins digests on Quay, so this job only runs for branch builds.
+  bundle:
+    name: "Build and push (bundle)"
+    if: inputs.version == ''
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: operator
+    env:
+      BUNDLE_REPO: docker.io/simplyblock/simplyblock-operator-bundle
+      IMAGE_REPO_PREFIX: docker.io/simplyblock
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Log in to Docker Hub
+        uses: ./.github/actions/registry-login
+        with:
+          ecr: "false"
+          dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+          internal: "false"
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: operator/go.mod
+
+      - name: Install operator-sdk
+        run: |
+          OPERATOR_SDK_VERSION="v1.42.2"
+          OPERATOR_SDK_SHA256="8847c45ea994ac62b3cd134f77934df2a16a56a39a634eb988e0d1db99d1a413"
+          curl -sLo /usr/local/bin/operator-sdk \
+            "https://github.com/operator-framework/operator-sdk/releases/download/${OPERATOR_SDK_VERSION}/operator-sdk_linux_amd64"
+          echo "${OPERATOR_SDK_SHA256}  /usr/local/bin/operator-sdk" | sha256sum -c -
+          chmod +x /usr/local/bin/operator-sdk
+
+      - name: Install kustomize
+        run: |
+          make kustomize
+          echo "${{ github.workspace }}/operator/bin" >> "$GITHUB_PATH"
+
+      # Same sanitization as the image tag in build-and-push, so the bundle's
+      # tag matches the images it references.
+      - name: Compute image tag
+        id: image_tag
+        run: |
+          tag="$(printf %s "${{ github.ref_name }}" | tr -c 'a-zA-Z0-9_.-' '-' | cut -c1-128)"
+          tag="$(printf %s "$tag" | sed 's/^[^a-zA-Z0-9_]*//')"
+          if [ -z "$tag" ]; then
+            echo "::error::branch name ${{ github.ref_name }} sanitizes to an empty image tag"
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      # A CSV name must be a SemVer, so the bundle is 0.0.0-<run>; the branch
+      # lives in the image tag.
+      - name: Generate bundle
+        run: |
+          make bundle-dev \
+            VERSION=0.0.0-${{ github.run_number }} \
+            IMG_TAG=${{ steps.image_tag.outputs.tag }} \
+            IMG_BASE=${IMAGE_REPO_PREFIX}/simplyblock-operator \
+            REBALANCER_IMG_BASE=${IMAGE_REPO_PREFIX}/simplyblock-rebalancer \
+            CLUSTER_IMAGE_BASE=${IMAGE_REPO_PREFIX}/simplyblock \
+            CLUSTER_IMAGE_TAG=main
+
+      - name: Build and push bundle image
+        run: |
+          docker build -f bundle.Dockerfile -t "${BUNDLE_REPO}:${{ steps.image_tag.outputs.tag }}" .
+          docker push "${BUNDLE_REPO}:${{ steps.image_tag.outputs.tag }}"
