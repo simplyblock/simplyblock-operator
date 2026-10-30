@@ -256,6 +256,8 @@ type fakeControlPlane struct {
 	serviceClassesCalls    int
 	setServiceClassesCalls int
 	growDevicesCalls  int
+	// growDevicesRebalance records the rebalance flag of each GrowDevices.
+	growDevicesRebalance []bool
 }
 
 func (f *fakeControlPlane) Endpoint(context.Context) string { return f.endpoint }
@@ -436,9 +438,10 @@ func (f *fakeControlPlane) SetServiceClasses(
 }
 
 func (f *fakeControlPlane) GrowDevices(
-	_ context.Context, clusterID string,
+	_ context.Context, clusterID string, rebalance bool,
 ) (atlascp.ClusterDeviceGrowth, error) {
 	f.growDevicesCalls++
+	f.growDevicesRebalance = append(f.growDevicesRebalance, rebalance)
 	if f.growDevices == nil {
 		return atlascp.ClusterDeviceGrowth{Uniform: true}, nil
 	}
