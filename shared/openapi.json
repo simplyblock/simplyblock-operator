@@ -3159,6 +3159,7 @@
     "/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-info": {
       "get": {
         "summary": "Clusters:Storage Nodes:Devices:Get-Device-Health-Info",
+        "description": "The device's health log (NVMe SMART / ATA SMART).\n\nA device that exposes no health log answers 200 with `supported=false`;\na storage node that cannot be reached is an error.",
         "operationId": "clusters_storage_nodes_devices_get_device_health_info_api_v2_clusters__cluster_id__storage_nodes__storage_node_id__devices__device_id__health_info_get",
         "security": [
           {
@@ -3207,6 +3208,75 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-assessment": {
+      "put": {
+        "summary": "Clusters:Storage Nodes:Devices:Set-Health-Assessment",
+        "description": "Record an externally computed health assessment (performance + SMART).\n\nStored on the device as sent; it raises the `device_slow` /\n`device_unhealthy` alerts while `reported_at + valid_seconds` has not\npassed.",
+        "operationId": "clusters_storage_nodes_devices_set_health_assessment_api_v2_clusters__cluster_id__storage_nodes__storage_node_id__devices__device_id__health_assessment_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "storage_node_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Storage Node Id"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceHealthAssessmentDTO"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -12338,6 +12408,18 @@
           },
           "capacity": {
             "$ref": "#/components/schemas/CapacityStatDTO"
+          },
+          "health_assessment": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Assessment"
           }
         },
         "type": "object",
@@ -12361,6 +12443,52 @@
         ],
         "title": "DeviceDTO"
       },
+      "DeviceHealthAssessmentDTO": {
+        "properties": {
+          "reporter": {
+            "type": "string",
+            "title": "Reporter",
+            "default": ""
+          },
+          "reported_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reported At"
+          },
+          "valid_seconds": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Valid Seconds",
+            "default": 900
+          },
+          "performance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DevicePerformanceAssessmentDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "smart": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeviceSmartAssessmentDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "reported_at"
+        ],
+        "title": "DeviceHealthAssessmentDTO",
+        "description": "A device health verdict computed outside the control plane.\n\nThe Kubernetes operator judges each device's performance against the\nfleet and its SMART log, and records the result here; the control plane\nstores it on the device and raises ``device_slow`` / ``device_unhealthy``\nfrom it while it is fresh (``reported_at`` + ``valid_seconds``). ``None``\nfor ``performance`` or ``smart`` means that half was not assessed."
+      },
       "DeviceHealthInfoDTO": {
         "properties": {
           "id": {
@@ -12368,117 +12496,431 @@
             "format": "uuid",
             "title": "Id"
           },
-          "model_number": {
+          "supported": {
+            "type": "boolean",
+            "title": "Supported",
+            "default": true
+          },
+          "source": {
             "type": "string",
+            "title": "Source",
+            "default": ""
+          },
+          "model_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Model Number"
           },
           "serial_number": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Serial Number"
           },
           "firmware_revision": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Firmware Revision"
           },
           "traddr": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Traddr"
           },
           "critical_warning": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Critical Warning"
           },
           "temperature_celsius": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Temperature Celsius"
           },
           "available_spare_percentage": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Available Spare Percentage"
           },
           "available_spare_threshold_percentage": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Available Spare Threshold Percentage"
           },
           "percentage_used": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Percentage Used"
           },
           "data_units_read": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Data Units Read"
           },
           "data_units_written": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Data Units Written"
           },
           "host_read_commands": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Host Read Commands"
           },
           "host_write_commands": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Host Write Commands"
           },
           "controller_busy_time": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Controller Busy Time"
           },
           "power_cycles": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Power Cycles"
           },
           "power_on_hours": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Power On Hours"
           },
           "unsafe_shutdowns": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Unsafe Shutdowns"
           },
           "media_errors": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Media Errors"
           },
           "num_err_log_entries": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Num Err Log Entries"
           },
           "warning_temperature_time_minutes": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Warning Temperature Time Minutes"
           },
           "critical_composite_temperature_time_minutes": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Critical Composite Temperature Time Minutes"
+          },
+          "smart_passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smart Passed"
+          },
+          "reallocated_sectors": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reallocated Sectors"
+          },
+          "pending_sectors": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Sectors"
           }
         },
         "type": "object",
         "required": [
-          "id",
-          "model_number",
-          "serial_number",
-          "firmware_revision",
-          "traddr",
-          "critical_warning",
-          "temperature_celsius",
-          "available_spare_percentage",
-          "available_spare_threshold_percentage",
-          "percentage_used",
-          "data_units_read",
-          "data_units_written",
-          "host_read_commands",
-          "host_write_commands",
-          "controller_busy_time",
-          "power_cycles",
-          "power_on_hours",
-          "unsafe_shutdowns",
-          "media_errors",
-          "num_err_log_entries",
-          "warning_temperature_time_minutes",
-          "critical_composite_temperature_time_minutes"
+          "id"
         ],
-        "title": "DeviceHealthInfoDTO"
+        "title": "DeviceHealthInfoDTO",
+        "description": "A device's health log, in SPDK's field names whatever it was read with.\n\nEvery metric is optional: an AIO device read through smartctl reports a\ndifferent subset than an NVMe controller does, and a device with no\nhealth log at all (a virtio disk, a host without smartctl) is\n``supported=false`` with every metric null -- a 200, not an error."
+      },
+      "DevicePerformanceAssessmentDTO": {
+        "properties": {
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "slow",
+              "unknown"
+            ],
+            "title": "Verdict"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "latency_us": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Us"
+          },
+          "fleet_latency_us": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fleet Latency Us"
+          },
+          "latency_ratio": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ratio"
+          },
+          "iops_per_tib": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Iops Per Tib"
+          },
+          "fleet_iops_per_tib": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fleet Iops Per Tib"
+          },
+          "iops_ratio": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Iops Ratio"
+          }
+        },
+        "type": "object",
+        "required": [
+          "verdict"
+        ],
+        "title": "DevicePerformanceAssessmentDTO"
+      },
+      "DeviceSmartAssessmentDTO": {
+        "properties": {
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warning",
+              "failing",
+              "unsupported",
+              "unknown"
+            ],
+            "title": "Verdict"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "verdict"
+        ],
+        "title": "DeviceSmartAssessmentDTO"
       },
       "DrainStepProgress": {
         "properties": {
@@ -13586,6 +14028,42 @@
         ],
         "title": "MigrationPlanVolumeDTO",
         "description": "One volume of a migration plan (docs/online-migration.md)."
+      },
+      "NetworkAttachment": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 253,
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+            "title": "Name"
+          },
+          "namespace": {
+            "type": "string",
+            "maxLength": 253,
+            "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)?$",
+            "title": "Namespace",
+            "default": ""
+          },
+          "interface": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,14}$",
+            "title": "Interface"
+          },
+          "ips": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ips"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "interface"
+        ],
+        "title": "NetworkAttachment",
+        "description": "One NetworkAttachmentDefinition the pod joins, as the operator states it. The\nnode record keeps these as plain dicts, which is what the record's base model stores."
       },
       "NvmeConnectEntry": {
         "properties": {
@@ -15073,6 +15551,18 @@
           "force_format": {
             "type": "boolean",
             "title": "Force Format",
+            "default": false
+          },
+          "networks": {
+            "items": {
+              "$ref": "#/components/schemas/NetworkAttachment"
+            },
+            "type": "array",
+            "title": "Networks"
+          },
+          "pod_network": {
+            "type": "boolean",
+            "title": "Pod Network",
             "default": false
           }
         },

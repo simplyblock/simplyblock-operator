@@ -199,6 +199,54 @@ func (e ConsistencyGroupReplicationStatusDTOState) Valid() bool {
 	}
 }
 
+// Defines values for DevicePerformanceAssessmentDTOVerdict.
+const (
+	DevicePerformanceAssessmentDTOVerdictOk      DevicePerformanceAssessmentDTOVerdict = "ok"
+	DevicePerformanceAssessmentDTOVerdictSlow    DevicePerformanceAssessmentDTOVerdict = "slow"
+	DevicePerformanceAssessmentDTOVerdictUnknown DevicePerformanceAssessmentDTOVerdict = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the DevicePerformanceAssessmentDTOVerdict enum.
+func (e DevicePerformanceAssessmentDTOVerdict) Valid() bool {
+	switch e {
+	case DevicePerformanceAssessmentDTOVerdictOk:
+		return true
+	case DevicePerformanceAssessmentDTOVerdictSlow:
+		return true
+	case DevicePerformanceAssessmentDTOVerdictUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceSmartAssessmentDTOVerdict.
+const (
+	DeviceSmartAssessmentDTOVerdictFailing     DeviceSmartAssessmentDTOVerdict = "failing"
+	DeviceSmartAssessmentDTOVerdictOk          DeviceSmartAssessmentDTOVerdict = "ok"
+	DeviceSmartAssessmentDTOVerdictUnknown     DeviceSmartAssessmentDTOVerdict = "unknown"
+	DeviceSmartAssessmentDTOVerdictUnsupported DeviceSmartAssessmentDTOVerdict = "unsupported"
+	DeviceSmartAssessmentDTOVerdictWarning     DeviceSmartAssessmentDTOVerdict = "warning"
+)
+
+// Valid indicates whether the value is a known member of the DeviceSmartAssessmentDTOVerdict enum.
+func (e DeviceSmartAssessmentDTOVerdict) Valid() bool {
+	switch e {
+	case DeviceSmartAssessmentDTOVerdictFailing:
+		return true
+	case DeviceSmartAssessmentDTOVerdictOk:
+		return true
+	case DeviceSmartAssessmentDTOVerdictUnknown:
+		return true
+	case DeviceSmartAssessmentDTOVerdictUnsupported:
+		return true
+	case DeviceSmartAssessmentDTOVerdictWarning:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FDBKeyDescriptorType.
 const (
 	Fdb FDBKeyDescriptorType = "fdb"
@@ -1453,53 +1501,105 @@ type ConsistencyGroupResolutionDTO struct {
 
 // DeviceDTO defines model for DeviceDTO.
 type DeviceDTO struct {
-	BdevType           *string            `json:"bdev_type,omitempty"`
-	Capacity           CapacityStatDTO    `json:"capacity"`
-	ClusterDeviceOrder *int               `json:"cluster_device_order"`
-	ClusterId          openapi_types.UUID `json:"cluster_id"`
-	DevicePath         *string            `json:"device_path,omitempty"`
-	HealthCheck        *bool              `json:"health_check"`
-	Id                 openapi_types.UUID `json:"id"`
-	IoError            bool               `json:"io_error"`
-	IsPartition        bool               `json:"is_partition"`
-	Model              string             `json:"model"`
-	NvmeController     string             `json:"nvme_controller"`
-	NvmfIps            []string           `json:"nvmf_ips"`
-	NvmfNqn            *string            `json:"nvmf_nqn,omitempty"`
-	NvmfPort           *int               `json:"nvmf_port,omitempty"`
-	PcieAddress        string             `json:"pcie_address"`
-	RetriesExhausted   bool               `json:"retries_exhausted"`
-	SerialNumber       string             `json:"serial_number"`
-	Size               int                `json:"size"`
-	Status             string             `json:"status"`
-	StorageNodeId      openapi_types.UUID `json:"storage_node_id"`
+	BdevType           *string                 `json:"bdev_type,omitempty"`
+	Capacity           CapacityStatDTO         `json:"capacity"`
+	ClusterDeviceOrder *int                    `json:"cluster_device_order"`
+	ClusterId          openapi_types.UUID      `json:"cluster_id"`
+	DevicePath         *string                 `json:"device_path,omitempty"`
+	HealthAssessment   *map[string]interface{} `json:"health_assessment,omitempty"`
+	HealthCheck        *bool                   `json:"health_check"`
+	Id                 openapi_types.UUID      `json:"id"`
+	IoError            bool                    `json:"io_error"`
+	IsPartition        bool                    `json:"is_partition"`
+	Model              string                  `json:"model"`
+	NvmeController     string                  `json:"nvme_controller"`
+	NvmfIps            []string                `json:"nvmf_ips"`
+	NvmfNqn            *string                 `json:"nvmf_nqn,omitempty"`
+	NvmfPort           *int                    `json:"nvmf_port,omitempty"`
+	PcieAddress        string                  `json:"pcie_address"`
+	RetriesExhausted   bool                    `json:"retries_exhausted"`
+	SerialNumber       string                  `json:"serial_number"`
+	Size               int                     `json:"size"`
+	Status             string                  `json:"status"`
+	StorageNodeId      openapi_types.UUID      `json:"storage_node_id"`
 }
 
-// DeviceHealthInfoDTO defines model for DeviceHealthInfoDTO.
-type DeviceHealthInfoDTO struct {
-	AvailableSparePercentage                int                `json:"available_spare_percentage"`
-	AvailableSpareThresholdPercentage       int                `json:"available_spare_threshold_percentage"`
-	ControllerBusyTime                      int                `json:"controller_busy_time"`
-	CriticalCompositeTemperatureTimeMinutes int                `json:"critical_composite_temperature_time_minutes"`
-	CriticalWarning                         int                `json:"critical_warning"`
-	DataUnitsRead                           int                `json:"data_units_read"`
-	DataUnitsWritten                        int                `json:"data_units_written"`
-	FirmwareRevision                        string             `json:"firmware_revision"`
-	HostReadCommands                        int                `json:"host_read_commands"`
-	HostWriteCommands                       int                `json:"host_write_commands"`
-	Id                                      openapi_types.UUID `json:"id"`
-	MediaErrors                             int                `json:"media_errors"`
-	ModelNumber                             string             `json:"model_number"`
-	NumErrLogEntries                        int                `json:"num_err_log_entries"`
-	PercentageUsed                          int                `json:"percentage_used"`
-	PowerCycles                             int                `json:"power_cycles"`
-	PowerOnHours                            int                `json:"power_on_hours"`
-	SerialNumber                            string             `json:"serial_number"`
-	TemperatureCelsius                      int                `json:"temperature_celsius"`
-	Traddr                                  string             `json:"traddr"`
-	UnsafeShutdowns                         int                `json:"unsafe_shutdowns"`
-	WarningTemperatureTimeMinutes           int                `json:"warning_temperature_time_minutes"`
+// DeviceHealthAssessmentDTO A device health verdict computed outside the control plane.
+//
+// The Kubernetes operator judges each device's performance against the
+// fleet and its SMART log, and records the result here; the control plane
+// stores it on the device and raises “device_slow“ / “device_unhealthy“
+// from it while it is fresh (“reported_at“ + “valid_seconds“). “None“
+// for “performance“ or “smart“ means that half was not assessed.
+type DeviceHealthAssessmentDTO struct {
+	Performance  *DevicePerformanceAssessmentDTO `json:"performance,omitempty"`
+	ReportedAt   time.Time                       `json:"reported_at"`
+	Reporter     *string                         `json:"reporter,omitempty"`
+	Smart        *DeviceSmartAssessmentDTO       `json:"smart,omitempty"`
+	ValidSeconds *int                            `json:"valid_seconds,omitempty"`
 }
+
+// DeviceHealthInfoDTO A device's health log, in SPDK's field names whatever it was read with.
+//
+// Every metric is optional: an AIO device read through smartctl reports a
+// different subset than an NVMe controller does, and a device with no
+// health log at all (a virtio disk, a host without smartctl) is
+// “supported=false“ with every metric null -- a 200, not an error.
+type DeviceHealthInfoDTO struct {
+	AvailableSparePercentage                *int               `json:"available_spare_percentage,omitempty"`
+	AvailableSpareThresholdPercentage       *int               `json:"available_spare_threshold_percentage,omitempty"`
+	ControllerBusyTime                      *int               `json:"controller_busy_time,omitempty"`
+	CriticalCompositeTemperatureTimeMinutes *int               `json:"critical_composite_temperature_time_minutes,omitempty"`
+	CriticalWarning                         *int               `json:"critical_warning,omitempty"`
+	DataUnitsRead                           *int               `json:"data_units_read,omitempty"`
+	DataUnitsWritten                        *int               `json:"data_units_written,omitempty"`
+	FirmwareRevision                        *string            `json:"firmware_revision,omitempty"`
+	HostReadCommands                        *int               `json:"host_read_commands,omitempty"`
+	HostWriteCommands                       *int               `json:"host_write_commands,omitempty"`
+	Id                                      openapi_types.UUID `json:"id"`
+	MediaErrors                             *int               `json:"media_errors,omitempty"`
+	ModelNumber                             *string            `json:"model_number,omitempty"`
+	NumErrLogEntries                        *int               `json:"num_err_log_entries,omitempty"`
+	PendingSectors                          *int               `json:"pending_sectors,omitempty"`
+	PercentageUsed                          *int               `json:"percentage_used,omitempty"`
+	PowerCycles                             *int               `json:"power_cycles,omitempty"`
+	PowerOnHours                            *int               `json:"power_on_hours,omitempty"`
+	ReallocatedSectors                      *int               `json:"reallocated_sectors,omitempty"`
+	SerialNumber                            *string            `json:"serial_number,omitempty"`
+	SmartPassed                             *bool              `json:"smart_passed,omitempty"`
+	Source                                  *string            `json:"source,omitempty"`
+	Supported                               *bool              `json:"supported,omitempty"`
+	TemperatureCelsius                      *int               `json:"temperature_celsius,omitempty"`
+	Traddr                                  *string            `json:"traddr,omitempty"`
+	UnsafeShutdowns                         *int               `json:"unsafe_shutdowns,omitempty"`
+	WarningTemperatureTimeMinutes           *int               `json:"warning_temperature_time_minutes,omitempty"`
+}
+
+// DevicePerformanceAssessmentDTO defines model for DevicePerformanceAssessmentDTO.
+type DevicePerformanceAssessmentDTO struct {
+	FleetIopsPerTib *float32                              `json:"fleet_iops_per_tib,omitempty"`
+	FleetLatencyUs  *float32                              `json:"fleet_latency_us,omitempty"`
+	IopsPerTib      *float32                              `json:"iops_per_tib,omitempty"`
+	IopsRatio       *float32                              `json:"iops_ratio,omitempty"`
+	LatencyRatio    *float32                              `json:"latency_ratio,omitempty"`
+	LatencyUs       *float32                              `json:"latency_us,omitempty"`
+	Reason          *string                               `json:"reason,omitempty"`
+	Since           *time.Time                            `json:"since,omitempty"`
+	Verdict         DevicePerformanceAssessmentDTOVerdict `json:"verdict"`
+}
+
+// DevicePerformanceAssessmentDTOVerdict defines model for DevicePerformanceAssessmentDTO.Verdict.
+type DevicePerformanceAssessmentDTOVerdict string
+
+// DeviceSmartAssessmentDTO defines model for DeviceSmartAssessmentDTO.
+type DeviceSmartAssessmentDTO struct {
+	CheckedAt *time.Time                      `json:"checked_at,omitempty"`
+	Reason    *string                         `json:"reason,omitempty"`
+	Verdict   DeviceSmartAssessmentDTOVerdict `json:"verdict"`
+}
+
+// DeviceSmartAssessmentDTOVerdict defines model for DeviceSmartAssessmentDTO.Verdict.
+type DeviceSmartAssessmentDTOVerdict string
 
 // DrainStepProgress How far one drain step has got.
 //
@@ -1861,6 +1961,15 @@ type MigrationPlanVolumeDTO struct {
 	TargetNodeId   *string `json:"target_node_id,omitempty"`
 }
 
+// NetworkAttachment One NetworkAttachmentDefinition the pod joins, as the operator states it. The
+// node record keeps these as plain dicts, which is what the record's base model stores.
+type NetworkAttachment struct {
+	Interface string    `json:"interface"`
+	Ips       *[]string `json:"ips,omitempty"`
+	Name      string    `json:"name"`
+	Namespace *string   `json:"namespace,omitempty"`
+}
+
 // NvmeConnectEntry defines model for NvmeConnectEntry.
 type NvmeConnectEntry struct {
 	AllowedHosts   *[]string `json:"allowed-hosts,omitempty"`
@@ -2140,30 +2249,32 @@ type StorageNodeDTOStatus string
 
 // StorageNodeParams defines model for StorageNodeParams.
 type StorageNodeParams struct {
-	CrName              *string   `json:"cr_name,omitempty"`
-	CrNamespace         *string   `json:"cr_namespace,omitempty"`
-	CrPlural            *string   `json:"cr_plural,omitempty"`
-	DataNics            *[]string `json:"data_nics,omitempty"`
-	Expand              *bool     `json:"expand,omitempty"`
-	FailureDomain       *int      `json:"failure_domain,omitempty"`
-	ForceFormat         *bool     `json:"force_format,omitempty"`
-	Format4k            *bool     `json:"format_4k,omitempty"`
-	HaJm                *bool     `json:"ha_jm,omitempty"`
-	HaJmCount           *int      `json:"ha_jm_count,omitempty"`
-	IdDeviceByNqn       *bool     `json:"id_device_by_nqn,omitempty"`
-	InterfaceName       string    `json:"interface_name"`
-	IobufLargePoolCount *int      `json:"iobuf_large_pool_count,omitempty"`
-	IobufSmallPoolCount *int      `json:"iobuf_small_pool_count,omitempty"`
-	JmPercent           *int      `json:"jm_percent,omitempty"`
-	MaxSnapshots        *int      `json:"max_snapshots,omitempty"`
-	Namespace           *string   `json:"namespace,omitempty"`
-	NodeAddress         string    `json:"node_address"`
-	Partitions          *int      `json:"partitions,omitempty"`
-	SpdkDebug           *bool     `json:"spdk_debug,omitempty"`
-	SpdkImage           *string   `json:"spdk_image,omitempty"`
-	SpdkProxyImage      *string   `json:"spdk_proxy_image,omitempty"`
-	SpdkSysMem          *string   `json:"spdk_sys_mem,omitempty"`
-	TestDevice          *bool     `json:"test_device,omitempty"`
+	CrName              *string              `json:"cr_name,omitempty"`
+	CrNamespace         *string              `json:"cr_namespace,omitempty"`
+	CrPlural            *string              `json:"cr_plural,omitempty"`
+	DataNics            *[]string            `json:"data_nics,omitempty"`
+	Expand              *bool                `json:"expand,omitempty"`
+	FailureDomain       *int                 `json:"failure_domain,omitempty"`
+	ForceFormat         *bool                `json:"force_format,omitempty"`
+	Format4k            *bool                `json:"format_4k,omitempty"`
+	HaJm                *bool                `json:"ha_jm,omitempty"`
+	HaJmCount           *int                 `json:"ha_jm_count,omitempty"`
+	IdDeviceByNqn       *bool                `json:"id_device_by_nqn,omitempty"`
+	InterfaceName       string               `json:"interface_name"`
+	IobufLargePoolCount *int                 `json:"iobuf_large_pool_count,omitempty"`
+	IobufSmallPoolCount *int                 `json:"iobuf_small_pool_count,omitempty"`
+	JmPercent           *int                 `json:"jm_percent,omitempty"`
+	MaxSnapshots        *int                 `json:"max_snapshots,omitempty"`
+	Namespace           *string              `json:"namespace,omitempty"`
+	Networks            *[]NetworkAttachment `json:"networks,omitempty"`
+	NodeAddress         string               `json:"node_address"`
+	Partitions          *int                 `json:"partitions,omitempty"`
+	PodNetwork          *bool                `json:"pod_network,omitempty"`
+	SpdkDebug           *bool                `json:"spdk_debug,omitempty"`
+	SpdkImage           *string              `json:"spdk_image,omitempty"`
+	SpdkProxyImage      *string              `json:"spdk_proxy_image,omitempty"`
+	SpdkSysMem          *string              `json:"spdk_sys_mem,omitempty"`
+	TestDevice          *bool                `json:"test_device,omitempty"`
 }
 
 // StoragePoolDTO defines model for StoragePoolDTO.
@@ -3039,6 +3150,9 @@ type ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPos
 // ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostJSONRequestBody defines body for ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPost for application/json ContentType.
 type ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostJSONRequestBody = StorageNodeParams
 
+// ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutJSONRequestBody defines body for ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut for application/json ContentType.
+type ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutJSONRequestBody = DeviceHealthAssessmentDTO
+
 // ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPostJSONRequestBody defines body for ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPost for application/json ContentType.
 type ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPostJSONRequestBody = UnderscoreRestartParams
 
@@ -3821,6 +3935,9 @@ type ServerInterface interface {
 	// ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost Clusters:Storage Nodes:Devices:Fail
 	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/fail)
 	ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID)
+	// ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut Clusters:Storage Nodes:Devices:Set-Health-Assessment
+	// (PUT /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-assessment)
+	ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID)
 	// ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet Clusters:Storage Nodes:Devices:Get-Device-Health-Info
 	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-info)
 	ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID)
@@ -7545,6 +7662,50 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesFailApiV2ClustersC
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "storage_node_id" -------------
+	var storageNodeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storage_node_id", r.PathValue("storage_node_id"), &storageNodeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "storage_node_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "device_id" -------------
+	var deviceId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "device_id", r.PathValue("device_id"), &deviceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "device_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut(w, r, clusterId, storageNodeId, deviceId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet operation middleware
 func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet(w http.ResponseWriter, r *http.Request) {
 
@@ -11116,6 +11277,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/add", wrapper.ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/capacity", wrapper.ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/fail", wrapper.ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-assessment", wrapper.ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-info", wrapper.ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/iostats", wrapper.ClustersStorageNodesDevicesIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdIostatsGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/remove", wrapper.ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePost)

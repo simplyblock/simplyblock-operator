@@ -201,6 +201,54 @@ func (e ConsistencyGroupReplicationStatusDTOState) Valid() bool {
 	}
 }
 
+// Defines values for DevicePerformanceAssessmentDTOVerdict.
+const (
+	DevicePerformanceAssessmentDTOVerdictOk      DevicePerformanceAssessmentDTOVerdict = "ok"
+	DevicePerformanceAssessmentDTOVerdictSlow    DevicePerformanceAssessmentDTOVerdict = "slow"
+	DevicePerformanceAssessmentDTOVerdictUnknown DevicePerformanceAssessmentDTOVerdict = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the DevicePerformanceAssessmentDTOVerdict enum.
+func (e DevicePerformanceAssessmentDTOVerdict) Valid() bool {
+	switch e {
+	case DevicePerformanceAssessmentDTOVerdictOk:
+		return true
+	case DevicePerformanceAssessmentDTOVerdictSlow:
+		return true
+	case DevicePerformanceAssessmentDTOVerdictUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceSmartAssessmentDTOVerdict.
+const (
+	DeviceSmartAssessmentDTOVerdictFailing     DeviceSmartAssessmentDTOVerdict = "failing"
+	DeviceSmartAssessmentDTOVerdictOk          DeviceSmartAssessmentDTOVerdict = "ok"
+	DeviceSmartAssessmentDTOVerdictUnknown     DeviceSmartAssessmentDTOVerdict = "unknown"
+	DeviceSmartAssessmentDTOVerdictUnsupported DeviceSmartAssessmentDTOVerdict = "unsupported"
+	DeviceSmartAssessmentDTOVerdictWarning     DeviceSmartAssessmentDTOVerdict = "warning"
+)
+
+// Valid indicates whether the value is a known member of the DeviceSmartAssessmentDTOVerdict enum.
+func (e DeviceSmartAssessmentDTOVerdict) Valid() bool {
+	switch e {
+	case DeviceSmartAssessmentDTOVerdictFailing:
+		return true
+	case DeviceSmartAssessmentDTOVerdictOk:
+		return true
+	case DeviceSmartAssessmentDTOVerdictUnknown:
+		return true
+	case DeviceSmartAssessmentDTOVerdictUnsupported:
+		return true
+	case DeviceSmartAssessmentDTOVerdictWarning:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FDBKeyDescriptorType.
 const (
 	Fdb FDBKeyDescriptorType = "fdb"
@@ -1455,53 +1503,105 @@ type ConsistencyGroupResolutionDTO struct {
 
 // DeviceDTO defines model for DeviceDTO.
 type DeviceDTO struct {
-	BdevType           *string            `json:"bdev_type,omitempty"`
-	Capacity           CapacityStatDTO    `json:"capacity"`
-	ClusterDeviceOrder *int               `json:"cluster_device_order"`
-	ClusterId          openapi_types.UUID `json:"cluster_id"`
-	DevicePath         *string            `json:"device_path,omitempty"`
-	HealthCheck        *bool              `json:"health_check"`
-	Id                 openapi_types.UUID `json:"id"`
-	IoError            bool               `json:"io_error"`
-	IsPartition        bool               `json:"is_partition"`
-	Model              string             `json:"model"`
-	NvmeController     string             `json:"nvme_controller"`
-	NvmfIps            []string           `json:"nvmf_ips"`
-	NvmfNqn            *string            `json:"nvmf_nqn,omitempty"`
-	NvmfPort           *int               `json:"nvmf_port,omitempty"`
-	PcieAddress        string             `json:"pcie_address"`
-	RetriesExhausted   bool               `json:"retries_exhausted"`
-	SerialNumber       string             `json:"serial_number"`
-	Size               int                `json:"size"`
-	Status             string             `json:"status"`
-	StorageNodeId      openapi_types.UUID `json:"storage_node_id"`
+	BdevType           *string                 `json:"bdev_type,omitempty"`
+	Capacity           CapacityStatDTO         `json:"capacity"`
+	ClusterDeviceOrder *int                    `json:"cluster_device_order"`
+	ClusterId          openapi_types.UUID      `json:"cluster_id"`
+	DevicePath         *string                 `json:"device_path,omitempty"`
+	HealthAssessment   *map[string]interface{} `json:"health_assessment,omitempty"`
+	HealthCheck        *bool                   `json:"health_check"`
+	Id                 openapi_types.UUID      `json:"id"`
+	IoError            bool                    `json:"io_error"`
+	IsPartition        bool                    `json:"is_partition"`
+	Model              string                  `json:"model"`
+	NvmeController     string                  `json:"nvme_controller"`
+	NvmfIps            []string                `json:"nvmf_ips"`
+	NvmfNqn            *string                 `json:"nvmf_nqn,omitempty"`
+	NvmfPort           *int                    `json:"nvmf_port,omitempty"`
+	PcieAddress        string                  `json:"pcie_address"`
+	RetriesExhausted   bool                    `json:"retries_exhausted"`
+	SerialNumber       string                  `json:"serial_number"`
+	Size               int                     `json:"size"`
+	Status             string                  `json:"status"`
+	StorageNodeId      openapi_types.UUID      `json:"storage_node_id"`
 }
 
-// DeviceHealthInfoDTO defines model for DeviceHealthInfoDTO.
-type DeviceHealthInfoDTO struct {
-	AvailableSparePercentage                int                `json:"available_spare_percentage"`
-	AvailableSpareThresholdPercentage       int                `json:"available_spare_threshold_percentage"`
-	ControllerBusyTime                      int                `json:"controller_busy_time"`
-	CriticalCompositeTemperatureTimeMinutes int                `json:"critical_composite_temperature_time_minutes"`
-	CriticalWarning                         int                `json:"critical_warning"`
-	DataUnitsRead                           int                `json:"data_units_read"`
-	DataUnitsWritten                        int                `json:"data_units_written"`
-	FirmwareRevision                        string             `json:"firmware_revision"`
-	HostReadCommands                        int                `json:"host_read_commands"`
-	HostWriteCommands                       int                `json:"host_write_commands"`
-	Id                                      openapi_types.UUID `json:"id"`
-	MediaErrors                             int                `json:"media_errors"`
-	ModelNumber                             string             `json:"model_number"`
-	NumErrLogEntries                        int                `json:"num_err_log_entries"`
-	PercentageUsed                          int                `json:"percentage_used"`
-	PowerCycles                             int                `json:"power_cycles"`
-	PowerOnHours                            int                `json:"power_on_hours"`
-	SerialNumber                            string             `json:"serial_number"`
-	TemperatureCelsius                      int                `json:"temperature_celsius"`
-	Traddr                                  string             `json:"traddr"`
-	UnsafeShutdowns                         int                `json:"unsafe_shutdowns"`
-	WarningTemperatureTimeMinutes           int                `json:"warning_temperature_time_minutes"`
+// DeviceHealthAssessmentDTO A device health verdict computed outside the control plane.
+//
+// The Kubernetes operator judges each device's performance against the
+// fleet and its SMART log, and records the result here; the control plane
+// stores it on the device and raises “device_slow“ / “device_unhealthy“
+// from it while it is fresh (“reported_at“ + “valid_seconds“). “None“
+// for “performance“ or “smart“ means that half was not assessed.
+type DeviceHealthAssessmentDTO struct {
+	Performance  *DevicePerformanceAssessmentDTO `json:"performance,omitempty"`
+	ReportedAt   time.Time                       `json:"reported_at"`
+	Reporter     *string                         `json:"reporter,omitempty"`
+	Smart        *DeviceSmartAssessmentDTO       `json:"smart,omitempty"`
+	ValidSeconds *int                            `json:"valid_seconds,omitempty"`
 }
+
+// DeviceHealthInfoDTO A device's health log, in SPDK's field names whatever it was read with.
+//
+// Every metric is optional: an AIO device read through smartctl reports a
+// different subset than an NVMe controller does, and a device with no
+// health log at all (a virtio disk, a host without smartctl) is
+// “supported=false“ with every metric null -- a 200, not an error.
+type DeviceHealthInfoDTO struct {
+	AvailableSparePercentage                *int               `json:"available_spare_percentage,omitempty"`
+	AvailableSpareThresholdPercentage       *int               `json:"available_spare_threshold_percentage,omitempty"`
+	ControllerBusyTime                      *int               `json:"controller_busy_time,omitempty"`
+	CriticalCompositeTemperatureTimeMinutes *int               `json:"critical_composite_temperature_time_minutes,omitempty"`
+	CriticalWarning                         *int               `json:"critical_warning,omitempty"`
+	DataUnitsRead                           *int               `json:"data_units_read,omitempty"`
+	DataUnitsWritten                        *int               `json:"data_units_written,omitempty"`
+	FirmwareRevision                        *string            `json:"firmware_revision,omitempty"`
+	HostReadCommands                        *int               `json:"host_read_commands,omitempty"`
+	HostWriteCommands                       *int               `json:"host_write_commands,omitempty"`
+	Id                                      openapi_types.UUID `json:"id"`
+	MediaErrors                             *int               `json:"media_errors,omitempty"`
+	ModelNumber                             *string            `json:"model_number,omitempty"`
+	NumErrLogEntries                        *int               `json:"num_err_log_entries,omitempty"`
+	PendingSectors                          *int               `json:"pending_sectors,omitempty"`
+	PercentageUsed                          *int               `json:"percentage_used,omitempty"`
+	PowerCycles                             *int               `json:"power_cycles,omitempty"`
+	PowerOnHours                            *int               `json:"power_on_hours,omitempty"`
+	ReallocatedSectors                      *int               `json:"reallocated_sectors,omitempty"`
+	SerialNumber                            *string            `json:"serial_number,omitempty"`
+	SmartPassed                             *bool              `json:"smart_passed,omitempty"`
+	Source                                  *string            `json:"source,omitempty"`
+	Supported                               *bool              `json:"supported,omitempty"`
+	TemperatureCelsius                      *int               `json:"temperature_celsius,omitempty"`
+	Traddr                                  *string            `json:"traddr,omitempty"`
+	UnsafeShutdowns                         *int               `json:"unsafe_shutdowns,omitempty"`
+	WarningTemperatureTimeMinutes           *int               `json:"warning_temperature_time_minutes,omitempty"`
+}
+
+// DevicePerformanceAssessmentDTO defines model for DevicePerformanceAssessmentDTO.
+type DevicePerformanceAssessmentDTO struct {
+	FleetIopsPerTib *float32                              `json:"fleet_iops_per_tib,omitempty"`
+	FleetLatencyUs  *float32                              `json:"fleet_latency_us,omitempty"`
+	IopsPerTib      *float32                              `json:"iops_per_tib,omitempty"`
+	IopsRatio       *float32                              `json:"iops_ratio,omitempty"`
+	LatencyRatio    *float32                              `json:"latency_ratio,omitempty"`
+	LatencyUs       *float32                              `json:"latency_us,omitempty"`
+	Reason          *string                               `json:"reason,omitempty"`
+	Since           *time.Time                            `json:"since,omitempty"`
+	Verdict         DevicePerformanceAssessmentDTOVerdict `json:"verdict"`
+}
+
+// DevicePerformanceAssessmentDTOVerdict defines model for DevicePerformanceAssessmentDTO.Verdict.
+type DevicePerformanceAssessmentDTOVerdict string
+
+// DeviceSmartAssessmentDTO defines model for DeviceSmartAssessmentDTO.
+type DeviceSmartAssessmentDTO struct {
+	CheckedAt *time.Time                      `json:"checked_at,omitempty"`
+	Reason    *string                         `json:"reason,omitempty"`
+	Verdict   DeviceSmartAssessmentDTOVerdict `json:"verdict"`
+}
+
+// DeviceSmartAssessmentDTOVerdict defines model for DeviceSmartAssessmentDTO.Verdict.
+type DeviceSmartAssessmentDTOVerdict string
 
 // DrainStepProgress How far one drain step has got.
 //
@@ -1863,6 +1963,15 @@ type MigrationPlanVolumeDTO struct {
 	TargetNodeId   *string `json:"target_node_id,omitempty"`
 }
 
+// NetworkAttachment One NetworkAttachmentDefinition the pod joins, as the operator states it. The
+// node record keeps these as plain dicts, which is what the record's base model stores.
+type NetworkAttachment struct {
+	Interface string    `json:"interface"`
+	Ips       *[]string `json:"ips,omitempty"`
+	Name      string    `json:"name"`
+	Namespace *string   `json:"namespace,omitempty"`
+}
+
 // NvmeConnectEntry defines model for NvmeConnectEntry.
 type NvmeConnectEntry struct {
 	AllowedHosts   *[]string `json:"allowed-hosts,omitempty"`
@@ -2142,30 +2251,32 @@ type StorageNodeDTOStatus string
 
 // StorageNodeParams defines model for StorageNodeParams.
 type StorageNodeParams struct {
-	CrName              *string   `json:"cr_name,omitempty"`
-	CrNamespace         *string   `json:"cr_namespace,omitempty"`
-	CrPlural            *string   `json:"cr_plural,omitempty"`
-	DataNics            *[]string `json:"data_nics,omitempty"`
-	Expand              *bool     `json:"expand,omitempty"`
-	FailureDomain       *int      `json:"failure_domain,omitempty"`
-	ForceFormat         *bool     `json:"force_format,omitempty"`
-	Format4k            *bool     `json:"format_4k,omitempty"`
-	HaJm                *bool     `json:"ha_jm,omitempty"`
-	HaJmCount           *int      `json:"ha_jm_count,omitempty"`
-	IdDeviceByNqn       *bool     `json:"id_device_by_nqn,omitempty"`
-	InterfaceName       string    `json:"interface_name"`
-	IobufLargePoolCount *int      `json:"iobuf_large_pool_count,omitempty"`
-	IobufSmallPoolCount *int      `json:"iobuf_small_pool_count,omitempty"`
-	JmPercent           *int      `json:"jm_percent,omitempty"`
-	MaxSnapshots        *int      `json:"max_snapshots,omitempty"`
-	Namespace           *string   `json:"namespace,omitempty"`
-	NodeAddress         string    `json:"node_address"`
-	Partitions          *int      `json:"partitions,omitempty"`
-	SpdkDebug           *bool     `json:"spdk_debug,omitempty"`
-	SpdkImage           *string   `json:"spdk_image,omitempty"`
-	SpdkProxyImage      *string   `json:"spdk_proxy_image,omitempty"`
-	SpdkSysMem          *string   `json:"spdk_sys_mem,omitempty"`
-	TestDevice          *bool     `json:"test_device,omitempty"`
+	CrName              *string              `json:"cr_name,omitempty"`
+	CrNamespace         *string              `json:"cr_namespace,omitempty"`
+	CrPlural            *string              `json:"cr_plural,omitempty"`
+	DataNics            *[]string            `json:"data_nics,omitempty"`
+	Expand              *bool                `json:"expand,omitempty"`
+	FailureDomain       *int                 `json:"failure_domain,omitempty"`
+	ForceFormat         *bool                `json:"force_format,omitempty"`
+	Format4k            *bool                `json:"format_4k,omitempty"`
+	HaJm                *bool                `json:"ha_jm,omitempty"`
+	HaJmCount           *int                 `json:"ha_jm_count,omitempty"`
+	IdDeviceByNqn       *bool                `json:"id_device_by_nqn,omitempty"`
+	InterfaceName       string               `json:"interface_name"`
+	IobufLargePoolCount *int                 `json:"iobuf_large_pool_count,omitempty"`
+	IobufSmallPoolCount *int                 `json:"iobuf_small_pool_count,omitempty"`
+	JmPercent           *int                 `json:"jm_percent,omitempty"`
+	MaxSnapshots        *int                 `json:"max_snapshots,omitempty"`
+	Namespace           *string              `json:"namespace,omitempty"`
+	Networks            *[]NetworkAttachment `json:"networks,omitempty"`
+	NodeAddress         string               `json:"node_address"`
+	Partitions          *int                 `json:"partitions,omitempty"`
+	PodNetwork          *bool                `json:"pod_network,omitempty"`
+	SpdkDebug           *bool                `json:"spdk_debug,omitempty"`
+	SpdkImage           *string              `json:"spdk_image,omitempty"`
+	SpdkProxyImage      *string              `json:"spdk_proxy_image,omitempty"`
+	SpdkSysMem          *string              `json:"spdk_sys_mem,omitempty"`
+	TestDevice          *bool                `json:"test_device,omitempty"`
 }
 
 // StoragePoolDTO defines model for StoragePoolDTO.
@@ -3040,6 +3151,9 @@ type ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPos
 
 // ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostJSONRequestBody defines body for ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPost for application/json ContentType.
 type ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostJSONRequestBody = StorageNodeParams
+
+// ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutJSONRequestBody defines body for ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut for application/json ContentType.
+type ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutJSONRequestBody = DeviceHealthAssessmentDTO
 
 // ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPostJSONRequestBody defines body for ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPost for application/json ContentType.
 type ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPostJSONRequestBody = UnderscoreRestartParams
@@ -4663,7 +4777,38 @@ type ClientInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/fail (the `ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost` operationId).
 	ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutWithBody Clusters:Storage Nodes:Devices:Set-Health-Assessment
+	//
+	// Record an externally computed health assessment (performance + SMART).
+	//
+	// Stored on the device as sent; it raises the `device_slow` /
+	// `device_unhealthy` alerts while `reported_at + valid_seconds` has not
+	// passed.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-assessment (the `ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut` operationId).
+	ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutWithBody(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut Clusters:Storage Nodes:Devices:Set-Health-Assessment
+	//
+	// Record an externally computed health assessment (performance + SMART).
+	//
+	// Stored on the device as sent; it raises the `device_slow` /
+	// `device_unhealthy` alerts while `reported_at + valid_seconds` has not
+	// passed.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-assessment (the `ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut` operationId).
+	ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, body ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet Clusters:Storage Nodes:Devices:Get-Device-Health-Info
+	//
+	// The device's health log (NVMe SMART / ATA SMART).
+	//
+	// A device that exposes no health log answers 200 with `supported=false`;
+	// a storage node that cannot be reached is an error.
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-info (the `ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet` operationId).
 	ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -7661,7 +7806,58 @@ func (c *Client) ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNod
 	return c.Client.Do(req)
 }
 
+// ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutWithBody Clusters:Storage Nodes:Devices:Set-Health-Assessment
+//
+// Record an externally computed health assessment (performance + SMART).
+//
+// Stored on the device as sent; it raises the `device_slow` /
+// `device_unhealthy` alerts while `reported_at + valid_seconds` has not
+// passed.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-assessment (the `ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut` operationId).
+func (c *Client) ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutWithBody(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutRequestWithBody(c.Server, clusterId, storageNodeId, deviceId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut Clusters:Storage Nodes:Devices:Set-Health-Assessment
+//
+// Record an externally computed health assessment (performance + SMART).
+//
+// Stored on the device as sent; it raises the `device_slow` /
+// `device_unhealthy` alerts while `reported_at + valid_seconds` has not
+// passed.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-assessment (the `ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut` operationId).
+func (c *Client) ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, body ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutRequest(c.Server, clusterId, storageNodeId, deviceId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet Clusters:Storage Nodes:Devices:Get-Device-Health-Info
+//
+// The device's health log (NVMe SMART / ATA SMART).
+//
+// A device that exposes no health log answers 200 with `supported=false`;
+// a storage node that cannot be reached is an error.
 //
 // Corresponds with GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-info (the `ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet` operationId).
 func (c *Client) ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -14042,6 +14238,67 @@ func NewClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorage
 	return req, nil
 }
 
+// NewClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutRequest calls the generic ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut builder with application/json body
+func NewClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutRequest(server string, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, body ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutRequestWithBody(server, clusterId, storageNodeId, deviceId, "application/json", bodyReader)
+}
+
+// NewClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutRequestWithBody constructs an http.Request for the ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut method, with any body, and a specified content type
+func NewClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutRequestWithBody(server string, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "storage_node_id", storageNodeId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "device_id", deviceId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/devices/%s/health-assessment", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPut, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGetRequest constructs an http.Request for the ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet method
 func NewClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGetRequest(server string, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID) (*http.Request, error) {
 	var err error
@@ -19505,7 +19762,38 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/fail (the `ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost` operationId).
 	ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPostResponse, error)
 
+	// ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutWithBodyWithResponse Clusters:Storage Nodes:Devices:Set-Health-Assessment
+	//
+	// Record an externally computed health assessment (performance + SMART).
+	//
+	// Stored on the device as sent; it raises the `device_slow` /
+	// `device_unhealthy` alerts while `reported_at + valid_seconds` has not
+	// passed.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-assessment (the `ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut` operationId).
+	ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutResponse, error)
+
+	// ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutWithResponse Clusters:Storage Nodes:Devices:Set-Health-Assessment
+	//
+	// Record an externally computed health assessment (performance + SMART).
+	//
+	// Stored on the device as sent; it raises the `device_slow` /
+	// `device_unhealthy` alerts while `reported_at + valid_seconds` has not
+	// passed.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-assessment (the `ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut` operationId).
+	ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, body ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutResponse, error)
+
 	// ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGetWithResponse Clusters:Storage Nodes:Devices:Get-Device-Health-Info
+	//
+	// The device's health log (NVMe SMART / ATA SMART).
+	//
+	// A device that exposes no health log answers 200 with `supported=false`;
+	// a storage node that cannot be reached is an error.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -24659,6 +24947,47 @@ func (r ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorage
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -29858,7 +30187,50 @@ func (c *ClientWithResponses) ClustersStorageNodesDevicesFailApiV2ClustersCluste
 	return ParseClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPostResponse(rsp)
 }
 
+// ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutWithBodyWithResponse Clusters:Storage Nodes:Devices:Set-Health-Assessment
+//
+// Record an externally computed health assessment (performance + SMART).
+//
+// Stored on the device as sent; it raises the `device_slow` /
+// `device_unhealthy` alerts while `reported_at + valid_seconds` has not
+// passed.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-assessment (the `ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut` operationId).
+func (c *ClientWithResponses) ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutResponse, error) {
+	rsp, err := c.ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutWithBody(ctx, clusterId, storageNodeId, deviceId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutResponse(rsp)
+}
+
+// ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutWithResponse Clusters:Storage Nodes:Devices:Set-Health-Assessment
+//
+// Record an externally computed health assessment (performance + SMART).
+//
+// Stored on the device as sent; it raises the `device_slow` /
+// `device_unhealthy` alerts while `reported_at + valid_seconds` has not
+// passed.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-assessment (the `ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut` operationId).
+func (c *ClientWithResponses) ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, body ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutResponse, error) {
+	rsp, err := c.ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut(ctx, clusterId, storageNodeId, deviceId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutResponse(rsp)
+}
+
 // ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGetWithResponse Clusters:Storage Nodes:Devices:Get-Device-Health-Info
+//
+// The device's health log (NVMe SMART / ATA SMART).
+//
+// A device that exposes no health log answers 200 with `supported=false`;
+// a storage node that cannot be reached is an error.
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -34214,6 +34586,35 @@ func ParseClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStora
 	}
 
 	response := &ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutResponse parses an HTTP response from a ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutWithResponse call
+func ParseClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutResponse(rsp *http.Response) (*ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
