@@ -224,6 +224,7 @@ spec:
                     - Validating
                     - CreatingClaims
                     - WaitingForBind
+                    - Completed
                     type: string
                 type: object
             type: object

@@ -60,7 +60,7 @@ const (
 )
 
 // StoragePoolOpsStep is one step of a running pool operation.
-// +kubebuilder:validation:Enum=Validating;Migrating
+// +kubebuilder:validation:Enum=Validating;Migrating;Completed
 type StoragePoolOpsStep string
 
 const (
@@ -72,6 +72,8 @@ const (
 	// that list and waits for each to reach a terminal phase, which is the same
 	// fan-out a node drain performs.
 	StoragePoolOpsStepMigrating StoragePoolOpsStep = "Migrating"
+	// StoragePoolOpsStepCompleted is the terminal step of an operation that succeeded.
+	StoragePoolOpsStepCompleted StoragePoolOpsStep = "Completed"
 )
 
 // StoragePoolOpsSpec is one operation to perform against one StoragePool.
@@ -103,7 +105,7 @@ type StoragePoolOpsStatus struct {
 	// Step is the position of the running action's state machine. It is
 	// persisted before the side effect that step performs, so a step reported
 	// here is a step that started.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating','Completed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

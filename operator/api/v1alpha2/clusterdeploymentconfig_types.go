@@ -60,7 +60,7 @@ const (
 )
 
 // ClusterDeploymentConfigStep is one step of the expansion path.
-// +kubebuilder:validation:Enum=Validating;CreatingCluster;AwaitingCluster;CreatingNodes;Activating
+// +kubebuilder:validation:Enum=Validating;CreatingCluster;AwaitingCluster;CreatingNodes;Activating;Completed
 type ClusterDeploymentConfigStep string
 
 const (
@@ -77,6 +77,9 @@ const (
 	// cluster that serves nothing behind a document reporting Expanded, with
 	// nothing saying that one more thing is required of anybody.
 	ClusterDeploymentConfigStepActivating ClusterDeploymentConfigStep = "Activating"
+	// ClusterDeploymentConfigStepCompleted is the terminal step of a document
+	// that expanded.
+	ClusterDeploymentConfigStepCompleted ClusterDeploymentConfigStep = "Completed"
 )
 
 // KubernetesEnvironment is the distribution a deployment targets. The values are
@@ -886,7 +889,7 @@ type ClusterDeploymentConfigStatus struct {
 	Phase ClusterDeploymentConfigPhase `json:"phase,omitempty"`
 
 	// Step is the position of the expansion machine within Expanding.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','CreatingCluster','AwaitingCluster','CreatingNodes','Activating']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','CreatingCluster','AwaitingCluster','CreatingNodes','Activating','Completed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

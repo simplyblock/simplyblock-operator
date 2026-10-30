@@ -612,6 +612,10 @@ func (r *PersistentVolumeOpsReconciler) finish(
 		status.Phase = phase
 		status.Message = message
 		status.CompletedAt = &now
+		// A failed or aborted operation keeps the step it broke in; a succeeded one reads Completed.
+		if phase == simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+			status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.PersistentVolumeOpsStepCompleted)}
+		}
 	}); err != nil {
 		return ctrl.Result{}, err
 	}

@@ -100,7 +100,7 @@ const (
 // It carries the two steps Restart has and the two more Fail adds. The rest of
 // the steps the other three actions need arrive with those actions, because a
 // step no graph declares is a status value nothing can resume from.
-// +kubebuilder:validation:Enum=Requesting;Awaiting;Removing;Failing
+// +kubebuilder:validation:Enum=Requesting;Awaiting;Removing;Failing;Completed
 type StorageDeviceOpsStep string
 
 const (
@@ -122,6 +122,8 @@ const (
 	// can be aborted and this cannot, and the abort table a DELETE guard reads
 	// is a set of step names with no action beside them.
 	StorageDeviceOpsStepFailing StorageDeviceOpsStep = "Failing"
+	// StorageDeviceOpsStepCompleted is the terminal step of an operation that succeeded.
+	StorageDeviceOpsStepCompleted StorageDeviceOpsStep = "Completed"
 )
 
 // StorageDeviceOpsSpec is one operation to perform against one StorageDevice.
@@ -159,7 +161,7 @@ type StorageDeviceOpsStatus struct {
 
 	// Step is the position of the running action's state machine. It is
 	// persisted before the side effect that step performs.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Awaiting','Removing','Failing']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Awaiting','Removing','Failing','Completed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

@@ -378,7 +378,7 @@ spec:
                   type: object
                   x-kubernetes-validations:
                     - message: unknown step
-                      rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'',''ShuttingDown'',''Starting'',''CheckingPeers'',''ShuttingDownNode'',''RefreshingPod'',''AwaitingPod'',''RestartingNode'',''Rebalancing'']'
+                      rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'',''ShuttingDown'',''Starting'',''CheckingPeers'',''ShuttingDownNode'',''RefreshingPod'',''AwaitingPod'',''RestartingNode'',''Rebalancing'',''Completed'']'
               type: object
           type: object
       served: true

@@ -73,7 +73,7 @@ const (
 // StorageClusterOpsStep is one step of a running cluster operation. The enum is
 // the union of every action's steps; which steps belong to which action is
 // declared by the graph rather than by this type.
-// +kubebuilder:validation:Enum=Requesting;Awaiting;ShuttingDown;Starting;CheckingPeers;ShuttingDownNode;RefreshingPod;AwaitingPod;RestartingNode;Rebalancing
+// +kubebuilder:validation:Enum=Requesting;Awaiting;ShuttingDown;Starting;CheckingPeers;ShuttingDownNode;RefreshingPod;AwaitingPod;RestartingNode;Rebalancing;Completed
 type StorageClusterOpsStep string
 
 const (
@@ -92,6 +92,8 @@ const (
 	StorageClusterOpsStepAwaitingPod      StorageClusterOpsStep = "AwaitingPod"
 	StorageClusterOpsStepRestartingNode   StorageClusterOpsStep = "RestartingNode"
 	StorageClusterOpsStepRebalancing      StorageClusterOpsStep = "Rebalancing"
+	// StorageClusterOpsStepCompleted is the terminal step of an operation that succeeded.
+	StorageClusterOpsStepCompleted StorageClusterOpsStep = "Completed"
 )
 
 // RollingRestartSpec parameterizes the RollingRestart action.
@@ -183,7 +185,7 @@ type StorageClusterOpsStatus struct {
 
 	// Step is the position of the running action's state machine. The value is
 	// one of the steps the running action declares.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Awaiting','ShuttingDown','Starting','CheckingPeers','ShuttingDownNode','RefreshingPod','AwaitingPod','RestartingNode','Rebalancing']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Awaiting','ShuttingDown','Starting','CheckingPeers','ShuttingDownNode','RefreshingPod','AwaitingPod','RestartingNode','Rebalancing','Completed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

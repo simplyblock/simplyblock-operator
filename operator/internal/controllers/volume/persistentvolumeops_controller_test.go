@@ -311,6 +311,9 @@ func TestAFinishedMigrationSucceedsAndReleasesTheVolume(t *testing.T) {
 	if ops.Status.CompletedAt == nil {
 		t.Error("a terminal operation records no completion time")
 	}
+	if got := ops.Status.Step.State; got != string(simplyblockv1alpha2.PersistentVolumeOpsStepCompleted) {
+		t.Errorf("step = %q, want %q on a succeeded operation", got, simplyblockv1alpha2.PersistentVolumeOpsStepCompleted)
+	}
 	if got := lockOn(t, r); got != "" {
 		t.Errorf("the volume is still locked by %q", got)
 	}
@@ -515,6 +518,10 @@ func TestAStepThatOutlivesItsDeadlineFailsTheOperation(t *testing.T) {
 	ops = operationFrom(t, r)
 	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed {
 		t.Fatalf("phase = %q, want Failed", ops.Status.Phase)
+	}
+	// A failed operation keeps the step it broke in.
+	if got := ops.Status.Step.State; got != string(stepValidating) {
+		t.Errorf("step = %q, want %q kept on a failed operation", got, stepValidating)
 	}
 	if got := lockOn(t, r); got != "" {
 		t.Errorf("the volume is still locked by %q", got)

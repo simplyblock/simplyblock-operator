@@ -180,7 +180,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'',''Removing'',''Failing'']'
+                  rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'',''Removing'',''Failing'',''Completed'']'
             type: object
         type: object
     served: true

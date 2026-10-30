@@ -37,13 +37,15 @@ const (
 // VolumeGroupSnapshotOpsStep is one step of a running operation. The enum is the
 // union of every action's steps. Which steps belong to which action is declared
 // by the action's state-machine graph rather than by this type.
-// +kubebuilder:validation:Enum=Validating;CreatingClaims;WaitingForBind
+// +kubebuilder:validation:Enum=Validating;CreatingClaims;WaitingForBind;Completed
 type VolumeGroupSnapshotOpsStep string
 
 const (
 	VolumeGroupSnapshotOpsStepValidating     VolumeGroupSnapshotOpsStep = "Validating"
 	VolumeGroupSnapshotOpsStepCreatingClaims VolumeGroupSnapshotOpsStep = "CreatingClaims"
 	VolumeGroupSnapshotOpsStepWaitingForBind VolumeGroupSnapshotOpsStep = "WaitingForBind"
+	// VolumeGroupSnapshotOpsStepCompleted is the terminal step of an operation that succeeded.
+	VolumeGroupSnapshotOpsStepCompleted VolumeGroupSnapshotOpsStep = "Completed"
 )
 
 // VolumeGroupSnapshotOpsStepSnapshot is the durable position of the action's

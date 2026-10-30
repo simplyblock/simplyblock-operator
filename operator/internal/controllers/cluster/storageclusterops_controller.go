@@ -453,6 +453,10 @@ func (r *StorageClusterOpsReconciler) finish(
 		status.Phase = phase
 		status.Message = message
 		status.CompletedAt = &now
+		// Success reads the terminal step; failure and abort keep the step they stopped at.
+		if phase == simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded {
+			status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.StorageClusterOpsStepCompleted)}
+		}
 	})
 	if err != nil {
 		return ctrl.Result{}, err

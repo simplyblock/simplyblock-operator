@@ -49,7 +49,7 @@ const (
 // OperatorOpsStep is one step of a running operator operation. Which steps
 // belong to which action is declared by that action's graph rather than by this
 // type, which is why the enum stays flat as actions are added.
-// +kubebuilder:validation:Enum=Inspecting;Probing;Writing
+// +kubebuilder:validation:Enum=Inspecting;Probing;Writing;Completed
 type OperatorOpsStep string
 
 const (
@@ -63,6 +63,8 @@ const (
 
 	// OperatorOpsStepWriting turns the reports into a ClusterDeploymentConfig.
 	OperatorOpsStepWriting OperatorOpsStep = "Writing"
+	// OperatorOpsStepCompleted is the terminal step of an operation that succeeded.
+	OperatorOpsStepCompleted OperatorOpsStep = "Completed"
 )
 
 // DeviceFilter narrows what a discovery run reports as a candidate device. It is
@@ -328,7 +330,7 @@ type OperatorOpsStatus struct {
 	Phase OperatorOpsPhase `json:"phase,omitempty"`
 
 	// Step is the position of the running action's state machine.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Inspecting','Probing','Writing']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Inspecting','Probing','Writing','Completed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

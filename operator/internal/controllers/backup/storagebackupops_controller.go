@@ -470,6 +470,10 @@ func (r *StorageBackupOpsReconciler) finish(
 		status.Phase = phase
 		status.Message = message
 		status.CompletedAt = &now
+		// A failed operation keeps the step it broke in; a succeeded one reads Completed.
+		if phase == simplyblockv1alpha2.StorageBackupOpsPhaseSucceeded {
+			status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.StorageBackupOpsStepCompleted)}
+		}
 	}); err != nil {
 		return ctrl.Result{}, err
 	}

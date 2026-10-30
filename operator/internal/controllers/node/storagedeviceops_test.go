@@ -310,6 +310,9 @@ func TestTheRestartIsIssuedOnce(t *testing.T) {
 	if ops.Status.Phase != simplyblockv1alpha2.StorageDeviceOpsPhaseSucceeded {
 		t.Errorf("phase = %q, want Succeeded: %s", ops.Status.Phase, ops.Status.Message)
 	}
+	if want := string(simplyblockv1alpha2.StorageDeviceOpsStepCompleted); ops.Status.Step.State != want {
+		t.Errorf("step = %q, want %q once the operation succeeded", ops.Status.Step.State, want)
+	}
 	if device.Status.ActiveOpsRef != "" {
 		t.Errorf("the device is still locked by %q after the operation finished",
 			device.Status.ActiveOpsRef)
@@ -377,6 +380,10 @@ func TestADeviceThatDoesNotComeBackFailsTheOperation(t *testing.T) {
 	ops, _ := w.settle()
 	if ops.Status.Phase != simplyblockv1alpha2.StorageDeviceOpsPhaseFailed {
 		t.Fatalf("phase = %q, want Failed when the device does not come back", ops.Status.Phase)
+	}
+	if ops.Status.Step.State == "" ||
+		ops.Status.Step.State == string(simplyblockv1alpha2.StorageDeviceOpsStepCompleted) {
+		t.Errorf("step = %q, want the step the operation failed in", ops.Status.Step.State)
 	}
 	if !strings.Contains(ops.Status.Message, "no longer held") {
 		t.Errorf("the failure does not say the device is gone: %q", ops.Status.Message)

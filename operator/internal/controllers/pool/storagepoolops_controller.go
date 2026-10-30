@@ -34,6 +34,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
+	"github.com/simplyblock/atlas/statemachine"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -283,6 +285,10 @@ func (r *StoragePoolOpsReconciler) finish(
 	ops.Status.Phase = phase
 	ops.Status.Message = message
 	ops.Status.CompletedAt = &now
+	// Success reads the terminal step; failure and abort keep the step they stopped at.
+	if phase == simplyblockv1alpha2.StoragePoolOpsPhaseSucceeded {
+		ops.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.StoragePoolOpsStepCompleted)}
+	}
 	ops.Status.ObservedGeneration = ops.Generation
 	if err := r.Status().Patch(ctx, ops, client.MergeFrom(base)); err != nil {
 		return ctrl.Result{}, err
