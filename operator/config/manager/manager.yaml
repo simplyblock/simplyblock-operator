@@ -83,6 +83,16 @@ spec:
         # named with the namePrefix.
         - name: SB_NODEPROBE_SERVICE_ACCOUNT
           value: nodeprobe
+        # The management API authenticates the operator by a TokenReview and
+        # trusts only the accounts it is told to. The chart's operator account
+        # is built in, so an OLM install, which runs as this deployment's own
+        # account, has to name it. config/default writes the prefixed name.
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: SB_EXTRA_ADMIN_SERVICE_ACCOUNTS
+          value: system:serviceaccount:$(POD_NAMESPACE):controller-manager
         securityContext:
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
