@@ -10445,7 +10445,7 @@
     "/api/v2/clusters/{cluster_id}/grow-devices": {
       "post": {
         "summary": "Clusters:Grow Devices",
-        "description": "Grow every online lblk data device of the cluster to the size of its\nblock device, one device at a time. Used after all LUNs of the cluster\nwere grown by the same factor on the storage array.",
+        "description": "Grow all lblk data devices of the cluster online by the same factor.\n\nEvery block device is rescanned (for example, after its LUN was grown on\nthe storage array), and every device grows by the smallest growth factor\nof all of them; the rest of a larger block device stays unused\n(`unused_size`). If one block device did not grow, nothing grows\n(`grown` false, `reason`). Device weights and data placement never change.\nA block device smaller than its device is refused, listed in `shrunk`\nand `errors`, and raises the device_shrunk alert.",
         "operationId": "clusters_grow_devices_api_v2_clusters__cluster_id__grow_devices_post",
         "security": [
           {
@@ -10474,75 +10474,6 @@
                 }
               }
             }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/resize": {
-      "post": {
-        "summary": "Clusters:Storage Nodes:Devices:Resize",
-        "description": "Grow an lblk device online to the size its block device now has.\n\nThe storage node's host re-reads the size of the block device (for\nexample, a LUN grown on its storage array) and the device takes it over\nwithout interrupting I/O. Shrinking is refused. The placement weight of\nthe device stays at its original size, so the added capacity is only\nfully usable once all data devices of the cluster have grown by the same\nfactor; `uniform` and `warning` report it.",
-        "operationId": "clusters_storage_nodes_devices_resize_api_v2_clusters__cluster_id__storage_nodes__storage_node_id__devices__device_id__resize_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          },
-          {
-            "name": "storage_node_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Storage Node Id"
-            }
-          },
-          {
-            "name": "device_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Device Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeviceResizeDTO"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "The device cannot be grown"
           },
           "422": {
             "description": "Validation Error",
@@ -16913,7 +16844,54 @@
         ],
         "title": "_UpdateParams"
       },
-      "DeviceResizeDTO": {
+      "DeviceGrowthDTO": {
+        "properties": {
+          "grown": {
+            "type": "boolean",
+            "title": "Grown"
+          },
+          "factor": {
+            "type": "number",
+            "title": "Factor"
+          },
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceGrowthEntryDTO"
+            },
+            "type": "array",
+            "title": "Devices"
+          },
+          "errors": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Errors"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "shrunk": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Shrunk",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "grown",
+          "factor",
+          "devices",
+          "errors",
+          "reason"
+        ],
+        "title": "DeviceGrowthDTO"
+      },
+      "DeviceGrowthEntryDTO": {
         "properties": {
           "device_id": {
             "type": "string",
@@ -16927,22 +16905,17 @@
             "type": "integer",
             "title": "New Size"
           },
+          "backend_size": {
+            "type": "integer",
+            "title": "Backend Size"
+          },
+          "unused_size": {
+            "type": "integer",
+            "title": "Unused Size"
+          },
           "placement_size": {
             "type": "integer",
             "title": "Placement Size"
-          },
-          "resized": {
-            "type": "boolean",
-            "title": "Resized"
-          },
-          "uniform": {
-            "type": "boolean",
-            "title": "Uniform"
-          },
-          "warning": {
-            "type": "string",
-            "title": "Warning",
-            "default": ""
           }
         },
         "type": "object",
@@ -16950,41 +16923,11 @@
           "device_id",
           "old_size",
           "new_size",
-          "placement_size",
-          "resized",
-          "uniform"
+          "backend_size",
+          "unused_size",
+          "placement_size"
         ],
-        "title": "DeviceResizeDTO"
-      },
-      "DeviceGrowthDTO": {
-        "properties": {
-          "devices": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "type": "array",
-            "title": "Devices"
-          },
-          "errors": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "title": "Errors"
-          },
-          "uniform": {
-            "type": "boolean",
-            "title": "Uniform"
-          }
-        },
-        "type": "object",
-        "required": [
-          "devices",
-          "errors",
-          "uniform"
-        ],
-        "title": "DeviceGrowthDTO"
+        "title": "DeviceGrowthEntryDTO"
       }
     },
     "securitySchemes": {

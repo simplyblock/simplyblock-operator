@@ -71,13 +71,13 @@ func TestTheDeviceCELRuleCoversEveryDeclaredState(t *testing.T) {
 // fail, which is the thing the narrowed enum exists to prevent.
 func TestTheActionEnumAdmitsOnlyWhatAGraphDeclares(t *testing.T) {
 	declared := storageDeviceOpsGraphs()
-	for _, action := range []statemachine.Action{actionDeviceRestart, actionDeviceFail, actionDeviceGrow} {
+	for _, action := range []statemachine.Action{actionDeviceRestart, actionDeviceFail} {
 		if _, ok := declared[action]; !ok {
 			t.Errorf("%s is in the Enum marker and no graph declares it", action)
 		}
 	}
-	if len(declared) != 3 {
-		t.Errorf("%d graphs are declared and the Enum marker admits three actions; an action "+
+	if len(declared) != 2 {
+		t.Errorf("%d graphs are declared and the Enum marker admits two actions; an action "+
 			"with a graph and no enum member is one nobody can ask for", len(declared))
 	}
 }
@@ -128,12 +128,6 @@ type deviceCalls struct {
 	refuse       error
 	refuseRemove error
 	refuseFail   error
-
-	// growth is what a Grow call answers, and refuseGrow the error it answers
-	// with instead. grows counts the calls.
-	growth     controlplane.DeviceGrowth
-	refuseGrow error
-	grows      int
 }
 
 func (c *deviceCalls) Device(
@@ -176,17 +170,6 @@ func (c *deviceCalls) FailDevice(context.Context, string, string, string) error 
 		c.status = cpDeviceFailed
 	}
 	return nil
-}
-
-func (c *deviceCalls) GrowDevice(
-	context.Context, string, string, string,
-) (controlplane.DeviceGrowth, error) {
-	c.grows++
-	if c.refuseGrow != nil {
-		return controlplane.DeviceGrowth{}, c.refuseGrow
-	}
-	c.issued = append(c.issued, "grow")
-	return c.growth, nil
 }
 
 func deviceObject() *simplyblockv1alpha2.StorageDevice {

@@ -1479,9 +1479,22 @@ type DeviceDTO struct {
 
 // DeviceGrowthDTO defines model for DeviceGrowthDTO.
 type DeviceGrowthDTO struct {
-	Devices []map[string]interface{} `json:"devices"`
-	Errors  map[string]string        `json:"errors"`
-	Uniform bool                     `json:"uniform"`
+	Devices []DeviceGrowthEntryDTO `json:"devices"`
+	Errors  map[string]string      `json:"errors"`
+	Factor  float32                `json:"factor"`
+	Grown   bool                   `json:"grown"`
+	Reason  string                 `json:"reason"`
+	Shrunk  *[]string              `json:"shrunk,omitempty"`
+}
+
+// DeviceGrowthEntryDTO defines model for DeviceGrowthEntryDTO.
+type DeviceGrowthEntryDTO struct {
+	BackendSize   int    `json:"backend_size"`
+	DeviceId      string `json:"device_id"`
+	NewSize       int    `json:"new_size"`
+	OldSize       int    `json:"old_size"`
+	PlacementSize int    `json:"placement_size"`
+	UnusedSize    int    `json:"unused_size"`
 }
 
 // DeviceHealthInfoDTO defines model for DeviceHealthInfoDTO.
@@ -1508,17 +1521,6 @@ type DeviceHealthInfoDTO struct {
 	Traddr                                  string             `json:"traddr"`
 	UnsafeShutdowns                         int                `json:"unsafe_shutdowns"`
 	WarningTemperatureTimeMinutes           int                `json:"warning_temperature_time_minutes"`
-}
-
-// DeviceResizeDTO defines model for DeviceResizeDTO.
-type DeviceResizeDTO struct {
-	DeviceId      string  `json:"device_id"`
-	NewSize       int     `json:"new_size"`
-	OldSize       int     `json:"old_size"`
-	PlacementSize int     `json:"placement_size"`
-	Resized       bool    `json:"resized"`
-	Uniform       bool    `json:"uniform"`
-	Warning       *string `json:"warning,omitempty"`
 }
 
 // DrainStepProgress How far one drain step has got.
@@ -4428,9 +4430,15 @@ type ClientInterface interface {
 
 	// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost Clusters:Grow Devices
 	//
-	// Grow every online lblk data device of the cluster to the size of its
-	// block device, one device at a time. Used after all LUNs of the cluster
-	// were grown by the same factor on the storage array.
+	// Grow all lblk data devices of the cluster online by the same factor.
+	//
+	// Every block device is rescanned (for example, after its LUN was grown on
+	// the storage array), and every device grows by the smallest growth factor
+	// of all of them; the rest of a larger block device stays unused
+	// (`unused_size`). If one block device did not grow, nothing grows
+	// (`grown` false, `reason`). Device weights and data placement never change.
+	// A block device smaller than its device is refused, listed in `shrunk`
+	// and `errors`, and raises the device_shrunk alert.
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/grow-devices (the `ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost` operationId).
 	ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -4720,20 +4728,6 @@ type ClientInterface interface {
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/reset (the `ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPost` operationId).
 	ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePost Clusters:Storage Nodes:Devices:Resize
-	//
-	// Grow an lblk device online to the size its block device now has.
-	//
-	// The storage node's host re-reads the size of the block device (for
-	// example, a LUN grown on its storage array) and the device takes it over
-	// without interrupting I/O. Shrinking is refused. The placement weight of
-	// the device stays at its original size, so the added capacity is only
-	// fully usable once all data devices of the cluster have grown by the same
-	// factor; `uniform` and `warning` report it.
-	//
-	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/resize (the `ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePost` operationId).
-	ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPost Clusters:Storage Nodes:Devices:Restart
 	//
@@ -7059,9 +7053,15 @@ func (c *Client) ClustersExpandApiV2ClustersClusterIdExpandPost(ctx context.Cont
 
 // ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost Clusters:Grow Devices
 //
-// Grow every online lblk data device of the cluster to the size of its
-// block device, one device at a time. Used after all LUNs of the cluster
-// were grown by the same factor on the storage array.
+// Grow all lblk data devices of the cluster online by the same factor.
+//
+// Every block device is rescanned (for example, after its LUN was grown on
+// the storage array), and every device grows by the smallest growth factor
+// of all of them; the rest of a larger block device stays unused
+// (`unused_size`). If one block device did not grow, nothing grows
+// (`grown` false, `reason`). Device weights and data placement never change.
+// A block device smaller than its device is refused, listed in `shrunk`
+// and `errors`, and raises the device_shrunk alert.
 //
 // Corresponds with POST /api/v2/clusters/{cluster_id}/grow-devices (the `ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost` operationId).
 func (c *Client) ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -7792,30 +7792,6 @@ func (c *Client) ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorage
 // Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/reset (the `ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPost` operationId).
 func (c *Client) ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPostRequest(c.Server, clusterId, storageNodeId, deviceId)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-// ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePost Clusters:Storage Nodes:Devices:Resize
-//
-// Grow an lblk device online to the size its block device now has.
-//
-// The storage node's host re-reads the size of the block device (for
-// example, a LUN grown on its storage array) and the device takes it over
-// without interrupting I/O. Shrinking is refused. The placement weight of
-// the device stays at its original size, so the added capacity is only
-// fully usable once all data devices of the cluster have grown by the same
-// factor; `uniform` and `warning` report it.
-//
-// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/resize (the `ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePost` operationId).
-func (c *Client) ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostRequest(c.Server, clusterId, storageNodeId, deviceId)
 	if err != nil {
 		return nil, err
 	}
@@ -14481,54 +14457,6 @@ func NewClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorag
 	return req, nil
 }
 
-// NewClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostRequest constructs an http.Request for the ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePost method
-func NewClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostRequest(server string, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
-	if err != nil {
-		return nil, err
-	}
-
-	var pathParam1 string
-
-	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "storage_node_id", storageNodeId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
-	if err != nil {
-		return nil, err
-	}
-
-	var pathParam2 string
-
-	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "device_id", deviceId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/devices/%s/resize", pathParam0, pathParam1, pathParam2)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return req, nil
-}
-
 // NewClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPostRequest constructs an http.Request for the ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPost method
 func NewClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPostRequest(server string, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params *ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPostParams) (*http.Request, error) {
 	var err error
@@ -19360,9 +19288,15 @@ type ClientWithResponsesInterface interface {
 
 	// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse Clusters:Grow Devices
 	//
-	// Grow every online lblk data device of the cluster to the size of its
-	// block device, one device at a time. Used after all LUNs of the cluster
-	// were grown by the same factor on the storage array.
+	// Grow all lblk data devices of the cluster online by the same factor.
+	//
+	// Every block device is rescanned (for example, after its LUN was grown on
+	// the storage array), and every device grows by the smallest growth factor
+	// of all of them; the rest of a larger block device stays unused
+	// (`unused_size`). If one block device did not grow, nothing grows
+	// (`grown` false, `reason`). Device weights and data placement never change.
+	// A block device smaller than its device is refused, listed in `shrunk`
+	// and `errors`, and raises the device_shrunk alert.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -19722,22 +19656,6 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/reset (the `ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPost` operationId).
 	ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPostResponse, error)
-
-	// ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostWithResponse Clusters:Storage Nodes:Devices:Resize
-	//
-	// Grow an lblk device online to the size its block device now has.
-	//
-	// The storage node's host re-reads the size of the block device (for
-	// example, a LUN grown on its storage array) and the device takes it over
-	// without interrupting I/O. Shrinking is refused. The placement weight of
-	// the device stays at its original size, so the added capacity is only
-	// fully usable once all data devices of the cluster have grown by the same
-	// factor; `uniform` and `warning` report it.
-	//
-	// Returns a wrapper object for the known response body format(s).
-	//
-	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/resize (the `ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePost` operationId).
-	ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostResponse, error)
 
 	// ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPostWithResponse Clusters:Storage Nodes:Devices:Restart
 	//
@@ -25125,54 +25043,6 @@ func (r ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorag
 	return ""
 }
 
-type ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *DeviceResizeDTO
-	// JSON422 the response for an HTTP 422 `application/json` response
-	JSON422 *HTTPValidationError
-}
-
-// GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostResponse) GetJSON200() *DeviceResizeDTO {
-	return r.JSON200
-}
-
-// GetJSON422 returns the response for an HTTP 422 `application/json` response
-func (r ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostResponse) GetJSON422() *HTTPValidationError {
-	return r.JSON422
-}
-
-// GetBody returns the raw response body bytes
-func (r ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostResponse) GetBody() []byte {
-	return r.Body
-}
-
-// Status returns HTTPResponse.Status
-func (r ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostResponse) ContentType() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Header.Get("Content-Type")
-	}
-	return ""
-}
-
 type ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPostResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -29602,9 +29472,15 @@ func (c *ClientWithResponses) ClustersExpandApiV2ClustersClusterIdExpandPostWith
 
 // ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse Clusters:Grow Devices
 //
-// Grow every online lblk data device of the cluster to the size of its
-// block device, one device at a time. Used after all LUNs of the cluster
-// were grown by the same factor on the storage array.
+// Grow all lblk data devices of the cluster online by the same factor.
+//
+// Every block device is rescanned (for example, after its LUN was grown on
+// the storage array), and every device grows by the smallest growth factor
+// of all of them; the rest of a larger block device stays unused
+// (`unused_size`). If one block device did not grow, nothing grows
+// (`grown` false, `reason`). Device weights and data placement never change.
+// A block device smaller than its device is refused, listed in `shrunk`
+// and `errors`, and raises the device_shrunk alert.
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -30233,28 +30109,6 @@ func (c *ClientWithResponses) ClustersStorageNodesDevicesResetApiV2ClustersClust
 		return nil, err
 	}
 	return ParseClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPostResponse(rsp)
-}
-
-// ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostWithResponse Clusters:Storage Nodes:Devices:Resize
-//
-// Grow an lblk device online to the size its block device now has.
-//
-// The storage node's host re-reads the size of the block device (for
-// example, a LUN grown on its storage array) and the device takes it over
-// without interrupting I/O. Shrinking is refused. The placement weight of
-// the device stays at its original size, so the added capacity is only
-// fully usable once all data devices of the cluster have grown by the same
-// factor; `uniform` and `warning` report it.
-//
-// Returns a wrapper object for the known response body format(s).
-//
-// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/resize (the `ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePost` operationId).
-func (c *ClientWithResponses) ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostResponse, error) {
-	rsp, err := c.ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePost(ctx, clusterId, storageNodeId, deviceId, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostResponse(rsp)
 }
 
 // ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPostWithResponse Clusters:Storage Nodes:Devices:Restart
@@ -34737,42 +34591,6 @@ func ParseClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStor
 
 	switch {
 	case rsp.StatusCode == 204:
-		break // No content-type
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest HTTPValidationError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON422 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostResponse parses an HTTP response from a ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostWithResponse call
-func ParseClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostResponse(rsp *http.Response) (*ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest DeviceResizeDTO
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case rsp.StatusCode == 409:
 		break // No content-type
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:

@@ -78,7 +78,6 @@ spec:
                 enum:
                 - Restart
                 - Fail
-                - Grow
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -112,40 +111,6 @@ spec:
                   to be when the operation took its lock, so a wait can tell the device
                   coming back from its never having gone.
                 type: string
-              growth:
-                description: Growth is what a Grow did, recorded once the control
-                  plane answered.
-                properties:
-                  newSizeBytes:
-                    format: int64
-                    type: integer
-                  oldSizeBytes:
-                    description: |-
-                      OldSizeBytes and NewSizeBytes are the device's size before and after. They
-                      are equal when the block device had not grown.
-                    format: int64
-                    type: integer
-                  placementSizeBytes:
-                    description: |-
-                      PlacementSizeBytes is the size the device's placement weight is derived
-                      from, which a growth does not change.
-                    format: int64
-                    type: integer
-                  uniform:
-                    description: |-
-                      Uniform reports whether every data device of the cluster has now grown
-                      by the same factor, which is what makes the added capacity fully usable.
-                    type: boolean
-                  warning:
-                    description: Warning says what a growth that left the cluster
-                      uneven means.
-                    type: string
-                required:
-                - newSizeBytes
-                - oldSizeBytes
-                - placementSizeBytes
-                - uniform
-                type: object
               message:
                 description: |-
                   Message is the reason the phase is what it is: one sentence, replaced as

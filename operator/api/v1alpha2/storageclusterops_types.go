@@ -70,12 +70,13 @@ const (
 	StorageClusterOpsActionCancelTask StorageClusterOpsAction = "CancelTask"
 
 	// StorageClusterOpsActionGrowDevices grows every Linux block device (lblk)
-	// of the cluster online to the size its block device has now. It is the
-	// action for a cluster on storage-array LUNs after every LUN has grown by
-	// the same factor: a device's placement weight keeps the size it was placed
-	// with, so growing the devices together is what keeps the added capacity
-	// fully usable. A device that cannot be grown does not stop the others; it
-	// is listed in status.deviceGrowth.errors.
+	// of the cluster online by the same factor, after the LUNs were grown on
+	// the storage array: the smallest growth of any of their block devices.
+	// Device weights and data placement never change, so the part of a LUN
+	// that grew by more stays unused (status.deviceGrowth.devices). If one
+	// block device did not grow, nothing grows. A block device that shrank,
+	// or a device that is not online, fails the operation without growing
+	// anything; a shrink also raises the control plane's device_shrunk alert.
 	StorageClusterOpsActionGrowDevices StorageClusterOpsAction = "GrowDevices"
 )
 
@@ -156,28 +157,58 @@ type StorageClusterOpsSpec struct {
 	RollingRestart *RollingRestartSpec `json:"rollingRestart,omitempty"`
 }
 
-// RollingRestartStatus is the walk's position over the cluster's nodes. Where
-// the machine has got to within the node currently being restarted is
-// status.step, and neither field is complete without the other.
 // ClusterDeviceGrowthStatus is what one GrowDevices did to the devices of a
 // cluster.
 type ClusterDeviceGrowthStatus struct {
-	// Grown is how many devices took a new, larger size.
-	Grown int32 `json:"grown"`
+	// Grown reports whether the devices grew. Nothing grows unless every data
+	// device can grow by the same factor; Reason says why not.
+	Grown bool `json:"grown"`
 
-	// Unchanged is how many devices had not grown on their block device.
-	Unchanged int32 `json:"unchanged"`
+	// Factor is the growth factor applied to every data device, as a decimal
+	// string ("1.5"), or "1" when nothing grew.
+	Factor string `json:"factor"`
 
-	// Errors maps the control-plane ID of each device that could not be grown
+	// Reason says why nothing grew.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// Devices lists every data device with its new size and the part of its
+	// block device that stays unused.
+	// +optional
+	Devices []DeviceGrowthStatus `json:"devices,omitempty"`
+
+	// UnusedBytes is the sum of the devices' unused capacity.
+	// +optional
+	UnusedBytes int64 `json:"unusedBytes,omitempty"`
+
+	// Errors maps the control-plane ID of each device that stopped the growth
 	// to the reason.
 	// +optional
 	Errors map[string]string `json:"errors,omitempty"`
 
-	// Uniform reports whether every data device of the cluster has now grown by
-	// the same factor, which is what makes the added capacity fully usable.
-	Uniform bool `json:"uniform"`
+	// Shrunk lists the control-plane IDs of the devices whose block device is
+	// smaller than the device. Shrinking is not supported; restore the LUN.
+	// +optional
+	Shrunk []string `json:"shrunk,omitempty"`
 }
 
+// DeviceGrowthStatus is one data device after a GrowDevices.
+type DeviceGrowthStatus struct {
+	// DeviceID is the control-plane ID of the device.
+	DeviceID string `json:"deviceID"`
+
+	// Size is the device's size in bytes after the growth.
+	Size int64 `json:"size"`
+
+	// UnusedBytes is the part of the device's block device beyond Size: grown
+	// on the storage array by more than the cluster-wide factor.
+	// +optional
+	UnusedBytes int64 `json:"unusedBytes,omitempty"`
+}
+
+// RollingRestartStatus is the walk's position over the cluster's nodes. Where
+// the machine has got to within the node currently being restarted is
+// status.step, and neither field is complete without the other.
 type RollingRestartStatus struct {
 	// Nodes is the ordered list of storage node UUIDs this action covers,
 	// written once when the walk starts and not modified afterward, so a node

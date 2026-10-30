@@ -395,7 +395,7 @@ func (f *fakeControlPlane) GrowDevices(
 ) (atlascp.ClusterDeviceGrowth, error) {
 	f.growDevicesCalls++
 	if f.growDevices == nil {
-		return atlascp.ClusterDeviceGrowth{Uniform: true}, nil
+		return atlascp.ClusterDeviceGrowth{Factor: 1}, nil
 	}
 	return f.growDevices(clusterID)
 }

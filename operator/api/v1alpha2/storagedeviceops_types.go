@@ -10,8 +10,6 @@
 // design-storagedevice.md §6 specifies five actions. Two are served by the
 // control plane's v2 API and are built. The other three are blocked on verbs
 // that API does not offer, and the TODO beside their constants is the ask.
-// Grow is a sixth, outside §6: it serves the Linux block devices of a cluster
-// running on storage-array LUNs, whose size can change underneath them.
 //
 // **The enum admits only what the operator can perform.** Declaring the other
 // three now would accept an object whose first reconcile can only fail, and an
@@ -33,7 +31,7 @@ import (
 // There is no Add: a device that appears is discovered. There is no bare Remove
 // either: a removal is a step of Replace and of Migrate, and taking a device out
 // of the data path without replacing it is Fail.
-// +kubebuilder:validation:Enum=Restart;Fail;Grow
+// +kubebuilder:validation:Enum=Restart;Fail
 type StorageDeviceOpsAction string
 
 const (
@@ -50,20 +48,6 @@ const (
 	// The removal alone is reversible and the failure is not, which is why the
 	// graph splits them and declares the abort edge on the first.
 	StorageDeviceOpsActionFail StorageDeviceOpsAction = "Fail"
-
-	// StorageDeviceOpsActionGrow grows a Linux block device (lblk) online to
-	// the size its block device has now, for example, a LUN grown on its
-	// storage array. The device keeps serving throughout.
-	//
-	// It is one call, and a safe one to repeat: a device that has already
-	// grown finds nothing to grow. Shrinking is refused by the control plane,
-	// because the data beyond the new end would be lost.
-	//
-	// The device's placement weight keeps the size it had when it was placed,
-	// so the capacity a growth adds is only fully usable once every data device
-	// of the cluster has grown by the same factor. status.growth reports
-	// whether that holds.
-	StorageDeviceOpsActionGrow StorageDeviceOpsAction = "Grow"
 
 	// TODO(storagedeviceops): EXTERNAL DEPENDENCY. The three actions below wait
 	// on control-plane verbs the v2 API does not offer. It serves restart,
@@ -167,26 +151,6 @@ type StorageDeviceOpsSpec struct {
 	Abort bool `json:"abort,omitempty"`
 }
 
-// StorageDeviceGrowth is what a Grow did to its device.
-type StorageDeviceGrowth struct {
-	// OldSizeBytes and NewSizeBytes are the device's size before and after. They
-	// are equal when the block device had not grown.
-	OldSizeBytes int64 `json:"oldSizeBytes"`
-	NewSizeBytes int64 `json:"newSizeBytes"`
-
-	// PlacementSizeBytes is the size the device's placement weight is derived
-	// from, which a growth does not change.
-	PlacementSizeBytes int64 `json:"placementSizeBytes"`
-
-	// Uniform reports whether every data device of the cluster has now grown
-	// by the same factor, which is what makes the added capacity fully usable.
-	Uniform bool `json:"uniform"`
-
-	// Warning says what a growth that left the cluster uneven means.
-	// +optional
-	Warning string `json:"warning,omitempty"`
-}
-
 // StorageDeviceOpsStatus is the observed state of one device operation.
 type StorageDeviceOpsStatus struct {
 	// Phase is the operation's own progress.
@@ -204,10 +168,6 @@ type StorageDeviceOpsStatus struct {
 	// coming back from its never having gone.
 	// +optional
 	DeviceStatusBefore string `json:"deviceStatusBefore,omitempty"`
-
-	// Growth is what a Grow did, recorded once the control plane answered.
-	// +optional
-	Growth *StorageDeviceGrowth `json:"growth,omitempty"`
 
 	// Message is the reason the phase is what it is: one sentence, replaced as
 	// the operation moves, and never a log.

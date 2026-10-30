@@ -2,7 +2,6 @@
 //
 //	Restart  Requesting ──► Awaiting
 //	Fail     Removing ──► Failing ──► Awaiting
-//	Grow     Requesting
 //
 // Two actions are declared, because two are what the control plane's v2 API can
 // serve. The other three of design-storagedevice.md §6 are blocked on verbs it
@@ -43,7 +42,6 @@ const (
 const (
 	actionDeviceRestart = statemachine.Action(simplyblockv1alpha2.StorageDeviceOpsActionRestart)
 	actionDeviceFail    = statemachine.Action(simplyblockv1alpha2.StorageDeviceOpsActionFail)
-	actionDeviceGrow    = statemachine.Action(simplyblockv1alpha2.StorageDeviceOpsActionGrow)
 )
 
 // How long each step may take before the operation is reported as stuck.
@@ -72,12 +70,6 @@ const (
 	// failure and outlives the operation, and an operation that waited for it
 	// would hold the device's lock for hours after its decision had landed.
 	awaitingFailureDeadline = 5 * time.Minute
-
-	// growingDeviceDeadline bounds the growth call. The control plane answers
-	// only once the device has drained its in-flight I/O, reopened its block
-	// device at the new size, and released the I/O it held, so the budget is
-	// the drain's rather than one POST's.
-	growingDeviceDeadline = 5 * time.Minute
 )
 
 // storageDeviceOpsGraphs declares the state graph of each action.
@@ -131,18 +123,6 @@ func storageDeviceOpsGraphs() statemachine.MultiConfig[deviceStep] {
 				stepDeviceAwaiting: {OnEnter: deviceDeadline(awaitingFailureDeadline)},
 			},
 		},
-		actionDeviceGrow: {
-			Initial: stepDeviceRequesting,
-			States: map[deviceStep]statemachine.StateDef[deviceStep]{
-				// One step, and abortable: an abort lands between passes, and
-				// a growth that already happened leaves nothing to undo, since
-				// the device serves at its new size either way.
-				stepDeviceRequesting: {
-					Abortable: true,
-					OnEnter:   deviceDeadline(growingDeviceDeadline),
-				},
-			},
-		},
 	}
 }
 
@@ -162,7 +142,6 @@ func deviceDeadline(d time.Duration) statemachine.TransitionFunc[deviceStep] {
 var initialDeviceDeadlines = map[statemachine.Action]time.Duration{
 	actionDeviceRestart: requestingDeviceDeadline,
 	actionDeviceFail:    removingDeviceDeadline,
-	actionDeviceGrow:    growingDeviceDeadline,
 }
 
 // UnabortableDeviceSteps are the steps a running operation cannot be stopped in,

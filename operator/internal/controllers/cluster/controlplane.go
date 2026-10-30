@@ -89,9 +89,9 @@ type ControlPlane interface {
 	// reads a 404 as success.
 	CancelTask(ctx context.Context, clusterID, taskID string) error
 
-	// GrowDevices grows every lblk data device of the cluster to the size of
-	// its block device. It is synchronous and safe to repeat: a device that
-	// has already grown is reported unchanged.
+	// GrowDevices grows every lblk data device of the cluster by the same
+	// factor, the smallest growth of their block devices. It is synchronous and
+	// safe to repeat: without new growth nothing changes.
 	GrowDevices(ctx context.Context, clusterID string) (atlascp.ClusterDeviceGrowth, error)
 
 	// Endpoint is the base URL this call would currently reach the control
@@ -236,28 +236,31 @@ func (c *httpControlPlane) GrowDevices(
 		return atlascp.ClusterDeviceGrowth{}, err
 	}
 	var wire struct {
+		Grown   bool    `json:"grown"`
+		Factor  float64 `json:"factor"`
 		Devices []struct {
 			DeviceID      string `json:"device_id"`
 			OldSize       int64  `json:"old_size"`
 			NewSize       int64  `json:"new_size"`
+			BackendSize   int64  `json:"backend_size"`
+			UnusedSize    int64  `json:"unused_size"`
 			PlacementSize int64  `json:"placement_size"`
-			Resized       bool   `json:"resized"`
-			Uniform       bool   `json:"uniform"`
-			Warning       string `json:"warning"`
 		} `json:"devices"`
-		Errors  map[string]string `json:"errors"`
-		Uniform bool              `json:"uniform"`
+		Errors map[string]string `json:"errors"`
+		Reason string            `json:"reason"`
+		Shrunk []string          `json:"shrunk"`
 	}
 	if err := json.Unmarshal(body, &wire); err != nil {
 		return atlascp.ClusterDeviceGrowth{}, fmt.Errorf("decode the device growth of cluster %s: %w",
 			clusterID, err)
 	}
-	out := atlascp.ClusterDeviceGrowth{Errors: wire.Errors, Uniform: wire.Uniform}
+	out := atlascp.ClusterDeviceGrowth{
+		Grown: wire.Grown, Factor: wire.Factor, Errors: wire.Errors, Reason: wire.Reason, Shrunk: wire.Shrunk,
+	}
 	for _, d := range wire.Devices {
 		out.Devices = append(out.Devices, atlascp.DeviceGrowth{
 			DeviceID: d.DeviceID, OldSize: d.OldSize, NewSize: d.NewSize,
-			PlacementSize: d.PlacementSize, Resized: d.Resized, Uniform: d.Uniform,
-			Warning: d.Warning,
+			BackendSize: d.BackendSize, UnusedSize: d.UnusedSize, PlacementSize: d.PlacementSize,
 		})
 	}
 	return out, nil

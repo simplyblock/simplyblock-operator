@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -63,8 +62,6 @@ const (
 	DeviceRestartRequested   = "DeviceRestartRequested"
 	DeviceRemovalRequested   = "DeviceRemovalRequested"
 	DeviceFailRequested      = "DeviceFailRequested"
-	DeviceGrown              = "DeviceGrown"
-	DeviceGrowthUneven       = "DeviceGrowthUneven"
 	DeviceAbortRefused       = "AbortRefused"
 	DeviceStepDeadlineGone   = "StepDeadlineExceeded"
 )
@@ -87,10 +84,6 @@ type DeviceClient interface {
 	// FailDevice declares one removed device untrustworthy, so the cluster
 	// rebuilds the redundancy it held elsewhere.
 	FailDevice(ctx context.Context, clusterID, nodeID, deviceID string) error
-
-	// GrowDevice grows one lblk device online to the size its block device
-	// has now. It returns once the device serves at that size.
-	GrowDevice(ctx context.Context, clusterID, nodeID, deviceID string) (controlplane.DeviceGrowth, error)
 }
 
 // StorageDeviceOpsReconciler runs operations against one device.
@@ -295,9 +288,6 @@ func (r *StorageDeviceOpsReconciler) performStep(
 ) (bool, error) {
 	switch current {
 	case stepDeviceRequesting:
-		if ops.Spec.Action == simplyblockv1alpha2.StorageDeviceOpsActionGrow {
-			return r.grow(ctx, ops, device)
-		}
 		return r.request(ctx, ops, device)
 	case stepDeviceRemoving:
 		return r.removeFromDataPath(ctx, ops, device)
@@ -350,69 +340,6 @@ func (r *StorageDeviceOpsReconciler) request(
 	r.event(ops, corev1.EventTypeNormal, DeviceRestartRequested,
 		fmt.Sprintf("asked the control plane to restart device %s", device.Name))
 	return true, nil
-}
-
-// grow asks the control plane to grow the device to the size of its block
-// device, and records what it did.
-//
-// Unlike a restart, the call is not guarded by a claim: it is synchronous and
-// idempotent, so a pass that died after the call and before its record repeats
-// it, finds nothing left to grow, and records the device's size as it stands.
-// What is lost is only the size before, which the repeat reports as unchanged.
-func (r *StorageDeviceOpsReconciler) grow(
-	ctx context.Context,
-	ops *simplyblockv1alpha2.StorageDeviceOps,
-	device *simplyblockv1alpha2.StorageDevice,
-) (bool, error) {
-	cluster, node, id, err := deviceAddress(device)
-	if err != nil {
-		return false, err
-	}
-
-	growth, err := r.API.GrowDevice(ctx, cluster, node, id)
-	if err != nil {
-		// A conflict is the control plane's refusal (not an lblk device, not
-		// online, or a block device that shrank), which a retry cannot change.
-		// Anything else is a transport failure worth another pass.
-		var status *controlplane.StatusError
-		if errors.As(err, &status) && status.StatusCode == http.StatusConflict {
-			return false, refuseDevice(
-				"the control plane refused to grow device %s: %s", device.Name, status.Body)
-		}
-		return false, fmt.Errorf("grow device %s: %w", device.Name, err)
-	}
-
-	record := &simplyblockv1alpha2.StorageDeviceGrowth{
-		OldSizeBytes:       growth.OldSize,
-		NewSizeBytes:       growth.NewSize,
-		PlacementSizeBytes: growth.PlacementSize,
-		Uniform:            growth.Uniform,
-		Warning:            growth.Warning,
-	}
-	if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageDeviceOpsStatus) {
-		status.Growth = record
-	}); err != nil {
-		return false, err
-	}
-
-	if growth.Resized {
-		r.event(ops, corev1.EventTypeNormal, DeviceGrown, fmt.Sprintf(
-			"device %s grew from %d to %d bytes", device.Name, growth.OldSize, growth.NewSize))
-	}
-	if !growth.Uniform {
-		r.event(ops, corev1.EventTypeWarning, DeviceGrowthUneven, deviceGrowthWarning(growth))
-	}
-	return true, nil
-}
-
-// deviceGrowthWarning is the uneven-growth warning, in the control plane's own
-// words where it gave some.
-func deviceGrowthWarning(growth controlplane.DeviceGrowth) string {
-	if growth.Warning != "" {
-		return growth.Warning
-	}
-	return "the data devices of the cluster have grown unevenly; the added capacity is only " +
-		"fully usable once all of them have grown by the same factor"
 }
 
 // deviceAddress is the three identifiers every device call carries, or the
@@ -653,10 +580,6 @@ func deviceTimeoutMessage(
 		return fmt.Sprintf("device %s did not come back within %s of being restarted",
 			name, awaitingDeviceDeadline)
 	default:
-		if act == simplyblockv1alpha2.StorageDeviceOpsActionGrow {
-			return fmt.Sprintf("the control plane did not finish growing device %s within %s",
-				name, growingDeviceDeadline)
-		}
 		return fmt.Sprintf("the control plane did not accept the restart of device %s "+
 			"within %s", name, requestingDeviceDeadline)
 	}
@@ -684,11 +607,6 @@ func narrateDevice(
 			starting: fmt.Sprintf("failing device %s", name),
 			succeeded: fmt.Sprintf("device %s was failed; the cluster is rebuilding the "+
 				"redundancy it held and has stopped reading from it", name),
-		}
-	case simplyblockv1alpha2.StorageDeviceOpsActionGrow:
-		return deviceNarration{
-			starting:  fmt.Sprintf("growing device %s to the size of its block device", name),
-			succeeded: fmt.Sprintf("device %s serves at the size of its block device", name),
 		}
 	default:
 		return deviceNarration{

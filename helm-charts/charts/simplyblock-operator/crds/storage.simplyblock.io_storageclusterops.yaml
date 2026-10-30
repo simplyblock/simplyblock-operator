@@ -278,30 +278,65 @@ spec:
                 deviceGrowth:
                   description: DeviceGrowth is what a GrowDevices did, set only for that action.
                   properties:
+                    devices:
+                      description: |-
+                        Devices lists every data device with its new size and the part of its
+                        block device that stays unused.
+                      items:
+                        description: DeviceGrowthStatus is one data device after a GrowDevices.
+                        properties:
+                          deviceID:
+                            description: DeviceID is the control-plane ID of the device.
+                            type: string
+                          size:
+                            description: Size is the device's size in bytes after the growth.
+                            format: int64
+                            type: integer
+                          unusedBytes:
+                            description: |-
+                              UnusedBytes is the part of the device's block device beyond Size: grown
+                              on the storage array by more than the cluster-wide factor.
+                            format: int64
+                            type: integer
+                        required:
+                          - deviceID
+                          - size
+                        type: object
+                      type: array
                     errors:
                       additionalProperties:
                         type: string
                       description: |-
-                        Errors maps the control-plane ID of each device that could not be grown
+                        Errors maps the control-plane ID of each device that stopped the growth
                         to the reason.
                       type: object
-                    grown:
-                      description: Grown is how many devices took a new, larger size.
-                      format: int32
-                      type: integer
-                    unchanged:
-                      description: Unchanged is how many devices had not grown on their block device.
-                      format: int32
-                      type: integer
-                    uniform:
+                    factor:
                       description: |-
-                        Uniform reports whether every data device of the cluster has now grown by
-                        the same factor, which is what makes the added capacity fully usable.
+                        Factor is the growth factor applied to every data device, as a decimal
+                        string ("1.5"), or "1" when nothing grew.
+                      type: string
+                    grown:
+                      description: |-
+                        Grown reports whether the devices grew. Nothing grows unless every data
+                        device can grow by the same factor; Reason says why not.
                       type: boolean
+                    reason:
+                      description: Reason says why nothing grew.
+                      type: string
+                    shrunk:
+                      description: |-
+                        Shrunk lists the control-plane IDs of the devices whose block device is
+                        smaller than the device. Shrinking is not supported; restore the LUN.
+                      items:
+                        type: string
+                      type: array
+                    unusedBytes:
+                      description: UnusedBytes is the sum of the devices' unused capacity.
+                      format: int64
+                      type: integer
                   required:
+                    - factor
                     - grown
-                    - unchanged
-                    - uniform
                   type: object
                 message:
                   description: |-

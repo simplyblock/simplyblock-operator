@@ -37,12 +37,12 @@ const (
 	TaskCompleted = "TaskCompleted"
 	TaskCanceled  = "TaskCanceled"
 
-	// DevicesGrown and DeviceGrowthUneven report a GrowDevices: how many devices
-	// took a new size, and a warning when the cluster's data devices have not
-	// all grown by the same factor, which leaves part of the added capacity
-	// unusable.
-	DevicesGrown       = "DevicesGrown"
-	DeviceGrowthUneven = "DeviceGrowthUneven"
+	// DevicesGrown, DevicesNotGrown, and DeviceShrunk report a GrowDevices: the
+	// factor every data device grew by and the capacity left unused, why
+	// nothing grew, and a warning per device whose block device shrank.
+	DevicesGrown    = "DevicesGrown"
+	DevicesNotGrown = "DevicesNotGrown"
+	DeviceShrunk    = "DeviceShrunk"
 
 	// TaskGaveUp is a task that left the window having been restarted, which is
 	// the control plane reporting a failure rather than a finish. Its own status
