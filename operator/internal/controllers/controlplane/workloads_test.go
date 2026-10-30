@@ -376,11 +376,10 @@ func TestTheExporterDoesNotRunTheControlPlanesImage(t *testing.T) {
 	}
 }
 
-// Every service container reaches the database through the cluster file, and
-// every pod that mounts it is annotated for restart when it changes. A
-// coordinator change rewrites that ConfigMap, and a pod holding a connection to
-// the old coordinator has to be restarted to notice.
-func TestEveryWorkloadThatReachesTheDatabaseIsRolledWhenItMoves(t *testing.T) {
+// Every service container reaches the database through the cluster file. The
+// stamp that rolls them when it changes is tested in clusterfile_test.go, and it
+// reaches only the workloads this test finds mounting the file.
+func TestEveryWorkloadThatReachesTheDatabaseMountsTheClusterFile(t *testing.T) {
 	cp := localControlPlane()
 
 	for _, name := range []string{
@@ -400,10 +399,6 @@ func TestEveryWorkloadThatReachesTheDatabaseIsRolledWhenItMoves(t *testing.T) {
 		if !mountsClusterFile {
 			t.Errorf("%s mounts no cluster file, so it cannot reach the database", name)
 			continue
-		}
-		if d.Annotations["reloader.stakater.com/configmap"] != clusterFileConfigMapName {
-			t.Errorf("%s is not rolled when the cluster file changes, so a coordinator move "+
-				"leaves it connected to a coordinator that is gone", name)
 		}
 	}
 }
