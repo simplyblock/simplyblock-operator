@@ -1532,6 +1532,26 @@ type DeviceDTO struct {
 	StorageNodeId      openapi_types.UUID      `json:"storage_node_id"`
 }
 
+// DeviceGrowthDTO defines model for DeviceGrowthDTO.
+type DeviceGrowthDTO struct {
+	Devices []DeviceGrowthEntryDTO `json:"devices"`
+	Errors  map[string]string      `json:"errors"`
+	Factor  float32                `json:"factor"`
+	Grown   bool                   `json:"grown"`
+	Reason  string                 `json:"reason"`
+	Shrunk  *[]string              `json:"shrunk,omitempty"`
+}
+
+// DeviceGrowthEntryDTO defines model for DeviceGrowthEntryDTO.
+type DeviceGrowthEntryDTO struct {
+	BackendSize   int    `json:"backend_size"`
+	DeviceId      string `json:"device_id"`
+	NewSize       int    `json:"new_size"`
+	OldSize       int    `json:"old_size"`
+	PlacementSize int    `json:"placement_size"`
+	UnusedSize    int    `json:"unused_size"`
+}
+
 // DeviceHealthAssessmentDTO A device health verdict computed outside the control plane.
 //
 // The Kubernetes operator judges each device's performance against the
@@ -4528,6 +4548,21 @@ type ClientInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/expand (the `ClustersExpandApiV2ClustersClusterIdExpandPost` operationId).
 	ClustersExpandApiV2ClustersClusterIdExpandPost(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost Clusters:Grow Devices
+	//
+	// Grow all lblk data devices of the cluster online by the same factor.
+	//
+	// Every block device is rescanned (for example, after its LUN was grown on
+	// the storage array), and every device grows by the smallest growth factor
+	// of all of them; the rest of a larger block device stays unused
+	// (`unused_size`). If one block device did not grow, nothing grows
+	// (`grown` false, `reason`). Device weights and data placement never change.
+	// A block device smaller than its device is refused, listed in `shrunk`
+	// and `errors`, and raises the device_shrunk alert.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/grow-devices (the `ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost` operationId).
+	ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ClustersIostatsApiV2ClustersClusterIdIostatsGet Clusters:Iostats
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/iostats (the `ClustersIostatsApiV2ClustersClusterIdIostatsGet` operationId).
@@ -7157,6 +7192,31 @@ func (c *Client) ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdC
 // Corresponds with POST /api/v2/clusters/{cluster_id}/expand (the `ClustersExpandApiV2ClustersClusterIdExpandPost` operationId).
 func (c *Client) ClustersExpandApiV2ClustersClusterIdExpandPost(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClustersExpandApiV2ClustersClusterIdExpandPostRequest(c.Server, clusterId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost Clusters:Grow Devices
+//
+// Grow all lblk data devices of the cluster online by the same factor.
+//
+// Every block device is rescanned (for example, after its LUN was grown on
+// the storage array), and every device grows by the smallest growth factor
+// of all of them; the rest of a larger block device stays unused
+// (`unused_size`). If one block device did not grow, nothing grows
+// (`grown` false, `reason`). Device weights and data placement never change.
+// A block device smaller than its device is refused, listed in `shrunk`
+// and `errors`, and raises the device_shrunk alert.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/grow-devices (the `ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost` operationId).
+func (c *Client) ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostRequest(c.Server, clusterId)
 	if err != nil {
 		return nil, err
 	}
@@ -12485,6 +12545,40 @@ func NewClustersExpandApiV2ClustersClusterIdExpandPostRequest(server string, clu
 	}
 
 	operationPath := fmt.Sprintf("/api/v2/clusters/%s/expand", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostRequest constructs an http.Request for the ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost method
+func NewClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostRequest(server string, clusterId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/grow-devices", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -19455,6 +19549,23 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/expand (the `ClustersExpandApiV2ClustersClusterIdExpandPost` operationId).
 	ClustersExpandApiV2ClustersClusterIdExpandPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersExpandApiV2ClustersClusterIdExpandPostResponse, error)
 
+	// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse Clusters:Grow Devices
+	//
+	// Grow all lblk data devices of the cluster online by the same factor.
+	//
+	// Every block device is rescanned (for example, after its LUN was grown on
+	// the storage array), and every device grows by the smallest growth factor
+	// of all of them; the rest of a larger block device stays unused
+	// (`unused_size`). If one block device did not grow, nothing grows
+	// (`grown` false, `reason`). Device weights and data placement never change.
+	// A block device smaller than its device is refused, listed in `shrunk`
+	// and `errors`, and raises the device_shrunk alert.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/grow-devices (the `ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost` operationId).
+	ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse, error)
+
 	// ClustersIostatsApiV2ClustersClusterIdIostatsGetWithResponse Clusters:Iostats
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -23398,6 +23509,54 @@ func (r ClustersExpandApiV2ClustersClusterIdExpandPostResponse) StatusCode() int
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ClustersExpandApiV2ClustersClusterIdExpandPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *DeviceGrowthDTO
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse) GetJSON200() *DeviceGrowthDTO {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -29646,6 +29805,29 @@ func (c *ClientWithResponses) ClustersExpandApiV2ClustersClusterIdExpandPostWith
 	return ParseClustersExpandApiV2ClustersClusterIdExpandPostResponse(rsp)
 }
 
+// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse Clusters:Grow Devices
+//
+// Grow all lblk data devices of the cluster online by the same factor.
+//
+// Every block device is rescanned (for example, after its LUN was grown on
+// the storage array), and every device grows by the smallest growth factor
+// of all of them; the rest of a larger block device stays unused
+// (`unused_size`). If one block device did not grow, nothing grows
+// (`grown` false, `reason`). Device weights and data placement never change.
+// A block device smaller than its device is refused, listed in `shrunk`
+// and `errors`, and raises the device_shrunk alert.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/grow-devices (the `ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost` operationId).
+func (c *ClientWithResponses) ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse, error) {
+	rsp, err := c.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(ctx, clusterId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse(rsp)
+}
+
 // ClustersIostatsApiV2ClustersClusterIdIostatsGetWithResponse Clusters:Iostats
 //
 // Returns a wrapper object for the known response body format(s).
@@ -33500,6 +33682,39 @@ func ParseClustersExpandApiV2ClustersClusterIdExpandPostResponse(rsp *http.Respo
 	switch {
 	case rsp.StatusCode == 202:
 		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse parses an HTTP response from a ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse call
+func ParseClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse(rsp *http.Response) (*ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest DeviceGrowthDTO
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest HTTPValidationError

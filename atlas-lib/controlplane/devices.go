@@ -1,11 +1,10 @@
 // One physical device of one storage node, and the operations the v2 API offers
 // against it.
 //
-// The v2 API offers five verbs on a device (restart, remove, fail, reset, and
-// resize) where design-storagedevice.md §7 asks for seven. What is here is what
-// exists: the reads the operations wait on, the restart one action is built
-// around, the removal and the failure the next is, and the growth of an lblk
-// device the third is. Self-test, detach, and the adopt call
+// The v2 API offers four verbs on a device (restart, remove, fail, and reset)
+// where design-storagedevice.md §7 asks for seven. What is here is what exists:
+// the reads the operations wait on, the restart one action is built around, and
+// the removal and the failure the next is. Self-test, detach, and the adopt call
 // are the three that are missing, and each is recorded as a TODO beside the
 // action it blocks, in the operator's storagedeviceops_types.go, rather than as
 // a client method here that would return a 404.
@@ -201,88 +200,58 @@ func (c *Client) FailDevice(ctx context.Context, clusterID, nodeID, deviceID str
 	return nil
 }
 
-// DeviceGrowth is the outcome of growing one device to the size its block
-// device has now.
+// DeviceGrowth is what a cluster-wide growth did to one lblk data device.
 //
-// The device's placement weight keeps the size it had when it was placed, so
-// the capacity a growth adds is only fully usable once every data device of the
-// cluster has grown by the same factor. Uniform reports whether that holds for
-// the cluster after this growth, and Warning says what it means when it does
-// not.
+// Devices grow uniformly: every data device of the cluster by the same factor,
+// the smallest growth of any of their block devices. Its placement weight keeps
+// the size it was placed with, so data placement never changes, and the part of
+// a block device that grew by more than the factor stays unused.
 type DeviceGrowth struct {
 	DeviceID string
 
 	// OldSize and NewSize are the device's size before and after, in bytes.
-	// They are equal when the block device had not grown.
 	OldSize int64
 	NewSize int64
 
+	// BackendSize is the size of the device's block device (the LUN) found by
+	// the rescan, and UnusedSize the part of it beyond NewSize.
+	BackendSize int64
+	UnusedSize  int64
+
 	// PlacementSize is the size the device's placement weight is derived from.
 	PlacementSize int64
-
-	// Resized is false when there was nothing to grow.
-	Resized bool
-
-	Uniform bool
-	Warning string
 }
 
-// GrowDevice grows one Linux block device (lblk) online to the size its block
-// device now has, for example, a LUN grown on its storage array.
-//
-// The call is synchronous and idempotent: it returns when the device has taken
-// the new size, and a repeat after a growth finds nothing to grow. The control
-// plane refuses it with a 409 for a device that is not an online lblk device,
-// and for a block device that shrank.
-func (c *Client) GrowDevice(ctx context.Context, clusterID, nodeID, deviceID string) (DeviceGrowth, error) {
-	cluster, node, device, err := parseDeviceIDs(clusterID, nodeID, deviceID)
-	if err != nil {
-		return DeviceGrowth{}, err
-	}
-
-	resp, err := c.api.ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePostWithResponse(
-		ctx, cluster, node, device)
-	if err != nil {
-		return DeviceGrowth{}, fmt.Errorf("grow device %s: %w", deviceID, err)
-	}
-	if code := resp.StatusCode(); code < 200 || code >= 300 || resp.JSON200 == nil {
-		return DeviceGrowth{}, respError("grow device "+deviceID, code, resp.Body)
-	}
-	return deviceGrowthFromDTO(*resp.JSON200), nil
-}
-
-func deviceGrowthFromDTO(d cpapi.DeviceResizeDTO) DeviceGrowth {
-	g := DeviceGrowth{
-		DeviceID:      d.DeviceId,
-		OldSize:       int64(d.OldSize),
-		NewSize:       int64(d.NewSize),
-		PlacementSize: int64(d.PlacementSize),
-		Resized:       d.Resized,
-		Uniform:       d.Uniform,
-	}
-	if d.Warning != nil {
-		g.Warning = *d.Warning
-	}
-	return g
-}
-
-// ClusterDeviceGrowth is the outcome of growing every lblk data device of a
+// ClusterDeviceGrowth is the outcome of growing the lblk data devices of a
 // cluster.
 type ClusterDeviceGrowth struct {
-	// Devices holds one entry per device the call looked at, grown or not.
+	// Grown is false when nothing grew; Reason says why.
+	Grown bool
+
+	// Factor is the growth factor applied to every data device, 1 when nothing
+	// grew.
+	Factor float64
+
+	// Devices holds one entry per data device, set when the devices grew or
+	// when none of them could.
 	Devices []DeviceGrowth
 
-	// Errors maps the id of each device that could not be grown to the reason.
+	// Errors maps the id of each device that stopped the growth to the reason.
 	Errors map[string]string
 
-	// Uniform reports whether every data device has now grown by the same
-	// factor, which is what makes the added capacity fully usable.
-	Uniform bool
+	Reason string
+
+	// Shrunk lists the devices whose block device was found smaller than the
+	// device. The control plane refuses to grow anything then and raises the
+	// device_shrunk alert.
+	Shrunk []string
 }
 
-// GrowClusterDevices grows every online lblk data device of a cluster to the
-// size of its block device, one device at a time. A device that fails does not
-// stop the others; it is reported in Errors.
+// GrowClusterDevices grows every lblk data device of a cluster online by the
+// same factor: the smallest growth of any of their block devices. If one block
+// device did not grow, or a device is not online, nothing grows. The call is
+// synchronous and idempotent: a repeat without new growth changes nothing. The
+// control plane refuses it with a 409 for a cluster not in lblk device mode.
 func (c *Client) GrowClusterDevices(ctx context.Context, clusterID string) (ClusterDeviceGrowth, error) {
 	cluster, err := parseUUID("cluster id", clusterID)
 	if err != nil {
@@ -296,42 +265,29 @@ func (c *Client) GrowClusterDevices(ctx context.Context, clusterID string) (Clus
 	if code := resp.StatusCode(); code < 200 || code >= 300 || resp.JSON200 == nil {
 		return ClusterDeviceGrowth{}, respError("grow devices of cluster "+clusterID, code, resp.Body)
 	}
-	out := ClusterDeviceGrowth{Errors: resp.JSON200.Errors, Uniform: resp.JSON200.Uniform}
-	for _, raw := range resp.JSON200.Devices {
-		out.Devices = append(out.Devices, deviceGrowthFromMap(raw))
+	dto := resp.JSON200
+	out := ClusterDeviceGrowth{
+		Grown:  dto.Grown,
+		Factor: float64(dto.Factor),
+		Errors: dto.Errors,
+		Reason: dto.Reason,
+	}
+	if dto.Shrunk != nil {
+		out.Shrunk = *dto.Shrunk
+	}
+	for _, d := range dto.Devices {
+		out.Devices = append(out.Devices, DeviceGrowth{
+			DeviceID:      d.DeviceId,
+			OldSize:       int64(d.OldSize),
+			NewSize:       int64(d.NewSize),
+			BackendSize:   int64(d.BackendSize),
+			UnusedSize:    int64(d.UnusedSize),
+			PlacementSize: int64(d.PlacementSize),
+		})
 	}
 	return out, nil
 }
 
-// deviceGrowthFromMap reads one entry of the cluster call's device list, which
-// the spec types as a free-form object.
-func deviceGrowthFromMap(m map[string]interface{}) DeviceGrowth {
-	num := func(k string) int64 {
-		if f, ok := m[k].(float64); ok {
-			return int64(f)
-		}
-		return 0
-	}
-	str := func(k string) string {
-		s, _ := m[k].(string)
-		return s
-	}
-	flag := func(k string) bool {
-		b, _ := m[k].(bool)
-		return b
-	}
-	return DeviceGrowth{
-		DeviceID:      str("device_id"),
-		OldSize:       num("old_size"),
-		NewSize:       num("new_size"),
-		PlacementSize: num("placement_size"),
-		Resized:       flag("resized"),
-		Uniform:       flag("uniform"),
-		Warning:       str("warning"),
-	}
-}
-
-// parseNodeIDs parses a cluster and storage-node identifier.
 func parseNodeIDs(clusterID, nodeID string) (cluster, node uuid.UUID, err error) {
 	if cluster, err = parseUUID("cluster id", clusterID); err != nil {
 		return cluster, node, err
