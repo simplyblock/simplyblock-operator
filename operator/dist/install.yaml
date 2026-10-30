@@ -4433,14 +4433,19 @@ spec:
               action:
                 description: |-
                   Action is the operation to perform. Immutable.
-                  failover:  unplanned — promote target clone, source may be down.
-                  failback:  restore source as primary after a prior failover.
-                  migration: planned cutover — calls replication_commit per volume; both clusters stay up.
-                             State progression: replicating → cutover_pending → cutover_done.
+                  failover is unplanned: it promotes the target's copy, and the source may be
+                  down. failback restores the source as primary after a failover. migration is
+                  a planned cutover with both clusters up: each volume moves through
+                  replicating, cutover_pending, and cutover_done. trigger takes a snapshot of
+                  each volume now and replicates it, outside the policy's interval. snapshot
+                  takes one crash-consistent generation of a consistency-group policy's
+                  volumes now, and takes scope policy or target only.
                 enum:
                 - failover
                 - failback
                 - migration
+                - trigger
+                - snapshot
                 type: string
               deleteSource:
                 description: |-
@@ -4475,6 +4480,10 @@ spec:
             - ref
             - scope
             type: object
+            x-kubernetes-validations:
+            - message: 'snapshot takes a consistency-group generation of a policy:
+                use scope policy or target'
+              rule: self.action != 'snapshot' || self.scope != 'volume'
           status:
             description: ReplicationOpsStatus holds the observed state of a ReplicationOps.
             properties:
@@ -4498,15 +4507,27 @@ spec:
               results:
                 description: Results holds a per-volume summary of the operation outcome.
                 items:
-                  description: ReplicationOpsResult holds the outcome for a single
-                    volume in a ReplicationOps.
+                  description: |-
+                    ReplicationOpsResult holds the outcome for a single volume in a ReplicationOps,
+                    or for a single policy's consistency group in a snapshot.
                   properties:
                     detail:
                       description: Detail is an optional human-readable note (error
                         message or skip reason).
                       type: string
+                    generation:
+                      description: Generation is the consistency-group generation
+                        a snapshot took.
+                      format: int64
+                      type: integer
+                    policyRef:
+                      description: PolicyRef is the name of the ReplicationPolicy
+                        a snapshot's result is for.
+                      type: string
                     slotRef:
-                      description: SlotRef is the name of the ReplicationSlot CR.
+                      description: |-
+                        SlotRef is the name of the ReplicationSlot CR. Empty on a snapshot's
+                        result, which is a policy's.
                       type: string
                     status:
                       description: Status is the outcome for this volume.
@@ -4520,7 +4541,6 @@ spec:
                         cluster (failover only).
                       type: string
                   required:
-                  - slotRef
                   - status
                   type: object
                 type: array
@@ -4531,7 +4551,7 @@ spec:
               subphase:
                 description: |-
                   Subphase describes what the operation is currently doing within the phase
-                  (e.g. "TriggeringFailover", "UpdatingSlotStatuses", "ReleasingLock").
+                  (for example, TriggeringFailover, UpdatingSlotStatuses, or ReleasingLock).
                 type: string
             type: object
         type: object
