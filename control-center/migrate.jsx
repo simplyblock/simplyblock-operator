@@ -29,7 +29,7 @@ const newMPathDialog = () => ({
   title: "New migration path", confirm: "Create path",
   desc: "A path moves application groups from a source storage cluster to a target storage cluster inside one Kubernetes cluster that spans both sites. The target site's nodes must already be part of that Kubernetes cluster and have a storage class on the target storage cluster.",
   fields: v => [
-    {k: "name", label: "Name", type: "text", required: true, placeholder: "site-a-to-site-b"},
+    {k: "name", label: "Name", type: "text", required: true},
     {k: "k8s_cluster_id", label: "Stretched Kubernetes cluster", type: "select", required: true,
       load: () => api.k8sClusters().then(ks => ks.filter(k => k.storageClusterIds.length >= 2).map(k => ({v: k.id, l: `${k.name} · ${k.storageClusterIds.length} storage clusters`}))),
       empty: "No Kubernetes cluster consumes two storage clusters yet — add nodes at the target site first."},
@@ -46,7 +46,7 @@ const newAppGroupDialog = p => ({
   title: `Add an application group to ${p.name || "the path"}`, confirm: "Queue group", wide: true,
   desc: "An application group is one unit of migration: its VMs and containers, and — identified from them — their PVCs and volumes. Groups run in queue order.",
   fields: [
-    {k: "name", label: "Group name", type: "text", required: true, placeholder: "payments"},
+    {k: "name", label: "Group name", type: "text", required: true},
     {k: "members", type: "members", k8sClusterId: p.k8sClusterId, label: "Workloads"},
     {k: "approval", label: "When replication has converged", type: "select", def: "manual",
       options: [{v: "manual", l: "Wait for approval before moving the workloads"}, {v: "auto", l: "Move the workloads automatically"}]}

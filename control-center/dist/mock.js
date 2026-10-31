@@ -10890,6 +10890,7 @@ window.SB_DR = {
       kind: "Test",
       ref: `${OPS}/test-shop-w4`,
       phase: "Completed",
+      outcome: "Passed",
       completionTime: agoIso(60 * 30)
     }, {
       kind: "Relocate",

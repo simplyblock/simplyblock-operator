@@ -21,6 +21,7 @@ const LAYER_META = {
   backups: {label: "Backups", icon: "cloud"}, backup: {icon: "cloud"},
   policies: {label: "Backup policies", icon: "clock"}, policy: {icon: "clock"},
   dr: {label: "Disaster recovery", icon: "shield"},
+  quickprotect: {label: "Quick protect", icon: "shield"},
   // DR hub (dr.simplyblock.io) — the detail layer name is the view-model kind
   plans: {label: "Protection plans", icon: "shield"}, pplan: {icon: "shield"},
   paths: {label: "DR paths", icon: "swap"}, drpath: {icon: "swap"},
@@ -802,6 +803,7 @@ function App() {
     openAppGroup: (pid, id) => go(pAg(pid, id)),
     zones: () => go([{t: "dr"}, {t: "zones"}]),
     dr: () => go([{t: "dr"}]),
+    quickProtect: () => go([{t: "dr"}, {t: "quickprotect"}]),
     cp: () => go([{t: "cp"}]),
     openSnapshot: (cid, sid) => (REG[sid] ? Promise.resolve(REG[sid]) : api.snapshot(sid)).then(s => go(detailPath(s))).catch(() => {}),
     hostNodes: h => go([...pH(h.clusterId, h.id), {t: "nodes"}]),
@@ -919,6 +921,8 @@ function App() {
         ? <ProposalsView key={viewKey} nav={nav} />
         : cur.t === "drconfig"
         ? <DRConfigView key={viewKey} nav={nav} />
+        : cur.t === "quickprotect"
+        ? <QuickProtectPage key={viewKey} nav={nav} />
         : cur.t === "cp"
         ? <ControlPlaneView key={viewKey} nav={nav} />
         : cur.t === "logs"

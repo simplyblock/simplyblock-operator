@@ -6,7 +6,7 @@
 const GBn = 1e9;
 const gb = n => Math.round((n || 0) / GBn);
 const qosFields = q => [
-  {k: "rw_ios_per_sec", label: "Max read+write IOPS", type: "number", min: 0, def: (q && q.rw_ios_per_sec) || 0, placeholder: "0 = unlimited"},
+  {k: "rw_ios_per_sec", label: "Max read+write IOPS", type: "number", min: 0, def: (q && q.rw_ios_per_sec) || 0, hint: "0 is unlimited."},
   {k: "rw_mbytes_per_sec", label: "Max read+write throughput", unit: "MB/s", type: "number", min: 0, def: (q && q.rw_mbytes_per_sec) || 0},
   {k: "r_mbytes_per_sec", label: "Max read throughput", unit: "MB/s", type: "number", min: 0, def: (q && q.r_mbytes_per_sec) || 0},
   {k: "w_mbytes_per_sec", label: "Max write throughput", unit: "MB/s", type: "number", min: 0, def: (q && q.w_mbytes_per_sec) || 0},
@@ -20,7 +20,7 @@ const configureHostDialog = h => {
     title: `Configure ${h.hostname} as a storage host`, confirm: "Apply configuration",
     desc: "Runs the storage-plane configuration on the inspected node. Only the resources you pick here are handed to simplyblock; everything else stays with the kubelet.",
     fields: [
-      {k: "numa_sockets", label: "NUMA socket(s) to use", type: "multiselect", required: true,
+      {k: "numa_sockets", label: "NUMA sockets", type: "multiselect", required: true,
         options: sockets.map(s => ({v: String(s),
           l: `socket ${s} · ${h.devices.filter(d => d.socket === s).length} device(s) · ${h.nics.filter(n => n.socket === s).length} NIC(s)`}))},
       {k: "memory_per_pod", label: "System memory per storage-plane pod", unit: "GB", type: "number", min: 8,
@@ -48,7 +48,7 @@ const newPoolDialog = cluster => ({
   title: `New pool on ${cluster.name}`, confirm: "Create pool", done: "Pool created",
   desc: "A pool groups volumes and carries their QoS ceiling. Bi-directional DH-CHAP is decided here and cannot be changed afterwards.",
   fields: [
-    {k: "name", label: "Pool name", type: "text", required: true, placeholder: "prod-oltp"},
+    {k: "name", label: "Pool name", type: "text", required: true},
     {k: "dhchap_bidirectional", label: "Bi-directional DH-CHAP", type: "checkbox", def: false},
     {k: "n70", type: "note", label: "With DH-CHAP the host and the subsystem authenticate each other on every connection. It applies to every volume in the pool, is fixed for the pool's lifetime, and cannot be added later — create a second pool if you need both."},
     {k: "max_rw_iops", label: "Max IOPS", type: "number", min: 0, def: 0, sub: "0 = unlimited"},
@@ -63,7 +63,7 @@ const newPlanDialog = sites => ({
   title: "New protection plan", confirm: "Create plan", done: "Plan created",
   desc: "A plan names the sites it spans and the storage profile its volumes come from. Methods are added afterwards — each one declares a protection relationship and derives its own policy and replication class.",
   fields: [
-    {k: "name", label: "Plan name", type: "text", required: true, placeholder: "gold",
+    {k: "name", label: "Plan name", type: "text", required: true,
       sub: "becomes the storageID suffix and the vault bucket name"},
     {k: "site_names", label: "Sites", type: "multiselect", required: true,
       options: (sites || []).map(s => ({v: s.name, l: `${s.name} · ${s.region}`})),
@@ -80,7 +80,7 @@ const addMethodDialog = plan => ({
   title: `Add a method to ${plan.name}`, confirm: "Add method", done: "Method added",
   desc: "A method is one declared protection relationship. All three types are configured identically and travel the same path to the driver; what differs is the parameters the class carries and therefore what the driver does with the data.",
   fields: v => [
-    {k: "name", label: "Method name", type: "text", required: true, placeholder: "regional"},
+    {k: "name", label: "Method name", type: "text", required: true},
     {k: "type", label: "Type", type: "select", required: true, def: "async", options: [
       {v: "sync", l: "synchronous — inline mirror to a peer, RPO 0, failback yes"},
       {v: "async", l: "asynchronous — block delta per epoch to a peer, RPO = interval, failback yes"},
@@ -91,13 +91,13 @@ const addMethodDialog = plan => ({
       sub: v.type === "sync" ? "must be in the same region as the source site"
         : v.type === "snapshot-s3" ? "the site a restore materialises on — the bucket itself is not a site" : "the peer that holds the replica"},
     v.type !== "sync" ? {k: "interval", label: "Interval", type: "text", required: true,
-      def: v.type === "snapshot-s3" ? "1h" : "5m", placeholder: "5m",
+      def: v.type === "snapshot-s3" ? "1h" : "5m",
       sub: "the target RPO. Emitted to the policy and to the class parameters as one value"} : null,
     v.type === "snapshot-s3" ? {k: "bucket", label: "Bucket", type: "text", def: `sb-vault-${plan.name}`} : null,
     v.type === "snapshot-s3" ? {k: "retention_hourly", label: "Hourly generations", type: "number", def: 24, min: 0} : null,
     v.type === "snapshot-s3" ? {k: "retention_daily", label: "Daily generations", type: "number", def: 14, min: 0} : null,
     v.type === "snapshot-s3" ? {k: "retention_weekly", label: "Weekly generations", type: "number", def: 8, min: 0} : null,
-    v.type === "snapshot-s3" ? {k: "immutable", label: "Object Lock (compliance)", type: "checkbox", def: true,
+    v.type === "snapshot-s3" ? {k: "immutable", label: "Object Lock", desc: "Compliance mode.", type: "checkbox", def: true,
       sub: "generations cannot be deleted before their lock expires — the guarantee the vault exists for"} : null,
     v.type === "sync" ? {k: "n99", type: "note", label: "Synchronous protection needs both sites in one region: it is declared by an equal region on the two DRClusters, and the mirror is inline so every write waits for the peer."} : null,
     v.type === "snapshot-s3" ? {k: "n100", type: "note", label: "There is no failback from a vault restore. The source volume is gone or untrusted and the vault holds generations rather than a live peer, so the original site's pre-compromise state cannot be reconstructed — the restored application is re-protected as a new plan with a full baseline."} : null
@@ -123,7 +123,7 @@ const newPairDialog = () => ({
   title: "New replication pair", confirm: "Create pair", done: "ReplicationPair created",
   desc: "A pair names a source and a target cluster and is reusable: several policies can replicate between the same two clusters on different schedules. Both clusters must be attached to this control plane — cross-namespace references are not supported.",
   fields: [
-    {k: "name", label: "Name", type: "text", required: true, placeholder: "prod-to-dr",
+    {k: "name", label: "Name", type: "text", required: true,
       sub: "metadata.name, DNS-1123"},
     {k: "sourceCluster", label: "Source cluster", type: "select", required: true,
       load: () => api.clusters().then(cs => cs.filter(c => c.status !== "unready")
@@ -142,7 +142,7 @@ const newReplPolicyDialog = pair => ({
   confirm: "Create policy", done: "ReplicationPolicy created",
   desc: "One interval and one snapshot count. There is no tiered retention schedule and no synchronous mode — mode is exactly failover or migration.",
   fields: v => [
-    {k: "name", label: "Name", type: "text", required: true, placeholder: "prod-to-dr-5m"},
+    {k: "name", label: "Name", type: "text", required: true},
     pair ? null : {k: "pairRef", label: "Replication pair", type: "select", required: true,
       load: () => api.pairs().then(ps => ps.map(p => ({v: p.name,
         l: `${p.name} · ${p.sourceCluster} → ${p.targetCluster}${p.ready ? "" : " · not ready"}`}))),
@@ -202,7 +202,6 @@ const replOpsDialog = ({action, scope, ref, obj}) => {
       action === "migration" ? {k: "deleteSource", label: "Delete the source volume after the cutover",
         type: "checkbox", def: false, sub: "spec.deleteSource — only meaningful for a migration"} : null,
       action === "failback" ? {k: "sourceClusterID", label: "Recover into a different cluster", type: "text",
-        placeholder: "leave empty for the original source",
         sub: "spec.sourceClusterID — omit to recover to the original source"} : null,
       action === "failback" ? {k: "n75", type: "note",
         label: "A short write freeze holds while the final delta transfers. Plan a maintenance window."} : null,
@@ -264,7 +263,7 @@ const newRPolicyDialog = ctx => ({
   fields: v => {
     const sync = v.mode === "synchronous";
     return [
-      {k: "name", label: "Policy name", type: "text", placeholder: "dr-prod-eu-to-us-east", required: true},
+      {k: "name", label: "Policy name", type: "text", required: true},
       {k: "mode", label: "Mode", type: "select", def: ctx && ctx.mode ? ctx.mode : "asynchronous",
         options: [{v: "asynchronous", l: "Asynchronous — between two clusters"}, {v: "synchronous", l: "Synchronous — across zones of one cluster"}]},
       sync ? {k: "source_cluster_id", label: "Stretched cluster", type: "select", required: true,
@@ -291,7 +290,7 @@ const newRPolicyDialog = ctx => ({
       sync ? null : {k: "consistency_group", label: "Create a consistency group for the member volumes", type: "checkbox", def: true},
       sync ? null : {k: "failback_mode", label: "Failback policy", type: "select", def: "manual",
         options: [{v: "manual", l: "Manual — operator initiates failback"}, {v: "automatic", l: "Automatic — on source recovery"}]},
-      sync ? null : {k: "resync_full", label: "Full resync on failback (instead of delta)", type: "checkbox"},
+      sync ? null : {k: "resync_full", label: "Full resync on failback", desc: "Instead of a delta.", type: "checkbox"},
       {k: "n7", type: "note", label: sync
         ? "Writes are acknowledged only when every listed zone has them — no frequency, no backlog and no consistency group. Volumes can be added to and removed from the policy at any time."
         : "Volumes are attached after the policy exists. A policy can only be deleted once no volumes are attached."}
@@ -306,7 +305,7 @@ const newMigrationDialog = cluster => ({
   fields: v => {
     const cross = v.mode === "cross_cluster";
     return [
-      {k: "name", label: "Migration name", type: "text", placeholder: "move-prod-to-dc2", required: true},
+      {k: "name", label: "Migration name", type: "text", required: true},
       {k: "mode", label: "Mechanism", type: "select", def: "intra_cluster",
         options: [{v: "intra_cluster", l: "Within the cluster — instant volume migration"},
           {v: "cross_cluster", l: "Between clusters / zones — replicate, then roll over"}]},
@@ -353,12 +352,12 @@ const protectAppDialog = () => ({
       sub: "the one method Ramen drives through this application's single placement control",
       empty: "This plan declares only a vault method, so that is what Ramen will drive."},
     {k: "n89", type: "note", label: "A placement control selects PVCs by label, so two over the same PVCs would both claim them — the documented outcome is data corruption. One application therefore names one orchestrated method; the others still replicate, and report their lag out of band."},
-    {k: "app_name", label: "Application name", type: "text", placeholder: "postgres-ha", required: true},
-    {k: "namespace", label: "Namespace", type: "text", placeholder: "db-prod", required: true},
+    {k: "app_name", label: "Application name", type: "text", required: true},
+    {k: "namespace", label: "Namespace", type: "text", required: true},
     {k: "app_kind", label: "Deployed as", type: "select", def: "ApplicationSet",
       options: [{v: "ApplicationSet", l: "ApplicationSet"}, {v: "Subscription", l: "Subscription"}, {v: "VirtualMachine", l: "VirtualMachine"}]},
     {k: "pvc_selector_key", label: "PVC selector label", type: "text", def: "app.kubernetes.io/name", required: true},
-    {k: "pvc_selector_value", label: "Selector value", type: "text", placeholder: "postgres", required: true,
+    {k: "pvc_selector_value", label: "Selector value", type: "text", required: true,
       sub: "never leave the selector empty — an empty selector claims every PVC in the namespace"},
     {k: "kube_object_protection", label: "Also protect Kubernetes objects", type: "checkbox", def: true},
     {k: "n28", type: "note", label: "Without Kubernetes object protection a failover moves the volumes only: the workload has to be recreated by hand and the application parks in WaitForUser."}
@@ -371,7 +370,7 @@ const newCgroupDialog = cluster => ({
   title: "Create a consistency group", confirm: "Create group",
   desc: "A consistency group is a named set of volumes. Group snapshots capture every member at the same instant so they restore to one common point in time.",
   fields: [
-    {k: "name", label: "Group name", type: "text", placeholder: "sap-hana-prod", required: true},
+    {k: "name", label: "Group name", type: "text", required: true},
     {k: "lvol_ids", label: "Member volumes", type: "multiselect", required: true,
       load: () => api.clusterVolumes(cluster.id).then(vs => vs.filter(v => v.status === "online")
         .map(v => ({v: v.id, l: `${v.name} · ${v.poolName} · ${fmtBytes(v.capacity.total)}`
@@ -395,8 +394,8 @@ const kmsDialog = c => {
           {v: "azure_key_vault", l: "Azure Key Vault"}, {v: "gcp_kms", l: "Google Cloud KMS"},
           {v: "kmip", l: "KMIP appliance"}]}];
       const perProvider = p === "hashicorp_vault" ? [
-        {k: "address", label: "Vault address", type: "text", def: k.address || "", placeholder: "https://vault.internal:8200", required: true},
-        {k: "namespace", label: "Namespace", type: "text", def: k.namespace || "", placeholder: "admin/storage (Enterprise)"},
+        {k: "address", label: "Vault address", type: "text", def: k.address || "", example: "https://vault.internal:8200", required: true},
+        {k: "namespace", label: "Namespace", type: "text", def: k.namespace || "", hint: "Vault Enterprise only."},
         {k: "auth_method", label: "Auth method", type: "select", def: k.auth_method || "kubernetes",
           options: [{v: "kubernetes", l: "Kubernetes service account"}, {v: "approle", l: "AppRole"}, {v: "token", l: "Token"}]},
         {k: "auth_role", label: "Role", type: "text", def: k.auth_role || "simplyblock-storage"},
@@ -484,14 +483,14 @@ const newBucketDialog = c => ({
   title: "Create a bucket", confirm: "Create bucket",
   desc: "A bucket is provisioned as one logical volume. Access is Kubernetes-native: a service account and a secret holding the access key.",
   fields: [
-    {k: "name", label: "Bucket name", type: "text", placeholder: "media-assets", required: true},
+    {k: "name", label: "Bucket name", type: "text", required: true},
     {k: "pool_id", label: "Pool", type: "select", required: true,
       load: () => api.pools(c.id).then(ps => ps.filter(p => p.enabled).map(p => ({v: p.id, l: p.name}))),
       empty: "No enabled pool in this cluster."},
     {k: "size", label: "Filesystem size", unit: "GB", type: "number", min: 10, def: 1000, required: true},
     {k: "quota", label: "Quota", unit: "GB, 0 = none", type: "number", min: 0, def: 0},
     {k: "namespace", label: "Kubernetes namespace", type: "text", def: "default", required: true},
-    {k: "service_account", label: "Service account", type: "text", placeholder: "sb-s3-media-assets"},
+    {k: "service_account", label: "Service account", type: "text"},
     {k: "policy", label: "Policy", type: "select", def: "read-write",
       options: [{v: "read-write", l: "Read / write"}, {v: "read-only", l: "Read only"}, {v: "write-only", l: "Write only"}]},
     {k: "versioning", label: "Enable versioning", type: "checkbox", def: !!(c.objectStorage || {}).versioning_default},
@@ -500,7 +499,7 @@ const newBucketDialog = c => ({
     {k: "encryption", label: "Encrypt with the cluster KMS key", type: "checkbox", def: true},
     {k: "storage_class", label: "Default storage class", type: "select", def: "standard",
       options: [{v: "standard", l: "Standard"}, {v: "infrequent-access", l: "Infrequent access"}]},
-    {k: "owner", label: "Owner", type: "text", placeholder: "platform-team"},
+    {k: "owner", label: "Owner", type: "text"},
     {k: "tags", label: "Bucket tags", type: "kv", max: 50, def: [{k: "env", v: "prod"}, {k: "team", v: ""}],
       hint: "S3 bucket tagging — searchable in the bucket list as key or key=value."}
   ],
@@ -514,14 +513,14 @@ const newClusterDialog = () => ({
   fields: v => {
     const edge = v.location_type === "edge";
     return [
-      {k: "name", label: "Cluster label", type: "text", placeholder: "prod-eu-central-2", required: true},
+      {k: "name", label: "Cluster label", type: "text", required: true},
       {k: "location_type", label: "Siting", type: "select", def: "datacenter",
         options: [{v: "datacenter", l: "Data center"}, {v: "edge", l: "Edge"}]},
       {k: "device_class", label: "Device class", type: "select", def: "nvme",
         options: edge ? [{v: "block", l: "Block devices"}]
           : [{v: "nvme", l: "NVMe (PCIe address)"}, {v: "block", l: "Block devices"}]},
       edge ? {k: "n5", type: "note", label: "Edge clusters are block-device only, do not rebalance, run no task engine, and are managed through the Kubernetes API rather than a separate control plane endpoint."} : null,
-      {k: "ec", label: "Stripe — data + parity chunks", type: "select", def: "2+1",
+      {k: "ec", label: "Stripe", desc: "Data + parity chunks.", type: "select", def: "2+1",
         options: ["1+1", "2+1", "2+2", "4+1", "4+2", "8+2"].map(x => ({v: x, l: `${x} (data+parity chunks)`}))},
       {k: "zone_ids", label: "Zones the cluster spans", type: "multiselect", required: true,
         load: () => api.zones().then(ss => ss.map(x => ({v: x.id, l: `${x.name} · ${x.location}`}))),
@@ -531,7 +530,7 @@ const newClusterDialog = () => ({
         options: [{v: "none", l: "None — free placement"},
           {v: "soft", l: "Soft — prefer to keep volumes in place"},
           {v: "strict", l: "Strict — volumes can be pinned to a node"}]},
-      {k: "pod_affinity_enabled", label: "Pod affinity — front storage follows the workload", type: "checkbox", def: true},
+      {k: "pod_affinity_enabled", label: "Pod affinity", desc: "Front storage follows the workload.", type: "checkbox", def: true},
       {k: "n25", type: "note", label: "With pod affinity a volume's primary is moved by instant migration whenever its workload pod is rescheduled to another node."},
       {k: "multipathing_enabled", label: "Enable multipathing", type: "checkbox", def: true},
       v.multipathing_enabled
@@ -547,12 +546,12 @@ const newClusterDialog = () => ({
       v.failure_domain_enabled ? {k: "n15", type: "note",
         label: "Every node must sit in a failure domain, and node counts per domain may differ by at most one. Hosts without the matching taint cannot take a node."} : null,
       {k: "backup_enabled", label: "Enable backups", type: "checkbox", def: true},
-      v.backup_enabled ? {k: "s3_endpoint", label: "S3 endpoint", type: "text", placeholder: "https://s3.eu-central-1.amazonaws.com", required: true} : null,
-      v.backup_enabled ? {k: "s3_region", label: "S3 region", type: "text", placeholder: "eu-central-1", required: true} : null,
-      v.backup_enabled ? {k: "s3_bucket", label: "Bucket", type: "text", placeholder: "sb-backup-prod", required: true} : null,
-      v.backup_enabled ? {k: "s3_path_prefix", label: "Path prefix", type: "text", placeholder: "clusters/prod/"} : null,
-      v.backup_enabled ? {k: "s3_access_key_id", label: "Access key id", type: "text", placeholder: "AKIA…", required: true} : null,
-      v.backup_enabled ? {k: "s3_secret_access_key", label: "Secret access key", type: "text", placeholder: "••••", required: true} : null,
+      v.backup_enabled ? {k: "s3_endpoint", label: "S3 endpoint", type: "text", example: "https://s3.eu-central-1.amazonaws.com", required: true} : null,
+      v.backup_enabled ? {k: "s3_region", label: "S3 region", type: "text", example: "eu-central-1", required: true} : null,
+      v.backup_enabled ? {k: "s3_bucket", label: "Bucket", type: "text", required: true} : null,
+      v.backup_enabled ? {k: "s3_path_prefix", label: "Path prefix", type: "text", example: "clusters/prod/"} : null,
+      v.backup_enabled ? {k: "s3_access_key_id", label: "Access key id", type: "text", required: true} : null,
+      v.backup_enabled ? {k: "s3_secret_access_key", label: "Secret access key", type: "text", required: true} : null,
       v.backup_enabled ? {k: "s3_addressing", label: "Addressing style", type: "select", def: "virtual-hosted",
         options: [{v: "virtual-hosted", l: "Virtual-hosted"}, {v: "path", l: "Path"}]} : null,
       v.backup_enabled ? {k: "s3_verify_tls", label: "Verify TLS certificate", type: "checkbox", def: true} : null,
@@ -629,9 +628,9 @@ const ACTIONS = {
             .map(h => ({v: h.id, l: `${h.hostname} · ${o.fd.scope} ${fdOf(h)} · ${h.counts.free} free devices`}));
         }),
         empty: "No eligible host. A host must be in one of the cluster's zones, carry a failure-domain taint, and sit in a domain that is not already ahead of the others."},
-        o.fd && o.fd.enabled ? {k: "failure_domain", label: `Failure domain (${o.fd.scope})`, type: "text", required: true,
-          placeholder: (o.fd.domains && o.fd.domains[0] && o.fd.domains[0].name) || "rack-1",
-          sub: (o.fd.domains || []).length ? "existing: " + o.fd.domains.map(f => f.name).join(", ") : null} : null,
+        o.fd && o.fd.enabled ? {k: "failure_domain", label: "Failure domain", desc: `Scope: ${o.fd.scope}.`, type: "text", required: true,
+          def: (o.fd.domains && o.fd.domains[0] && o.fd.domains[0].name) || "",
+          hint: (o.fd.domains || []).length ? "Existing: " + o.fd.domains.map(f => f.name).join(", ") + "." : null} : null,
         o.fd && o.fd.enabled ? {k: "n71", type: "note", label: "The failure domain is assigned once, now. It is fixed for the node's lifetime — moving a node between domains means removing it and adding it again."} : null,
         {k: "n13", type: "note", label: o.fd && o.fd.enabled
           ? `Nodes can only be started on hosts in the cluster's zones. Each ${o.fd.scope} must carry at least two storage nodes and counts may differ by at most one, so expand in pairs` + ((o.fd.domains || []).length ? ` — currently ${o.fd.domains.filter(f => f.name !== "unassigned").map(f => f.name + ": " + f.nodes).join(", ")}.` : ".")
@@ -678,8 +677,8 @@ const ACTIONS = {
       desc: "A host is racked in exactly one zone. The rack and cabinet labels are how operators find it on the floor.",
       fields: [
         {k: "n28", type: "note", label: `Zone and region come from the node labels topology.kubernetes.io/zone and /region — this host reports ${o.zone || "no zone"}${o.region ? " in " + o.region : ""}. They cannot be set here.`},
-        {k: "rack_id", label: "Rack", type: "text", def: o.rack || "", placeholder: "r14 (optional)"},
-        {k: "cabinet_id", label: "Cabinet", type: "text", def: o.cabinet || "", placeholder: "c03 (optional)"},
+        {k: "rack_id", label: "Rack", type: "text", def: o.rack || ""},
+        {k: "cabinet_id", label: "Cabinet", type: "text", def: o.cabinet || ""},
         {k: "n9", type: "note", label: `Rack and cabinet come from the worker node's taints and may be absent. Device class is derived from the installed hardware: this host is ${o.hostClass || "not yet inspected"}.`}
       ],
       confirm: "Apply", run: v => api.hostSetPlacement(o.id, v)}}
@@ -691,7 +690,7 @@ const ACTIONS = {
     o.status === "online" || o.status === "in_restart" ? {label: "Shut down node", icon: "power", danger: true, dialog: {
       title: `Shut down ${o.hostname}?`, danger: true,
       desc: "The node reports in shutdown and then offline. Nothing is migrated off it — volumes whose primary sits here fail over to their secondaries, and the cluster runs at reduced redundancy until the node is back. A forced shutdown stops the node without waiting for it to close cleanly.",
-      fields: [{k: "force", label: "Force (do not wait for a clean stop)", type: "checkbox"}],
+      fields: [{k: "force", label: "Force", desc: "Does not wait for a clean stop.", type: "checkbox"}],
       confirm: "Shut down", run: v => api.nodeShutdown(o.id, v.force)}} : null,
     o.status !== "online" && o.status !== "in_restart" ? {label: "Restart node", icon: "refresh", dialog: {
       title: `Restart ${o.hostname}?`,
@@ -711,8 +710,8 @@ const ACTIONS = {
       title: "Add a device to this node",
       desc: (REG[o.clusterId] || {}).mode === "nvme" ? "NVMe cluster — identify the drive by PCIe address." : "Block device cluster — identify the drive by block device name.",
       fields: (REG[o.clusterId] || {}).mode === "nvme"
-        ? [{k: "pcie_address", label: "PCIe address", type: "text", placeholder: "0000:5e:00.0", required: true}]
-        : [{k: "device_name", label: "Block device", type: "text", placeholder: "/dev/sdb", required: true}],
+        ? [{k: "pcie_address", label: "PCIe address", type: "text", example: "0000:5e:00.0", required: true}]
+        : [{k: "device_name", label: "Block device", type: "text", example: "/dev/sdb", required: true}],
       confirm: "Add device", run: v => api.nodeAddDevice(o.id, v)}},
     {label: "Remove node", icon: "trash", danger: true, removes: true, dialog: {
       title: `Remove ${o.hostname}?`, danger: true,
@@ -1136,7 +1135,7 @@ const ACTIONS = {
       fields: [
         {k: "method", label: "Method", type: "select", required: true,
           options: o.methods.filter(m => !m.intervalConsistent).map(m => ({v: m.name, l: `${m.name} · policy ${m.interval} vs class ${m.classInterval}`}))},
-        {k: "interval", label: "Interval", type: "text", required: true, placeholder: "5m",
+        {k: "interval", label: "Interval", type: "text", required: true, example: "5m",
           sub: "written to DRPolicy.spec.schedulingInterval and parameters.schedulingInterval at once"}
       ],
       confirm: "Set interval", run: v => api.planSetInterval(o.id, v.method, v.interval),
@@ -1156,7 +1155,7 @@ const ACTIONS = {
         title: `Interval for ${o.name}`,
         desc: "One field, written to two places: the policy's schedulingInterval and the class's parameters.schedulingInterval. They must agree exactly — a difference of formatting alone leaves the application protected by nothing.",
         fields: [
-          {k: "interval", label: "Interval", type: "text", required: true, def: o.interval, placeholder: "5m"},
+          {k: "interval", label: "Interval", type: "text", required: true, def: o.interval, example: "5m"},
           !o.intervalConsistent ? {k: "n97", type: "note", label: `Currently the policy carries ${o.interval} and the class carries ${o.classInterval}, so no class resolves for this method.`} : null
         ].filter(Boolean),
         confirm: "Set interval", run: v => api.planSetInterval(o.planId, o.name, v.interval)}},
@@ -1366,7 +1365,7 @@ const ACTIONS = {
       title: `Schedule for ${o.name}`,
       desc: "Each row is a tier: how often a snapshot is taken and backed up, how many backup versions of that tier are retained, and how many of those snapshots stay online on the cluster.",
       fields: [{k: "schedule", label: "Schedule", type: "bschedule", def: o.schedule},
-        {k: "consistency_group", label: "Group-consistent — all linked volumes in one consistency group", type: "checkbox", def: o.consistencyGroup},
+        {k: "consistency_group", label: "Group-consistent", desc: "All linked volumes in one consistency group.", type: "checkbox", def: o.consistencyGroup},
         {k: "n60", type: "note", label: "Group-consistent policies are what Ramen applications link for ransomware recovery: any retained version is a point-in-time the application can be restored to."}],
       confirm: "Apply", run: v => api.policyUpdate(o.id, v)}},
     {label: "Delete policy", icon: "trash", danger: true, removes: true,
@@ -1382,10 +1381,10 @@ const newBackupPolicyDialog = cluster => ({
   title: "Create a backup policy", confirm: "Create policy",
   desc: "A policy triggers background snapshot-and-backup cycles. Each schedule row carries the cadence, how many backup versions are retained, and how many snapshots stay online.",
   fields: [
-    {k: "name", label: "Policy name", type: "text", placeholder: "5m-tiered", required: true},
+    {k: "name", label: "Policy name", type: "text", required: true},
     {k: "schedule", label: "Schedule", type: "bschedule",
       def: [{interval: "5m", versions: 12, online: 3}, {interval: "1h", versions: 11, online: 0}, {interval: "1d", versions: 6, online: 0}]},
-    {k: "consistency_group", label: "Group-consistent — all linked volumes in one consistency group", type: "checkbox", def: false},
+    {k: "consistency_group", label: "Group-consistent", desc: "All linked volumes in one consistency group.", type: "checkbox", def: false},
     {k: "n12", type: "note", label: "Once a tier holds more versions than it retains, the oldest is merged into its predecessor — so the interval is also the merge cadence. Group-consistent policies snapshot every linked volume atomically per cycle, which is what an application needs to recover from ransomware to one point in time."}
   ],
   run: v => api.policyCreate(cluster.id, v)
@@ -1438,7 +1437,12 @@ const runCheck = (fn, set) => {
   Promise.resolve().then(fn).then(set, e => set({status: "bad", text: (e && e.message) || "the check failed"}));
 };
 
-function Field({f, val, setVal, vals, setAll, reprepare}) {
+// f.desc: what the field is, said once beneath it, before any hint (labels
+// stay terse: "Tiers", not "Tiers — the boot order …")
+const withDesc = f => !f.desc ? f : Object.assign({}, f, {desc: undefined, hint: !f.hint ? f.desc
+  : typeof f.hint === "function" ? (...a) => [f.desc, f.hint(...a)].filter(Boolean).join(" ") : `${f.desc} ${f.hint}`});
+function Field({f: f0, val, setVal, vals, setAll, reprepare}) {
+  const f = withDesc(f0);
   const [opts, setOpts] = useState(f.options || null);
   const [loading, setLoading] = useState(!!f.load);
   const [checks, setChecks] = useState({});
@@ -1458,15 +1462,20 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
   });
   useEffect(() => {
     if (f.load) f.load().then(o => { setOpts(o); setLoading(false); if (o.length && f.type !== "multiselect" && (val === undefined || val === "")) setVal(o[0].v); }).catch(() => setLoading(false));
-    else if (f.options && f.options.length && f.type === "select" && val === undefined && !f.sync) setVal(f.options[0].v);
+    // a select that appears after the form opened takes its own default, else the first option
+    else if (f.options && f.options.length && f.type === "select" && val === undefined && !f.sync)
+      setVal(f.def !== undefined && f.options.some(o => o.v === f.def) ? f.def : f.options[0].v);
   }, []);
   // conditional forms can swap the option set out from under a chosen value
   useEffect(() => {
     if (!f.options || f.type !== "select") return;
     setOpts(f.options);
-    if (f.options.length && !f.options.some(o => o.v === val)) setVal(f.options[0].v);
+    if (f.options.length && !f.options.some(o => o.v === val))
+      setVal(val === undefined && f.def !== undefined && f.options.some(o => o.v === f.def) ? f.def : f.options[0].v);
   }, [f.options && f.options.map(o => o.v + "=" + o.l).join("|")]);
   if (f.type === "note") return <div className={"fnote" + (f.tone ? " " + f.tone : "")}><Icon n={f.icon || "alert"} s={12} />{f.label}</div>;
+  // A heading that groups the fields after it (a long form in sections).
+  if (f.type === "section") return <div className="fsection"><h4>{f.label}</h4>{f.hint && <span>{f.hint}</span>}</div>;
   // A button that fills other fields from a proposal (f.apply returns the
   // values to set); nothing is applied until it is pressed.
   if (f.type === "apply") {
@@ -1506,11 +1515,11 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
     const verr = f.validate && f.validate(val, vals || {});
     return (
       <div className="field">
-        <span className="flabel">{f.label} <em>({sel.length})</em></span>
+        <span className="flabel">{f.label}{f.required && <b className="freq" aria-hidden="true"> *</b>} <em>({sel.length})</em></span>
         <div className="chipbox">
           {sel.map(x => <span key={x} className="chip mono">{x}<button type="button" className="kebab" title={`Remove ${x}`} onClick={() => setVal(sel.filter(y => y !== x))}><Icon n="x" s={10} /></button></span>)}
           {opts2.length > 0
-            ? <select className="finput sm chipadd" value="" onChange={e => e.target.value && setVal(sel.concat(e.target.value))}>
+            ? <select className="finput sm chipadd unset" value="" onChange={e => e.target.value && setVal(sel.concat(e.target.value))}>
               <option value="">{f.addLabel || "— add —"}</option>
               {opts2.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
             </select>
@@ -1547,11 +1556,12 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
       <label className="field">
         <span className="flabel">{f.label} <em>({rows.length} of {f.max || 50})</em></span>
         <div className="schedbox" style={off ? {opacity: 0.5} : undefined}>
+          {rows.length > 0 && <div className="schedrow kvrow head"><span className="sl">Key</span><span className="sl"></span><span className="sl">Value</span><span></span></div>}
           {rows.map((r, i) => (
             <div className="schedrow kvrow" key={i}>
-              <input className="finput sm" placeholder="key" value={r.k} disabled={off} onChange={e => set(i, "k", e.target.value)} />
+              <input className="finput sm" aria-label="Key" value={r.k} disabled={off} onChange={e => set(i, "k", e.target.value)} />
               <span className="sl">=</span>
-              <input className="finput sm" placeholder="value" value={r.v} disabled={off} onChange={e => set(i, "v", e.target.value)} />
+              <input className="finput sm" aria-label="Value" value={r.v} disabled={off} onChange={e => set(i, "v", e.target.value)} />
               <button type="button" className="kebab" title="Remove tag" disabled={off} onClick={() => setVal(rows.filter((_, j) => j !== i))}><Icon n="x" s={11} /></button>
             </div>
           ))}
@@ -1602,7 +1612,7 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
         }
         const cur = r[c.k] || "";
         const known = opts.some(o => o.v === cur);
-        return <select key={c.k} className="finput sm" style={w} value={cur} disabled={off} onChange={e => set(i, c.k, e.target.value)}>
+        return <select key={c.k} className={"finput sm" + (cur ? "" : " unset")} style={w} value={cur} aria-label={c.label} disabled={off} onChange={e => set(i, c.k, e.target.value)}>
           {c.blank !== undefined && <option value="">{typeof c.blank === "function" ? c.blank(r) : c.blank}</option>}
           {!known && cur && <option value={cur}>{c.unknown ? c.unknown(cur) : cur}</option>}
           {opts.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}</select>;
@@ -1610,16 +1620,16 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
       const sug = c.suggest ? c.suggest(r, i, vals || {}) || [] : [];
       const listId = sug.length ? `sug-${f.k}-${i}-${c.k}` : undefined;
       return <React.Fragment key={c.k}>
-        <input className="finput sm" style={w} type={c.type === "number" ? "number" : "text"} placeholder={c.placeholder || ""} value={r[c.k] == null ? "" : r[c.k]}
+        <input className="finput sm" style={w} type={c.type === "number" ? "number" : "text"} aria-label={c.label} value={r[c.k] == null ? "" : r[c.k]}
           disabled={off || !!(c.disabled && c.disabled(r))} list={listId} onChange={e => set(i, c.k, e.target.value)} />
         {listId && <datalist id={listId}>{sug.map(x => <option key={x} value={x} />)}</datalist>}
       </React.Fragment>;
     };
     return (
       <label className="field">
-        <span className="flabel">{f.label} <em>({rows.length}{f.max ? ` of ${f.max}` : ""})</em></span>
+        <span className="flabel">{f.label}{f.required && <b className="freq" aria-hidden="true"> *</b>} <em>({rows.length}{f.max ? ` of ${f.max}` : ""})</em></span>
         <div className="schedbox rgridbox" style={off ? {opacity: 0.5} : undefined}><div className="rgridin" style={{minWidth: floor}}>
-          <div className="schedrow rgrid head" style={gridRow}>{f.cols.map(c => <span key={c.k} className="sl">{c.label}</span>)}{ra && <span></span>}{f.reorder && <span></span>}{!fixed && <span></span>}</div>
+          <div className="schedrow rgrid head" style={gridRow}>{f.cols.map(c => <span key={c.k} className="sl">{c.label}{c.required && <b className="freq" aria-hidden="true"> *</b>}</span>)}{ra && <span></span>}{f.reorder && <span></span>}{!fixed && <span></span>}</div>
           {rows.map((r, i) => {
             const rerr = f.rowError && f.rowError(r, i, rows, vals || {});
             const rinfo = !rerr && f.rowInfo && f.rowInfo(r, i, rows, vals || {});
@@ -1645,6 +1655,8 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
         </div></div>
         {f.validate && f.validate(val, vals || {}) && <span className="fhint" style={{color: "var(--bad)"}}>{f.validate(val, vals || {})}</span>}
         {f.hint && <span className="fhint">{typeof f.hint === "function" ? f.hint(val, vals || {}) : f.hint}</span>}
+        {/* what a column's empty value means, or its format: beneath the table, not in the cells */}
+        {f.cols.filter(c => c.note).map(c => <span key={c.k} className="fhint fcolnote"><b>{c.label}:</b> {c.note}</span>)}
       </label>
     );
   }
@@ -1717,25 +1729,31 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
     );
   }
   const empty = (f.type === "select") && !loading && (!opts || !opts.length);
+  // A box holds a value or nothing, never a placeholder: a format example is
+  // said beneath the box (f.example), with the description.
+  const err = f.validate && f.validate(val, vals || {});
+  const hint = [typeof f.hint === "function" ? f.hint(val, vals || {}) : f.hint, f.example ? `For example ${f.example}.` : ""].filter(Boolean).join(" ");
+  // dim only while a select shows its blank ("— none —"); "" can also be a real choice
+  const blank = f.type === "select" && (val === undefined || val === "") && /^—/.test(((opts || []).find(o => o.v === "") || {l: "—"}).l);
+  const cls = "finput" + (err ? " bad" : "") + (blank ? " unset" : "");
   return (
     <label className="field">
-      <span className="flabel">{f.label}{f.unit && <em> ({f.unit})</em>}</span>
+      <span className="flabel">{f.label}{f.required && <b className="freq" aria-hidden="true"> *</b>}{f.unit && <em> ({f.unit})</em>}</span>
       {f.type === "select" ? (
         loading ? <div className="fskel"></div>
           : empty ? <div className="fempty">{f.empty || "No options available"}</div>
-          : <select className="finput" value={val === undefined ? "" : val} onChange={e => setVal(e.target.value)}>
+          : <select className={cls} value={val === undefined ? "" : val} aria-invalid={!!err} onChange={e => setVal(e.target.value)}>
               {opts.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
             </select>
       ) : f.type === "checkbox" ? (
         <button type="button" className={"toggle" + (val ? " on" : "")} onClick={() => setVal(!val)}><i></i></button>
       ) : (
-        <input className="finput" type={f.type === "number" ? "number" : "text"} min={f.min} maxLength={f.maxLen} value={val === undefined ? "" : val}
-          placeholder={f.placeholder} onChange={e => setVal(e.target.value)} />
+        <input className={cls} type={f.type === "number" ? "number" : "text"} min={f.min} maxLength={f.maxLen} value={val === undefined ? "" : val}
+          aria-invalid={!!err} onChange={e => setVal(e.target.value)} />
       )}
       {f.match && val && val !== f.match && <span className="fhint" style={{color: "var(--bad)"}}>must match “{f.match}”</span>}
-      {f.validate && f.validate(val, vals || {})
-        ? <span className="fhint" style={{color: "var(--bad)"}}>{f.validate(val, vals || {})}</span>
-        : f.hint && <span className="fhint" style={{color: "var(--dim)"}}>{typeof f.hint === "function" ? f.hint(val, vals || {}) : f.hint}</span>}
+      {err ? <span className="fhint" style={{color: "var(--bad)"}}>{err}</span>
+        : hint && <span className="fhint" style={{color: "var(--dim)"}}>{hint}</span>}
     </label>
   );
 }
@@ -1793,8 +1811,15 @@ function LanesField({f, val, setVal, vals}) {
 
 // spec.prepare, when set, loads what the fields need first (the DHCP servers
 // a binding may name, say); the fields are then fields(values, prepared).
-function Dialog({spec, obj, removes, onClose}) {
+// page: the form fills a view instead of a modal (Quick protect): every
+// section open, a section list beside it, the buttons at the bottom of the
+// window. spec.result(value of run, close) replaces the form after a
+// successful run.
+function Dialog({spec, obj, removes, onClose, page}) {
   const [prep, setPrep] = useState(spec.prepare ? null : {});
+  const [result, setResult] = useState(undefined);
+  const [active, setActive] = useState(null);
+  const scrollRef = useRef(null);
   const resolve = (v, p) => typeof spec.fields === "function" ? spec.fields(v, p) : (spec.fields || []);
   const defaults = p => {
     const v = {}; resolve({}, p).forEach(f => { if (f.def !== undefined) v[f.k] = f.def; if (f.type === "checkbox") v[f.k] = !!f.def; });
@@ -1814,24 +1839,92 @@ function Dialog({spec, obj, removes, onClose}) {
   const reprepare = () => Promise.resolve().then(spec.prepare || (() => ({}))).then(p => setPrep(p || {}), () => {});
   // a dialog with a multi-column row editor or priority lanes gets the wide modal
   const wide = !!spec.wide || allFields.some(f => (f.type === "rows" && (f.cols || []).length >= 3) || f.type === "lanes");
-  const fields = allFields.filter(f => f.type !== "note");
-  const invalid = !prep || fields.some(f => (f.required && (vals[f.k] === undefined || vals[f.k] === "" || (Array.isArray(vals[f.k]) && !vals[f.k].length)))
+  const fields = allFields.filter(f => f.type !== "note" && f.type !== "section");
+  const bad = f => (f.required && (vals[f.k] === undefined || vals[f.k] === "" || (Array.isArray(vals[f.k]) && !vals[f.k].length)))
     || (f.match && vals[f.k] !== f.match) || (f.validate && f.validate(vals[f.k], vals))
     // a row error blocks saving when the field says so (a selector that matches nothing)
-    || (f.rowsBlock && f.rowError && (vals[f.k] || []).some((r, i, rows) => f.rowError(r, i, rows, vals))));
+    || (f.rowsBlock && f.rowError && (vals[f.k] || []).some((r, i, rows) => f.rowError(r, i, rows, vals)));
+  const invalid = !prep || fields.some(bad);
+  // spec.collapsible: one section open at a time, the others a line with their
+  // summary and whether they still need input; their fields stay mounted (and
+  // keep proposing values), only hidden. A section with f.open stays open.
+  const groups = [];
+  allFields.forEach(f => f.type === "section" || !groups.length ? groups.push({sec: f.type === "section" ? f : null, items: f.type === "section" ? [] : [f]}) : groups[groups.length - 1].items.push(f));
+  const [openSec, setOpenSec] = useState(undefined);
+  const firstSec = (groups.find(g => g.sec) || {}).sec;
+  const shown = openSec === undefined ? firstSec && firstSec.k : openSec;
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
-      await spec.run(vals);
+      const res = await spec.run(vals);
       window.__toast(spec.done || `${spec.confirm} — accepted by the control plane`);
       if (removes) window.__removed(obj); else window.__refresh();
-      onClose();
+      if (page && spec.result) { setResult(res === undefined ? null : res); setBusy(false); if (scrollRef.current) scrollRef.current.scrollTop = 0; }
+      else onClose();
     } catch (e) { setErr(e.message || "Request failed"); setBusy(false); }
   };
   useEffect(() => {
+    // a page leaves through the app's own Escape (one level up)
+    if (page) return;
     const h = e => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", h, true); return () => window.removeEventListener("keydown", h, true);
   }, []);
+  const fieldsOf = items => items.map(f => f.type === "note"
+    ? <Field key={f.k || f.label} f={f} />
+    : <Field key={f.k} f={f} val={vals[f.k]} vals={vals} setVal={v => setVals(s => Object.assign({}, s, {[f.k]: v}))}
+        setAll={patch => setVals(s => Object.assign({}, s, patch))} reprepare={reprepare} />);
+  if (page) {
+    const secs = groups.filter(g => g.sec);
+    const secId = k => `fp-${k}`;
+    const go = k => { const el = document.getElementById(secId(k)); if (el && scrollRef.current) { scrollRef.current.scrollTo({top: el.offsetTop - 12, behavior: "smooth"}); setActive(k); } };
+    // the section list follows the scroll: the last section whose top has passed
+    const onScroll = () => {
+      const box = scrollRef.current; if (!box) return;
+      const top = box.scrollTop + 40;
+      const cur = secs.filter(g => { const el = document.getElementById(secId(g.sec.k)); return el && el.offsetTop <= top; }).pop();
+      const end = box.scrollTop + box.clientHeight >= box.scrollHeight - 4;
+      setActive(end && secs.length ? secs[secs.length - 1].sec.k : cur ? cur.sec.k : null);
+    };
+    const on = active || (secs[0] && secs[0].sec.k);
+    return (
+      <div className="scroll fpscroll" ref={scrollRef} onScroll={onScroll}>
+        <div className="dhead"><div style={{minWidth: 0, flex: 1}}>
+          <h1>{spec.title}</h1>
+          {spec.desc && <div className="dsub">{spec.desc}</div>}
+        </div></div>
+        {result !== undefined ? spec.result(result, onClose) : <>
+          <div className="fpgrid">
+            {secs.length > 0 && <nav className="fpnav" aria-label="Sections">
+              {secs.map(g => {
+                const needs = g.items.some(f => f.type !== "note" && bad(f));
+                const fieldsIn = g.items.some(f => f.type !== "note");
+                return <button type="button" key={g.sec.k} className={on === g.sec.k ? "on" : ""} onClick={() => go(g.sec.k)}>
+                  <span>{g.sec.label}</span>
+                  {prep && fieldsIn && <span className={"fhmark" + (needs ? " needs" : "")}>{needs ? "needs input" : <Icon n="check" s={12} />}</span>}
+                </button>;
+              })}
+            </nav>}
+            <div className="fpmain">
+              {!prep && <div className="fskel"></div>}
+              {groups.map((g, gi) => (
+                <section key={g.sec ? g.sec.k : "_" + gi} id={g.sec ? secId(g.sec.k) : undefined} className="fpsec">
+                  {g.sec && <h2>{g.sec.label}</h2>}
+                  {g.sec && g.sec.hint && <p className="fpsechint">{g.sec.hint}</p>}
+                  {fieldsOf(g.items)}
+                </section>))}
+              {err && <div className="banner" style={{marginTop: 10, marginBottom: 0}}><Icon n="alert" s={14} />{err}</div>}
+            </div>
+          </div>
+          <div className="fpfoot">
+            <button className="btn" onClick={onClose}>Cancel</button>
+            <button className={"btn primary" + (spec.danger ? " danger" : "")} disabled={invalid || busy} onClick={submit}>
+              {busy ? "Working…" : (spec.confirm || "Confirm")}
+            </button>
+          </div>
+        </>}
+      </div>
+    );
+  }
   return (
     <div className="ovl" onClick={onClose}>
       <div className={"modal" + (wide ? " wide" : "")} onClick={e => e.stopPropagation()}>
@@ -1842,10 +1935,24 @@ function Dialog({spec, obj, removes, onClose}) {
         <div className="mbody">
           {spec.desc && <p className="mdesc">{spec.desc}</p>}
           {!prep && <div className="fskel"></div>}
-          {allFields.map(f => f.type === "note"
-            ? <Field key={f.k || f.label} f={f} />
-            : <Field key={f.k} f={f} val={vals[f.k]} vals={vals} setVal={v => setVals(s => Object.assign({}, s, {[f.k]: v}))}
-                setAll={patch => setVals(s => Object.assign({}, s, patch))} reprepare={reprepare} />)}
+          {groups.map((g, gi) => {
+            const items = fieldsOf(g.items);
+            if (!g.sec || !spec.collapsible || g.sec.open) return <React.Fragment key={g.sec ? g.sec.k : "_" + gi}>{g.sec && <Field f={g.sec} />}{items}</React.Fragment>;
+            const isOpen = shown === g.sec.k;
+            const next = (groups.slice(gi + 1).find(x => x.sec && !x.sec.open) || {}).sec;
+            const needs = g.items.some(f => f.type !== "note" && bad(f));
+            const summary = typeof g.sec.summary === "function" ? g.sec.summary(vals) : g.sec.summary;
+            return (
+              <div key={g.sec.k} className={"fcollapse" + (isOpen ? " open" : "")}>
+                <button type="button" className="fsection fhead" aria-expanded={isOpen} onClick={() => setOpenSec(isOpen ? null : g.sec.k)}>
+                  <Icon n={isOpen ? "chevd" : "chev"} s={12} />
+                  <span className="fhtext"><h4>{g.sec.label}</h4>{!isOpen && summary && <span>{summary}</span>}</span>
+                  <span className={"fhmark" + (needs ? " needs" : "")}>{needs ? "needs input" : <Icon n="check" s={12} />}</span>
+                </button>
+                <div style={isOpen ? undefined : {display: "none"}}>{items}
+                  {next && <button type="button" className="btn fnext" onClick={() => setOpenSec(next.k)}>Next: {next.label}</button>}</div>
+              </div>);
+          })}
           {err && <div className="banner" style={{marginTop: 10, marginBottom: 0}}><Icon n="alert" s={14} />{err}</div>}
         </div>
         <div className="mfoot">
@@ -1864,15 +1971,19 @@ function Dialog({spec, obj, removes, onClose}) {
 function UiLayer({routeKey}) {
   const [menu, setMenu] = useState(null);
   const [dialog, setDialog] = useState(null);
-  const menuRef = useRef(null), dialogRef = useRef(null);
-  menuRef.current = menu; dialogRef.current = dialog;
-  useEffect(() => { setMenu(null); setDialog(null); }, [routeKey]);
+  // a modal that is not a form (live progress after a dialog): a function
+  // rendering it, given its close
+  const [panel, setPanel] = useState(null);
+  const menuRef = useRef(null), dialogRef = useRef(null), panelRef = useRef(null);
+  menuRef.current = menu; dialogRef.current = dialog; panelRef.current = panel;
+  useEffect(() => { setMenu(null); setDialog(null); setPanel(null); }, [routeKey]);
   useEffect(() => {
     window.__ui = {
       menu: (rect, items, obj) => setMenu({rect, items, obj}),
       dialog: (spec, obj) => setDialog({spec, obj}),
-      isOpen: () => !!(menuRef.current || dialogRef.current),
-      close: () => { setMenu(null); setDialog(null); }
+      panel: render => setPanel(() => render),
+      isOpen: () => !!(menuRef.current || dialogRef.current || panelRef.current),
+      close: () => { setMenu(null); setDialog(null); setPanel(null); }
     };
   }, []);
   const runItem = async it => {
@@ -1897,6 +2008,7 @@ function UiLayer({routeKey}) {
         </div>
       </>}
       {dialog && <Dialog spec={dialog.spec} obj={dialog.obj} removes={dialog.removes} onClose={() => setDialog(null)} />}
+      {panel && panel(() => setPanel(null))}
     </>
   );
 }

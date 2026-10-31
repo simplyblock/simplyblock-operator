@@ -231,16 +231,67 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 .btn.primary.danger{background:var(--bad);border-color:var(--bad)}
 .btn[disabled]{opacity:.45;cursor:not-allowed}
 .field{display:block;margin-bottom:12px}
-.flabel{display:block;font-size:11px;color:var(--dim);margin-bottom:5px;letter-spacing:.02em}
-.flabel em{font-style:normal;color:var(--dim2)}
-.finput{width:100%;height:32px;padding:0 9px;border:1px solid var(--line2);border-radius:6px;background:var(--panel2);color:var(--text);font:inherit;font-size:12.5px;outline:none}
+.flabel{display:block;font-size:12px;font-weight:500;color:var(--text);margin-bottom:6px}
+.flabel em{font-style:normal;font-weight:400;color:var(--dim2)}
+.freq{color:var(--bad);font-weight:600}
+.fsection{margin:18px 0 10px;padding-top:12px;border-top:1px solid var(--line)}
+.fsection:first-child{margin-top:0;padding-top:0;border-top:0}
+.fsection h4{margin:0;font-size:13px;font-weight:600;color:var(--text)}
+.fsection span{display:block;font-size:11px;color:var(--dim);margin-top:2px}
+.fcollapse{border-top:1px solid var(--line)}
+.fcollapse:first-of-type{border-top:0}
+.fsection.fhead{display:flex;align-items:center;gap:8px;width:100%;text-align:left;margin:0;padding:12px 0;border-top:0;color:var(--dim);cursor:pointer}
+.fsection.fhead:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.fhead .fhtext{flex:1;min-width:0;margin:0;color:inherit;font-size:inherit}
+.fhead .fhtext span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fhead .fhmark{flex:none;margin:0;font-size:10.5px;color:var(--ok);display:inline-flex}
+.fhead .fhmark.needs{color:var(--warn)}
+.fcollapse.open{padding-bottom:12px}
+.fnext{margin-top:2px}
+/* a form as a page (Quick protect): section list beside the sections, buttons at the bottom of the window */
+.fpscroll{display:flex;flex-direction:column;padding-bottom:0}
+.fpgrid{display:grid;grid-template-columns:200px minmax(0,1fr);gap:20px;align-items:start;max-width:1180px;width:100%;flex:1}
+.fpnav{position:sticky;top:12px;display:flex;flex-direction:column;gap:2px}
+.fpnav button{display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;padding:8px 10px;border-radius:6px;font-size:12.5px;color:var(--dim)}
+.fpnav button:hover{background:var(--panel2);color:var(--text)}
+.fpnav button.on{background:var(--panel);color:var(--text);font-weight:500;box-shadow:inset 2px 0 0 var(--accent),var(--shadow)}
+.fpnav .fhmark{flex:none;font-size:11px;font-weight:400;color:var(--ok);display:inline-flex}.fpnav .fhmark.needs{color:var(--warn)}
+.fpmain{display:flex;flex-direction:column;gap:14px;min-width:0;padding-bottom:16px}
+.fpsec{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px 18px 6px;box-shadow:var(--shadow);scroll-margin-top:12px}
+.fpsec>h2{margin:0 0 14px;font-size:14px;font-weight:600}
+.fpsechint{margin:-8px 0 14px;font-size:11.5px;color:var(--dim)}
+.fpfoot{position:sticky;bottom:0;display:flex;justify-content:flex-end;gap:8px;margin:0 -16px;padding:11px 16px;background:var(--panel2);border-top:1px solid var(--line);z-index:5}
+.fpdone{max-width:640px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px 18px;box-shadow:var(--shadow);margin-bottom:24px}
+.fpdone>h2{margin:0 0 10px;font-size:15px;font-weight:600}
+.fpdonebtns{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+@media (max-width:800px){.fpgrid{grid-template-columns:1fr}.fpnav{position:static;flex-direction:row;overflow-x:auto}.fpnav button{white-space:nowrap}}
+.qpsteps{list-style:none;margin:0;padding:0}
+.qpsteps li{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--line)}
+.qpsteps li:last-child{border-bottom:0}
+.qpmark{width:18px;height:18px;flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--dim2)}
+.qpmark i{width:9px;height:9px;border-radius:50%;border:1.5px solid var(--line2)}
+.qpsteps li.done .qpmark{color:var(--ok)}
+.qpsteps li.cur .qpmark{color:var(--accent);animation:qpspin 1.2s linear infinite}
+@keyframes qpspin{to{transform:rotate(360deg)}}
+.qptext{display:flex;flex-direction:column;min-width:0;font-size:12.5px}
+.qptext b{font-weight:500}
+.qptext em{font-style:normal;color:var(--dim)}
+.qptext small{font-size:11.5px;color:var(--dim);margin-top:1px}
+.qpsteps li:not(.done):not(.cur) .qptext b{color:var(--dim)}
+/* An editable field is a white box; read-only values are plain text. Typed, chosen and default values look the same. */
+.finput{width:100%;height:34px;padding:0 10px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);color:var(--text);font:inherit;font-size:13px;font-weight:500;outline:none}
+.finput:hover:not(:disabled):not(:focus){border-color:var(--dim2)}
+.finput.bad{border-color:var(--bad)}
+.finput.unset{color:var(--dim);font-weight:400}
+.finput:disabled{background:var(--panel3);border-color:var(--line);color:var(--dim)}
 .finput:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
-/* a placeholder is an example, never a value: dimmer and italic so it is not mistaken for typed text */
-.finput::placeholder{color:var(--dim2);font-style:italic;opacity:.75}
-select.finput{font-family:'IBM Plex Mono',monospace;font-size:11.5px}
+/* forms carry no placeholders (examples go beneath the box); this covers any left */
+.finput::placeholder{color:var(--dim2);font-weight:400}
+.finput option{color:var(--text);font-weight:400}
 .fskel{height:32px;border-radius:6px;background:var(--panel3);animation:bl 1.2s ease-in-out infinite}
 .fempty{font-size:11.5px;color:var(--warn);border:1px dashed color-mix(in srgb,var(--warn) 45%,transparent);border-radius:6px;padding:8px 9px}
-.fhint{display:block;font-size:10.5px;margin-top:4px}
+.fhint{display:block;font-size:11.5px;margin-top:5px;color:var(--dim)}
+.fcolnote{margin-top:3px}.fcolnote b{font-weight:500;color:var(--text)}
 .fnote{display:flex;gap:7px;align-items:flex-start;font-size:11.5px;color:var(--dim);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:8px 9px;margin-bottom:12px}
 .toggle{width:38px;height:21px;border-radius:11px;background:var(--line2);position:relative;display:block;transition:background .15s}
 .toggle i{position:absolute;top:2px;left:2px;width:17px;height:17px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 3px #0003}
@@ -335,7 +386,7 @@ tr.on td{background:color-mix(in srgb,var(--info) 8%,transparent)}
 .fl{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--dim);min-width:0;justify-content:flex-end}
 .fl>.sel,.fl>.inp{margin-top:auto}
 .fc{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer;margin:4px 0 10px}
-.inp{height:30px;background:var(--panel);border:1px solid var(--line2);border-radius:6px;color:var(--text);font:inherit;font-size:12px;padding:0 8px;outline:none;width:100%;box-sizing:border-box}
+.inp{height:30px;background:var(--panel);border:1px solid var(--line2);border-radius:6px;color:var(--text);font:inherit;font-size:12.5px;font-weight:500;padding:0 8px;outline:none;width:100%;box-sizing:border-box}
 .inp:focus{border-color:var(--accent)}
 .btnrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .nset{border-bottom:1px solid var(--line);padding:10px 13px}
@@ -403,8 +454,8 @@ tr.on td{background:color-mix(in srgb,var(--info) 8%,transparent)}
 .zonechip{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-family:'IBM Plex Mono',monospace;color:var(--ro);border:1px solid color-mix(in srgb,var(--ro) 35%,transparent);background:color-mix(in srgb,var(--ro) 7%,transparent);border-radius:4px;padding:2px 6px}
 .schedbox{border:1px solid var(--line2);border-radius:6px;background:var(--panel2);padding:6px}
 .schedrow{display:flex;align-items:center;gap:7px;margin-bottom:5px}
-.schedrow .sl{font-size:10.5px;color:var(--dim2);white-space:nowrap}
-.finput.sm{height:27px;font-size:11.5px;padding:0 6px;width:auto;flex:1;min-width:60px}
+.schedrow .sl{font-size:11.5px;font-weight:500;color:var(--text);white-space:nowrap}
+.finput.sm{height:30px;font-size:12.5px;padding:0 8px;width:auto;flex:1;min-width:60px;color:var(--text);margin-top:0}.finput.sm.unset,.finput.sm:disabled{color:var(--dim)}
 .schedadd{display:flex;align-items:center;gap:6px;width:100%;padding:5px 7px;border-radius:5px;font-size:11.5px;color:var(--accent);border:1px dashed var(--accent-line)}
 .schedadd:hover{background:var(--accent-soft)}
 .lab.wide{display:flex;width:100%;margin-top:9px}
@@ -509,7 +560,7 @@ button.rbit{cursor:pointer}button.rbit:hover{border-color:var(--accent)}.rbit.on
 .schedrow.rgrid>.finput,.schedrow.rgrid>select.finput,.schedrow.rgrid>input.finput{width:100%;min-width:0;flex:none}
 .schedrow.rgrid.head{align-items:end;margin-bottom:4px}
 .schedrow.rgrid.head .sl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25}
-.rocell{display:block;font-size:11.5px;line-height:1.35;padding:4px 2px;color:var(--text);overflow-wrap:anywhere}
+.rocell{display:block;font-size:12.5px;line-height:1.35;padding:4px 2px;color:var(--text);overflow-wrap:anywhere}
 .rmulti{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
 .rmulti>.radd{flex:none;width:auto;max-width:130px;height:22px;padding:0 4px;font-size:10.5px;border-style:dashed;color:var(--dim)}
 .rmulti .chip{padding:1px 4px 1px 6px}
