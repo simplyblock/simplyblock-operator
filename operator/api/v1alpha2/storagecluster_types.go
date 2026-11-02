@@ -169,6 +169,69 @@ type KMSSpec struct {
 	Vault *VaultKMS `json:"vault,omitempty"`
 }
 
+// BackupCredentialsSource selects how a backup store's credentials are
+// obtained: a Secret holding a static access key and secret key, or the AWS
+// SDK's default credential provider chain, which on Amazon EKS resolves
+// through a service account's IAM role.
+// +kubebuilder:validation:Enum=Secret;ProviderChain
+type BackupCredentialsSource string
+
+const (
+	// BackupCredentialsSourceSecret reads a static access key and secret key
+	// from the Secret SecretRef names.
+	BackupCredentialsSourceSecret BackupCredentialsSource = "Secret"
+
+	// BackupCredentialsSourceProviderChain names no Secret at all and
+	// authenticates through the AWS SDK's default credential provider chain
+	// instead: an EC2 instance profile, environment variables, or a
+	// Kubernetes service account's IAM role (IRSA on Amazon EKS, OIDC
+	// federation elsewhere).
+	BackupCredentialsSourceProviderChain BackupCredentialsSource = "ProviderChain"
+)
+
+// BackupCredentials is how a backup store's endpoint is authenticated to.
+// Source selects the method, and SecretRef is required for Secret and
+// rejected for ProviderChain.
+// +kubebuilder:validation:XValidation:rule="self.source != 'Secret' || has(self.secretRef)",message="source: Secret requires secretRef"
+// +kubebuilder:validation:XValidation:rule="self.source != 'ProviderChain' || !has(self.secretRef)",message="source: ProviderChain forbids secretRef"
+type BackupCredentials struct {
+	// Source selects how credentials are obtained. Secret, the default, reads
+	// a static access key and secret key from SecretRef. ProviderChain names
+	// no Secret and authenticates through the AWS SDK's default credential
+	// provider chain instead, which is how a cluster reaches its bucket with
+	// no access key stored anywhere in Kubernetes.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:default=Secret
+	Source BackupCredentialsSource `json:"source"`
+
+	// SecretRef names the Secret holding access_key_id and secret_access_key.
+	// Required when source is Secret, and rejected when source is
+	// ProviderChain.
+	// +optional
+	SecretRef *corev1.LocalObjectReference `json:"secretRef,omitempty"`
+}
+
+// EffectiveCredentials resolves how a BackupStoreSpec's backups authenticate,
+// accepting the deprecated CredentialsSecretRef beside the Credentials block
+// it is replaced by. The second return is false only for a spec that set
+// neither, which the XValidation rules on BackupStoreSpec refuse at admission:
+// a cached or hand-built object carries no such guarantee.
+func (b *BackupStoreSpec) EffectiveCredentials() (BackupCredentials, bool) {
+	if b == nil {
+		return BackupCredentials{}, false
+	}
+	if b.Credentials != nil {
+		return *b.Credentials, true
+	}
+	if b.CredentialsSecretRef != nil && b.CredentialsSecretRef.Name != "" {
+		return BackupCredentials{
+			Source:    BackupCredentialsSourceSecret,
+			SecretRef: b.CredentialsSecretRef,
+		}, true
+	}
+	return BackupCredentials{}, false
+}
+
 // BackupStoreSpec is the S3 location a cluster's backups live in, and the
 // credentials to reach it. It is a location and nothing else: how backups are
 // taken and what they contain are the control plane's, and this block only says
@@ -179,6 +242,8 @@ type KMSSpec struct {
 // given one later, and what changes when it changes is which backups have
 // objects, since the object set is derived from the location rather than
 // accumulated.
+// +kubebuilder:validation:XValidation:rule="has(self.credentialsSecretRef) || has(self.credentials)",message="one of credentials and the deprecated credentialsSecretRef must be set"
+// +kubebuilder:validation:XValidation:rule="!(has(self.credentialsSecretRef) && has(self.credentials))",message="credentials and the deprecated credentialsSecretRef are exclusive"
 type BackupStoreSpec struct {
 	// Endpoint is the S3 endpoint, for example, https://s3.example.com.
 	// +kubebuilder:validation:Pattern=`^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$`
@@ -194,10 +259,20 @@ type BackupStoreSpec struct {
 	Region string `json:"region,omitempty"`
 
 	// CredentialsSecretRef names the Secret holding the access key and the
-	// secret key. It is a reference rather than the values, because a spec is
-	// readable by anybody who can read the object.
-	// +kubebuilder:validation:Required
-	CredentialsSecretRef corev1.LocalObjectReference `json:"credentialsSecretRef"`
+	// secret key.
+	//
+	// Deprecated: set Credentials instead, with source: Secret and this same
+	// name under secretRef. This field cannot express ProviderChain, so a
+	// store that authenticates without a static key has to use Credentials.
+	// Set exactly one of the two.
+	// +optional
+	CredentialsSecretRef *corev1.LocalObjectReference `json:"credentialsSecretRef,omitempty"`
+
+	// Credentials is how this store's endpoint is authenticated to. Replaces
+	// CredentialsSecretRef, which could only ever name a Secret. Set exactly
+	// one of the two.
+	// +optional
+	Credentials *BackupCredentials `json:"credentials,omitempty"`
 }
 
 // StorageClusterDeviceClass is the class of backend storage a cluster is built

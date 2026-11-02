@@ -105,6 +105,9 @@ spec:
       adminTokenSecretRef:
         name: {{ .Values.controlplane.local.adminTokenSecretRef | quote }}
       {{- end }}
+      {{- if .Values.controlplane.local.eksRoleARN }}
+      eksRoleARN: {{ .Values.controlplane.local.eksRoleARN | quote }}
+      {{- end }}
 {{- else }}
     # A control plane elsewhere manages this cluster's storage. The operator
     # installs nothing here: it resolves the endpoint, probes it, and reports.

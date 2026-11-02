@@ -504,8 +504,16 @@ func buildStorageNodeSetTLSVolume(tlsProvider, secretName string) corev1.Volume 
 	}
 }
 
-func BuildStorageNodeSetServiceAccount(namespace string) *corev1.ServiceAccount {
-	return &corev1.ServiceAccount{
+// EKSRoleARNAnnotation is the key Amazon EKS's pod-identity webhook reads on a
+// ServiceAccount, injecting AWS_ROLE_ARN, AWS_WEB_IDENTITY_TOKEN_FILE, and the
+// projected token volume into every pod that runs as the account it is on.
+const EKSRoleARNAnnotation = "eks.amazonaws.com/role-arn"
+
+// BuildStorageNodeSetServiceAccount is the account the storage-node pods run
+// as. eksRoleARN, when set, is the IAM role they assume on Amazon EKS; empty
+// leaves the account with no such annotation.
+func BuildStorageNodeSetServiceAccount(namespace, eksRoleARN string) *corev1.ServiceAccount {
+	sa := &corev1.ServiceAccount{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "ServiceAccount",
 			APIVersion: "v1",
@@ -515,6 +523,10 @@ func BuildStorageNodeSetServiceAccount(namespace string) *corev1.ServiceAccount 
 			Namespace: namespace,
 		},
 	}
+	if eksRoleARN != "" {
+		sa.Annotations = map[string]string{EKSRoleARNAnnotation: eksRoleARN}
+	}
+	return sa
 }
 
 func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {

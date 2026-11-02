@@ -270,7 +270,7 @@ func TestResolveCrossClusterCredentialsResolvesSourceClusterSecret(t *testing.T)
 
 	sourceCluster := testCluster("source-cluster", "source-uuid")
 	sourceCluster.Spec.Backup = &simplyblockv1alpha2.BackupStoreSpec{
-		CredentialsSecretRef: corev1.LocalObjectReference{Name: "source-backup-creds"},
+		CredentialsSecretRef: &corev1.LocalObjectReference{Name: "source-backup-creds"},
 	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "source-backup-creds", Namespace: "default"},

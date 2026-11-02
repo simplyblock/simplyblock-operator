@@ -622,6 +622,17 @@ controlplane:
     # `controlplane.managed.credentialsSecretRef`. Empty grants no additional credential.
     adminTokenSecretRef: ""
 
+    # The IAM role this control plane's pods and every StorageCluster's
+    # storage-node pods in this namespace assume, through a ServiceAccount
+    # annotated with it (eks.amazonaws.com/role-arn). It is what lets a
+    # StorageCluster's spec.backup.credentials name ProviderChain on Amazon
+    # EKS, with no access key stored anywhere in Kubernetes. Empty leaves the
+    # accounts this chart creates without the annotation, which is correct
+    # off EKS.
+    # -- IAM role ARN to annotate this release's ServiceAccounts with (`eks.amazonaws.com/role-arn`), for
+    # S3 backup credentials through Amazon EKS's pod-identity webhook. Empty adds no annotation.
+    eksRoleARN: ""
+
   # Where the control plane is, for deployment.profile: managed.
   managed:
     # Base URL of the management API. Required for that profile. A loopback or

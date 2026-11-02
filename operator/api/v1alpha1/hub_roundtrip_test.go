@@ -392,7 +392,7 @@ func TestStorageClusterRoundTripsFromTheHub(t *testing.T) {
 				Endpoint:             "https://s3.example.com",
 				Bucket:               "simplyblock-backups",
 				Region:               "eu-central-1",
-				CredentialsSecretRef: corev1.LocalObjectReference{Name: "backup-credentials"},
+				CredentialsSecretRef: &corev1.LocalObjectReference{Name: "backup-credentials"},
 			},
 			DisableDataRealignment:    ptr.To(true),
 			EnableVolumeAutoPlacement: ptr.To(true),

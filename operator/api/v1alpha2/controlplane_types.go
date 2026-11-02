@@ -289,6 +289,21 @@ type LocalControlPlane struct {
 	// +kubebuilder:default={}
 	// +optional
 	Prerequisites ControlPlanePrerequisites `json:"prerequisites,omitempty"`
+
+	// EKSRoleARN is the IAM role this control plane's pods and every
+	// StorageCluster's storage-node pods in this namespace assume, through a
+	// service account annotated with it (eks.amazonaws.com/role-arn). Amazon
+	// EKS's pod-identity webhook reads that annotation and injects the
+	// credentials the AWS SDK's default provider chain picks up from there,
+	// which is what lets a StorageCluster's backup.credentials name
+	// ProviderChain on EKS.
+	//
+	// Left unset, the service accounts this operator creates carry no such
+	// annotation, which is correct off Amazon EKS and on an EKS cluster whose
+	// pods authenticate another way.
+	// +kubebuilder:validation:Pattern=`^arn:aws[a-zA-Z0-9-]*:iam::[0-9]{12}:role/.+$`
+	// +optional
+	EKSRoleARN string `json:"eksRoleARN,omitempty"`
 }
 
 // ControlPlanePrerequisites lists the add-ons a control plane needs before

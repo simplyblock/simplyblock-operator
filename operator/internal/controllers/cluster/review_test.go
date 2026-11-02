@@ -189,7 +189,7 @@ func TestABackupStoreWithNoBucketIsRefused(t *testing.T) {
 	cluster := newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
 		c.Spec.Backup = &simplyblockv1alpha2.BackupStoreSpec{
 			Endpoint:             "https://203.0.113.20:9000",
-			CredentialsSecretRef: corev1.LocalObjectReference{Name: "backup-credentials"},
+			CredentialsSecretRef: &corev1.LocalObjectReference{Name: "backup-credentials"},
 		}
 	})
 	r := newClusterReconciler(t, &fakeControlPlane{}, &recorder{}, cluster, secret)
