@@ -19886,6 +19886,8 @@ spec:
           value: quay.io/simplyblock-io/simplyblock-operator:0.1.0
         - name: SB_NODEPROBE_IMAGE
           value: quay.io/simplyblock-io/simplyblock-operator:0.1.0
+        - name: SB_NUMA_PLUGIN_IMAGE
+          value: quay.io/simplyblock-io/numa-resource-plugin@sha256:c45c5dfc2156422d5ad7ca0727ae67116bb9e4d67a9d44f41f7099c04c5c9a66
         - name: SB_NODEPROBE_SERVICE_ACCOUNT
           value: simplyblock-operator-nodeprobe
         - name: POD_NAMESPACE
