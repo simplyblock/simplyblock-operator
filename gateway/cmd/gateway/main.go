@@ -97,17 +97,7 @@ func kubeClient() (client.Client, error) {
 // serving certificate is re-read whenever its files change
 // (internal/certwatch), so a rotated certificate is served without a restart.
 func run(ctx context.Context, cfg config.Config, cli client.Client) error {
-	be, err := posix.New(cfg.RootDir, meta.XattrMeta{}, posix.PosixOpts{
-		BucketLinks: cfg.BucketLinks,
-		Fsync:       cfg.Fsync,
-		// Every bucket this gateway serves is an S3Bucket's own volume,
-		// symlinked in rather than created through CreateBucket
-		// (design-bucket-provisioning.md §5), so nothing validates a
-		// bucket's name against S3's naming rules at creation time the way
-		// a CreateBucket call would. This is what posix.PosixOpts's own doc
-		// comment calls out that case for.
-		ValidateBucketNames: true,
-	})
+	be, err := posix.New(cfg.RootDir, meta.XattrMeta{}, posixOpts(cfg))
 	if err != nil {
 		return fmt.Errorf("starting the posix backend at %s: %w", cfg.RootDir, err)
 	}
@@ -130,6 +120,34 @@ func run(ctx context.Context, cfg config.Config, cli client.Client) error {
 		return fmt.Errorf("running the gateway: %w", err)
 	}
 	return nil
+}
+
+// posixOpts is the posix backend's configuration cfg describes, split out of
+// run for the same reason gatewayConfig is: a test can check what reaches the
+// backend without opening one over a real directory.
+func posixOpts(cfg config.Config) posix.PosixOpts {
+	return posix.PosixOpts{
+		BucketLinks: cfg.BucketLinks,
+		Fsync:       cfg.Fsync,
+		// Every bucket this gateway serves is an S3Bucket's own volume,
+		// symlinked in rather than created through CreateBucket
+		// (design-bucket-provisioning.md §5), so nothing validates a
+		// bucket's name against S3's naming rules at creation time the way
+		// a CreateBucket call would. This is what posix.PosixOpts's own doc
+		// comment calls out that case for.
+		ValidateBucketNames: true,
+		// Those volumes are pNFS — S3BucketSpec.StorageClassName must select
+		// the pnfs fstype or the bucket never leaves Pending — and
+		// reassembling a multipart upload with copy_file_range over an
+		// NFSv4.2 mount turns into a server-side async COPY whose completion
+		// never gets reported, leaving CompleteMultipartUpload stuck in an
+		// uninterruptible kernel wait that outlives the request's own
+		// context. Deliberately not a config knob, unlike BucketLinks and
+		// Fsync: those degrade observably when turned off, whereas the
+		// copy_file_range path has no recovery short of killing the pod, and
+		// the buffered copy it falls back to is correct on every filesystem.
+		ForceNoCopyFileRange: true,
+	}
 }
 
 // gatewayConfig is the embedgw.Config cfg describes, split out of run so a

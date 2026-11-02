@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscreds "github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -250,4 +251,100 @@ func TestRunRecognizesABucketlinksSymlink(t *testing.T) {
 	if !found {
 		t.Errorf("ListBuckets did not include %q, the symlinked bucket; BucketLinks is not taking effect", bucketName)
 	}
+}
+
+// TestRunCompletesAMultipartUpload covers the multipart path end to end, which
+// nothing else here did: parts uploaded separately and reassembled into one
+// object on CompleteMultipartUpload.
+//
+// Not a regression test for the pNFS multipart hang, and deliberately carries
+// no Regression marker: it passes with or without posixOpts's
+// ForceNoCopyFileRange, because a local temp directory serves copy_file_range
+// correctly and only an NFSv4.2 mount hangs on it. What it does pin is that
+// the buffered reassembly that opt-out selects joins the parts in order, byte
+// for byte — the behavior that would otherwise be taken on trust.
+func TestRunCompletesAMultipartUpload(t *testing.T) {
+	client, kube, rootDir := startGateway(t)
+	ctx := context.Background()
+
+	const bucket = "multipart-bucket"
+	const key = "joined.bin"
+	deliverWhenCreated(t, kube, rootDir, bucket)
+	if _, err := client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+
+	// Every part but the last must reach versitygw's 5 MiB minimum
+	// (backend.MinPartSize), so the first part is a real one and the second
+	// is the short tail that proves the join respects part order rather than
+	// just concatenating equal-sized blocks.
+	parts := [][]byte{patternBytes(5<<20, 0), patternBytes(1024, 5<<20)}
+
+	created, err := client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("CreateMultipartUpload: %v", err)
+	}
+
+	completed := make([]types.CompletedPart, 0, len(parts))
+	for i, part := range parts {
+		number := int32(i + 1) //nolint:gosec // bounded by len(parts)
+		uploaded, err := client.UploadPart(ctx, &s3.UploadPartInput{
+			Bucket:     aws.String(bucket),
+			Key:        aws.String(key),
+			UploadId:   created.UploadId,
+			PartNumber: aws.Int32(number),
+			Body:       bytes.NewReader(part),
+		})
+		if err != nil {
+			t.Fatalf("UploadPart %d: %v", number, err)
+		}
+		completed = append(completed, types.CompletedPart{
+			ETag:       uploaded.ETag,
+			PartNumber: aws.Int32(number),
+		})
+	}
+
+	if _, err := client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket:          aws.String(bucket),
+		Key:             aws.String(key),
+		UploadId:        created.UploadId,
+		MultipartUpload: &types.CompletedMultipartUpload{Parts: completed},
+	}); err != nil {
+		t.Fatalf("CompleteMultipartUpload: %v", err)
+	}
+
+	got, err := client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	defer func() { _ = got.Body.Close() }()
+	gotBytes, err := io.ReadAll(got.Body)
+	if err != nil {
+		t.Fatalf("reading the joined object: %v", err)
+	}
+
+	want := bytes.Join(parts, nil)
+	if len(gotBytes) != len(want) {
+		t.Fatalf("joined object is %d bytes, want %d", len(gotBytes), len(want))
+	}
+	if !bytes.Equal(gotBytes, want) {
+		t.Error("joined object does not match the parts it was assembled from")
+	}
+}
+
+// patternBytes is n bytes whose value varies with their absolute offset, so a
+// join that drops, repeats, or reorders a stretch does not happen to compare
+// equal the way a run of zeroes would.
+func patternBytes(n int, offset int) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = byte((offset + i) * 31 % 251)
+	}
+	return b
 }

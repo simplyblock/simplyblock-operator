@@ -52,7 +52,7 @@ File: `internal/controllers/objectstore/objectstore_build_unit_test.go`
 
 | #    | Function              | Scenario                                                                                                 | Type     | Test                                                          |
 |------|-----------------------|----------------------------------------------------------------------------------------------------------|----------|---------------------------------------------------------------|
-| U-09 | `buildDeployment`     | Pod template carries label `storage.simplyblock.io/objectstore=<name>`                                  | Positive | `TestBuildDeploymentCarriesTheGatewayInstanceLabel`           |
+| U-09 | `buildDeployment`     | Pod template carries label `storage.simplyblock.io/objectstore=<name>`                                   | Positive | `TestBuildDeploymentCarriesTheGatewayInstanceLabel`           |
 | U-10 | `buildDeployment`     | `spec.envFrom` copied onto the gateway container's `envFrom` unmodified                                  | Positive | `TestBuildDeploymentCopiesEnvFromUnmodified`                  |
 | U-11 | `buildDeployment`     | `spec.replicas` unset → Deployment requests 1 replica (default)                                          | Boundary | `TestBuildDeploymentDefaultsReplicasToOne`                    |
 | U-12 | `buildService`        | `ClusterIP`, single port `spec.port`, selector matches the Deployment's pod label                        | Positive | `TestBuildServiceIsClusterIPOnSpecPortSelectingTheDeployment` |
@@ -63,6 +63,18 @@ File: `internal/controllers/objectstore/objectstore_build_unit_test.go`
 ~~U-16 `spec.image` validation~~ **Dropped.** `spec.image` is a
 `crdtypes.ImageReference`, which accepts any registry. No ObjectStore-specific
 registry rule is left to test.
+
+### Gateway Backend Configuration (gateway repository)
+
+The gateway binary rather than this operator, listed here because the
+`ObjectStore` is what deploys it and this is where its coverage is audited.
+File: `gateway/cmd/gateway/posix_opts_test.go`, `gateway/cmd/gateway/main_test.go`.
+
+| #    | Scenario                                                                                                                                              | Type       | Test                                         |
+|------|-------------------------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------|
+| U-17 | `posixOpts` sets `ForceNoCopyFileRange`, keeping `CompleteMultipartUpload` off the `copy_file_range` path that hangs on an NFSv4.2 mount (2026-11-02) | Regression | `TestPosixOptsCarriesTheBucketShapeSettings` |
+| U-18 | `posixOpts` carries `BucketLinks` and `Fsync` through from `config.Config`, and always sets `ValidateBucketNames`                                     | Positive   | `TestPosixOptsCarriesTheBucketShapeSettings` |
+| U-19 | A two-part multipart upload reassembles into one object, parts joined in order, byte for byte                                                         | Positive   | `TestRunCompletesAMultipartUpload`           |
 
 ---
 
@@ -102,11 +114,12 @@ actually serves TLS with it.
 
 ### Certificate Issuance and Service Reachability (§5)
 
-| #    | Scenario                                                                                                                                                       | Type     | Test |
-|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| E-01 | `ObjectStore` created with `tlsProvider: cert-manager` → `Certificate` issued, Secret populated, gateway pod mounts it and serves TLS on `spec.port`           | Positive | —    |
-| E-02 | Same, with `tlsProvider: OpenShift` → the service-ca-operator populates the annotated Secret the same way                                                      | Positive | —    |
-| E-03 | A client inside the cluster reaches the `ObjectStore`'s `ClusterIP` Service on `spec.port` and completes a TLS handshake verified against the cluster's own CA | Positive | —    |
+| #    | Scenario                                                                                                                                                                          | Type       | Test |
+|------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|------|
+| E-01 | `ObjectStore` created with `tlsProvider: cert-manager` → `Certificate` issued, Secret populated, gateway pod mounts it and serves TLS on `spec.port`                              | Positive   | —    |
+| E-02 | Same, with `tlsProvider: OpenShift` → the service-ca-operator populates the annotated Secret the same way                                                                         | Positive   | —    |
+| E-03 | A client inside the cluster reaches the `ObjectStore`'s `ClusterIP` Service on `spec.port` and completes a TLS handshake verified against the cluster's own CA                    | Positive   | —    |
+| E-04 | A multipart upload of two or more parts to a pNFS-backed bucket completes: `CompleteMultipartUpload` returns rather than hanging in the kernel's `handle_async_copy` (2026-11-02) | Regression | —    |
 
 ---
 
@@ -146,20 +159,21 @@ repository's concern entirely (`design-objectstore.md` Open Question 2).
 
 ## 6. Coverage Summary
 
-| Class       | Scenarios                      | Covered | Not covered |
-|-------------|--------------------------------|---------|-------------|
-| Unit        | 15 (U-16 dropped)              | 15      | —           |
-| Integration | 7                              | 5       | I-05, I-07  |
-| E2E         | 3                              | 0       | E-01 … E-03 |
+| Class       | Scenarios         | Covered | Not covered |
+|-------------|-------------------|---------|-------------|
+| Unit        | 18 (U-16 dropped) | 18      | —           |
+| Integration | 7                 | 5       | I-05, I-07  |
+| E2E         | 4                 | 0       | E-01 … E-04 |
 
 ---
 
 ## 7. What Is Not Yet Covered
 
-| #    | Gap                                                                          | Reason                                                                                                                                                                 |
-|------|------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| I-05 | Two concurrent reconciles converge to one set of owned objects               | Design §7.3's own "standard controller-runtime guarantee," the same reasoning design-bucket-provisioning.md's I-08 is not covered for                                  |
-| I-07 | `spec.envFrom` naming a missing `Secret` degrades, naming the reference      | Needs a real kubelet to produce `CreateContainerConfigError`; `envtest` runs none                                                                                      |
-| I-04 | Deleting a `Ready` `ObjectStore` actually garbage-collects its owned objects | `envtest` has no garbage-collector controller; only `TestObjectStoreDeletionIsNotBlockedByAFinalizer`'s narrower claim (no finalizer blocks the delete) is proven here |
-| —    | Graceful shutdown / in-flight request draining during a rolling update       | Open Question 2 in the design: not designed here, may be entirely the gateway binary's concern                                                                         |
-| —    | E-01 … E-03                                                                  | Need a live cluster with both TLS providers available, which this session has no access to                                                                             |
+| #    | Gap                                                                          | Reason                                                                                                                                                                             |
+|------|------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| I-05 | Two concurrent reconciles converge to one set of owned objects               | Design §7.3's own "standard controller-runtime guarantee," the same reasoning design-bucket-provisioning.md's I-08 is not covered for                                              |
+| I-07 | `spec.envFrom` naming a missing `Secret` degrades, naming the reference      | Needs a real kubelet to produce `CreateContainerConfigError`; `envtest` runs none                                                                                                  |
+| I-04 | Deleting a `Ready` `ObjectStore` actually garbage-collects its owned objects | `envtest` has no garbage-collector controller; only `TestObjectStoreDeletionIsNotBlockedByAFinalizer`'s narrower claim (no finalizer blocks the delete) is proven here             |
+| —    | Graceful shutdown / in-flight request draining during a rolling update       | Open Question 2 in the design: not designed here, may be entirely the gateway binary's concern                                                                                     |
+| —    | E-01 … E-03                                                                  | Need a live cluster with both TLS providers available, which this session has no access to                                                                                         |
+| E-04 | Multipart upload over a real pNFS mount completes                            | The hang needs a real NFSv4.2 mount. A local filesystem serves `copy_file_range` correctly, so no Go test can fail for the bug's reason. U-17 pins the nearest observable contract |
