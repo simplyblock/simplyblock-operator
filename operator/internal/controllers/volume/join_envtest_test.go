@@ -92,6 +92,8 @@ func newEnvJoinWorld(t *testing.T) *joinWorld {
 		joinVolume(memberPVName, memberVolumeID, "member"),
 		attachment(testPVName, joinHost),
 		attachment(memberPVName, memberHost),
+		envHostNode(joinHost),
+		envHostNode(memberHost),
 		envClusterObject(),
 		envNodeObject(),
 	} {
@@ -124,6 +126,13 @@ func envClusterObject() *simplyblockv1alpha2.StorageCluster {
 }
 
 // envNodeObject is the target node with the fields admission requires.
+// envHostNode is hostNode without a UID, which the API server assigns itself.
+func envHostNode(name string) *corev1.Node {
+	node := hostNode(name)
+	node.UID = ""
+	return node
+}
+
 func envNodeObject() *simplyblockv1alpha2.StorageNode {
 	node := testNodeObject()
 	vcpus := int32(8)

@@ -1,6 +1,6 @@
 # Design Document: Live Consistency-Group Subsystem Flip
 
-**Status:** Draft  
+**Status:** Partially Implemented  
 **Author:** Israel Geoffrey (geoffrey1330)  
 **Date:** 2026-11-02  
 **Test Plan:** [`tests/test-plan-cg-live-subsystem-flip.md`](../tests/test-plan-cg-live-subsystem-flip.md)
@@ -9,32 +9,40 @@
 
 ## Phasing Overview
 
-| Phase       | Status  | Scope                                                                                                                                                                                       | Sections       |
-|-------------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------|
-| **Phase 1** | Planned | Every CSI node stack shape, the LVM and VDO shapes included, staged behind the `dmLinear` indirection by default, plus the node swap service, its watchdog, and restart recovery            | §6             |
-| **Phase 2** | Planned | The `JoinConsistencyGroup` action on `PersistentVolumeOps`, created by the membership watcher, driving the migration, the join, the subsystem selection, and the coordinated namespace move | §4, §5, §7, §8 |
-| **Phase 3** | Planned | Make-before-break: the namespace is exported by the target subsystem before it leaves the source, so the suspend window shrinks to the table reload                                         | §6.7           |
+| Phase       | Status                          | Scope                                                                                                                                                                                       | Sections       |
+|-------------|---------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------|
+| **Phase 1** | Implemented, not live-validated | Every CSI node stack shape, the LVM and VDO shapes included, staged behind the `dmLinear` indirection by default, plus the node swap service, its watchdog, and restart recovery            | §6             |
+| **Phase 2** | Implemented, not live-validated | The `JoinConsistencyGroup` action on `PersistentVolumeOps`, created by the membership watcher, driving the migration, the join, the subsystem selection, and the coordinated namespace move | §4, §5, §7, §8 |
+| **Phase 3** | Blocked on SPDK                 | Make-before-break: the namespace is exported by the target, gated `inaccessible` by ANA, before it leaves the source, so the window shrinks to the ANA switch and the reload (P0-7)         | §6.7           |
 
 Phase 1 changes nothing a user sees: a volume staged after it carries one more
 device-mapper node under its consumer, and nothing re-points that node yet.
 Phase 2 depends on Phase 1 being deployed on every node that consumes a group
 member, and on the control-plane API in Phase 0. Phase 3 depends on P0-7 alone.
+Until it ships, the break-before-make window of §6 is the bound on the pause.
+
+Phases 1 and 2 are built in this repository and in sbcli, and are covered by
+unit tests, `envtest` suites, and sbcli's integration tier against FoundationDB.
+Neither has run against a live cluster, a real `dmsetup`, or a real NVMe-oF
+target, so every end-to-end and manual scenario in the test plan is open.
 
 ---
 
 ## Phase 0 — External Prerequisites
 
-| #    | Prerequisite                                                                                                                                                                                                                                                   | Kind                    | Blocks                        | Status                   |
-|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|-------------------------------|--------------------------|
-| P0-1 | A subsystem-move resource on the consistency group: create, prepare, move, commit, roll back, and read (§9)                                                                                                                                                    | Control plane (`sbcli`) | Phase 2                       | Not shipped              |
-| P0-2 | The join plan (`POST .../members/plan`) carries the colocation outcome: the target subsystem, whether it is new, the members that would move, and a capacity refusal (§5.5)                                                                                    | Control plane (`sbcli`) | Phase 2                       | Not shipped              |
-| P0-3 | An active subsystem move refuses a group snapshot, a group migration, a second move on the group, and any namespace-slot claim into its source or target subsystems. The target's slots are reserved inside the claim transaction                              | Control plane (`sbcli`) | Phase 2                       | Not shipped              |
-| P0-4 | The move call refuses to start removing namespaces once the operation's absolute suspend deadline has passed (§6.5)                                                                                                                                            | Control plane (`sbcli`) | Phase 2                       | Not shipped              |
-| P0-5 | A fresh subsystem is created on every node of the group's HA set, with listeners whose ANA state mirrors the group's current subsystem on that node. No single helper does this today. The work is spread over `add_lvol_on_node` and `publish_lvol_listeners` | Control plane (`sbcli`) | Phase 2, fresh-subsystem path | Not shipped              |
-| P0-6 | A namespace removed from one subsystem can be added to another subsystem on the same node with the same UUID and NGUID, at an nsid shared by every HA node. `move_namespace` implements it and is tested against fakes only                                    | Storage plane (SPDK)    | Phase 2                       | Unknown on a live target |
-| P0-7 | One bdev exported by two subsystems at once                                                                                                                                                                                                                    | Storage plane (SPDK)    | Phase 3                       | Unknown                  |
-| P0-8 | The host kernel rescans a controller on the namespace-attribute-changed event over NVMe/TCP, and `nvme ns-rescan` is available in the CSI node image as the fallback                                                                                           | Node OS                 | Phase 2                       | Expected, not measured   |
-| P0-9 | On a stretched cluster the move applies to the subsystem on both sites, the remote triplet included, with the closed site's listeners kept `inaccessible`                                                                                                      | Control plane (`sbcli`) | Phase 2 on stretched clusters | Not shipped              |
+| #     | Prerequisite                                                                                                                                                                                                                                                     | Kind                    | Blocks                              | Status                                                                                                                  |
+|-------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|-------------------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| P0-1  | A subsystem-move resource on the consistency group: create, prepare, move, commit, roll back, and read (§9)                                                                                                                                                      | Control plane (`sbcli`) | Phase 2                             | Implemented on the sbcli branch, not released                                                                           |
+| P0-2  | The join plan (`POST .../members/plan`) carries the colocation outcome: the target subsystem, whether it is new, the members that would move, and a capacity refusal (§5.5)                                                                                      | Control plane (`sbcli`) | Phase 2                             | Implemented on the sbcli branch, not released                                                                           |
+| P0-3  | An active subsystem move refuses a group snapshot, a group migration, a second move on the group, and any namespace-slot claim into its source or target subsystems. The target's slots are reserved inside the claim transaction                                | Control plane (`sbcli`) | Phase 2                             | Implemented on the sbcli branch, not released                                                                           |
+| P0-4  | The move call refuses to start removing namespaces once the operation's absolute suspend deadline has passed (§6.5)                                                                                                                                              | Control plane (`sbcli`) | Phase 2                             | Implemented on the sbcli branch, not released                                                                           |
+| P0-5  | A fresh subsystem is created on every node of the group's HA set, with listeners whose ANA state mirrors the group's current subsystem on that node. No single helper does this today. The work is spread over `add_lvol_on_node` and `publish_lvol_listeners`   | Control plane (`sbcli`) | Phase 2, fresh-subsystem path       | Partly implemented: the fresh subsystem exists on every HA node, and its listeners follow the publish rule (§5, Step 4) |
+| P0-6  | A namespace removed from one subsystem can be added to another subsystem on the same node with the same UUID and NGUID, at an nsid shared by every HA node. `move_namespace` implements it and is tested against fakes only                                      | Storage plane (SPDK)    | Phase 2                             | Unknown on a live target                                                                                                |
+| P0-7  | One bdev added as a namespace to a second subsystem while the first still exports it, through a shared-write claim (`SPDK_BDEV_CLAIM_READ_MANY_WRITE_SHARED`), with ANA keeping only one subsystem writable. Today, the namespace takes an exclusive-write claim | Storage plane (SPDK)    | Phase 3                             | Requested. The exclusive claim refuses it today (SPDK team, 2026-11-02)                                                 |
+| P0-8  | The host kernel rescans a controller on the namespace-attribute-changed event over NVMe/TCP, and `nvme ns-rescan` is available in the CSI node image as the fallback                                                                                             | Node OS                 | Phase 2                             | Expected, not measured                                                                                                  |
+| P0-9  | On a stretched cluster the move applies to the subsystem on both sites, the remote triplet included, with the closed site's listeners kept `inaccessible`                                                                                                        | Control plane (`sbcli`) | Phase 2 on stretched clusters       | Not shipped. The control plane refuses colocation on a stretched cluster                                                |
+| P0-10 | A storage node restarted while a move is active restores the move's namespaces where the move record says they are. Today, the restart rebuilds them from the volume records, which name the source until commit                                                 | Control plane (`sbcli`) | Phase 2, node restart inside a move | Not shipped                                                                                                             |
+| P0-11 | The control plane reports the host NQNs connected to a subsystem, so the operator can find a consuming host that is not a Kubernetes node (§8.2)                                                                                                                 | Control plane (`sbcli`) | Phase 2, hosts outside Kubernetes   | Not shipped                                                                                                             |
 
 Without P0-1 through P0-6 a join still works the way it does today: the volume
 migrates to the pinned node and joins, and its namespace stays in its own
@@ -187,7 +195,7 @@ Three things block a live flip today:
 - **Striped volumes.** A volume staged through the `members` layer spans several
   logical volumes. A group refuses it at join, as today.
 - **Hosts outside Kubernetes.** A volume whose subsystem has a connected host
-  with no CSI node peer on the link cannot be flipped, and the operation fails
+  with no CSI node peer on the link cannot be flipped. Once P0-11 ships, the operation fails
   before anything is suspended (§11).
 - **Retrofitting the indirection under a staged volume.** A volume staged
   without `dmLinear` gains it at its next stage, never under a live consumer
@@ -360,10 +368,12 @@ any other.
 
 When no candidate fits, the target is a new subsystem on `N`, created with
 capacity `MAX_NAMESPACES_PER_SUBSYSTEM` on every node of the group's HA set
-(P0-5). The moving set is `M ∪ {J}`. Its listeners mirror, per node, the ANA
-state the group's subsystem `g` holds on that node: `optimized` where the pinned
-node leads, `non_optimized` on the secondaries, and `inaccessible` on a closed
-site of a stretched cluster (P0-9).
+(P0-5). The moving set is `M ∪ {J}`. Its listeners follow the rule every new
+subsystem is published with: `optimized` on the group's primary node and
+`non_optimized` on the other nodes of the HA set. That matches the group's
+subsystem `g` whenever `g`'s leadership has not moved since it was published. A
+stretched cluster, whose closed site needs `inaccessible` listeners, is refused
+before this step (P0-9).
 
 ### Step 5 — The node's subsystem limit
 
@@ -487,7 +497,9 @@ source subsystem once the control plane put the namespace back there.
 The operator computes one absolute deadline before `Suspending`: now plus
 `suspendTimeoutSeconds`. It sends the deadline to every host in `Suspend` and to
 the control plane in the move call. The control plane refuses to begin removing
-namespaces once the deadline has passed (P0-4). The node's watchdog fires at the
+namespaces once the deadline has passed (P0-4). It checks the deadline once, before
+the first removal: a move that has started runs to the end, or restores every
+source and reports `namespaces_at: source`. The node's watchdog fires at the
 deadline plus a 5-second grace, which absorbs clock skew between the operator,
 the control plane, and the host.
 
@@ -513,12 +525,32 @@ rollback path, because that host may already have resumed on the source device.
 
 ### 6.7 Make-Before-Break (Phase 3)
 
-When P0-7 holds, the control plane adds the namespace to the target before
-removing it from the source. The host then sees both devices, and the window
-shrinks to the reload: `Prepare` waits for the target device, `Suspend` and
-`Resume` run back to back, and the source export is removed afterward. The step
-machine keeps its shape. `MovingNamespaces` splits into an add before
-`Suspending` and a remove after `Resuming`.
+SPDK allows one writer per bdev, and a namespace takes an exclusive-write claim
+on its bdev, so the same bdev cannot be added to a second subsystem today
+(P0-7). The writer limit holds without that exclusivity when ANA decides which
+subsystem accepts I/O, and Phase 3 rests on that:
+
+1. **Add, gated:** the control plane adds the namespace to the target under a
+   shared-write claim, with the target's ANA state `inaccessible`. The target
+   rejects every I/O, so the source stays the only writer.
+2. **Appear:** the host already holds the target's paths from `AttachingPaths`,
+   sees the target device, and `Prepare` waits for it.
+3. **Switch:** the host suspends, the control plane sets the source
+   `inaccessible` and the target `optimized`, and the host reloads and resumes.
+   The window is two ANA changes and a table reload, with no namespace removal
+   and no rescan inside it.
+4. **Remove:** the control plane removes the source namespace after `Resuming`.
+
+ANA state is set per listener, so it covers every namespace of a subsystem. A
+shared source subsystem holds volumes that are not moving, so the switch has to
+act on the moving namespaces alone, through their own ANA group (`anagrpid`).
+The step machine keeps its shape: `MovingNamespaces` becomes an add before
+`Suspending` and a remove after `Resuming`, and the switch runs inside the
+window.
+
+Until P0-7 ships, the move stays break-before-make. Its window is the control
+plane's remove-and-add time plus the host's rescan (§6.4), and
+`simplyblock_cg_subsystem_move_window_seconds` measures it.
 
 ---
 
@@ -584,24 +616,30 @@ on, the window is bounded by the deadline, and the operation finishes or rolls
 back by itself. A join that already happened stays: membership is one-way
 (`design-consistency-groups.md` §4.3).
 
-| Condition                                                                                 | Step                 | Result                                                                                                                                  |
-|-------------------------------------------------------------------------------------------|----------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
-| Group name resolves to nothing                                                            | `Planning`           | Held as `Pending` with `ConsistencyGroupPending`, requeued                                                                              |
-| Volume in another group, another pool, or a sibling in another group                      | `Planning`           | `Failed`, `ConsistencyGroupJoinRefused`                                                                                                 |
-| Preflight refuses for capacity                                                            | `Planning`           | `Failed`, `SubsystemLimitReached`. Nothing migrated                                                                                     |
-| Child migration fails or aborts                                                           | `Migrating`          | `Failed`, `ConsistencyGroupMigrationFailed`. The volume stays where the child left it                                                   |
-| Members endpoint returns 409                                                              | `Joining`            | `Failed`, `ConsistencyGroupJoinRefused`                                                                                                 |
-| Selection refused for capacity                                                            | `SelectingSubsystem` | `Failed`, `SubsystemLimitReached`. The volume is a member in its own subsystem                                                          |
-| Prepare returns 5xx or times out                                                          | `PreparingTarget`    | Retried with backoff. No host touched                                                                                                   |
-| A consuming host has no link peer, lacks `volume-swap`, or reports a volume not swappable | `AttachingPaths`     | `Failed` after `ReleasingPaths`, `SubsystemSwapUnavailable` naming the PVC to restart                                                   |
-| A host fails `Suspend`                                                                    | `Suspending`         | Rollback path. Nothing was moved                                                                                                        |
-| A host restarted or resumed before the move                                               | `MovingNamespaces`   | Rollback path                                                                                                                           |
-| The control plane refuses the move as past the deadline                                   | `MovingNamespaces`   | Rollback path                                                                                                                           |
-| The move fails partway and the control plane restored the source                          | `MovingNamespaces`   | Rollback path, `namespacesAt: Source`                                                                                                   |
-| A host cannot find the namespace before the deadline                                      | `Resuming`           | The reconciler rolls back the move and resumes on the source. The watchdog covers a reconciler that cannot                              |
-| Commit returns 5xx                                                                        | `Committing`         | Retried. The namespaces are already on the target and every host has resumed                                                            |
-| Operator restarts in any step                                                             | any                  | Resumes at the persisted step. Every call is repeated safely                                                                            |
-| Operation deleted while running                                                           | any                  | The finalizer runs the rollback path when `namespacesAt` is unknown or `Source`, the commit when it is `Target`, and releases the locks |
+The admission webhook refuses to delete the operation while its step is
+`Joining`, `Suspending`, `MovingNamespaces`, `Resuming`, or `ReleasingPaths`,
+the steps whose side effect cannot be abandoned halfway. A delete that reaches
+the finalizer anyway still runs the commit or the rollback below.
+
+| Condition                                                                                 | Step                 | Result                                                                                                                                                                                           |
+|-------------------------------------------------------------------------------------------|----------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Group name resolves to nothing                                                            | `Planning`           | Held as `Pending` with `ConsistencyGroupPending`, requeued                                                                                                                                       |
+| Volume in another group, another pool, or a sibling in another group                      | `Planning`           | `Failed`, `ConsistencyGroupJoinRefused`                                                                                                                                                          |
+| Preflight refuses for capacity                                                            | `Planning`           | `Failed`, `SubsystemLimitReached`. Nothing migrated                                                                                                                                              |
+| Child migration fails or aborts                                                           | `Migrating`          | `Failed`, `ConsistencyGroupMigrationFailed`. The volume stays where the child left it                                                                                                            |
+| Members endpoint returns 409                                                              | `Joining`            | `Failed`, `ConsistencyGroupJoinRefused`                                                                                                                                                          |
+| Selection refused for capacity                                                            | `SelectingSubsystem` | `Failed`, `SubsystemLimitReached`. The volume is a member in its own subsystem                                                                                                                   |
+| The control plane refuses colocation, as on a stretched cluster                           | `SelectingSubsystem` | `Succeeded`, `ConsistencyGroupColocationRefused`. The volume is a member in its own subsystem                                                                                                    |
+| Prepare returns 5xx or times out                                                          | `PreparingTarget`    | Retried with backoff. No host touched                                                                                                                                                            |
+| A consuming host has no link peer, lacks `volume-swap`, or reports a volume not swappable | `AttachingPaths`     | `Failed` after `ReleasingPaths`, `SubsystemSwapUnavailable` naming the PVC to restart                                                                                                            |
+| A host fails `Suspend`                                                                    | `Suspending`         | Rollback path. Nothing was moved                                                                                                                                                                 |
+| A host restarted or resumed before the move                                               | `MovingNamespaces`   | Rollback path                                                                                                                                                                                    |
+| The control plane refuses the move as past the deadline                                   | `MovingNamespaces`   | Rollback path                                                                                                                                                                                    |
+| The move fails partway and the control plane restored the source                          | `MovingNamespaces`   | Rollback path, `namespacesAt: Source`                                                                                                                                                            |
+| A host cannot find the namespace before the deadline                                      | `Resuming`           | The reconciler rolls back the move and resumes on the source. The watchdog covers a reconciler that cannot                                                                                       |
+| Commit returns 5xx                                                                        | `Committing`         | Retried. The namespaces are already on the target and every host has resumed                                                                                                                     |
+| Operator restarts in any step                                                             | any                  | Resumes at the persisted step. Every call is repeated safely                                                                                                                                     |
+| Operation deleted while running                                                           | any                  | Refused by admission in the five steps above. Otherwise, the finalizer runs the rollback path when `namespacesAt` is unknown or `Source`, the commit when it is `Target`, and releases the locks |
 
 ---
 
@@ -639,10 +677,18 @@ The action lives in `operator/internal/controllers/volume`, beside `Migrate` and
 `join.go`. It reaches CSI nodes through the csi-link hub's registry
 (`Registry.Conn(link.NodePeer(node))`), the way `operator/internal/csilink/flows.go`
 already calls each node's `FlowService`. The
-consuming hosts of a volume are the nodes of its `VolumeAttachment` objects,
-cross-checked against the host NQNs the control plane reports connected to the
-source subsystem. A connected host NQN with no matching node fails
-`AttachingPaths`.
+consuming hosts of a volume are the nodes of its `VolumeAttachment` objects.
+The design also cross-checks them against the host NQNs connected to the source
+subsystem, so that a host outside Kubernetes fails `AttachingPaths`. The control
+plane does not report those NQNs yet (P0-11), so the cross-check is not built,
+and such a host is not detected.
+
+The prepare call is made once per consuming host and names that host's NQN,
+because the control plane returns connect entries, a DHCHAP secret among them,
+only for a named host. The NQN is the kernel default the host's CSI node plugin
+publishes on its Node (`storage.simplyblock.io/nvme-host-nqn`), or the form
+derived from the Node's UID before the plugin has published one. A prepare that
+returns no path fails `AttachingPaths` before the host is asked to connect.
 
 Every external wait is a requeue with a named interval. No step blocks, and the
 suspend window is enforced by the deadline in status, not by a timer in memory.
@@ -652,8 +698,8 @@ suspend window is enforced by the deadline in status, not by a timer in memory.
 From `SelectingSubsystem` on, the operation holds the volume lock
 (`design-persistentvolumeops.md` §6) on every PV in every source subsystem of
 the moving set and in the target subsystem. Lock acquisition is all or nothing:
-a PV held by another operation leaves this one `Pending` with `deferredSince`
-set. During `Migrating` the parent holds no lock, and the child takes its own.
+a PV held by another operation leaves this one `Running` with `deferredSince`
+set and a `SubsystemSwapDeferred` event. During `Migrating` the parent holds no lock, and the child takes its own.
 
 The control plane enforces the same exclusion for actors outside Kubernetes
 (P0-3): a group snapshot, a group migration, a second move, and a slot claim into
@@ -719,7 +765,7 @@ host's capability instead of an assertion about all of them.
 | A host unreachable over the link during the window | gRPC error                            | Rollback. The unreachable host's watchdog resolves it by namespace UUID                                                                   |
 | The namespace never appears on the target          | `Resume` times out                    | Rollback to the source, and the operation fails with `SubsystemSwapRolledBack`                                                            |
 | The kernel refuses the reload                      | `Resume` error                        | The mapping stays suspended, the reconciler rolls back, and the reload onto the source device is retried                                  |
-| A connected host outside Kubernetes                | Host NQN without a node               | `Failed` at `AttachingPaths`, nothing suspended                                                                                           |
+| A connected host outside Kubernetes                | Not detected until P0-11              | The host is never suspended, and its I/O to a moving namespace fails during the window                                                    |
 | A member staged without `dmLinear` is attached     | `Describe` reports not swappable      | `Failed` at `AttachingPaths`, the event names the PVC whose pod needs a restart                                                           |
 | The pinned node at its subsystem limit             | Preflight or selection 409            | `Failed`, `SubsystemLimitReached`, before the migration when caught by the preflight                                                      |
 | CSI node restarts while suspended                  | Changed instance UID, or startup scan | The node resolves alone. The reconciler rolls back if it had not moved yet                                                                |
@@ -765,6 +811,8 @@ always the joining one.
 | `simplyblock_csi_node_swap_suspended`             | `node`                                                      | Gauge of mappings currently suspended                               |
 | `simplyblock_csi_node_swap_rescan_seconds`        | `node`                                                      | Histogram of the time from `Resume` to the namespace's appearance   |
 | `simplyblock_csi_node_swap_watchdog_total`        | `node`, `outcome` (`target`, `source`, `none`)              | Watchdog resolutions                                                |
+
+The three `simplyblock_csi_node_swap_*` metrics are registered on the CSI node's default registry. The CSI node serves no `/metrics` endpoint yet, so they are recorded and not scraped.
 
 The window histogram is the measure of the goal and the alert for its breach:
 anything past `suspendTimeoutSeconds` is an application stall nobody asked for.
@@ -819,13 +867,14 @@ Those rows are not cut.
 
 ## 15. Open Questions
 
-| #   | Question                                                                                                                                                                             | Owner             |
-|-----|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------|
-| 1   | **Dual export:** may SPDK export one bdev from two subsystems at once (P0-7)? It decides whether Phase 3 exists                                                                      | SPDK/Backend team |
-| 2   | **Rescan latency:** how long the kernel takes to surface a namespace added to a connected subsystem over NVMe/TCP. It sets the default timeout, and whether `Resume` rescans at once | Geoffrey          |
-| 3   | **Fresh subsystem size:** a fresh subsystem takes 50 slots. Smaller sizes save target memory but make a later full-group move more likely                                            | SPDK/Backend team |
-| 4   | **Multi-host consumers:** an RWX raw-block volume consumed by several hosts multiplies the hosts that must all suspend. Whether a cap on hosts per flip is needed                    | Geoffrey          |
-| 5   | **Stretched clusters:** whether P0-9 moves the subsystem on both sites inside one window, or the closed site follows at its next promotion                                           | SPDK/Backend team |
+| #   | Question                                                                                                                                                                                                                                                                                                                                            | Owner             |
+|-----|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------|
+| 1   | **Dual export:** whether SPDK can open a namespace's bdev with the shared-write claim, so a second subsystem can add it while ANA keeps the first the only writable one, and whether the ANA switch can act per namespace through ANA groups (P0-7, §6.7). The first answer (2026-11-02) was that the exclusive claim refuses a second export today | SPDK/Backend team |
+| 2   | **Rescan latency:** how long the kernel takes to surface a namespace added to a connected subsystem over NVMe/TCP. It sets the default timeout, and whether `Resume` rescans at once                                                                                                                                                                | Geoffrey          |
+| 3   | **Fresh subsystem size:** a fresh subsystem takes 50 slots. Smaller sizes save target memory but make a later full-group move more likely                                                                                                                                                                                                           | SPDK/Backend team |
+| 4   | **Multi-host consumers:** an RWX raw-block volume consumed by several hosts multiplies the hosts that must all suspend. Whether a cap on hosts per flip is needed                                                                                                                                                                                   | Geoffrey          |
+| 5   | **Stretched clusters:** whether P0-9 moves the subsystem on both sites inside one window, or the closed site follows at its next promotion                                                                                                                                                                                                          | SPDK/Backend team |
+| 6   | ~~**DHCHAP:** the prepare call names no host, so a subsystem gated by host authentication gets no per-host secret~~ **Resolved.** The operator prepares each consuming host with its own host NQN (§8.2)                                                                                                                                            | Resolved          |
 
 ---
 

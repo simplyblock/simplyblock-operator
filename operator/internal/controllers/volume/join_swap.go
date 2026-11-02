@@ -23,15 +23,19 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/lvol"
+	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/nvmeof"
 	"github.com/simplyblock/atlas/statemachine"
 	"github.com/simplyblock/atlas/volstack/swaprpc"
@@ -136,7 +140,6 @@ func (r *PersistentVolumeOpsReconciler) joinAttach(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
 ) (step, bool, error) {
 	join := joinOf(ops)
-	var target *lvol.Connection
 	for _, host := range join.Hosts {
 		if host.Prepared {
 			continue
@@ -161,14 +164,23 @@ func (r *PersistentVolumeOpsReconciler) joinAttach(
 					volumes.claimOfPV[state.Handle], host.Node)
 			}
 		}
-		if target == nil {
-			prepared, err := r.Join.PrepareSubsystemMove(ctx, subject.clusterUUID, join.GroupUUID, join.MoveID, "")
-			if err != nil {
-				return "", false, err
-			}
-			target = &prepared.Target
+		// The connect entries are a host's own (its DHCHAP secret among them),
+		// so the control plane answers them only for a named host, and each host
+		// is prepared with its own.
+		hostNQN, err := r.hostNQNOf(ctx, host.Node)
+		if err != nil {
+			return "", false, err
 		}
-		if _, err := node.Prepare(ctx, volumes.handles, join.TargetNQN, nvmeof.Targets(*target)); err != nil {
+		prepared, err := r.Join.PrepareSubsystemMove(ctx, subject.clusterUUID, join.GroupUUID, join.MoveID, hostNQN)
+		if err != nil {
+			return "", false, err
+		}
+		paths := nvmeof.Targets(prepared.Target)
+		if len(paths) == 0 {
+			return "", false, fmt.Errorf("the control plane returned no path to %s for host %s (%s)",
+				join.TargetNQN, host.Node, hostNQN)
+		}
+		if _, err := node.Prepare(ctx, volumes.handles, join.TargetNQN, paths); err != nil {
 			return "", false, fmt.Errorf("connect %s to the target: %w", host.Node, err)
 		}
 		if err := r.updateHost(ctx, ops, host.Node, func(h *simplyblockv1alpha2.SwapHost) {
@@ -179,6 +191,23 @@ func (r *PersistentVolumeOpsReconciler) joinAttach(
 		}
 	}
 	return stepSuspending, true, nil
+}
+
+// hostNQNOf is the NVMe host NQN a Kubernetes node connects with: the kernel
+// default its CSI node plugin publishes on the Node, or, before the plugin has
+// published one, the form derived from the Node's UID.
+func (r *PersistentVolumeOpsReconciler) hostNQNOf(ctx context.Context, nodeName string) (string, error) {
+	node := &corev1.Node{}
+	if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, node); err != nil {
+		return "", fmt.Errorf("read node %s for its host NQN: %w", nodeName, err)
+	}
+	if v := strings.TrimSpace(node.Annotations[kube.AnnoNVMeHostNQN]); strings.HasPrefix(v, "nqn.") {
+		return v, nil
+	}
+	if node.UID == "" {
+		return "", fmt.Errorf("node %s publishes no host NQN and has no UID to derive one from", nodeName)
+	}
+	return nqn.Host(string(node.UID)), nil
 }
 
 // joinSuspend holds every moving volume's I/O on every host.
@@ -362,12 +391,12 @@ func (r *PersistentVolumeOpsReconciler) resumeHost(
 		return err
 	}
 	sources := make([]string, 0, len(volumes.bySource))
-	for nqn := range volumes.bySource {
-		sources = append(sources, nqn)
+	for source := range volumes.bySource {
+		sources = append(sources, source)
 	}
 	sort.Strings(sources)
-	for _, nqn := range sources {
-		if _, err := node.Resume(ctx, volumes.bySource[nqn], nqn); err != nil {
+	for _, source := range sources {
+		if _, err := node.Resume(ctx, volumes.bySource[source], source); err != nil {
 			return err
 		}
 	}
@@ -397,14 +426,14 @@ func (r *PersistentVolumeOpsReconciler) joinRelease(
 			if err != nil {
 				return "", false, err
 			}
-			for nqn := range volumes.bySource {
-				nqns = append(nqns, nqn)
+			for source := range volumes.bySource {
+				nqns = append(nqns, source)
 			}
 			sort.Strings(nqns)
 		}
-		for _, nqn := range nqns {
-			if _, err := node.Release(ctx, nqn); err != nil {
-				return "", false, fmt.Errorf("release subsystem %s on %s: %w", nqn, host.Node, err)
+		for _, subsystem := range nqns {
+			if _, err := node.Release(ctx, subsystem); err != nil {
+				return "", false, fmt.Errorf("release subsystem %s on %s: %w", subsystem, host.Node, err)
 			}
 		}
 		if err := r.updateHost(ctx, ops, host.Node, func(h *simplyblockv1alpha2.SwapHost) { h.Released = true }); err != nil {

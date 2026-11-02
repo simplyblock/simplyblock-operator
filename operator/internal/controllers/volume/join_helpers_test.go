@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nvmeof"
 	"github.com/simplyblock/atlas/volstack/swaprpc"
@@ -99,6 +100,8 @@ type fakeJoinAPI struct {
 	requestIDs []string
 
 	prepareErr error
+	// prepareHosts is the host NQN each prepare named, in call order.
+	prepareHosts []string
 
 	// startErr is what the move call answers with. A nil one moves every
 	// namespace to the target.
@@ -145,12 +148,19 @@ func (f *fakeJoinAPI) GetSubsystemMove(context.Context, string, string, string) 
 	return f.move, nil
 }
 
+// PrepareSubsystemMove answers the way the control plane does: the target's
+// paths only for a named host, since the connect entries are a host's own, and
+// none for a call that names no host.
 func (f *fakeJoinAPI) PrepareSubsystemMove(
-	_ context.Context, _, _, _, _ string,
+	_ context.Context, _, _, _, hostNQN string,
 ) (controlplane.PreparedMove, error) {
 	f.log.add("prepare")
+	f.prepareHosts = append(f.prepareHosts, hostNQN)
 	if f.prepareErr != nil {
 		return controlplane.PreparedMove{}, f.prepareErr
+	}
+	if hostNQN == "" {
+		return controlplane.PreparedMove{Move: f.move, Target: lvol.Connection{NQN: f.move.TargetNQN}}, nil
 	}
 	return controlplane.PreparedMove{Move: f.move, Target: lvol.Connection{
 		NQN: f.move.TargetNQN,
@@ -321,6 +331,17 @@ func attachment(pv, node string) *storagev1.VolumeAttachment {
 	}
 }
 
+// hostNode is a consuming host's Node, carrying the host NQN its CSI node
+// plugin publishes.
+func hostNode(name string) *corev1.Node {
+	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+		Name: name, UID: types.UID("uid-" + name),
+		Annotations: map[string]string{kube.AnnoNVMeHostNQN: hostNQNOf(name)},
+	}}
+}
+
+func hostNQNOf(node string) string { return "nqn.2014-08.org.nvmexpress:uuid:" + node }
+
 // joinOps is a join of the test volume to the test group.
 func joinOps() *simplyblockv1alpha2.PersistentVolumeOps {
 	timeout := int32(10)
@@ -398,6 +419,8 @@ func newJoinWorld(t *testing.T, extra ...client.Object) *joinWorld {
 		joinVolume(memberPVName, memberVolumeID, "member"),
 		attachment(testPVName, joinHost),
 		attachment(memberPVName, memberHost),
+		hostNode(joinHost),
+		hostNode(memberHost),
 		testClusterObject(),
 		testNodeObject(),
 	)

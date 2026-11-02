@@ -206,15 +206,16 @@ Files: `operator/internal/controllers/volume/cel_validation_test.go`, and `opera
 
 Files: `operator/internal/webhook/persistentvolumeops_validator_test.go`, `csi-driver/internal/csi/controller/cg_join_operation_test.go`, `atlas-lib/volstack/swaprpc/swaprpc_test.go`, `atlas-lib/volstack/swaprpc/rescan_test.go`, `csi-driver/internal/csi/node/swap_test.go`
 
-| #     | Scenario                                                                                              | Type     | Test                                                         |
-|-------|-------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------------------|
-| U-105 | The webhook refuses a `groupName` that is not a valid label value                                     | Negative | `TestPersistentVolumeOpsJoinChecksTheGroupNameAsALabelValue` |
-| U-106 | `SPDKCSI_CG_JOIN_OPERATION` is on unless set to an off value                                          | Boundary | `TestTheJoinOperationIsOnUnlessTurnedOff`                    |
-| U-107 | A full describe, prepare, suspend, resume, and release cycle works through the gRPC client and server | Positive | `TestAFullSwapRoundTripsOverTheWire`                         |
-| U-108 | Not-swappable, deadline-passed, and namespace-not-found refusals keep their meaning across the wire   | Negative | `TestRefusalsKeepTheirMeaningAcrossTheWire`                  |
-| U-109 | A rescan asks every live controller of the subsystem                                                  | Positive | `TestRescanAsksEveryLiveControllerOfTheSubsystem`            |
-| U-110 | A rescan of a subsystem with no live controller fails                                                 | Negative | `TestRescanOfASubsystemWithNoLiveControllerFails`            |
-| U-111 | A swap warning is recorded on the swapped volume's claim                                              | Positive | `TestASwapWarningLandsOnTheVolumesClaim`                     |
+| #     | Scenario                                                                                                                                                                                                               | Type       | Test                                                           |
+|-------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------------|
+| U-105 | The webhook refuses a `groupName` that is not a valid label value                                                                                                                                                      | Negative   | `TestPersistentVolumeOpsJoinChecksTheGroupNameAsALabelValue`   |
+| U-106 | `SPDKCSI_CG_JOIN_OPERATION` is on unless set to an off value                                                                                                                                                           | Boundary   | `TestTheJoinOperationIsOnUnlessTurnedOff`                      |
+| U-107 | A full describe, prepare, suspend, resume, and release cycle works through the gRPC client and server                                                                                                                  | Positive   | `TestAFullSwapRoundTripsOverTheWire`                           |
+| U-108 | Not-swappable, deadline-passed, and namespace-not-found refusals keep their meaning across the wire                                                                                                                    | Negative   | `TestRefusalsKeepTheirMeaningAcrossTheWire`                    |
+| U-109 | A rescan asks every live controller of the subsystem                                                                                                                                                                   | Positive   | `TestRescanAsksEveryLiveControllerOfTheSubsystem`              |
+| U-110 | A rescan of a subsystem with no live controller fails                                                                                                                                                                  | Negative   | `TestRescanOfASubsystemWithNoLiveControllerFails`              |
+| U-111 | A swap warning is recorded on the swapped volume's claim                                                                                                                                                               | Positive   | `TestASwapWarningLandsOnTheVolumesClaim`                       |
+| U-112 | Regression 2026-11-02: each consuming host is prepared with its own host NQN from its Node and receives the target's paths. A prepare naming no host returned no connect entries, and every host's Prepare was refused | Regression | `TestEachHostIsPreparedWithItsOwnHostNQNAndGetsTheTargetPaths` |
 
 ---
 
@@ -284,10 +285,11 @@ window is under `suspendTimeoutSeconds`.
 
 ## 4. Integration Tests — Phase 3 (Planned)
 
-| #       | Scenario                                                                                                                                 |
-|---------|------------------------------------------------------------------------------------------------------------------------------------------|
-| I-P3-01 | Make-before-break: the mock exports the target before removing the source, and the host steps run with the target device already present |
-| I-P3-02 | Make-before-break: the window measured on a live cluster is the reload alone                                                             |
+| #       | Scenario                                                                                                                                                      |
+|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| I-P3-01 | Make-before-break: the mock adds the target namespace gated `inaccessible` before `Suspending`, and the host steps run with the target device already present |
+| I-P3-02 | Make-before-break: the window measured on a live cluster is the ANA switch and the reload alone                                                               |
+| I-P3-03 | Make-before-break on a shared source subsystem: the volumes that are not moving keep their ANA state through the switch                                       |
 
 ---
 
@@ -395,7 +397,7 @@ blindly.
 
 | Class       | Scenarios | Covered | Not covered      |
 |-------------|-----------|---------|------------------|
-| Unit        | 111       | 108     | U-05, U-73, U-98 |
+| Unit        | 112       | 109     | U-05, U-73, U-98 |
 | Integration | 10        | 7       | I-06, I-09, I-10 |
 | E2E         | 14        | 0       | E-01 … E-14      |
 | Manual      | 5         | 0       | M-01 … M-05      |

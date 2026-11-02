@@ -40,6 +40,27 @@ func TestTheConsumingHostsAreTheNodesOfTheVolumeAttachments(t *testing.T) {
 	}
 }
 
+// Regression: 2026-11-02-cg-flip-prepare-without-host — the operator asked the
+// control plane to prepare the target without naming a host, the control plane
+// answered with no connect entries, and every host's Prepare was refused for
+// having no path, so a live flip never got past AttachingPaths.
+func TestEachHostIsPreparedWithItsOwnHostNQNAndGetsTheTargetPaths(t *testing.T) {
+	w := newJoinWorld(t)
+
+	ops := w.runUntil(stepSuspending, 25)
+	if ops.Status.Step.State != string(stepSuspending) {
+		t.Fatalf("step = %q (%s), want Suspending", ops.Status.Step.State, ops.Status.Message)
+	}
+	for _, name := range []string{joinHost, memberHost} {
+		if !slices.Contains(w.api.prepareHosts, hostNQNOf(name)) {
+			t.Errorf("no prepare named %s's host NQN %s; prepares named %q", name, hostNQNOf(name), w.api.prepareHosts)
+		}
+		if w.log.index("prepare "+name+" "+joinTargetNQN+" 2") < 0 {
+			t.Errorf("%s was not given both paths to the target: %v", name, w.log.calls)
+		}
+	}
+}
+
 // U-68, U-83, U-86, U-87
 func TestAFlipSuspendsEveryHostBeforeMovingAndResumesThemOnTheTarget(t *testing.T) {
 	w := newJoinWorld(t)
