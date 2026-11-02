@@ -18,8 +18,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    outputs:
-      tag: ${{ steps.image_tag.outputs.tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -62,24 +60,9 @@ jobs:
 
       - name: Compute image tag
         id: image_tag
-        # A Docker tag admits [a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}, and a branch name
-        # admits far more than that, so every character outside the set becomes a
-        # dash rather than only "/." Sanitizing one character was enough until a
-        # branch carried a "+," which produced an invalid reference and failed the
-        # build after the image had already been built.
-        run: |
-          version="${{ inputs.version || github.ref_name }}"
-          tag="$(printf %s "$version" | tr -c 'a-zA-Z0-9_.-' '-' | cut -c1-128)"
-          # A tag's first character may not be a dash or a dot.
-          tag="$(printf %s "$tag" | sed 's/^[^a-zA-Z0-9_]*//')"
-          if [ -z "$tag" ]; then
-            echo "::error::branch name ${version} sanitizes to an empty image tag"
-            exit 1
-          fi
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          # Both Dockerfiles read this as the OCI `version` label, which must not
-          # carry the tag's leading "v."
-          echo "label_version=${tag#v}" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/image-tag
+        with:
+          version: ${{ inputs.version || github.ref_name }}
 
       # Quay.io is only listed on a release run, matching the login step above.
       - name: Determine target tags
@@ -122,11 +105,17 @@ jobs:
     defaults:
       run:
         working-directory: operator
-    env:
-      TAG: ${{ needs.build-and-push.outputs.tag }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Computed here rather than read from a build-and-push job output, which
+      # GitHub drops when the tag happens to contain a secret's value.
+      - name: Compute image tag
+        id: image_tag
+        uses: ./.github/actions/image-tag
+        with:
+          version: ${{ github.ref_name }}
 
       - name: Log in to Docker Hub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -156,7 +145,10 @@ jobs:
       # A ClusterServiceVersion name must be SemVer, so the run number stands in
       # for the version and the branch is in the image tag.
       - name: Build and push the bundle image
+        env:
+          TAG: ${{ steps.image_tag.outputs.tag }}
         run: |
+          [ -n "$TAG" ] || { echo "::error::empty image tag"; exit 1; }
           make bundle-dev \
             VERSION=0.0.0-${{ github.run_number }} IMG_TAG="$TAG" \
             IMG_BASE=docker.io/simplyblock/simplyblock-operator \
