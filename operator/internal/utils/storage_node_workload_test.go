@@ -277,6 +277,29 @@ func TestTalosReachesTheAgent(t *testing.T) {
 	if env["TALOSCTL_IMAGE"] != "ghcr.io/siderolabs/talosctl:v1.12.7" {
 		t.Errorf("TALOSCTL_IMAGE = %q, want the pinned image", env["TALOSCTL_IMAGE"])
 	}
+	if env["TALOS_MACHINE_CONFIG"] != "preprovisioned" {
+		t.Errorf("TALOS_MACHINE_CONFIG = %q with no mode stated, want the pre-provisioned default said out loud",
+			env["TALOS_MACHINE_CONFIG"])
+	}
+}
+
+// A cluster that states Managed lets the agent patch the machine config
+// through the Talos API; the agent reads the mode lowercase.
+func TestAManagedTalosMachineConfigReachesTheAgent(t *testing.T) {
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "simplyblock"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			StorageNodes: &simplyblockv1alpha2.StorageNodesSpec{
+				Talos:              ptr.To(true),
+				TalosMachineConfig: simplyblockv1alpha2.TalosMachineConfigManaged,
+			},
+		},
+	}
+
+	env := mainEnvOf(t, BuildStorageNodeDaemonSet(cluster, false, false, "", "", "agent:test"))
+	if env["TALOS_MACHINE_CONFIG"] != "managed" {
+		t.Errorf("TALOS_MACHINE_CONFIG = %q for a cluster that states Managed", env["TALOS_MACHINE_CONFIG"])
+	}
 }
 
 // Unstated is not Talos, said explicitly, and no image is forced on the agent
@@ -292,6 +315,9 @@ func TestUnstatedTalosIsNotTalos(t *testing.T) {
 	}
 	if _, stated := env["TALOSCTL_IMAGE"]; stated {
 		t.Errorf("TALOSCTL_IMAGE = %q with Talos unstated", env["TALOSCTL_IMAGE"])
+	}
+	if _, stated := env["TALOS_MACHINE_CONFIG"]; stated {
+		t.Errorf("TALOS_MACHINE_CONFIG = %q with Talos unstated", env["TALOS_MACHINE_CONFIG"])
 	}
 }
 

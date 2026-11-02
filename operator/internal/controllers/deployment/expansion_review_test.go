@@ -167,6 +167,27 @@ func TestTalosStatesItselfAndItsTalosctlImage(t *testing.T) {
 	if workload.TalosctlImage != "ghcr.io/siderolabs/talosctl:v1.12.7" {
 		t.Errorf("TalosctlImage = %q, want the talosctl slot", workload.TalosctlImage)
 	}
+	if workload.TalosMachineConfig != "" {
+		t.Errorf("TalosMachineConfig = %q with none stated, want it left unstated (pre-provisioned)",
+			workload.TalosMachineConfig)
+	}
+}
+
+// A Talos document that states Managed hands the mode to the cluster, and from
+// there to the agent, which is then allowed to patch the machine config.
+func TestATalosDocumentStatesWhoWritesTheMachineConfig(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentTalos
+		if c.Spec.Cluster == nil {
+			c.Spec.Cluster = &simplyblockv1alpha2.ClusterTemplate{}
+		}
+		c.Spec.Cluster.TalosMachineConfig = simplyblockv1alpha2.TalosMachineConfigManaged
+	})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if workload.TalosMachineConfig != simplyblockv1alpha2.TalosMachineConfigManaged {
+		t.Errorf("TalosMachineConfig = %q, want the document's Managed", workload.TalosMachineConfig)
+	}
 }
 
 // Any other environment leaves Talos unstated, and an unstated talosctl slot
