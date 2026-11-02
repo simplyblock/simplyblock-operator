@@ -189,6 +189,21 @@ spec:
                               type: string
                           type: object
                           x-kubernetes-map-type: atomic
+                        eksRoleARN:
+                          description: |-
+                            EKSRoleARN is the IAM role this control plane's pods and every
+                            StorageCluster's storage-node pods in this namespace assume, through a
+                            service account annotated with it (eks.amazonaws.com/role-arn). Amazon
+                            EKS's pod-identity webhook reads that annotation and injects the
+                            credentials the AWS SDK's default provider chain picks up from there,
+                            which is what lets a StorageCluster's backup.credentials name
+                            ProviderChain on EKS.
+
+                            Left unset, the service accounts this operator creates carry no such
+                            annotation, which is correct off Amazon EKS and on an EKS cluster whose
+                            pods authenticate another way.
+                          pattern: ^arn:aws[a-zA-Z0-9-]*:iam::[0-9]{12}:role/.+$
+                          type: string
                         foundationDB:
                           description: FoundationDB sizes the FoundationDB the management API stores its state in.
                           properties:

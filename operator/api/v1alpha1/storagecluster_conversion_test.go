@@ -65,6 +65,7 @@ func TestStorageClusterConvertToRenamesAndRegroups(t *testing.T) {
 	if got := dst.Spec.Backup.Endpoint; got != "https://s3.example.com" {
 		t.Errorf("spec.backup.endpoint = %q", got)
 	}
+	//nolint:staticcheck // SA1019: asserting the legacy conversion path this deprecated field still serves
 	if got := dst.Spec.Backup.CredentialsSecretRef.Name; got != "backup-credentials" {
 		t.Errorf("spec.backup.credentialsSecretRef.name = %q", got)
 	}

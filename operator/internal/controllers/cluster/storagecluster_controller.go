@@ -1181,8 +1181,9 @@ func (r *StorageClusterReconciler) backupConfig(
 	if store == nil {
 		return nil, nil
 	}
-	if store.CredentialsSecretRef.Name == "" {
-		return nil, errors.New("spec.backup.credentialsSecretRef.name is required")
+	creds, ok := store.EffectiveCredentials()
+	if !ok {
+		return nil, errors.New("spec.backup: set credentials, or the deprecated credentialsSecretRef")
 	}
 	// A store with no bucket is not a location. The registered v1alpha1 type
 	// had no bucket at all, so a cluster converted from one arrives with an
@@ -1201,19 +1202,26 @@ func (r *StorageClusterReconciler) backupConfig(
 				"annotation %s", annotationBackupBucket)
 	}
 
-	var secret corev1.Secret
-	key := types.NamespacedName{Name: store.CredentialsSecretRef.Name, Namespace: cluster.Namespace}
-	if err := r.Get(ctx, key, &secret); err != nil {
-		return nil, fmt.Errorf("read the backup credentials secret %q: %w",
-			store.CredentialsSecretRef.Name, err)
-	}
-	accessKeyID, ok := secret.Data["access_key_id"]
-	if !ok {
-		return nil, fmt.Errorf("secret %q has no access_key_id", store.CredentialsSecretRef.Name)
-	}
-	secretAccessKey, ok := secret.Data["secret_access_key"]
-	if !ok {
-		return nil, fmt.Errorf("secret %q has no secret_access_key", store.CredentialsSecretRef.Name)
+	// ProviderChain names no Secret at all: the empty key pair sent below is
+	// exactly what the control plane already maps to "use the AWS default
+	// credential provider chain" (backup_config.py), which keyless deployments
+	// have long reached by setting Secret with an empty-string Secret instead.
+	var accessKeyID, secretAccessKey []byte
+	if creds.Source == simplyblockv1alpha2.BackupCredentialsSourceSecret {
+		var secret corev1.Secret
+		key := types.NamespacedName{Name: creds.SecretRef.Name, Namespace: cluster.Namespace}
+		if err := r.Get(ctx, key, &secret); err != nil {
+			return nil, fmt.Errorf("read the backup credentials secret %q: %w", creds.SecretRef.Name, err)
+		}
+		var ok bool
+		accessKeyID, ok = secret.Data["access_key_id"]
+		if !ok {
+			return nil, fmt.Errorf("secret %q has no access_key_id", creds.SecretRef.Name)
+		}
+		secretAccessKey, ok = secret.Data["secret_access_key"]
+		if !ok {
+			return nil, fmt.Errorf("secret %q has no secret_access_key", creds.SecretRef.Name)
+		}
 	}
 	if err := atlasnet.ValidateExternalURL(store.Endpoint); err != nil {
 		return nil, fmt.Errorf("spec.backup.endpoint: %w", err)

@@ -329,11 +329,58 @@ spec:
                             description: Bucket is the bucket backups are written
                               to and read from.
                             type: string
+                          credentials:
+                            description: |-
+                              Credentials is how this store's endpoint is authenticated to. Replaces
+                              CredentialsSecretRef, which could only ever name a Secret. Set exactly
+                              one of the two.
+                            properties:
+                              secretRef:
+                                description: |-
+                                  SecretRef names the Secret holding access_key_id and secret_access_key.
+                                  Required when source is Secret, and rejected when source is
+                                  ProviderChain.
+                                properties:
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              source:
+                                default: Secret
+                                description: |-
+                                  Source selects how credentials are obtained. Secret, the default, reads
+                                  a static access key and secret key from SecretRef. ProviderChain names
+                                  no Secret and authenticates through the AWS SDK's default credential
+                                  provider chain instead, which is how a cluster reaches its bucket with
+                                  no access key stored anywhere in Kubernetes.
+                                enum:
+                                - Secret
+                                - ProviderChain
+                                type: string
+                            required:
+                            - source
+                            type: object
+                            x-kubernetes-validations:
+                            - message: 'source: Secret requires secretRef'
+                              rule: self.source != 'Secret' || has(self.secretRef)
+                            - message: 'source: ProviderChain forbids secretRef'
+                              rule: self.source != 'ProviderChain' || !has(self.secretRef)
                           credentialsSecretRef:
                             description: |-
                               CredentialsSecretRef names the Secret holding the access key and the
-                              secret key. It is a reference rather than the values, because a spec is
-                              readable by anybody who can read the object.
+                              secret key.
+
+                              Deprecated: set Credentials instead, with source: Secret and this same
+                              name under secretRef. This field cannot express ProviderChain, so a
+                              store that authenticates without a static key has to use Credentials.
+                              Set exactly one of the two.
                             properties:
                               name:
                                 default: ""
@@ -357,9 +404,15 @@ spec:
                             type: string
                         required:
                         - bucket
-                        - credentialsSecretRef
                         - endpoint
                         type: object
+                        x-kubernetes-validations:
+                        - message: one of credentials and the deprecated credentialsSecretRef
+                            must be set
+                          rule: has(self.credentialsSecretRef) || has(self.credentials)
+                        - message: credentials and the deprecated credentialsSecretRef
+                            are exclusive
+                          rule: '!(has(self.credentialsSecretRef) && has(self.credentials))'
                       clusterMode:
                         default: Standard
                         description: |-

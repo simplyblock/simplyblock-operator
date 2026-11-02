@@ -470,6 +470,26 @@ func (r *StorageNodeWorkloadReconciler) image(
 		SingletonControlPlaneName)
 }
 
+// eksRoleARN is the IAM role the storage-node service account assumes on
+// Amazon EKS, read from the ControlPlane singleton's spec.source.local, the
+// same object and the same fallback image() reads. Empty, without error, when
+// the singleton is absent or its control plane is managed elsewhere: neither
+// is this operator's to annotate an account for.
+func (r *StorageNodeWorkloadReconciler) eksRoleARN(ctx context.Context) (string, error) {
+	var controlPlane simplyblockv1alpha2.ControlPlane
+	key := types.NamespacedName{Namespace: r.Namespace, Name: SingletonControlPlaneName}
+	if err := r.Get(ctx, key, &controlPlane); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read ControlPlane %s: %w", SingletonControlPlaneName, err)
+	}
+	if local := controlPlane.Spec.Source.Local; local != nil {
+		return local.EKSRoleARN, nil
+	}
+	return "", nil
+}
+
 // tlsSecretVersion is what a certificate rotation is noticed by.
 func (r *StorageNodeWorkloadReconciler) tlsSecretVersion(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
@@ -666,7 +686,8 @@ func (r *StorageNodeWorkloadReconciler) reconcileRBAC(
 }
 
 // shareServiceAccount makes the cluster an owner of the ServiceAccount the
-// storage-node pods run as.
+// storage-node pods run as, and keeps its EKS role annotation equal to what
+// the ControlPlane singleton states.
 //
 // The control plane's SPDK pod template names the account, so every cluster in a
 // namespace runs as the same one. Each cluster owns it without controlling it,
@@ -677,7 +698,11 @@ func (r *StorageNodeWorkloadReconciler) reconcileRBAC(
 func (r *StorageNodeWorkloadReconciler) shareServiceAccount(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
-	account := utils.BuildStorageNodeSetServiceAccount(cluster.Namespace)
+	roleARN, err := r.eksRoleARN(ctx)
+	if err != nil {
+		return err
+	}
+	account := utils.BuildStorageNodeSetServiceAccount(cluster.Namespace, roleARN)
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var existing corev1.ServiceAccount
 		err := r.Get(ctx, client.ObjectKeyFromObject(account), &existing)
@@ -699,11 +724,34 @@ func (r *StorageNodeWorkloadReconciler) shareServiceAccount(
 		for i := range existing.OwnerReferences {
 			existing.OwnerReferences[i].Controller = nil
 		}
-		if len(existing.OwnerReferences) == before && !controlled {
+		annotationChanged := setEKSRoleARNAnnotation(&existing, roleARN)
+		if len(existing.OwnerReferences) == before && !controlled && !annotationChanged {
 			return nil
 		}
 		return r.Update(ctx, &existing)
 	})
+}
+
+// setEKSRoleARNAnnotation keeps sa's EKS role annotation equal to roleARN,
+// added, changed, or removed as roleARN requires, and reports whether it
+// changed anything. Every other annotation is left alone.
+func setEKSRoleARNAnnotation(sa *corev1.ServiceAccount, roleARN string) bool {
+	current, ok := sa.Annotations[utils.EKSRoleARNAnnotation]
+	if roleARN == "" {
+		if !ok {
+			return false
+		}
+		delete(sa.Annotations, utils.EKSRoleARNAnnotation)
+		return true
+	}
+	if ok && current == roleARN {
+		return false
+	}
+	if sa.Annotations == nil {
+		sa.Annotations = map[string]string{}
+	}
+	sa.Annotations[utils.EKSRoleARNAnnotation] = roleARN
+	return true
 }
 
 // reconcileCertificates applies the serving certificates of the two Services.

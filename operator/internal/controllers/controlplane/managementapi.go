@@ -48,7 +48,7 @@ func managementAPIObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object 
 	ns := cp.Namespace
 	//nolint:prealloc // the literal is the declaration; the append below is the conditional set
 	objects := []client.Object{
-		serviceAccount(ns, serviceAccountName),
+		serviceAccount(ns, serviceAccountName, eksRoleARNAnnotation(cp)),
 		sharedConfigMap(ns),
 		controlPlaneClusterRole(),
 		controlPlaneClusterRoleBinding(ns),
@@ -65,6 +65,17 @@ func managementAPIObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object 
 		fdbExporterService(ns),
 	}
 	return append(objects, servingCertificateObjects(cp)...)
+}
+
+// eksRoleARNAnnotation is the annotation that makes serviceAccountName
+// authenticate through its IAM role on Amazon EKS, read from the local
+// control plane's spec.source.local.eksRoleARN, or nil when it carries none.
+func eksRoleARNAnnotation(cp *simplyblockv1alpha2.ControlPlane) map[string]string {
+	local := cp.Spec.Source.Local
+	if local == nil || local.EKSRoleARN == "" {
+		return nil
+	}
+	return map[string]string{utils.EKSRoleARNAnnotation: local.EKSRoleARN}
 }
 
 // managementAPIClusterScoped is the half of that set the garbage collector will

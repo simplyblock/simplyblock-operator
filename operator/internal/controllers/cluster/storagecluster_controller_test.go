@@ -466,7 +466,7 @@ func TestAMissingBackupSecretHoldsTheCreation(t *testing.T) {
 		c.Spec.Backup = &simplyblockv1alpha2.BackupStoreSpec{
 			Endpoint:             "https://s3.example.com",
 			Bucket:               "simplyblock-backups",
-			CredentialsSecretRef: corev1.LocalObjectReference{Name: "missing"},
+			CredentialsSecretRef: &corev1.LocalObjectReference{Name: "missing"},
 		}
 	})
 	rec := &recorder{}

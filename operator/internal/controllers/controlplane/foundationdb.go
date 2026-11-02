@@ -95,8 +95,8 @@ func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 	ns := cp.Namespace
 	//nolint:prealloc // the literal is the declaration; the append below is the conditional set
 	objects := []client.Object{
-		serviceAccount(ns, fdbOperatorServiceAccount),
-		serviceAccount(ns, fdbPodServiceAccount),
+		serviceAccount(ns, fdbOperatorServiceAccount, nil),
+		serviceAccount(ns, fdbPodServiceAccount, nil),
 		fdbManagerRoleObject(),
 		fdbManagerClusterRoleObject(),
 		fdbManagerRoleBindingObject(ns),
@@ -119,11 +119,12 @@ func foundationDBClusterScoped() []client.Object {
 	}
 }
 
-// serviceAccount is the account an object set runs under. It carries nothing but
-// its name: what it may do is in the bindings that name it.
-func serviceAccount(namespace, name string) *corev1.ServiceAccount {
+// serviceAccount is the account an object set runs under. It carries nothing
+// but its name and, where the caller passes one, an annotation: what it may
+// do is in the bindings that name it.
+func serviceAccount(namespace, name string, annotations map[string]string) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Annotations: annotations},
 	}
 }
 
