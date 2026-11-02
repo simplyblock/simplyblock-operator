@@ -137,11 +137,76 @@ func TestUnstatedNodeFlagsAreTheEnvironments(t *testing.T) {
 	})
 
 	workload := reconcilerFor(t).buildWorkload(config)
-	if workload.EnableKubeletConfiguration == nil || *workload.EnableKubeletConfiguration {
-		t.Errorf("Talos's kubelet flag is %v, want false", workload.EnableKubeletConfiguration)
+	if workload.EnableKubeletConfiguration == nil || !*workload.EnableKubeletConfiguration {
+		t.Errorf("Talos's kubelet flag is %v, want true (configured through the Talos API)", workload.EnableKubeletConfiguration)
 	}
-	if workload.EnableCpuTopology != nil {
-		t.Errorf("Talos's CPU topology flag is %v, want unset", *workload.EnableCpuTopology)
+	if workload.EnableCpuTopology == nil || !*workload.EnableCpuTopology {
+		t.Errorf("Talos's CPU topology flag is %v, want true (configured through the Talos API)", workload.EnableCpuTopology)
+	}
+}
+
+// Talos is stated to the node, not only resolved into the kubelet flag: the node
+// reserves huge pages through the Talos API when it knows the host is Talos, and
+// the talosctl slot of spec.images is the image it does that with.
+func TestTalosStatesItselfAndItsTalosctlImage(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentTalos
+		c.Spec.Images = &simplyblockv1alpha2.DeploymentImages{
+			Talosctl: &simplyblockv1alpha2.ExternalImageSpec{Image: "ghcr.io/siderolabs/talosctl:v1.12.7"},
+		}
+	})
+	r := reconcilerFor(t)
+
+	workload := r.buildWorkload(config)
+	if workload.Talos == nil || !*workload.Talos {
+		t.Error("a Talos document did not state Talos on the workload")
+	}
+	if workload.EnableKubeletConfiguration == nil || !*workload.EnableKubeletConfiguration {
+		t.Error("a Talos document did not resolve to configuring the kubelet (through the Talos API)")
+	}
+	if workload.EnableCpuTopology == nil || !*workload.EnableCpuTopology {
+		t.Error("a Talos document did not resolve to the CPU topology the kubelet configuration is for")
+	}
+	if workload.TalosctlImage != "ghcr.io/siderolabs/talosctl:v1.12.7" {
+		t.Errorf("TalosctlImage = %q, want the talosctl slot", workload.TalosctlImage)
+	}
+	if workload.TalosMachineConfig != "" {
+		t.Errorf("TalosMachineConfig = %q with none stated, want it left unstated (pre-provisioned)",
+			workload.TalosMachineConfig)
+	}
+}
+
+// A Talos document that states Managed hands the mode to the cluster, and from
+// there to the agent, which is then allowed to patch the machine config.
+func TestATalosDocumentStatesWhoWritesTheMachineConfig(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentTalos
+		if c.Spec.Cluster == nil {
+			c.Spec.Cluster = &simplyblockv1alpha2.ClusterTemplate{}
+		}
+		c.Spec.Cluster.TalosMachineConfig = simplyblockv1alpha2.TalosMachineConfigManaged
+	})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if workload.TalosMachineConfig != simplyblockv1alpha2.TalosMachineConfigManaged {
+		t.Errorf("TalosMachineConfig = %q, want the document's Managed", workload.TalosMachineConfig)
+	}
+}
+
+// Any other environment leaves Talos unstated, and an unstated talosctl slot
+// writes the zero value so the node agent's default stands.
+func TestANonTalosDocumentLeavesTalosUnstated(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentVanilla
+	})
+	r := reconcilerFor(t)
+
+	workload := r.buildWorkload(config)
+	if workload.Talos != nil {
+		t.Errorf("Talos = %v for a Vanilla document", *workload.Talos)
+	}
+	if workload.TalosctlImage != "" {
+		t.Errorf("TalosctlImage = %q with no talosctl slot", workload.TalosctlImage)
 	}
 }
 

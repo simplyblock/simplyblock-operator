@@ -632,6 +632,34 @@ type StorageNodesSpec struct {
 	// +optional
 	UbuntuHost *bool `json:"ubuntuHost,omitempty"`
 
+	// Talos states that the workers run Talos Linux: an immutable host with no
+	// shell, which the node therefore never touches directly. It reserves the
+	// huge pages a worker needs through the Talos API instead, and skips the
+	// host-configuration Jobs that would nsenter into the host. The expansion
+	// sets it from spec.environment, as it sets OpenShift; the node agent reads
+	// it as TALOS_CLUSTER.
+	// +optional
+	Talos *bool `json:"talos,omitempty"`
+
+	// TalosctlImage is the talosctl image the node runs as a Job on a Talos
+	// worker to reach its Talos API. Empty keeps the node agent's own default;
+	// a deployment pins it to the cluster's Talos minor, or to a mirror on an
+	// air-gapped site. It is spec.images.talosctl on the deployment config.
+	// +optional
+	TalosctlImage string `json:"talosctlImage,omitempty"`
+
+	// TalosMachineConfig is who writes a Talos worker's machine config: the
+	// huge-page pool (machine.sysfs) and the kubelet's CPU topology
+	// (machine.kubelet.extraConfig). Preprovisioned, the default, is the
+	// cluster's operator, before the node is added: the node verifies both,
+	// applies nothing, and fails the add with the patch to apply, so no Talos
+	// API credentials exist in the namespace. Managed is the node itself,
+	// through the Talos API as talosctl Jobs, which needs the os:admin Secret
+	// the Talos API access feature issues. Read only when Talos is stated; the
+	// node agent reads it as TALOS_MACHINE_CONFIG.
+	// +optional
+	TalosMachineConfig TalosMachineConfigMode `json:"talosMachineConfig,omitempty"`
+
 	// OpenShift is what this deployment states because it runs on OpenShift,
 	// and its presence is that statement. See OpenShiftSpec.
 	// +optional
@@ -1634,3 +1662,18 @@ type NetworkDefinitionReference struct {
 	// +optional
 	AddressPool *NetworkAddressPool `json:"addressPool,omitempty"`
 }
+
+// TalosMachineConfigMode is who writes a Talos worker's machine config, the
+// huge-page pool and the kubelet's CPU topology.
+// +kubebuilder:validation:Enum=Preprovisioned;Managed
+type TalosMachineConfigMode string
+
+const (
+	// TalosMachineConfigPreprovisioned: the cluster's operator puts the pool
+	// and the kubelet settings in the machine config before the node is
+	// added; the node verifies them and applies nothing. The default.
+	TalosMachineConfigPreprovisioned TalosMachineConfigMode = "Preprovisioned"
+	// TalosMachineConfigManaged: the node patches the machine config through
+	// the Talos API, with the os:admin credentials Secret in the namespace.
+	TalosMachineConfigManaged TalosMachineConfigMode = "Managed"
+)

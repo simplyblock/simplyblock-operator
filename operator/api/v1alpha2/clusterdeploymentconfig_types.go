@@ -632,6 +632,16 @@ type ClusterTemplate struct {
 	// +optional
 	EnableKubeletConfiguration *bool `json:"enableKubeletConfiguration,omitempty"`
 
+	// TalosMachineConfig is who writes a Talos worker's machine config, the
+	// huge-page pool and the kubelet's CPU topology. Preprovisioned, the
+	// default, is the cluster's operator, before the nodes are added: a node
+	// verifies and fails its add with the patch to apply. Managed is the node
+	// itself, through the Talos API, which needs the os:admin credentials
+	// Secret in the namespace. It is valid only when spec.environment is
+	// Talos, and lands on StorageCluster.spec.storageNodes.talosMachineConfig.
+	// +optional
+	TalosMachineConfig TalosMachineConfigMode `json:"talosMachineConfig,omitempty"`
+
 	// Stripe is the erasure-coding layout.
 	// +optional
 	Stripe *StripeSpec `json:"stripe,omitempty"`
@@ -810,6 +820,30 @@ type DeploymentImages struct {
 	// SPDKProxy is the SPDK proxy image, written per node for the reason SPDK is.
 	// +optional
 	SPDKProxy *ImageSpec `json:"spdkProxy,omitempty"`
+
+	// Talosctl is the talosctl image a Talos worker's node runs as a Job to
+	// reserve its huge pages through the Talos API. It is the fleet's, written
+	// to StorageCluster.spec.storageNodes.talosctlImage: one DaemonSet, one Job
+	// image. Unstated keeps the node agent's default; a deployment pins it to
+	// the cluster's Talos minor, or to a mirror on an air-gapped site. Read only
+	// for a document whose environment is Talos.
+	// +optional
+	Talosctl *ExternalImageSpec `json:"talosctl,omitempty"`
+}
+
+// ExternalImageSpec is an image this product does not build, stated the way
+// ImageSpec states one it does. It exists because ImageSpec holds every image to
+// simplyblock's own registries, which is right for software simplyblock publishes
+// and wrong for talosctl: Sidero publishes it on ghcr.io, and a deployment that
+// mirrors it names its own registry. Any registry is admitted; the shape of a
+// reference is still checked.
+type ExternalImageSpec struct {
+	// Image is the repository and tag, optionally digest-pinned, on any
+	// registry. An empty value is not written downstream, so the field it would
+	// fill keeps its own default.
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?/[a-z0-9][a-z0-9._/-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	Image string `json:"image,omitempty"`
 }
 
 // ClusterDeploymentConfigSpec is a whole simplyblock deployment as one
@@ -827,6 +861,7 @@ type DeploymentImages struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.network) || (has(self.cluster.network.spdkOnHostNetwork) && self.cluster.network.spdkOnHostNetwork) || self.nodeSets.all(s, s.groups.all(g, !has(g.dataInterfaces)))",message="group dataInterfaces are allowed only with cluster.network.spdkOnHostNetwork"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || (!has(self.cluster.enableCpuTopology) && !has(self.cluster.enableKubeletConfiguration)) || (has(self.environment) && self.environment == 'Vanilla')",message="spec.cluster.enableCpuTopology and spec.cluster.enableKubeletConfiguration are stated only when spec.environment is Vanilla: every other environment decides both"
+// +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.talosMachineConfig) || (has(self.environment) && self.environment == 'Talos')",message="spec.cluster.talosMachineConfig is what a deployment onto Talos states, so spec.environment has to be Talos"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
 	// and is validated but otherwise inert before that, which is what makes
