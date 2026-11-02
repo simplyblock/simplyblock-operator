@@ -487,9 +487,12 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		// CPU topology through machine.kubelet.extraConfig, the way it reserves
 		// huge pages, so the kubelet configuration is enabled as on any other
 		// distribution. Stated to the node as well, which is what selects that
-		// path over a write to a host it cannot reach.
+		// path over a write to a host it cannot reach. The CPU topology is on,
+		// as on OpenShift: it is what the kubelet configuration is for, and a
+		// Talos document cannot state it itself.
 		workload.Talos = ptr.To(true)
 		workload.EnableKubeletConfiguration = ptr.To(true)
+		workload.EnableCpuTopology = ptr.To(true)
 		// Who writes the machine config those settings live in. Unstated is
 		// Preprovisioned, the agent's own default, left unstated here too so
 		// the cluster reads as the document did.
