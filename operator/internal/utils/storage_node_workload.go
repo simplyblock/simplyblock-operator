@@ -133,6 +133,9 @@ func BuildStorageNodeDaemonSet(
 	if wl.TalosctlImage != "" {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "TALOSCTL_IMAGE", Value: wl.TalosctlImage})
 	}
+	if wl.Talos != nil && *wl.Talos {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "TALOS_MACHINE_CONFIG", Value: talosMachineConfigEnv(wl.TalosMachineConfig)})
+	}
 	if tlsMutualEnabled {
 		mainEnv = append(mainEnv,
 			corev1.EnvVar{Name: "SB_TLS_SERVE", Value: envTrue},
@@ -526,6 +529,16 @@ func BuildStorageNodeSetServiceAccount(namespace string) *corev1.ServiceAccount 
 			Namespace: namespace,
 		},
 	}
+}
+
+// talosMachineConfigEnv is the mode as the agent reads it: lowercase, and
+// preprovisioned when the cluster states none, which is the agent's own
+// default said out loud so the DaemonSet shows what the node will do.
+func talosMachineConfigEnv(mode simplyblockv1alpha2.TalosMachineConfigMode) string {
+	if mode == simplyblockv1alpha2.TalosMachineConfigManaged {
+		return "managed"
+	}
+	return "preprovisioned"
 }
 
 func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
