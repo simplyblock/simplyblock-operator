@@ -56,6 +56,14 @@ type migrationRequester interface {
 	Ensure(ctx context.Context, name, pvName, targetNodeUUID string) (string, error)
 }
 
+// joinOperationRequester asks the operator to bring a PersistentVolume into a
+// consistency group, through a PersistentVolumeOps with action
+// JoinConsistencyGroup. Ensure creates the request once (by name), never
+// rewrites it, and reports its phase and whether this call created it.
+type joinOperationRequester interface {
+	Ensure(ctx context.Context, name, pvName, groupName string) (phase string, created bool, err error)
+}
+
 // cgMembershipWatcher reconciles PVC label state to backend group membership.
 type cgMembershipWatcher struct {
 	kube       kubernetes.Interface
@@ -78,6 +86,10 @@ type cgMembershipWatcher struct {
 	// clientSwapReady asserts every node stages volumes behind the
 	// device-mapper indirection and swaps paths itself (design §6).
 	clientSwapReady bool
+	// joinOps, when set, replaces the direct join: a labeled volume in no
+	// group gets one JoinConsistencyGroup operation, and the operator does
+	// the rest. nil keeps the direct join and the pre-join migration.
+	joinOps joinOperationRequester
 }
 
 // StartConsistencyGroupLabelWatcher runs the membership watcher until ctx is
@@ -110,6 +122,9 @@ func StartConsistencyGroupLabelWatcher(
 	}
 	watcher.colocate = colocate
 	watcher.clientSwapReady = swapReady
+	if joinOperationEnabled() && dyn != nil {
+		watcher.joinOps = newJoinOperations(dyn)
+	}
 
 	factory := informers.NewSharedInformerFactory(kube, membershipResync)
 	informer := factory.Core().V1().PersistentVolumeClaims().Informer()
@@ -225,6 +240,9 @@ func (w *cgMembershipWatcher) join(
 			"consistency group %q does not exist yet; it is created by the first volume provisioned with the label", label)
 		return nil
 	}
+	if w.joinOps != nil {
+		return w.requestJoin(ctx, pvc, pvName, label, lvolID)
+	}
 	if err := client.JoinConsistencyGroupMember(ctx, group.ID, lvolID); err != nil {
 		if errors.Is(err, controlplane.ErrMembershipRefused) {
 			return w.joinRefused(ctx, client, pvc, pvName, label, group.ID, lvolID, err)
@@ -234,6 +252,37 @@ func (w *cgMembershipWatcher) join(
 	w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupJoined",
 		"volume joined consistency group %q; it is included from the next generation", label)
 	return w.colocateMember(ctx, client, pvc, group.ID, label, lvolID)
+}
+
+// requestJoin hands a labeled volume in no group to the operator as one
+// JoinConsistencyGroup operation and reports where it stands. The watcher is
+// reached here only for a volume in no group, so a volume provisioned with the
+// label (a member from birth) never gets one.
+func (w *cgMembershipWatcher) requestJoin(
+	ctx context.Context, pvc *corev1.PersistentVolumeClaim, pvName, label, lvolID string,
+) error {
+	name := preJoinMigrationName(lvolID)
+	phase, created, err := w.joinOps.Ensure(ctx, name, pvName, label)
+	if err != nil {
+		return fmt.Errorf("request the join of %s to consistency group %q: %w", pvName, label, err)
+	}
+	switch {
+	case created:
+		w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupJoinStarted",
+			"joining consistency group %q through PersistentVolumeOps %s", label, name)
+	case phase == opsSucceeded:
+		w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupColocated",
+			"PersistentVolumeOps %s brought the volume into consistency group %q", name, label)
+	case phase == opsFailed || phase == opsAborted:
+		w.recorder.Eventf(pvc, corev1.EventTypeWarning, "ConsistencyGroupJoinFailed",
+			"PersistentVolumeOps %s joining consistency group %q ended %s; delete it to retry",
+			name, label, phase)
+	default:
+		w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupJoining",
+			"PersistentVolumeOps %s is joining the volume to consistency group %q (phase %q)",
+			name, label, phase)
+	}
+	return nil
 }
 
 // clusterHolding is the cluster of the driver's secret, other than the

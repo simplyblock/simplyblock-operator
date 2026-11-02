@@ -87,7 +87,7 @@ const PinnedVolumeLabel = "storage.simplyblock.io/pinned-volume-pv"
 // PersistentVolumeOpsAction is the operation a PersistentVolumeOps performs.
 // The kind is named for its target rather than for the action, so that a
 // second action did not rename it.
-// +kubebuilder:validation:Enum=Migrate;Relocate
+// +kubebuilder:validation:Enum=Migrate;Relocate;JoinConsistencyGroup
 type PersistentVolumeOpsAction string
 
 const (
@@ -99,6 +99,11 @@ const (
 	// cluster of its supercluster, together with every volume sharing its
 	// NVMe-oF subsystem.
 	PersistentVolumeOpsActionRelocate PersistentVolumeOpsAction = "Relocate"
+
+	// PersistentVolumeOpsActionJoinConsistencyGroup moves the volume onto its
+	// consistency group's node, adds it to the group, and brings it into the
+	// group's NVMe-oF subsystem while its consumers keep running.
+	PersistentVolumeOpsActionJoinConsistencyGroup PersistentVolumeOpsAction = "JoinConsistencyGroup"
 )
 
 // PersistentVolumeOpsPhase is the operation's own progress. Succeeded rather
@@ -128,7 +133,7 @@ const (
 // registered kind merges these with the phases above into one enum, so that
 // Validating sits beside Completed and neither can be read without the other's
 // values in mind.
-// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Replicating;Committing;AwaitingCutover;AttachingPaths;Proceeding
+// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Replicating;Committing;AwaitingCutover;AttachingPaths;Proceeding;Planning;Joining;SelectingSubsystem;PreparingTarget;Suspending;MovingNamespaces;Resuming;ReleasingPaths
 type PersistentVolumeOpsStep string
 
 const (
@@ -165,6 +170,44 @@ const (
 	// PersistentVolumeOpsStepProceeding releases a volume's cutover once its
 	// consumers hold the target's paths.
 	PersistentVolumeOpsStepProceeding PersistentVolumeOpsStep = "Proceeding"
+
+	// PersistentVolumeOpsStepPlanning resolves the consistency group and checks
+	// that the volume can join it and that the group's node can hold the NVMe-oF
+	// subsystems the join needs.
+	PersistentVolumeOpsStepPlanning PersistentVolumeOpsStep = "Planning"
+	// PersistentVolumeOpsStepJoining adds the volume to the group.
+	PersistentVolumeOpsStepJoining PersistentVolumeOpsStep = "Joining"
+	// PersistentVolumeOpsStepSelectingSubsystem chooses the subsystem the group
+	// ends up in and reserves its namespace slots.
+	PersistentVolumeOpsStepSelectingSubsystem PersistentVolumeOpsStep = "SelectingSubsystem"
+	// PersistentVolumeOpsStepPreparingTarget creates the target subsystem when
+	// it is new.
+	PersistentVolumeOpsStepPreparingTarget PersistentVolumeOpsStep = "PreparingTarget"
+	// PersistentVolumeOpsStepSuspending holds the I/O of every moving volume on
+	// every node consuming it.
+	PersistentVolumeOpsStepSuspending PersistentVolumeOpsStep = "Suspending"
+	// PersistentVolumeOpsStepMovingNamespaces moves every moving volume's
+	// namespace into the target subsystem.
+	PersistentVolumeOpsStepMovingNamespaces PersistentVolumeOpsStep = "MovingNamespaces"
+	// PersistentVolumeOpsStepResuming points every consuming node at the
+	// subsystem the namespaces are in and releases their I/O.
+	PersistentVolumeOpsStepResuming PersistentVolumeOpsStep = "Resuming"
+	// PersistentVolumeOpsStepReleasingPaths disconnects the subsystem the
+	// volumes left, on every node that no longer uses it.
+	PersistentVolumeOpsStepReleasingPaths PersistentVolumeOpsStep = "ReleasingPaths"
+)
+
+// SubsystemSide is which NVMe-oF subsystem a moving volume's namespace is
+// exported by.
+// +kubebuilder:validation:Enum=Source;Target
+type SubsystemSide string
+
+const (
+	// SubsystemSideSource is the subsystem the namespace was in before the
+	// operation.
+	SubsystemSideSource SubsystemSide = "Source"
+	// SubsystemSideTarget is the subsystem the operation moves it to.
+	SubsystemSideTarget SubsystemSide = "Target"
 )
 
 // StorageNodeReference locates a StorageNode from a cluster-scoped object.
@@ -214,6 +257,27 @@ type RelocateVolumeSpec struct {
 	TargetClusterRef string `json:"targetClusterRef"`
 }
 
+// JoinConsistencyGroupSpec parameterizes the JoinConsistencyGroup action.
+type JoinConsistencyGroupSpec struct {
+	// GroupName is the consistency group to join, by the name its members'
+	// claims carry in the storage.simplyblock.io/consistency-group label.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +k8s:immutable
+	GroupName string `json:"groupName"`
+
+	// SuspendTimeoutSeconds is the longest time any node may hold the I/O of a
+	// moving volume while its namespace changes subsystem. A node that has not
+	// been released by then resumes the volume on its own. Defaults to 10.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=30
+	// +kubebuilder:default=10
+	// +optional
+	// +k8s:immutable
+	SuspendTimeoutSeconds *int32 `json:"suspendTimeoutSeconds,omitempty"`
+}
+
 // CreatorReference names the object that created a PersistentVolumeOps.
 //
 // It exists because a cluster-scoped object cannot be owned by a namespaced
@@ -246,10 +310,11 @@ type CreatorReference struct {
 // PersistentVolume.
 //
 // The action and its parameter block have to agree: Migrate requires
-// spec.migrate and Relocate requires spec.relocate, and neither action
-// accepts the other's block.
+// spec.migrate, Relocate requires spec.relocate, and JoinConsistencyGroup
+// requires spec.joinConsistencyGroup, and no action accepts another's block.
 // +kubebuilder:validation:XValidation:rule="self.action == 'Migrate' ? has(self.migrate) : !has(self.migrate)",message="migrate is required for action Migrate and must be absent otherwise"
 // +kubebuilder:validation:XValidation:rule="self.action == 'Relocate' ? has(self.relocate) : !has(self.relocate)",message="relocate is required for action Relocate and must be absent otherwise"
+// +kubebuilder:validation:XValidation:rule="self.action == 'JoinConsistencyGroup' ? has(self.joinConsistencyGroup) : !has(self.joinConsistencyGroup)",message="joinConsistencyGroup is required for action JoinConsistencyGroup and must be absent otherwise"
 type PersistentVolumeOpsSpec struct {
 	// PersistentVolumeName names the PersistentVolume this operation acts on.
 	// It is a name rather than a reference because a PersistentVolume is
@@ -281,6 +346,10 @@ type PersistentVolumeOpsSpec struct {
 	// Relocate parameterizes action Relocate.
 	// +optional
 	Relocate *RelocateVolumeSpec `json:"relocate,omitempty"`
+
+	// JoinConsistencyGroup parameterizes action JoinConsistencyGroup.
+	// +optional
+	JoinConsistencyGroup *JoinConsistencyGroupSpec `json:"joinConsistencyGroup,omitempty"`
 
 	// CreatorRef names the object that created this one, and that object's
 	// finalizer is what aborts and deletes this one when it goes. Absent on an
@@ -495,6 +564,118 @@ type RelocateStatus struct {
 	NodesMissingPaths []string `json:"nodesMissingPaths,omitempty"`
 }
 
+// MovingVolume is one volume whose namespace changes NVMe-oF subsystem.
+type MovingVolume struct {
+	// VolumeUUID is the volume's backend UUID.
+	// +kubebuilder:validation:Required
+	VolumeUUID string `json:"volumeUUID"`
+
+	// PersistentVolumeName is the volume's PersistentVolume, when it has one.
+	// +optional
+	PersistentVolumeName string `json:"persistentVolumeName,omitempty"`
+
+	// SourceNQN is the subsystem the namespace leaves.
+	// +optional
+	SourceNQN string `json:"sourceNQN,omitempty"`
+
+	// TargetNSID is the namespace ID the volume takes in the target subsystem.
+	// +optional
+	TargetNSID int32 `json:"targetNSID,omitempty"`
+}
+
+// SwapHost is one node consuming a moving volume, and how far its part of the
+// swap got.
+type SwapHost struct {
+	// Node is the Kubernetes node.
+	// +kubebuilder:validation:Required
+	Node string `json:"node"`
+
+	// PersistentVolumes are the moving volumes the node consumes, which are
+	// the ones it holds and releases.
+	// +listType=set
+	// +optional
+	PersistentVolumes []string `json:"persistentVolumes,omitempty"`
+
+	// InstanceUID identifies the CSI node plugin process that acknowledged the
+	// steps below. A different value means the plugin restarted since.
+	// +optional
+	InstanceUID string `json:"instanceUID,omitempty"`
+
+	// Prepared is set once the node holds paths to the target subsystem.
+	// +optional
+	Prepared bool `json:"prepared,omitempty"`
+
+	// Suspended is set once the node holds the I/O of every moving volume it
+	// consumes.
+	// +optional
+	Suspended bool `json:"suspended,omitempty"`
+
+	// Resumed is set once the node released that I/O on the subsystem named by
+	// namespacesAt.
+	// +optional
+	Resumed bool `json:"resumed,omitempty"`
+
+	// Released is set once the node disconnected the subsystem it no longer
+	// uses.
+	// +optional
+	Released bool `json:"released,omitempty"`
+}
+
+// JoinConsistencyGroupStatus is the progress of a JoinConsistencyGroup.
+type JoinConsistencyGroupStatus struct {
+	// GroupUUID is the group's backend UUID, resolved from spec.groupName.
+	// +optional
+	GroupUUID string `json:"groupUUID,omitempty"`
+
+	// MigrationName is the Migrate operation this one created to bring the
+	// volume onto the group's node, when it needed one.
+	// +optional
+	MigrationName string `json:"migrationName,omitempty"`
+
+	// Joined is set once the volume is a member of the group.
+	// +optional
+	Joined bool `json:"joined,omitempty"`
+
+	// MoveID is the backend's identity for the subsystem move.
+	// +optional
+	MoveID string `json:"moveID,omitempty"`
+
+	// TargetNQN is the subsystem the group ends up in.
+	// +optional
+	TargetNQN string `json:"targetNQN,omitempty"`
+
+	// TargetIsNew is set when the target subsystem was created for this move.
+	// +optional
+	TargetIsNew bool `json:"targetIsNew,omitempty"`
+
+	// NamespacesAt is the subsystem the moving namespaces are exported by now.
+	// +optional
+	NamespacesAt SubsystemSide `json:"namespacesAt,omitempty"`
+
+	// SuspendDeadline is the time by which every node resumes, whatever
+	// happened.
+	// +optional
+	SuspendDeadline *metav1.Time `json:"suspendDeadline,omitempty"`
+
+	// Volumes are the volumes whose namespaces change subsystem.
+	// +listType=map
+	// +listMapKey=volumeUUID
+	// +optional
+	Volumes []MovingVolume `json:"volumes,omitempty"`
+
+	// Hosts are the nodes consuming any of those volumes.
+	// +listType=map
+	// +listMapKey=node
+	// +optional
+	Hosts []SwapHost `json:"hosts,omitempty"`
+
+	// RollbackReason is why the move is being taken back, set once the
+	// operation stops moving the group forward. The operation ends Failed with
+	// it once every node is back on the subsystem it started on.
+	// +optional
+	RollbackReason string `json:"rollbackReason,omitempty"`
+}
+
 // PersistentVolumeOpsStatus is the observed state of one volume operation.
 type PersistentVolumeOpsStatus struct {
 	// Phase is the operation's own progress.
@@ -504,7 +685,7 @@ type PersistentVolumeOpsStatus struct {
 	// Step is the position of the running action's state machine. It is
 	// persisted before the side effect that step performs, so a step reported
 	// here is a step that started.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating','Verifying','Replicating','Committing','AwaitingCutover','AttachingPaths','Proceeding']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating','Verifying','Replicating','Committing','AwaitingCutover','AttachingPaths','Proceeding','Planning','Joining','SelectingSubsystem','PreparingTarget','Suspending','MovingNamespaces','Resuming','ReleasingPaths']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
@@ -516,6 +697,10 @@ type PersistentVolumeOpsStatus struct {
 	// Relocate is the progress of a Relocate.
 	// +optional
 	Relocate *RelocateStatus `json:"relocate,omitempty"`
+
+	// JoinConsistencyGroup is the progress of a JoinConsistencyGroup.
+	// +optional
+	JoinConsistencyGroup *JoinConsistencyGroupStatus `json:"joinConsistencyGroup,omitempty"`
 
 	// DeferredSince is when the operation was first held — behind another
 	// operation's lock, or behind a control plane that is not accepting
@@ -552,6 +737,7 @@ type PersistentVolumeOpsStatus struct {
 // +kubebuilder:printcolumn:name="Action",type=string,JSONPath=".spec.action"
 // +kubebuilder:printcolumn:name="Target",type=string,JSONPath=".spec.migrate.targetNodeRef.name"
 // +kubebuilder:printcolumn:name="Target Cluster",type=string,JSONPath=".spec.relocate.targetClusterRef"
+// +kubebuilder:printcolumn:name="Group",type=string,JSONPath=".spec.joinConsistencyGroup.groupName"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Step",type=string,JSONPath=".status.step.state"
 // +kubebuilder:printcolumn:name="Message",type=string,JSONPath=".status.message",priority=1

@@ -131,6 +131,16 @@ type PersistentVolumeOpsReconciler struct {
 	// whose consumer was missed is one whose host never gets the target's
 	// paths and loses its volume at cutover.
 	Reader client.Reader
+
+	// Join is the control-plane surface of a JoinConsistencyGroup, and Swap
+	// reaches the CSI node plugins that hold a moving volume's I/O. A join
+	// fails when either is missing rather than running half a swap.
+	Join JoinClient
+	Swap SwapPeers
+
+	// Clock is the time the suspend window is measured against, so a test can
+	// close it. Nil is the wall clock.
+	Clock func() time.Time
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=persistentvolumeops,verbs=get;list;watch;create;update;patch;delete
@@ -143,6 +153,7 @@ type PersistentVolumeOpsReconciler struct {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=volumeattachments,verbs=get;list;watch
 
 // SetupWithManager registers the controller, the field index the queue reads,
 // and the watch that wakes a queued operation when the volume's lock frees.
@@ -266,6 +277,10 @@ func (r *PersistentVolumeOpsReconciler) Reconcile(
 			return r.finish(ctx, &ops, simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed, fatal.Error())
 		}
 		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, &ops, err.Error())
+	}
+
+	if ops.Spec.Action == simplyblockv1alpha2.PersistentVolumeOpsActionJoinConsistencyGroup {
+		return r.reconcileJoin(ctx, &ops, subject)
 	}
 
 	// The named volume's pin is read before anything else is waited on, so a
@@ -559,6 +574,11 @@ func (r *PersistentVolumeOpsReconciler) teardown(
 ) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(ops, opsFinalizer) {
 		return ctrl.Result{}, nil
+	}
+
+	if ops.Spec.Action == simplyblockv1alpha2.PersistentVolumeOpsActionJoinConsistencyGroup &&
+		!terminal(ops.Status.Phase) {
+		return r.teardownJoin(ctx, ops)
 	}
 
 	if !terminal(ops.Status.Phase) {

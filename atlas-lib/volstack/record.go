@@ -219,3 +219,34 @@ func (s *Store) Remove(handle string) error {
 	}
 	return nil
 }
+
+// List returns every record in the store, in no particular order. A file that
+// is not a record (a temporary file of a write in flight, or anything else left
+// in the directory) is skipped rather than failing the listing, and a store
+// whose directory does not exist yet holds nothing.
+func (s *Store) List() ([]Record, error) {
+	entries, err := os.ReadDir(s.dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("volstack: list the records in %s: %w", s.dir, err)
+	}
+	var records []Record
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.dir, name))
+		if err != nil {
+			continue
+		}
+		var rec Record
+		if json.Unmarshal(data, &rec) != nil || rec.Version != RecordVersion || rec.VolumeHandle == "" {
+			continue
+		}
+		records = append(records, rec)
+	}
+	return records, nil
+}

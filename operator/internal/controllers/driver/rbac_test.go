@@ -106,6 +106,9 @@ func TestRulesMatchTheChart(t *testing.T) {
 		{"provisioner", "snapshot.storage.k8s.io", "volumesnapshotcontents/status", []string{"get", "update", "patch"}},
 		{"provisioner", "", "persistentvolumes", []string{"get", "list", "watch", "create", "delete", "patch"}},
 		{"provisioner", "storage.simplyblock.io", "volumemigrations", []string{"get", "create"}},
+		// U-104 (design-cg-live-subsystem-flip.md §8.4): the membership watcher
+		// creates the JoinConsistencyGroup operation and reports its phase.
+		{"provisioner", "storage.simplyblock.io", "persistentvolumeops", []string{"get", "list", "watch", "create"}},
 		{"attacher", "storage.k8s.io", "volumeattachments/status", []string{"patch"}},
 		{"resizer", "", "persistentvolumeclaims/status", []string{"patch"}},
 		{"health-monitor", "", "events", []string{"get", "list", "watch", "create", "patch"}},
