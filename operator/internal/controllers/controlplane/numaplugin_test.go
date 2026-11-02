@@ -65,9 +65,9 @@ func TestTheControlPlaneOwnsTheNUMAPlugin(t *testing.T) {
 		req.Operator != corev1.NodeSelectorOpExists {
 		t.Errorf("node affinity = %+v, want every enrolled worker", req)
 	}
-	// The OpenShift bootstrap finds the pod by this label.
+	// The DaemonSet's selector matches the pods by this label.
 	if ds.Spec.Template.Labels["app"] != "simplyblock-numa-resource-plugin" {
-		t.Errorf("pod labels = %v, want the app label the node bootstrap waits on", ds.Spec.Template.Labels)
+		t.Errorf("pod labels = %v, want the app label the DaemonSet selects", ds.Spec.Template.Labels)
 	}
 
 	var account corev1.ServiceAccount

@@ -844,16 +844,7 @@
           }
         },
         "numaResource": {
-          "type": "object",
-          "properties": {
-            "pullPolicy": {
-              "enum": [
-                "Always",
-                "IfNotPresent",
-                "Never"
-              ]
-            }
-          }
+          "type": "object"
         }
       }
     },
