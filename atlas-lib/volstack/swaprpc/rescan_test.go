@@ -65,3 +65,45 @@ func TestRescanOfASubsystemWithNoLiveControllerFails(t *testing.T) {
 		t.Fatal("a subsystem that is not attached was rescanned")
 	}
 }
+
+// Part of Regression: 2026-11-02-cg-flip-stale-source-path. A controller that is
+// not live is disconnected through its delete_controller attribute; one that is
+// live, or already being deleted, is left alone.
+func TestDropStaleDisconnectsOnlyTheControllersThatAreNotLive(t *testing.T) {
+	root := t.TempDir()
+	dirs := map[string]string{}
+	for _, name := range []string{"nvme1", "nvme2", "nvme3", "nvme4"} {
+		dirs[name] = controllerDir(t, root, name)
+		if err := os.WriteFile(filepath.Join(dirs[name], "delete_controller"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	drop := SysfsDropStale(fakeSubsystems{sub: nvme.Subsystem{NQN: sourceNQN, Controllers: []nvme.Controller{
+		{ID: "nvme1", SysfsPath: dirs["nvme1"], State: "live"},
+		{ID: "nvme2", SysfsPath: dirs["nvme2"], State: "connecting"},
+		{ID: "nvme3", SysfsPath: dirs["nvme3"], State: "resetting"},
+		{ID: "nvme4", SysfsPath: dirs["nvme4"], State: "deleting"},
+	}}})
+
+	n, err := drop(ctx, sourceNQN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("dropped %d controller(s), want the 2 that are connecting or resetting", n)
+	}
+	for name, want := range map[string]string{"nvme1": "", "nvme2": "1", "nvme3": "1", "nvme4": ""} {
+		got, _ := os.ReadFile(filepath.Join(dirs[name], "delete_controller"))
+		if string(got) != want {
+			t.Errorf("%s: wrote %q to delete_controller, want %q", name, got, want)
+		}
+	}
+}
+
+func TestDropStaleOfASubsystemNotAttachedDropsNothing(t *testing.T) {
+	drop := SysfsDropStale(fakeSubsystems{err: errors.New("not attached")})
+	n, err := drop(ctx, sourceNQN)
+	if err != nil || n != 0 {
+		t.Fatalf("dropped %d, err %v; want nothing dropped and no error for a subsystem the host does not hold", n, err)
+	}
+}

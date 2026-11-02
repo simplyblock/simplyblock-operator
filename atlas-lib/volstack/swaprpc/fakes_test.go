@@ -148,12 +148,35 @@ func (m *fakeMapper) deviceOf(name string) string {
 }
 
 // fakeDevices is the host's NVMe view. onRescan lets a test make a namespace
-// appear only once the node asked the controller to look again.
+// appear only once the node asked the controller to look again. stale holds the
+// subsystems with a controller that is not live, and drops records, in order,
+// every subsystem whose dead paths the node dropped; calls interleaves both
+// with the rescans, so a test can assert their order.
 type fakeDevices struct {
 	mu       sync.Mutex
 	devices  []nvme.Device
 	rescans  []string
 	onRescan func(nqn string)
+	stale    map[string]int
+	drops    []string
+	calls    []string
+}
+
+// dropStale removes the subsystem's controllers that are not live.
+func (d *fakeDevices) dropStale(_ context.Context, nqn string) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.drops = append(d.drops, nqn)
+	d.calls = append(d.calls, "drop "+nqn)
+	n := d.stale[nqn]
+	delete(d.stale, nqn)
+	return n, nil
+}
+
+func (d *fakeDevices) isStale(nqn string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.stale[nqn] > 0
 }
 
 func (d *fakeDevices) add(nqn, uuid, dev string, nsid uint32) {
@@ -180,6 +203,7 @@ func (d *fakeDevices) remove(nqn string) {
 func (d *fakeDevices) rescan(_ context.Context, nqn string) error {
 	d.mu.Lock()
 	d.rescans = append(d.rescans, nqn)
+	d.calls = append(d.calls, "rescan "+nqn)
 	hook := d.onRescan
 	d.mu.Unlock()
 	if hook != nil {
@@ -370,26 +394,27 @@ func newRig(t *testing.T) *rig {
 		t:         t,
 		store:     volstack.NewStore(t.TempDir()),
 		mapper:    newFakeMapper(),
-		devices:   &fakeDevices{},
+		devices:   &fakeDevices{stale: map[string]int{}},
 		connector: &fakeConnector{},
 		clock:     &fakeClock{now: time.Unix(1_800_000_000, 0)},
 		events:    &fakeEvents{},
 		metrics:   &fakeMetrics{},
 	}
 	s, err := New(Config{
-		Records:      r.store,
-		Mapper:       r.mapper,
-		Devices:      r.devices,
-		Connector:    r.connector,
-		Rescan:       r.devices.rescan,
-		Events:       r.events,
-		Metrics:      r.metrics,
-		HostNQN:      "nqn.2014-08.org.nvmexpress:uuid:host",
-		HostID:       "host",
-		Now:          r.clock.Now,
-		AfterFunc:    r.clock.AfterFunc,
-		Sleep:        func(time.Duration) { r.clock.advance(100 * time.Millisecond) },
-		PollInterval: 100 * time.Millisecond,
+		Records:        r.store,
+		Mapper:         r.mapper,
+		Devices:        r.devices,
+		Connector:      r.connector,
+		Rescan:         r.devices.rescan,
+		DropStalePaths: r.devices.dropStale,
+		Events:         r.events,
+		Metrics:        r.metrics,
+		HostNQN:        "nqn.2014-08.org.nvmexpress:uuid:host",
+		HostID:         "host",
+		Now:            r.clock.Now,
+		AfterFunc:      r.clock.AfterFunc,
+		Sleep:          func(time.Duration) { r.clock.advance(100 * time.Millisecond) },
+		PollInterval:   100 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -116,6 +116,9 @@ type Config struct {
 	// Rescan asks the controllers of a subsystem to look for new namespaces
 	// (`nvme ns-rescan`).
 	Rescan func(ctx context.Context, nqn string) error
+	// DropStalePaths disconnects the controllers of a subsystem that are not
+	// live, and reports how many it dropped. Nil drops nothing.
+	DropStalePaths func(ctx context.Context, nqn string) (int, error)
 
 	// Events and Metrics are optional.
 	Events  Events
@@ -397,7 +400,7 @@ func (s *Swapper) reportHeld() {
 	s.cfg.Metrics.SetSuspended(n)
 }
 
-// Resume points each volume's mapping at its namespace under nqn and releases
+// Resume points each volume's mapping at its namespace under `nqn` and releases
 // its I/O. A namespace that has not appeared yet gets one rescan of the
 // subsystem and is waited for until the volume's deadline. A volume whose
 // namespace never appears stays suspended and the call fails, so the caller can
@@ -425,7 +428,7 @@ func (s *Swapper) Resume(ctx context.Context, handles []string, nqn string) ([]V
 	return s.Describe(ctx, handles)
 }
 
-// await finds v's namespace under nqn, rescanning once and polling until the
+// await finds v's namespace under `nqn`, rescanning once and polling until the
 // volume's deadline.
 func (s *Swapper) await(ctx context.Context, v volume, nqn string) (nvme.Device, error) {
 	until := s.cfg.Now().Add(defaultResumeWait)
@@ -438,6 +441,7 @@ func (s *Swapper) await(ctx context.Context, v volume, nqn string) (nvme.Device,
 	sel := nvme.DeviceSelector{UUID: v.uuid, NQN: nqn}
 	started := s.cfg.Now()
 	rescanned := false
+	var dropErr error
 	for {
 		found, err := s.cfg.Devices.ListWithSelector(ctx, sel)
 		if err != nil {
@@ -451,16 +455,40 @@ func (s *Swapper) await(ctx context.Context, v volume, nqn string) (nvme.Device,
 		}
 		if !rescanned {
 			rescanned = true
+			// The kernel admits a namespace only while no other subsystem on the
+			// host holds its identity. A controller of the source that is not
+			// live never processed the namespace's removal and still holds it,
+			// so the target's copy would be ignored however often it is
+			// rescanned. Such a controller carries no I/O, and is dropped first.
+			dropErr = s.dropStaleSource(ctx, v, nqn)
 			if err := s.cfg.Rescan(ctx, nqn); err != nil {
 				return nvme.Device{}, fmt.Errorf("swap: rescan %s: %w", nqn, err)
 			}
 			continue
 		}
 		if !s.cfg.Now().Before(until) || ctx.Err() != nil {
+			if dropErr != nil {
+				return nvme.Device{}, fmt.Errorf("%s under %s: %w (dropping the source's dead paths failed: %v)",
+					v.uuid, nqn, ErrNamespaceNotFound, dropErr)
+			}
 			return nvme.Device{}, fmt.Errorf("%s under %s: %w", v.uuid, nqn, ErrNamespaceNotFound)
 		}
 		s.cfg.Sleep(s.cfg.PollInterval)
 	}
+}
+
+// dropStaleSource drops the controllers of v's source subsystem that are not
+// live, when v is being resumed somewhere else. A resume onto the source itself
+// is a rollback, and needs every path the source still has.
+func (s *Swapper) dropStaleSource(ctx context.Context, v volume, nqn string) error {
+	source := v.fabric.NQN
+	if s.cfg.DropStalePaths == nil || source == "" || source == nqn {
+		return nil
+	}
+	if _, err := s.cfg.DropStalePaths(ctx, source); err != nil {
+		return fmt.Errorf("drop the dead paths of %s: %w", source, err)
+	}
+	return nil
 }
 
 // best is the most serviceable of several devices carrying one namespace.
@@ -533,7 +561,7 @@ func (s *Swapper) record(v volume, dev nvme.Device) error {
 	return nil
 }
 
-// Release disconnects nqn unless a volume staged here still points at it.
+// Release disconnects `nqn` unless a volume staged here still points at it.
 func (s *Swapper) Release(ctx context.Context, nqn string) (bool, error) {
 	records, err := s.cfg.Records.List()
 	if err != nil {

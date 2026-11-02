@@ -36,12 +36,14 @@ type SwapperConfig struct {
 // host seams this server stages with.
 func (ns *Server) NewSwapper(cfg SwapperConfig) (*swaprpc.Swapper, error) {
 	seams := ns.stack.seams
+	subsystems := nvme.NewSysfsSubsystemResolver(nvme.SysfsConfig{})
 	swap := swaprpc.Config{
-		Records:   ns.stack.store,
-		Mapper:    devmapper.New(nil),
-		Devices:   seams.Devices,
-		Connector: seams.Connector,
-		Rescan:    swaprpc.SysfsRescan(nvme.NewSysfsSubsystemResolver(nvme.SysfsConfig{})),
+		Records:        ns.stack.store,
+		Mapper:         devmapper.New(nil),
+		Devices:        seams.Devices,
+		Connector:      seams.Connector,
+		Rescan:         swaprpc.SysfsRescan(subsystems),
+		DropStalePaths: swaprpc.SysfsDropStale(subsystems),
 	}
 	if ns.kubeClient != nil {
 		broadcaster := record.NewBroadcaster()

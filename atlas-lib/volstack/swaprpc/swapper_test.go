@@ -246,6 +246,64 @@ func TestResumeRescansOnceWhenTheNamespaceHasNotAppeared(t *testing.T) {
 	}
 }
 
+// Regression: 2026-11-02-cg-flip-stale-source-path — after a live migration the
+// host kept a controller to the old node's path of the volume's source
+// subsystem, stuck reconnecting. A controller that is not live never processes
+// the removal of a namespace, so it kept the namespace's identity registered,
+// and the kernel ignored the same namespace in the target subsystem ("ignoring
+// nsid 2 because of duplicate IDs"). The swap waited out its deadline and
+// rolled back.
+func TestResumeDropsTheSourcesDeadPathsSoTheNamespaceCanAppearInTheTarget(t *testing.T) {
+	r := newRig(t)
+	r.stage(volA, "259:1", true)
+	if _, err := r.swapper.Suspend(ctx, []string{handle(volA)}, r.deadline(10*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	r.devices.remove(sourceNQN)
+	r.devices.stale[sourceNQN] = 1
+	// The kernel admits the namespace in the target only once no controller of
+	// the source still holds its identity.
+	r.devices.onRescan = func(nqn string) {
+		if nqn == targetNQN && !r.devices.isStale(sourceNQN) {
+			r.devices.add(targetNQN, volA, "259:7", 2)
+		}
+	}
+
+	if _, err := r.swapper.Resume(ctx, []string{handle(volA)}, targetNQN); err != nil {
+		t.Fatalf("resume: %v (calls %v)", err, r.devices.calls)
+	}
+	if !slices.Equal(r.devices.calls, []string{"drop " + sourceNQN, "rescan " + targetNQN}) {
+		t.Fatalf("calls = %v, want the source's dead paths dropped before the target is rescanned", r.devices.calls)
+	}
+	if r.mapper.deviceOf(layers.DMLinearName(volA)) != "259:7" {
+		t.Fatal("the mapping was not re-pointed at the namespace in the target")
+	}
+}
+
+// A resume back onto the source (the rollback) must not drop the source's
+// paths: those are the paths it is about to use.
+func TestResumeOnTheSourceDropsNothing(t *testing.T) {
+	r := newRig(t)
+	r.stage(volA, "259:1", true)
+	if _, err := r.swapper.Suspend(ctx, []string{handle(volA)}, r.deadline(10*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	r.devices.remove(sourceNQN)
+	r.devices.stale[sourceNQN] = 1
+	r.devices.onRescan = func(nqn string) {
+		if nqn == sourceNQN {
+			r.devices.add(sourceNQN, volA, "259:9", 1)
+		}
+	}
+
+	if _, err := r.swapper.Resume(ctx, []string{handle(volA)}, sourceNQN); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.devices.drops) != 0 {
+		t.Fatalf("drops = %v, want none on a resume back onto the source", r.devices.drops)
+	}
+}
+
 // U-32
 func TestResumeWhoseNamespaceNeverAppearsFailsAtTheDeadlineAndStaysSuspended(t *testing.T) {
 	r := newRig(t)
