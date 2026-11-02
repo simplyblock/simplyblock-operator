@@ -4,7 +4,8 @@
 // which is where the singleton ControlPlane lives, so the ControlPlane can own it
 // and garbage collection removes it with the ControlPlane. It selects every worker
 // a StorageCluster enrolled, so it does not depend on which cluster that is. The
-// OpenShift node bootstrap finds its pods by label across namespaces.
+// OpenShift node bootstrap does not look the pods up; it waits for the node's
+// numa-align allocatable, which the kubelet reports only while the plugin is registered.
 
 package controlplane
 

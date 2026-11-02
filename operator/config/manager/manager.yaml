@@ -79,6 +79,10 @@ spec:
           value: controller:latest
         - name: SB_NODEPROBE_IMAGE
           value: controller:latest
+        # The NUMA device plugin the ControlPlane runs. Pinned by digest so a
+        # disconnected cluster can mirror it; `make bundle` re-resolves it.
+        - name: SB_NUMA_PLUGIN_IMAGE
+          value: quay.io/simplyblock-io/numa-resource-plugin@sha256:c45c5dfc2156422d5ad7ca0727ae67116bb9e4d67a9d44f41f7099c04c5c9a66
         # The accounts below carry config/default's namePrefix. The management
         # API trusts only the accounts it is told to, and the chart's operator
         # account is built in, so a bundle install names its own.

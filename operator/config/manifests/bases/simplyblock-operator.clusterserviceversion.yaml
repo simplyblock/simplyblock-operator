@@ -712,4 +712,6 @@ spec:
     name: simplyblock
   - image: quay.io/simplyblock-io/ultra:R26.2-PRE-latest@sha256:f10a5b1186da852abe7e4dae6110a75554c46a51de229174acaec99dff283eb0
     name: ultra-spdk
+  - image: quay.io/simplyblock-io/numa-resource-plugin:latest@sha256:c45c5dfc2156422d5ad7ca0727ae67116bb9e4d67a9d44f41f7099c04c5c9a66
+    name: numa-resource-plugin
   version: 0.1.0

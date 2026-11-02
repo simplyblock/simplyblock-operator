@@ -51,8 +51,6 @@ image:
     repository: quay.io/simplyblock-io/numa-resource-plugin
     # -- NUMA resource plugin image tag.
     tag: latest
-    # -- NUMA resource plugin image pull policy.
-    pullPolicy: Always
 rbac:
   # Specifies whether RBAC resources should be created
   # -- RBAC switch. Not read by the chart templates.
