@@ -1447,6 +1447,21 @@ spec:
                         sets it from spec.environment, as it sets OpenShift; the node agent reads
                         it as TALOS_CLUSTER.
                       type: boolean
+                    talosMachineConfig:
+                      description: |-
+                        TalosMachineConfig is who writes a Talos worker's machine config: the
+                        huge-page pool (machine.sysfs) and the kubelet's CPU topology
+                        (machine.kubelet.extraConfig). Preprovisioned, the default, is the
+                        cluster's operator, before the node is added: the node verifies both,
+                        applies nothing, and fails the add with the patch to apply, so no Talos
+                        API credentials exist in the namespace. Managed is the node itself,
+                        through the Talos API as talosctl Jobs, which needs the os:admin Secret
+                        the Talos API access feature issues. Read only when Talos is stated; the
+                        node agent reads it as TALOS_MACHINE_CONFIG.
+                      enum:
+                        - Preprovisioned
+                        - Managed
+                      type: string
                     talosctlImage:
                       description: |-
                         TalosctlImage is the talosctl image the node runs as a Job on a Talos
