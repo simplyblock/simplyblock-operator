@@ -1474,6 +1474,19 @@ spec:
                       rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks)
                         ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4, 1],
                         [1, 2], [2, 2], [4, 2]]'
+                  talosMachineConfig:
+                    description: |-
+                      TalosMachineConfig is who writes a Talos worker's machine config, the
+                      huge-page pool and the kubelet's CPU topology. Preprovisioned, the
+                      default, is the cluster's operator, before the nodes are added: a node
+                      verifies and fails its add with the patch to apply. Managed is the node
+                      itself, through the Talos API, which needs the os:admin credentials
+                      Secret in the namespace. It is valid only when spec.environment is
+                      Talos, and lands on StorageCluster.spec.storageNodes.talosMachineConfig.
+                    enum:
+                    - Preprovisioned
+                    - Managed
+                    type: string
                   tolerations:
                     description: |-
                       Tolerations are what the storage-node pods tolerate, and they expand into
@@ -2036,6 +2049,10 @@ spec:
               rule: '!has(self.cluster) || (!has(self.cluster.enableCpuTopology) &&
                 !has(self.cluster.enableKubeletConfiguration)) || (has(self.environment)
                 && self.environment == ''Vanilla'')'
+            - message: spec.cluster.talosMachineConfig is what a deployment onto Talos
+                states, so spec.environment has to be Talos
+              rule: '!has(self.cluster) || !has(self.cluster.talosMachineConfig) ||
+                (has(self.environment) && self.environment == ''Talos'')'
           status:
             properties:
               clusterRef:
@@ -9142,6 +9159,21 @@ spec:
                       sets it from spec.environment, as it sets OpenShift; the node agent reads
                       it as TALOS_CLUSTER.
                     type: boolean
+                  talosMachineConfig:
+                    description: |-
+                      TalosMachineConfig is who writes a Talos worker's machine config: the
+                      huge-page pool (machine.sysfs) and the kubelet's CPU topology
+                      (machine.kubelet.extraConfig). Preprovisioned, the default, is the
+                      cluster's operator, before the node is added: the node verifies both,
+                      applies nothing, and fails the add with the patch to apply, so no Talos
+                      API credentials exist in the namespace. Managed is the node itself,
+                      through the Talos API as talosctl Jobs, which needs the os:admin Secret
+                      the Talos API access feature issues. Read only when Talos is stated; the
+                      node agent reads it as TALOS_MACHINE_CONFIG.
+                    enum:
+                    - Preprovisioned
+                    - Managed
+                    type: string
                   talosctlImage:
                     description: |-
                       TalosctlImage is the talosctl image the node runs as a Job on a Talos
@@ -15645,6 +15677,19 @@ spec:
                           rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks)
                             ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4,
                             1], [1, 2], [2, 2], [4, 2]]'
+                      talosMachineConfig:
+                        description: |-
+                          TalosMachineConfig is who writes a Talos worker's machine config, the
+                          huge-page pool and the kubelet's CPU topology. Preprovisioned, the
+                          default, is the cluster's operator, before the nodes are added: a node
+                          verifies and fails its add with the patch to apply. Managed is the node
+                          itself, through the Talos API, which needs the os:admin credentials
+                          Secret in the namespace. It is valid only when spec.environment is
+                          Talos, and lands on StorageCluster.spec.storageNodes.talosMachineConfig.
+                        enum:
+                        - Preprovisioned
+                        - Managed
+                        type: string
                       tolerations:
                         description: |-
                           Tolerations are what the storage-node pods tolerate, and they expand into
@@ -16280,6 +16325,23 @@ spec:
                         - Always
                         - Never
                         - IfNotPresent
+                        type: string
+                    type: object
+                  talosctl:
+                    description: |-
+                      Talosctl is the talosctl image a Talos worker's node runs as a Job to
+                      reserve its huge pages through the Talos API. It is the fleet's, written
+                      to StorageCluster.spec.storageNodes.talosctlImage: one DaemonSet, one Job
+                      image. Unstated keeps the node agent's default; a deployment pins it to
+                      the cluster's Talos minor, or to a mirror on an air-gapped site. Read only
+                      for a document whose environment is Talos.
+                    properties:
+                      image:
+                        description: |-
+                          Image is the repository and tag, optionally digest-pinned, on any
+                          registry. An empty value is not written downstream, so the field it would
+                          fill keeps its own default.
+                        pattern: ^($|[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?/[a-z0-9][a-z0-9._/-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                         type: string
                     type: object
                 type: object
@@ -17273,6 +17335,19 @@ spec:
                                   has(self.parityChunks) ? self.parityChunks : 1]
                                   in [[1, 0], [1, 1], [2, 1], [4, 1], [1, 2], [2,
                                   2], [4, 2]]'
+                            talosMachineConfig:
+                              description: |-
+                                TalosMachineConfig is who writes a Talos worker's machine config, the
+                                huge-page pool and the kubelet's CPU topology. Preprovisioned, the
+                                default, is the cluster's operator, before the nodes are added: a node
+                                verifies and fails its add with the patch to apply. Managed is the node
+                                itself, through the Talos API, which needs the os:admin credentials
+                                Secret in the namespace. It is valid only when spec.environment is
+                                Talos, and lands on StorageCluster.spec.storageNodes.talosMachineConfig.
+                              enum:
+                              - Preprovisioned
+                              - Managed
+                              type: string
                             tolerations:
                               description: |-
                                 Tolerations are what the storage-node pods tolerate, and they expand into
