@@ -648,6 +648,18 @@ type StorageNodesSpec struct {
 	// +optional
 	TalosctlImage string `json:"talosctlImage,omitempty"`
 
+	// TalosMachineConfig is who writes a Talos worker's machine config: the
+	// huge-page pool (machine.sysfs) and the kubelet's CPU topology
+	// (machine.kubelet.extraConfig). Preprovisioned, the default, is the
+	// cluster's operator, before the node is added: the node verifies both,
+	// applies nothing, and fails the add with the patch to apply, so no Talos
+	// API credentials exist in the namespace. Managed is the node itself,
+	// through the Talos API as talosctl Jobs, which needs the os:admin Secret
+	// the Talos API access feature issues. Read only when Talos is stated; the
+	// node agent reads it as TALOS_MACHINE_CONFIG.
+	// +optional
+	TalosMachineConfig TalosMachineConfigMode `json:"talosMachineConfig,omitempty"`
+
 	// OpenShift is what this deployment states because it runs on OpenShift,
 	// and its presence is that statement. See OpenShiftSpec.
 	// +optional
@@ -1650,3 +1662,18 @@ type NetworkDefinitionReference struct {
 	// +optional
 	AddressPool *NetworkAddressPool `json:"addressPool,omitempty"`
 }
+
+// TalosMachineConfigMode is who writes a Talos worker's machine config, the
+// huge-page pool and the kubelet's CPU topology.
+// +kubebuilder:validation:Enum=Preprovisioned;Managed
+type TalosMachineConfigMode string
+
+const (
+	// TalosMachineConfigPreprovisioned: the cluster's operator puts the pool
+	// and the kubelet settings in the machine config before the node is
+	// added; the node verifies them and applies nothing. The default.
+	TalosMachineConfigPreprovisioned TalosMachineConfigMode = "Preprovisioned"
+	// TalosMachineConfigManaged: the node patches the machine config through
+	// the Talos API, with the os:admin credentials Secret in the namespace.
+	TalosMachineConfigManaged TalosMachineConfigMode = "Managed"
+)

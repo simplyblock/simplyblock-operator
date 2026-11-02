@@ -490,6 +490,12 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		// path over a write to a host it cannot reach.
 		workload.Talos = ptr.To(true)
 		workload.EnableKubeletConfiguration = ptr.To(true)
+		// Who writes the machine config those settings live in. Unstated is
+		// Preprovisioned, the agent's own default, left unstated here too so
+		// the cluster reads as the document did.
+		if config.Spec.Cluster != nil {
+			workload.TalosMachineConfig = config.Spec.Cluster.TalosMachineConfig
+		}
 	case simplyblockv1alpha2.KubernetesEnvironmentEKS,
 		simplyblockv1alpha2.KubernetesEnvironmentGKE,
 		simplyblockv1alpha2.KubernetesEnvironmentAKS,
