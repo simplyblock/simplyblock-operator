@@ -396,6 +396,9 @@ func TestDiscoverFailsWhenNoWorkerIsFree(t *testing.T) {
 	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseFailed {
 		t.Fatalf("the run is %q, want Failed", ops.Status.Phase)
 	}
+	if ops.Status.Step.State != string(simplyblockv1alpha2.OperatorOpsStepInspecting) {
+		t.Errorf("a failed run is on step %q, want the step it broke on, Inspecting", ops.Status.Step.State)
+	}
 	if !strings.Contains(ops.Status.Message, "no worker is free") {
 		t.Errorf("the message is %q, and it does not say what was wrong", ops.Status.Message)
 	}
@@ -469,6 +472,9 @@ func TestDiscoverWritesADraftFromTheReports(t *testing.T) {
 	}
 	if ops.Status.CompletedAt == nil {
 		t.Error("a finished run does not say when it finished")
+	}
+	if ops.Status.Step.State != string(simplyblockv1alpha2.OperatorOpsStepCompleted) {
+		t.Errorf("a succeeded run is on step %q, want Completed", ops.Status.Step.State)
 	}
 
 	configs := r.configs()

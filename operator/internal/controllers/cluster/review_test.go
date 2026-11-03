@@ -264,7 +264,8 @@ func TestAStepIsNeverPersistedWithoutItsDeadline(t *testing.T) {
 				obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption,
 			) error {
 				if ops, ok := obj.(*simplyblockv1alpha2.StorageClusterOps); ok {
-					if s := ops.Status.Step; s.State != "" && s.Deadline == nil {
+					// A terminal operation is never restored into a machine, so its step needs no deadline.
+					if s := ops.Status.Step; s.State != "" && s.Deadline == nil && !terminalOps(ops.Status.Phase) {
 						unbounded = append(unbounded, s.State)
 					}
 				}

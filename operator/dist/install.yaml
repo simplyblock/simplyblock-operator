@@ -2190,7 +2190,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Validating'',''CreatingCluster'',''AwaitingCluster'',''CreatingNodes'',''Activating'']'
+                  rule: '!has(self.state) || self.state in [''Validating'',''CreatingCluster'',''AwaitingCluster'',''CreatingNodes'',''Activating'',''Completed'']'
             type: object
         type: object
     served: true
@@ -2455,7 +2455,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Draining'',''Restarting'',''Awaiting'',''Preflight'',''Applying'',''Verifying'',''Requesting'']'
+                  rule: '!has(self.state) || self.state in [''Draining'',''Restarting'',''Awaiting'',''Preflight'',''Applying'',''Verifying'',''Requesting'',''Completed'']'
             type: object
         type: object
     served: true
@@ -3244,9 +3244,9 @@ spec:
                 type: string
               step:
                 description: |-
-                  Step is the position of the installation machine within Installing. The
-                  rule repeats the ControlPlaneStep enum because a marker cannot reach a
-                  field of the shared snapshot type.
+                  Step is the position of the installation machine, and Installed once the
+                  installation is complete. The rule repeats the ControlPlaneStep enum
+                  because a marker cannot reach a field of the shared snapshot type.
                 properties:
                   claim:
                     description: |-
@@ -3287,7 +3287,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''ApplyingFoundationDB'',''AwaitingFoundationDB'',''BuildingIndices'',''ApplyingDatastore'',''ApplyingAPI'',''AwaitingAPI'']'
+                  rule: '!has(self.state) || self.state in [''ApplyingFoundationDB'',''AwaitingFoundationDB'',''BuildingIndices'',''ApplyingDatastore'',''ApplyingAPI'',''AwaitingAPI'',''Installed'']'
               version:
                 description: Version is the version the management API reports.
                 type: string
@@ -3967,7 +3967,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Inspecting'',''Probing'',''Writing'']'
+                  rule: '!has(self.state) || self.state in [''Inspecting'',''Probing'',''Writing'',''Completed'']'
               workers:
                 description: |-
                   Workers are the workers this run is inspecting, decided once in
@@ -4530,7 +4530,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'',''Verifying'',''Replicating'',''Committing'',''AwaitingCutover'',''AttachingPaths'',''Proceeding'']'
+                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'',''Verifying'',''Replicating'',''Committing'',''AwaitingCutover'',''AttachingPaths'',''Proceeding'',''Completed'']'
             type: object
         type: object
     served: true
@@ -6540,7 +6540,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Validating'',''Restoring'',''AwaitingVolume'',''AwaitingVolumes'',''Binding'']'
+                  rule: '!has(self.state) || self.state in [''Validating'',''Restoring'',''AwaitingVolume'',''AwaitingVolumes'',''Binding'',''Completed'']'
             type: object
         required:
         - spec
@@ -7737,7 +7737,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'',''ShuttingDown'',''Starting'',''CheckingPeers'',''ShuttingDownNode'',''RefreshingPod'',''AwaitingPod'',''RestartingNode'',''Rebalancing'']'
+                  rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'',''ShuttingDown'',''Starting'',''CheckingPeers'',''ShuttingDownNode'',''RefreshingPod'',''AwaitingPod'',''RestartingNode'',''Rebalancing'',''Completed'']'
             type: object
         type: object
     served: true
@@ -10517,7 +10517,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'',''Removing'',''Failing'']'
+                  rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'',''Removing'',''Failing'',''Completed'']'
             type: object
         type: object
     served: true
@@ -11853,7 +11853,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Requesting'',''Departing'',''Awaiting'',''Validating'',''MigratingDevices'',''MigratingVolumes'',''Verifying'',''Removing'',''AwaitingRemoval'',''Preparing'',''Relocating'',''AwaitingNode'',''Promoting'',''Holding'',''ShuttingDown'',''Releasing'',''AwaitingHost'',''Restarting'',''Cleanup'']'
+                  rule: '!has(self.state) || self.state in [''Requesting'',''Departing'',''Awaiting'',''Validating'',''MigratingDevices'',''MigratingVolumes'',''Verifying'',''Removing'',''AwaitingRemoval'',''Preparing'',''Relocating'',''AwaitingNode'',''Promoting'',''Holding'',''ShuttingDown'',''Releasing'',''AwaitingHost'',''Restarting'',''Cleanup'',''Completed'']'
             type: object
         type: object
     served: true
@@ -14090,7 +14090,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'']'
+                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'',''Completed'']'
             type: object
         type: object
     served: true
@@ -18682,6 +18682,7 @@ spec:
                     - Validating
                     - CreatingClaims
                     - WaitingForBind
+                    - Completed
                     type: string
                 type: object
             type: object
