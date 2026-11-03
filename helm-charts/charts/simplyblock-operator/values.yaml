@@ -50,7 +50,7 @@ image:
     # -- NUMA resource plugin image.
     repository: quay.io/simplyblock-io/numa-resource-plugin
     # -- NUMA resource plugin image tag.
-    tag: latest
+    tag: v1.0.0
 rbac:
   # Specifies whether RBAC resources should be created
   # -- RBAC switch. Not read by the chart templates.

@@ -45,9 +45,12 @@ spec:
           effect: NoExecute
       containers:
         - name: numa-plugin
-          image: quay.io/simplyblock-io/numa-resource-plugin:latest
+          image: quay.io/simplyblock-io/numa-resource-plugin:v1.0.0
           imagePullPolicy: Always
           securityContext:
+            # Root, whatever the image's USER: the socket goes into kubelet's
+            # root-owned device-plugins directory with every capability dropped.
+            runAsUser: 0
             privileged: false
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false

@@ -20,7 +20,7 @@ CLUSTER_IMAGE_TAG  ?= 26.4.0-beta1
 SPDK_IMAGE_BASE    ?= public.ecr.aws/simply-block/ultra
 SPDK_IMAGE_TAG     ?= main-latest
 NUMA_PLUGIN_IMAGE_BASE ?= quay.io/simplyblock-io/numa-resource-plugin
-NUMA_PLUGIN_IMAGE_TAG  ?= latest
+NUMA_PLUGIN_IMAGE_TAG  ?= v1.0.0
 
 YQ_CSV_EXPR = .metadata.annotations.containerImage = strenv(OPERATOR_IMG) \
   | .spec.relatedImages = [{"name": "simplyblock-operator", "image": strenv(OPERATOR_IMG)}, \
