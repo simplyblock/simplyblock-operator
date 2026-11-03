@@ -4207,6 +4207,34 @@ spec:
                     description: Joined is set once the volume is a member of the
                       group.
                     type: boolean
+                  leave:
+                    description: |-
+                      Leave is the progress of leaving the consistency group the volume was a
+                      member of when the operation started. It is absent when the volume was in
+                      no group, or already in the one spec.groupName names.
+                    properties:
+                      detached:
+                        description: Detached is set once the volume is no longer
+                          a member of that group.
+                        type: boolean
+                      groupUUID:
+                        description: GroupUUID is the backend UUID of the group the
+                          volume leaves.
+                        type: string
+                      split:
+                        description: |-
+                          Split is set once the volume no longer shares an NVMe-oF subsystem with
+                          the members of the group it leaves.
+                        type: boolean
+                      splitNQN:
+                        description: |-
+                          SplitNQN is the NVMe-oF subsystem the volume was moved into when it
+                          shared its subsystem with that group's members. It is empty when the
+                          volume shared its subsystem with no other volume.
+                        type: string
+                    required:
+                    - groupUUID
+                    type: object
                   migrationName:
                     description: |-
                       MigrationName is the Migrate operation this one created to bring the
@@ -4592,7 +4620,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'',''Verifying'',''Replicating'',''Committing'',''AwaitingCutover'',''AttachingPaths'',''Proceeding'',''Planning'',''Joining'',''SelectingSubsystem'',''PreparingTarget'',''Suspending'',''MovingNamespaces'',''Resuming'',''ReleasingPaths'']'
+                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'',''Verifying'',''Replicating'',''Committing'',''AwaitingCutover'',''AttachingPaths'',''Proceeding'',''Planning'',''Joining'',''SelectingSubsystem'',''PreparingTarget'',''Suspending'',''MovingNamespaces'',''Resuming'',''ReleasingPaths'',''Leaving'']'
             type: object
         type: object
     served: true
