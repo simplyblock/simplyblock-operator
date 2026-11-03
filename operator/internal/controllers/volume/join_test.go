@@ -360,8 +360,8 @@ func TestEnteringTheNextStepReplacesTheWaitingMessageOfThePreviousOne(t *testing
 	w := newJoinWorld(t)
 	w.offPin()
 
-	ops := w.runUntil(stepJoinMigrating, 10)
-	ops = w.run(2)
+	w.runUntil(stepJoinMigrating, 10)
+	ops := w.run(2)
 	if !strings.Contains(ops.Status.Message, "waiting on Migrating") {
 		t.Fatalf("message = %q while the child runs, want it waiting on Migrating", ops.Status.Message)
 	}
