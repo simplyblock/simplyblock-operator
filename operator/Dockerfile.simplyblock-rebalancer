@@ -61,6 +61,7 @@ RUN dnf update -y --nogpgcheck && \
     && dnf clean all
 
 COPY --from=builder /workspace/simplyblock-rebalancer /usr/local/bin/simplyblock-rebalancer
+COPY LICENSE /licenses/LICENSE
 
 # The image defaults to a non-root user (uid 65532) for OpenShift SCC and Red
 # Hat certification. The operator runs every container of this image as root:
