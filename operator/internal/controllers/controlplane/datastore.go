@@ -36,8 +36,8 @@ import (
 // still renders the same value into the observability half's objstore
 // configuration, because the two have to agree.
 const (
-	minioImage       = "quay.io/simplyblock-io/minio:RELEASE.2024-01-16T16-07-38Z"
-	minioClientImage = "quay.io/simplyblock-io/minio-client:RELEASE.2024-01-16T16-06-34Z"
+	minioImage       = "quay.io/simplyblock-io/minio:RELEASE.2024-01-16T16-07-38Z@sha256:4c4a4876193f030c81f57aabb22bcb9a73462010eb61fcab66908e03e5484af8"
+	minioClientImage = "quay.io/simplyblock-io/minio-client:RELEASE.2024-01-16T16-06-34Z@sha256:591b097ea2d44edb157b86938d332c749291d01785b20457f31ffef9664b3fdb"
 
 	minioAccessKey = "minioadmin"
 	minioSecretKey = "minioadmin"
@@ -105,7 +105,7 @@ func minioStatefulSet(cp *simplyblockv1alpha2.ControlPlane) *appsv1.StatefulSet 
 		Containers: []corev1.Container{
 			{
 				Name:            "minio",
-				Image:           minioImage,
+				Image:           image(minioImage),
 				ImagePullPolicy: pullPolicyOf(cp.Spec.Source.Local),
 				Args:            []string{"server", "/data", "--console-address=:9001"},
 				Env:             credentials,
@@ -132,7 +132,7 @@ func minioStatefulSet(cp *simplyblockv1alpha2.ControlPlane) *appsv1.StatefulSet 
 				// zero in a StatefulSet pod is restarted, and the bucket would
 				// be re-made on every restart forever.
 				Name:            "bucket-init",
-				Image:           minioClientImage,
+				Image:           image(minioClientImage),
 				ImagePullPolicy: pullPolicyOf(cp.Spec.Source.Local),
 				Command: []string{"sh", "-c", `until mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
   echo "Waiting for the object store..."; sleep 3;

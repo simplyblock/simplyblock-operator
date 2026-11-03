@@ -133,7 +133,7 @@ const (
 // registered kind merges these with the phases above into one enum, so that
 // Validating sits beside Completed and neither can be read without the other's
 // values in mind.
-// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Replicating;Committing;AwaitingCutover;AttachingPaths;Proceeding;Planning;Joining;SelectingSubsystem;PreparingTarget;Suspending;MovingNamespaces;Resuming;ReleasingPaths;Leaving
+// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Replicating;Committing;AwaitingCutover;AttachingPaths;Proceeding;Completed;Planning;Joining;SelectingSubsystem;PreparingTarget;Suspending;MovingNamespaces;Resuming;ReleasingPaths;Leaving
 type PersistentVolumeOpsStep string
 
 const (
@@ -170,6 +170,8 @@ const (
 	// PersistentVolumeOpsStepProceeding releases a volume's cutover once its
 	// consumers hold the target's paths.
 	PersistentVolumeOpsStepProceeding PersistentVolumeOpsStep = "Proceeding"
+	// PersistentVolumeOpsStepCompleted is the terminal step of an operation that succeeded.
+	PersistentVolumeOpsStepCompleted PersistentVolumeOpsStep = "Completed"
 
 	// PersistentVolumeOpsStepPlanning resolves the consistency group and checks
 	// that the volume can join it and that the group's node can hold the NVMe-oF
@@ -721,7 +723,7 @@ type PersistentVolumeOpsStatus struct {
 	// Step is the position of the running action's state machine. It is
 	// persisted before the side effect that step performs, so a step reported
 	// here is a step that started.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating','Verifying','Replicating','Committing','AwaitingCutover','AttachingPaths','Proceeding','Planning','Joining','SelectingSubsystem','PreparingTarget','Suspending','MovingNamespaces','Resuming','ReleasingPaths','Leaving']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating','Verifying','Replicating','Committing','AwaitingCutover','AttachingPaths','Proceeding','Completed','Planning','Joining','SelectingSubsystem','PreparingTarget','Suspending','MovingNamespaces','Resuming','ReleasingPaths','Leaving']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

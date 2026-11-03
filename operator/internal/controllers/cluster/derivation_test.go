@@ -151,7 +151,7 @@ func TestTheBackupStoreResolvesItsCredentials(t *testing.T) {
 			Endpoint:             "https://203.0.113.20:9000",
 			Bucket:               "simplyblock-backups",
 			Region:               "eu-central-1",
-			CredentialsSecretRef: corev1.LocalObjectReference{Name: "backup-credentials"},
+			CredentialsSecretRef: &corev1.LocalObjectReference{Name: "backup-credentials"},
 		}
 	})
 	r := newClusterReconciler(t, &fakeControlPlane{}, &recorder{}, cluster, secret)
@@ -172,6 +172,35 @@ func TestTheBackupStoreResolvesItsCredentials(t *testing.T) {
 	}
 }
 
+// A store authenticating through ProviderChain names no Secret at all, so
+// backupConfig sends the same empty key pair the control plane already maps
+// to "use the AWS default credential provider chain" (backup_config.py),
+// without reading any Secret.
+func TestTheBackupStoreAuthenticatesThroughTheProviderChain(t *testing.T) {
+	cluster := newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.Spec.Backup = &simplyblockv1alpha2.BackupStoreSpec{
+			Endpoint: "https://203.0.113.20:9000",
+			Bucket:   "simplyblock-backups",
+			Region:   "eu-central-1",
+			Credentials: &simplyblockv1alpha2.BackupCredentials{
+				Source: simplyblockv1alpha2.BackupCredentialsSourceProviderChain,
+			},
+		}
+	})
+	r := newClusterReconciler(t, &fakeControlPlane{}, &recorder{}, cluster)
+
+	got, err := r.backupConfig(context.Background(), cluster)
+	if err != nil {
+		t.Fatalf("backupConfig: %v", err)
+	}
+	if got.AccessKeyID != "" || got.SecretAccessKey != "" {
+		t.Errorf("ProviderChain sent a static key: %+v", got)
+	}
+	if got.Endpoint != "https://203.0.113.20:9000" || got.BucketName != "simplyblock-backups" {
+		t.Errorf("the store's location was not carried: %+v", got)
+	}
+}
+
 // A Secret missing one of the two keys is as unusable as a missing Secret, and
 // is refused rather than sent half-filled.
 func TestABackupSecretMissingAKeyIsRefused(t *testing.T) {
@@ -183,7 +212,7 @@ func TestABackupSecretMissingAKeyIsRefused(t *testing.T) {
 		c.Spec.Backup = &simplyblockv1alpha2.BackupStoreSpec{
 			Endpoint:             "https://203.0.113.20:9000",
 			Bucket:               "simplyblock-backups",
-			CredentialsSecretRef: corev1.LocalObjectReference{Name: "backup-credentials"},
+			CredentialsSecretRef: &corev1.LocalObjectReference{Name: "backup-credentials"},
 		}
 	})
 	r := newClusterReconciler(t, &fakeControlPlane{}, &recorder{}, cluster, secret)

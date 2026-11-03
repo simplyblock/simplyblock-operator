@@ -23,7 +23,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
@@ -32,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -70,18 +70,32 @@ type ControlPlaneReconciler struct {
 	// Prober performs the readiness and version reads. It is an interface so the
 	// phase branches can be exercised without an HTTP server.
 	Prober Prober
+
+	// ImageMirrorRegistry is the registry every image this install deploys is
+	// pulled from on an air-gapped cluster. Empty keeps the upstream registries.
+	ImageMirrorRegistry string
+
+	// NUMAPluginImage is the NUMA device plugin's image. Empty keeps the image
+	// the embedded manifest names.
+	NUMAPluginImage string
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=controlplanes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=controlplanes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=controlplanes/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
-// +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets;daemonsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts;configmaps;services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings;clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete;escalate;bind
 // +kubebuilder:rbac:groups=apps.foundationdb.org,resources=foundationdbclusters;foundationdbbackups,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=create
+// +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;patch,resourceNames=foundationdbbackups.apps.foundationdb.org;foundationdbclusters.apps.foundationdb.org;foundationdbrestores.apps.foundationdb.org;certificaterequests.cert-manager.io;certificates.cert-manager.io;challenges.acme.cert-manager.io;clusterissuers.cert-manager.io;issuers.cert-manager.io;orders.acme.cert-manager.io;volumesnapshotclasses.snapshot.storage.k8s.io;volumesnapshotcontents.snapshot.storage.k8s.io;volumesnapshots.snapshot.storage.k8s.io;volumegroupsnapshotclasses.groupsnapshot.storage.k8s.io;volumegroupsnapshotcontents.groupsnapshot.storage.k8s.io;volumegroupsnapshots.groupsnapshot.storage.k8s.io
+// +kubebuilder:rbac:groups=cert-manager.io,resources=clusterissuers,verbs=get;create;patch
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;create;patch
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch;create;patch
+// +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=mutatingwebhookconfigurations;validatingwebhookconfigurations,verbs=get;create;patch
 
 // Reconcile advances the control plane by at most one step.
 func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -135,6 +149,10 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	if err := r.applyNUMAPlugin(ctx, &cp); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	switch {
 	case isManaged(&cp):
 		return r.reconcileManaged(ctx, &cp)
@@ -152,7 +170,7 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 }
 
 // reconcileManaged resolves the endpoint, probes it, and reports. The operator
-// installs nothing and owns no components here, so status.components stays empty
+// installs no control plane and owns no components here, so status.components stays empty
 // and the probe is the only signal: the phase is Available or Unavailable, and
 // Degraded is unreachable (§4.3).
 func (r *ControlPlaneReconciler) reconcileManaged(
@@ -191,15 +209,13 @@ func (r *ControlPlaneReconciler) reconcileManaged(
 func (r *ControlPlaneReconciler) reconcileLocal(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) (ctrl.Result, error) {
-	// The FoundationDB kinds are a prerequisite rather than something to wait
-	// on: creating a FoundationDBCluster against a group the API server does not
-	// serve is an error on every attempt, and the CRDs are the chart's to apply.
-	if served, err := r.foundationDBServed(); err != nil {
+	// The add-ons the install depends on are detected before the first step.
+	// Missing ones are installed where allowed, and the install holds until the
+	// cluster serves them: creating an object of a kind the API server does not
+	// know is an error on every attempt, not a wait.
+	if held, message, err := r.ensurePrerequisites(ctx, cp); err != nil {
 		return ctrl.Result{}, err
-	} else if !served {
-		message := fmt.Sprintf(
-			"the Kubernetes cluster does not serve %s/%s, so the FoundationDB this control "+
-				"plane stores its state in cannot be created", fdbGroup, fdbVersion)
+	} else if held {
 		r.emit(cp, corev1.EventTypeWarning, PrerequisiteMissing, message)
 		return ctrl.Result{RequeueAfter: installRetry}, r.report(ctx, cp,
 			simplyblockv1alpha2.ControlPlanePhaseInstalling, message)
@@ -270,9 +286,8 @@ func (r *ControlPlaneReconciler) install(
 
 	next, ok := nextStep(machine)
 	if !ok {
-		// AwaitingAPI is terminal, and reaching it is what makes the control
-		// plane Available. The step is left on the object as the record of how
-		// the install finished.
+		// AwaitingAPI is the last install step, and finishing it is what makes
+		// the control plane Available. Steady state records the step Installed.
 		return r.steadyState(ctx, cp)
 	}
 	if err := machine.TransitionTo(ctx, next); err != nil {
@@ -311,7 +326,11 @@ func (r *ControlPlaneReconciler) performInstallStep(
 		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, datastoreObjects(cp))
 
 	case stepApplyingAPI:
-		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, managementAPIObjects(cp))
+		objects, err := r.managementAPIStamped(ctx, cp)
+		if err != nil {
+			return false, "", err
+		}
+		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, objects)
 
 	case stepAwaitingAPI:
 		access, err := localAccess(cp)
@@ -367,6 +386,7 @@ func (r *ControlPlaneReconciler) steadyState(
 		version:    r.version(ctx, access),
 		components: components,
 		probed:     true,
+		installed:  true,
 	})
 }
 
@@ -376,10 +396,14 @@ func (r *ControlPlaneReconciler) steadyState(
 func (r *ControlPlaneReconciler) applyEverything(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) error {
+	api, err := r.managementAPIStamped(ctx, cp)
+	if err != nil {
+		return err
+	}
 	for _, set := range [][]client.Object{
 		datastoreObjects(cp),
 		foundationDBObjects(cp),
-		managementAPIObjects(cp),
+		api,
 	} {
 		if err := applyAll(ctx, r.Client, cp, r.Scheme, set); err != nil {
 			return err
@@ -437,6 +461,10 @@ type statusUpdate struct {
 	// probed says whether this pass ran the readiness probe, which is what makes
 	// status.lastChecked mean what it says.
 	probed bool
+
+	// installed marks the installation complete, which a local control plane
+	// in steady state is.
+	installed bool
 }
 
 // publish writes the conclusion of one pass.
@@ -454,6 +482,11 @@ func (r *ControlPlaneReconciler) publish(
 		if update.probed {
 			now := metav1.Now()
 			status.LastChecked = &now
+		}
+		if update.installed {
+			status.Step = statemachine.KubeSnapshot{
+				State: string(simplyblockv1alpha2.ControlPlaneStepInstalled),
+			}
 		}
 	})
 }
@@ -677,22 +710,6 @@ func olderThan(a, b *simplyblockv1alpha2.ControlPlane) bool {
 	return a.Name < b.Name
 }
 
-// foundationDBServed reports whether the API server knows the FoundationDB
-// kinds. It asks the manager's RESTMapper rather than a discovery client,
-// because the mapper is already backed by discovery and is what an apply would
-// consult anyway.
-func (r *ControlPlaneReconciler) foundationDBServed() (bool, error) {
-	_, err := r.RESTMapper().RESTMapping(fdbClusterGVK.GroupKind(), fdbClusterGVK.Version)
-	switch {
-	case err == nil:
-		return true, nil
-	case meta.IsNoMatchError(err):
-		return false, nil
-	default:
-		return false, err
-	}
-}
-
 // writeStatus applies a mutation to the live status, retrying a conflict. The
 // observed generation is stamped here rather than by each caller, so that no
 // path can write a phase without saying which spec it was computed from.
@@ -757,16 +774,25 @@ func errorsAs[T error](err error, target *T) bool {
 // its completion advances the installation rather than the retry interval doing
 // it.
 //
+// The cluster-file ConfigMap is watched too, so a coordinator move restamps the
+// workloads that mount it.
+//
 // The ControlPlane's own watch is filtered to generation changes. Every probe
 // stamps status.lastChecked, and an unfiltered watch turns that write into
 // another reconcile, which probes and stamps again.
 func (r *ControlPlaneReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	SetImageMirrorRegistry(r.ImageMirrorRegistry)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha2.ControlPlane{},
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).
+		Owns(&appsv1.DaemonSet{}).
 		Owns(&batchv1.Job{}).
+		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.clusterFileRequests),
+			builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
+				return o.GetName() == clusterFileConfigMapName
+			}))).
 		Named("controlplane").
 		Complete(r)
 }

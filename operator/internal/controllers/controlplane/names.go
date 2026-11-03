@@ -45,6 +45,10 @@ const (
 	// in.
 	ComponentMinio = "simplyblock-minio"
 
+	// ComponentPrometheus keeps the metrics the control plane pushes, and its
+	// Thanos sidecar uploads them to the object store.
+	ComponentPrometheus = "simplyblock-prometheus"
+
 	// ComponentFDBCluster is the FoundationDBCluster, whose readiness is that
 	// resource's own report rather than a replica count: a cluster at two of
 	// three coordinators is serving and a count cannot say so.

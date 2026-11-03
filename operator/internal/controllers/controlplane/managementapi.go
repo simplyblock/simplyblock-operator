@@ -40,18 +40,6 @@ import (
 // reason the database's images are.
 const fdbExporterImage = "aikoven/foundationdb-exporter:3.1.0"
 
-// restartOnClusterFileChange is what makes a coordinator change reach the pods
-// that hold a connection to the old one. The reloader watches the ConfigMap the
-// FoundationDB operator writes and rolls whatever carries this annotation.
-//
-// The reloader itself is a chart dependency and stays one. A control plane
-// installed without it keeps working and takes a coordinator change on the next
-// restart instead of at once, which is a degradation rather than a break.
-var restartOnClusterFileChange = map[string]string{
-	"reloader.stakater.com/auto":      "true",
-	"reloader.stakater.com/configmap": clusterFileConfigMapName,
-}
-
 // managementAPIObjects is everything the ApplyingAPI step writes, in the order it
 // depends on itself: the account and the configuration, then the roles that name
 // the account, then the workloads that run under it, then the Service in front
@@ -60,7 +48,7 @@ func managementAPIObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object 
 	ns := cp.Namespace
 	//nolint:prealloc // the literal is the declaration; the append below is the conditional set
 	objects := []client.Object{
-		serviceAccount(ns, serviceAccountName),
+		serviceAccount(ns, serviceAccountName, eksRoleARNAnnotation(cp)),
 		sharedConfigMap(ns),
 		controlPlaneClusterRole(),
 		controlPlaneClusterRoleBinding(ns),
@@ -76,7 +64,19 @@ func managementAPIObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object 
 		fdbExporterDeployment(cp),
 		fdbExporterService(ns),
 	}
+	objects = append(objects, prometheusObjects(cp)...)
 	return append(objects, servingCertificateObjects(cp)...)
+}
+
+// eksRoleARNAnnotation is the annotation that makes serviceAccountName
+// authenticate through its IAM role on Amazon EKS, read from the local
+// control plane's spec.source.local.eksRoleARN, or nil when it carries none.
+func eksRoleARNAnnotation(cp *simplyblockv1alpha2.ControlPlane) map[string]string {
+	local := cp.Spec.Source.Local
+	if local == nil || local.EKSRoleARN == "" {
+		return nil
+	}
+	return map[string]string{utils.EKSRoleARNAnnotation: local.EKSRoleARN}
 }
 
 // managementAPIClusterScoped is the half of that set the garbage collector will
@@ -318,9 +318,8 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        ComponentWebAPI,
-			Namespace:   cp.Namespace,
-			Annotations: restartOnClusterFileChange,
+			Name:      ComponentWebAPI,
+			Namespace: cp.Namespace,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr.To(apiReplicas(managed)),
@@ -472,9 +471,8 @@ func servicePoolDeployment(
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        name,
-			Namespace:   cp.Namespace,
-			Annotations: restartOnClusterFileChange,
+			Name:      name,
+			Namespace: cp.Namespace,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr.To(int32(1)),
@@ -539,9 +537,8 @@ func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploy
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        ComponentAdminControl,
-			Namespace:   cp.Namespace,
-			Annotations: restartOnClusterFileChange,
+			Name:      ComponentAdminControl,
+			Namespace: cp.Namespace,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr.To(apiReplicas(managed)),
@@ -638,10 +635,9 @@ func fdbExporterDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        ComponentFDBExporter,
-			Namespace:   cp.Namespace,
-			Labels:      labels,
-			Annotations: restartOnClusterFileChange,
+			Name:      ComponentFDBExporter,
+			Namespace: cp.Namespace,
+			Labels:    labels,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr.To(int32(1)),

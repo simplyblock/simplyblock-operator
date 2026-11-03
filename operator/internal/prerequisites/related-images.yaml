@@ -1,0 +1,31 @@
+# Every image the embedded prerequisite manifests and the control-plane install
+# deploy, for mirroring into an air-gapped registry. It is not merged into the
+# CSV's relatedImages, which certification requires to be certified images;
+# images_test.go keeps it in sync with the manifests.
+- name: busybox
+  image: quay.io/simplyblock-io/busybox:1.37.0@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
+- name: local-path-provisioner
+  image: quay.io/simplyblock-io/local-path-provisioner:v0.0.30@sha256:9b914881170048f80ae9302f36e5b99b4a6b18af73a38adc1c66d12f65d360be
+- name: cert-manager-acmesolver
+  image: quay.io/simplyblock-io/cert-manager-acmesolver:v1.16.2@sha256:6ea8176c5baa6a7f6b1262ac7b51f5888006b4c57ec574b708e3bc11c8fe441c
+- name: cert-manager-cainjector
+  image: quay.io/simplyblock-io/cert-manager-cainjector:v1.16.2@sha256:593abc7bf8b926d6fcb9c63b91504ad85e1379b25056aa5dee90b35505ab3211
+- name: cert-manager-controller
+  image: quay.io/simplyblock-io/cert-manager-controller:v1.16.2@sha256:0eec9c89554011c9aa16eea88ab89a91b32dc8d6eb96307b7fc2dcd6bbbc7fcf
+- name: cert-manager-webhook
+  image: quay.io/jetstack/cert-manager-webhook:v1.16.2@sha256:64c4d5dd55d7d00e5b162e21887f9bffbf1e531ee0668eaf801fae9bd54e536d
+- name: snapshot-controller
+  image: quay.io/simplyblock-io/snapshot-controller:v8.2.0@sha256:9dade8f2f3ab29e3919c41b343f8d77b12178ac51f25574d7ed2d45a3e3ef69d
+- name: fdb-kubernetes-operator
+  image: quay.io/simplyblock-io/fdb-kubernetes-operator:v2.13.0@sha256:880d19f6d15198c54b5b03073768d1f8231430c7bbcb4fcb7247eece8e0b7687
+# Mirror this one with its tag: the FoundationDB operator pulls it by tag, not digest.
+- name: fdb-kubernetes-monitor
+  image: quay.io/simplyblock-io/fdb-kubernetes-monitor:7.3.63@sha256:348929437e4203dcf38f7788b85b86723c4250c2a5981213a73b8c6fe238fcd2
+- name: minio
+  image: quay.io/simplyblock-io/minio:RELEASE.2024-01-16T16-07-38Z@sha256:4c4a4876193f030c81f57aabb22bcb9a73462010eb61fcab66908e03e5484af8
+- name: minio-client
+  image: quay.io/simplyblock-io/minio-client:RELEASE.2024-01-16T16-06-34Z@sha256:591b097ea2d44edb157b86938d332c749291d01785b20457f31ffef9664b3fdb
+- name: prometheus
+  image: quay.io/simplyblock-io/prometheus:v2.51.0@sha256:5ccad477d0057e62a7cd1981ffcc43785ac10c5a35522dc207466ff7e7ec845f
+- name: thanos
+  image: quay.io/simplyblock-io/thanos:v0.31.0@sha256:e7d337d6ac2aea3f0f9314ec9830291789e16e2b480b9d353be02d05ce7f2a7e

@@ -64,6 +64,9 @@ spec:
           image: "{{ .Values.image.numaResource.repository }}:{{ .Values.image.numaResource.tag }}"
           imagePullPolicy: {{ .Values.image.numaResource.pullPolicy }}
           securityContext:
+            # Root, whatever the image's USER: the socket goes into kubelet's
+            # root-owned device-plugins directory with every capability dropped.
+            runAsUser: 0
             privileged: false
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false

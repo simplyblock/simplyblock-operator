@@ -694,6 +694,10 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("controlplane-controller"),
+		// Air-gapped clusters pull every image the install deploys from this mirror.
+		ImageMirrorRegistry: os.Getenv("SB_IMAGE_MIRROR_REGISTRY"),
+
+		NUMAPluginImage: os.Getenv(controlplanecontroller.NUMAPluginImageEnv),
 	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlane")
 		os.Exit(1)

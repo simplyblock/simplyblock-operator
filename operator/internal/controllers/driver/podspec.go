@@ -49,6 +49,15 @@ func configMapVolume(name, configMap string, optional bool) corev1.Volume {
 	return corev1.Volume{Name: name, VolumeSource: corev1.VolumeSource{ConfigMap: source}}
 }
 
+// credentialsVolume mounts the Secret the StorageCluster reconciler writes. It is
+// optional so the plugins start, and answer node add's host checks, before the
+// first cluster exists; the driver re-reads the file on every call.
+func credentialsVolume(secret string) corev1.Volume {
+	v := secretVolume("csi-secret", secret)
+	v.Secret.Optional = ptr.To(true)
+	return v
+}
+
 func secretVolume(name, secret string) corev1.Volume {
 	return corev1.Volume{
 		Name:         name,

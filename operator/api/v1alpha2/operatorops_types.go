@@ -49,7 +49,7 @@ const (
 // OperatorOpsStep is one step of a running operator operation. Which steps
 // belong to which action is declared by that action's graph rather than by this
 // type, which is why the enum stays flat as actions are added.
-// +kubebuilder:validation:Enum=Inspecting;Probing;Writing
+// +kubebuilder:validation:Enum=Inspecting;Probing;Writing;Completed
 type OperatorOpsStep string
 
 const (
@@ -63,6 +63,8 @@ const (
 
 	// OperatorOpsStepWriting turns the reports into a ClusterDeploymentConfig.
 	OperatorOpsStepWriting OperatorOpsStep = "Writing"
+	// OperatorOpsStepCompleted is the terminal step of an operation that succeeded.
+	OperatorOpsStepCompleted OperatorOpsStep = "Completed"
 )
 
 // DeviceFilter narrows what a discovery run reports as a candidate device. It is
@@ -247,15 +249,17 @@ type DiscoverSpec struct {
 	// aside: on a worker with ten 10 TB disks that is 10 TB, silently. So the run
 	// does not guess.
 	//
-	// What it does instead depends on the class. An NVMe cluster with no
-	// dedicated journal device carves a journal partition out of every device, so
-	// the run leaves the field unset, says so, and every disk stays storage. A
-	// logical block-device cluster has no such layout — the control plane refuses
-	// the partitioned journal for the class — so the run fails rather than
-	// writing a document that creates the cluster, formats its drives, and then
-	// fails every node_add. Setting this is what asks for one of the equal disks
-	// to be taken anyway, and the draft says the disk was taken rather than
-	// offered.
+	// An NVMe cluster with no dedicated journal device carves a journal
+	// partition out of every device, so the run leaves the field unset, says so,
+	// and every disk stays storage. Setting this is what asks for one of the
+	// equal disks to be taken anyway, and the draft says the disk was taken
+	// rather than offered.
+	//
+	// A logical block-device cluster never proposes a dedicated journal device
+	// on its own: by default each storage node's journal is a partition carved
+	// from its smallest device (the journal split), and every disk carries data.
+	// For that class, setting this dedicates the smallest disk of every node to
+	// the journal, provided every worker hands over at least two disks.
 	//
 	// It does not force the cases that are impossible rather than ambiguous. A
 	// worker handing over a single disk is refused with it or without it, because
@@ -328,7 +332,7 @@ type OperatorOpsStatus struct {
 	Phase OperatorOpsPhase `json:"phase,omitempty"`
 
 	// Step is the position of the running action's state machine.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Inspecting','Probing','Writing']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Inspecting','Probing','Writing','Completed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

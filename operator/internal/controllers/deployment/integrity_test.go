@@ -177,7 +177,7 @@ func TestTheDocumentsBackupStoreReachesTheCluster(t *testing.T) {
 			Endpoint:             "https://s3.example.com",
 			Bucket:               "simplyblock-backups",
 			Region:               "eu-central-1",
-			CredentialsSecretRef: corev1.LocalObjectReference{Name: "backup-credentials"},
+			CredentialsSecretRef: &corev1.LocalObjectReference{Name: "backup-credentials"},
 		}
 	}))
 
@@ -191,8 +191,9 @@ func TestTheDocumentsBackupStoreReachesTheCluster(t *testing.T) {
 	if store.Endpoint != "https://s3.example.com" || store.Region != "eu-central-1" {
 		t.Errorf("the store is %+v, want the document's endpoint and region", store)
 	}
+	//nolint:staticcheck // SA1019: asserting the document carries the deprecated spelling through
 	if store.CredentialsSecretRef.Name != "backup-credentials" {
-		t.Errorf("the store reads its credentials from %q", store.CredentialsSecretRef.Name)
+		t.Errorf("the store reads its credentials from %q", store.CredentialsSecretRef.Name) //nolint:staticcheck // SA1019
 	}
 }
 

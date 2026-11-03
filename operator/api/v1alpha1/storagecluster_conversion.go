@@ -659,17 +659,27 @@ func backupStoreToHub(b *BackupSpec) *v1alpha2.BackupStoreSpec {
 	}
 	return &v1alpha2.BackupStoreSpec{
 		Endpoint:             b.LocalEndpoint,
-		CredentialsSecretRef: corev1.LocalObjectReference{Name: b.CredentialsSecretRef.Name},
+		CredentialsSecretRef: &corev1.LocalObjectReference{Name: b.CredentialsSecretRef.Name},
 	}
 }
 
+// backupStoreFromHub reads whichever of the hub's two credential spellings is
+// set. A hub object authenticating through ProviderChain has no Secret at
+// all, and the registered type has no way to say so, so it arrives with an
+// empty name, as this field already does for every other way the hub's store
+// cannot be expressed here.
 func backupStoreFromHub(b *v1alpha2.BackupStoreSpec) *BackupSpec {
 	if b == nil {
 		return nil
 	}
+	creds, _ := b.EffectiveCredentials()
+	name := ""
+	if creds.SecretRef != nil {
+		name = creds.SecretRef.Name
+	}
 	return &BackupSpec{
 		LocalEndpoint:        b.Endpoint,
-		CredentialsSecretRef: BackupCredentialsSecretRef{Name: b.CredentialsSecretRef.Name},
+		CredentialsSecretRef: BackupCredentialsSecretRef{Name: name},
 	}
 }
 

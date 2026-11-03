@@ -447,6 +447,7 @@ func (r *StorageBackupOpsReconciler) ensurePersistentVolume(
 			StorageClassName: storageClass,
 			Capacity:         corev1.ResourceList{corev1.ResourceStorage: size},
 			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			VolumeMode:       restoredVolumeMode(ops, backup),
 			// Delete, matching what the driver provisions: a restored volume is
 			// an ordinary volume from the moment it exists, and a claim deleted
 			// later should not leave storage behind that nothing references.
@@ -519,6 +520,7 @@ func (r *StorageBackupOpsReconciler) ensureClaim(
 			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			StorageClassName: ptr.To(storageClass),
 			VolumeName:       restoredVolumeName(ops),
+			VolumeMode:       restoredVolumeMode(ops, backup),
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{corev1.ResourceStorage: restoredSize(backup)},
 			},
@@ -644,6 +646,21 @@ func restoredSize(backup *simplyblockv1alpha2.StorageBackup) resource.Quantity {
 		return *resource.NewQuantity(*size, resource.BinarySI)
 	}
 	return *resource.NewQuantity(1<<30, resource.BinarySI)
+}
+
+// restoredVolumeMode is the mode of the restored volume and its claim: the one
+// the request names, else the one recorded from the source volume. Nil when
+// neither says, which leaves the Kubernetes default of Filesystem.
+func restoredVolumeMode(
+	ops *simplyblockv1alpha2.StorageBackupOps, backup *simplyblockv1alpha2.StorageBackup,
+) *corev1.PersistentVolumeMode {
+	if mode := ops.Spec.Restore.VolumeMode; mode != "" {
+		return &mode
+	}
+	if mode := backup.Source().VolumeMode; mode != "" {
+		return &mode
+	}
+	return nil
 }
 
 // restoredVolumeName and the restored logical volume's name are both built from

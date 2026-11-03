@@ -476,8 +476,8 @@ function cdc() {
 // ─── Helm values editor ────────────────────────────────────────────────────
 
 // getAt, setAt, and deleteAt read and write a path, given as its keys, in
-// nested objects. A key may hold dots of its own, as an annotation such as
-// reloader.stakater.com/auto does, so a path is never split on them. deleteAt
+// nested objects. A key may hold dots of its own, as a Prometheus argument such as
+// storage.tsdb.min-block-duration does, so a path is never split on them. deleteAt
 // drops parents it leaves empty, so the overrides stay minimal.
 const getAt = (obj, keys) => keys.reduce((o, k) => (o == null ? undefined : o[k]), obj);
 function setAt(obj, keys, value) {

@@ -349,17 +349,14 @@ gets only the first refusal that applies, in the order listed. Each one is repor
 
 == Journal disk (logical block device mode)
 
-In logical block device mode every worker needs one disk set aside for the journal. The run fails with
-`no document could be drafted: ...` and a `ConfigRefused` event.
+Logical block device mode refuses no worker for its journal. By default the configure of every storage node
+carves a journal partition out of the node's smallest disk (the journal split), so a worker with a single
+disk, such as one RAID-protected storage-array LUN, is drafted too, and every disk carries data. The draft
+leaves `enableJournalDevice` unset and says so in its notes.
 
-#grid(cols, head,
-  [Only one disk], [`<worker> hands over no disk that could carry the journal, and a block cluster has no other journal layout ... Give the worker a second disk, or deploy it as nvme`],
-  [A worker contributes fewer than two disks.],
-  [Add a second disk to the worker, leave the worker out, or deploy in NVMe mode if the disks are NVMe.],
-  [Tied smallest disks], [`<worker> hands over no disk smaller than its others, so nothing says which one carries the journal ...`],
-  [Two or more of the worker's disks share the smallest size, so none is obviously the journal disk. The larger disks do not matter: 1 TB, 1 TB, and 4 TB is refused too.],
-  [Set `spec.discover.forceJournalDevice: true`. One of the disks then becomes the journal; the message states how much capacity that costs.],
-)
+`spec.discover.forceJournalDevice: true` dedicates the smallest disk of every node to the journal instead. It is
+honoured only when every worker hands over at least two disks of known size; otherwise the draft keeps the
+journal split and names the worker that could not give up a disk.
 
 = Draft document checks
 
@@ -379,7 +376,6 @@ spec.approved`.
   [Too many failure domains \ `TooManyFailureDomains`], [`the document would bring the cluster to <n> failure domains, and a cluster maps at most <max>`], [Merge failure domains.],
   [Failure domains do not fit the stripe \ `FailureDomainLayout`], [`failure-domain mode with <scheme> needs at least <n> distinct failure domains (the stripe's parity plus two), and the workers are in <n> (...)` or `failure-domain mode needs an equal number of workers in every failure domain when the cluster is activated, and the domains hold <domain>: <n>, ...`], [Add workers in further failure domains, move workers so every domain holds the same number, choose a stripe with less parity, or set `spec.cluster.enableFailureDomains: false`.],
   [Mixed disk types \ `DeviceClassMismatch`], [`the groups name <class> devices and cluster <name> is built out of <class> ...`], [When adding to an existing cluster, use the same mode (NVMe or logical block devices) the cluster was built with.],
-  [Journal required \ `JournalDeviceRequired`], [`the groups name logical block devices, and the control plane runs those only with the journal on a device of its own ...`], [Set `spec.cluster.enableJournalDevice: true`.],
   [Cluster too large \ `MemberTooLarge`], [`node set <name> makes <n> storage nodes, and a cluster holds at most <max> ...` or `the document adds <n> storage nodes to cluster <name> ...`], [Split the workers into several node sets (each becomes its own cluster), or add fewer nodes.],
   [Name too long \ `MemberNameInvalid`], [`node set <name> makes a member named like <name>, which a StorageCluster cannot be named ...`], [Shorten the cluster or node set name.],
   [Sizing missing \ `MemberSizingUnstated`], [`spec.clusterRef names supercluster <name>, and the members the document adds have no sizing ...`], [Add the cluster settings (`spec.cluster`).],
@@ -472,7 +468,7 @@ All under `spec.discover` of the OperatorOps.
 #grid((1.5fr, 4fr), ([Setting], [Effect]),
   [`enableLogicalBlockDevices`], [Logical block device mode: virtio, SCSI, SAS, SATA, and NVMe disks through the kernel, named by `/dev/disk/by-id` path. Required for virtual machines and most cloud instances. The default is NVMe mode, which takes only NVMe disks, named by PCI address.],
   [`enablePartitionedDevices`], [Takes a disk whose only problem is a leftover partition table.],
-  [`forceJournalDevice`], [Logical block device mode: picks a journal disk when several disks tie for the smallest size.],
+  [`forceJournalDevice`], [Logical block device mode: dedicates the smallest disk of every node to the journal instead of the default journal split.],
   [`enableControlPlaneNodes`], [Includes control-plane nodes. Infrastructure nodes are always included.],
   [`workers` or `nodeSelector`], [Which workers to inspect; use one or the other.],
   [`tolerations`], [Includes workers whose `NoSchedule` and `NoExecute` taints these tolerate, lets the probe run there, and carries over to the deployment.],

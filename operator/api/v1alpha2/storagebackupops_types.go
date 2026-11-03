@@ -18,6 +18,7 @@
 package v1alpha2
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -79,7 +80,7 @@ const (
 // StorageBackupOpsStep is one step of a running backup operation. The enum stays
 // flat as actions are added, because which steps belong to which action is
 // declared by the graph rather than by this type.
-// +kubebuilder:validation:Enum=Validating;Restoring;AwaitingVolume;AwaitingVolumes;Binding
+// +kubebuilder:validation:Enum=Validating;Restoring;AwaitingVolume;AwaitingVolumes;Binding;Completed
 type StorageBackupOpsStep string
 
 const (
@@ -98,6 +99,8 @@ const (
 	StorageBackupOpsStepAwaitingVolume  StorageBackupOpsStep = "AwaitingVolume"
 	StorageBackupOpsStepAwaitingVolumes StorageBackupOpsStep = "AwaitingVolumes"
 	StorageBackupOpsStepBinding         StorageBackupOpsStep = "Binding"
+	// StorageBackupOpsStepCompleted is the terminal step of an operation that succeeded.
+	StorageBackupOpsStepCompleted StorageBackupOpsStep = "Completed"
 )
 
 // RestoreSpec parameterizes the Restore action.
@@ -141,6 +144,16 @@ type RestoreSpec struct {
 	// +k8s:immutable
 	// +optional
 	ClaimAnnotations map[string]string `json:"claimAnnotations,omitempty"`
+
+	// VolumeMode is the volume mode of the restored claim and its volume. It
+	// defaults to the mode recorded in the backup's status.source, and has to be
+	// set for a backup that recorded none, such as one whose source volume was
+	// gone when the backup was discovered. A Block source restored as Filesystem
+	// is formatted over on first mount.
+	// +kubebuilder:validation:Enum=Filesystem;Block
+	// +k8s:immutable
+	// +optional
+	VolumeMode corev1.PersistentVolumeMode `json:"volumeMode,omitempty"`
 }
 
 // StorageBackupOpsSpec is one operation to perform against a backup.
@@ -285,7 +298,7 @@ type StorageBackupOpsStatus struct {
 	// Step is the position of the running action's state machine. It is
 	// persisted before the side effect that step performs, so a step reported
 	// here is a step that started.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Restoring','AwaitingVolume','AwaitingVolumes','Binding']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Restoring','AwaitingVolume','AwaitingVolumes','Binding','Completed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

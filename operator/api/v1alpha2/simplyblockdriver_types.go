@@ -114,9 +114,9 @@ const (
 )
 
 // DriverTLS configures whether this deployment's two plugins reach the
-// control plane over TLS. Unset (every field at its zero value) is a
-// plaintext data path, which is what every deployment ran as before this field
-// existed.
+// control plane over TLS. A field left unset follows the ControlPlane in the
+// same namespace, so a driver that states nothing talks to the control plane
+// the way it serves. Without a control plane this cluster hosts, unset is off.
 //
 // The client-certificate Secret each plugin mounts is not named here. It is
 // `<object name>-csi-controller-client-tls` and
@@ -125,23 +125,23 @@ const (
 // would be a second place for the two to disagree.
 type DriverTLS struct {
 	// EnableTLS turns on TLS between both plugins and the control plane.
-	// +kubebuilder:default=false
+	// Unset follows the ControlPlane's spec.source.local.tls.enableTLS.
 	// +optional
 	EnableTLS *bool `json:"enableTLS,omitempty"`
 
 	// EnableMutualTLS additionally requires each plugin to present a client
 	// certificate, rather than dialing the control plane anonymously over
 	// the encrypted connection EnableTLS alone provides. Ignored when
-	// EnableTLS is false, the same as the Helm value it replaces.
-	// +kubebuilder:default=false
+	// EnableTLS is false, the same as the Helm value it replaces. Unset follows
+	// the ControlPlane's spec.source.local.tls.enableMutualTLS.
 	// +optional
 	EnableMutualTLS *bool `json:"enableMutualTLS,omitempty"`
 
 	// Provider selects where the CA bundle (and, with EnableMutualTLS, the
 	// client certificate) comes from. Required reading whenever EnableTLS is
 	// true: the two providers mount a differently shaped volume, and neither
-	// shape can be inferred from anything else on this object.
-	// +kubebuilder:default=cert-manager
+	// shape can be inferred from anything else on this object. Unset follows
+	// the ControlPlane's provider, and is cert-manager without one.
 	// +optional
 	Provider DriverTLSProvider `json:"provider,omitempty"`
 }

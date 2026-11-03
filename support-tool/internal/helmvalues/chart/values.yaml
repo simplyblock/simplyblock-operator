@@ -50,9 +50,7 @@ image:
     # -- NUMA resource plugin image.
     repository: quay.io/simplyblock-io/numa-resource-plugin
     # -- NUMA resource plugin image tag.
-    tag: latest
-    # -- NUMA resource plugin image pull policy.
-    pullPolicy: Always
+    tag: v1.0.0
 rbac:
   # Specifies whether RBAC resources should be created
   # -- RBAC switch. Not read by the chart templates.
@@ -624,6 +622,17 @@ controlplane:
     # `controlplane.managed.credentialsSecretRef`. Empty grants no additional credential.
     adminTokenSecretRef: ""
 
+    # The IAM role this control plane's pods and every StorageCluster's
+    # storage-node pods in this namespace assume, through a ServiceAccount
+    # annotated with it (eks.amazonaws.com/role-arn). It is what lets a
+    # StorageCluster's spec.backup.credentials name ProviderChain on Amazon
+    # EKS, with no access key stored anywhere in Kubernetes. Empty leaves the
+    # accounts this chart creates without the annotation, which is correct
+    # off EKS.
+    # -- IAM role ARN to annotate this release's ServiceAccounts with (`eks.amazonaws.com/role-arn`), for
+    # S3 backup credentials through Amazon EKS's pod-identity webhook. Empty adds no annotation.
+    eksRoleARN: ""
+
   # Where the control plane is, for deployment.profile: managed.
   managed:
     # Base URL of the management API. Required for that profile. A loopback or
@@ -1084,39 +1093,12 @@ opensearch:
     # -- Enables the OpenSearch security configuration.
     enabled: false
 
-reloader:
-  # Rolls the workloads mounting the FoundationDB cluster file when coordinators
-  # move. Off means they pick the change up on their next restart instead.
-  # -- Rolls the workloads mounting the FoundationDB cluster file when the coordinators move. With
-  # `false`, they pick up the change on their next restart.
-  enabled: true
-  # -- Name override.
-  nameOverride: simplyblock-reloader
-  # -- Full name override.
-  fullnameOverride: simplyblock-reloader
-  reloader:
-    deployment:
-      image:
-        # -- Reloader image.
-        name: quay.io/simplyblock-io/reloader
-        # -- Reloader image tag.
-        tag: v1.3.0
-      pod:
-        # Ships the pod's logs to Graylog through the chart's fluent-bit.
-        # -- Reloader pod annotations. The default ships the pod logs to Graylog.
-        annotations:
-          log-collector/enabled: "true"
-      # -- Node selector for Reloader.
-      nodeSelector: {}
-      # -- Tolerations for Reloader.
-      tolerations: []
-
 prometheus:
-  # Where the control plane pushes what it measures. A managed deployment
-  # reports to the control plane administering it, so it can turn this off.
-  # -- Installs the Prometheus subchart. A `managed` deployment that reports to its remote control
-  # plane can turn it off.
-  enabled: true
+  # The operator runs Prometheus and its Thanos sidecar as a ControlPlane
+  # component, so the subchart stays off; enabling it creates a second
+  # simplyblock-prometheus that the operator and Helm fight over.
+  # -- Installs the Prometheus subchart. Off: the ControlPlane installs Prometheus.
+  enabled: false
   simplyblock:
     # -- Prometheus service name the Control Center queries when `controlCenter.prometheusUrl` is
     # empty.
@@ -1144,11 +1126,9 @@ prometheus:
     # -- Prometheus pod labels.
     podLabels:
       app: simplyblock-prometheus
-    # -- Prometheus pod annotations, for log collection and Reloader triggers.
+    # -- Prometheus pod annotations, for log collection.
     podAnnotations:
       log-collector/enabled: "true"
-      reloader.stakater.com/auto: "true"
-      reloader.stakater.com/configmap: "simplyblock-prometheus-config"
     # -- Node selector for the Prometheus server.
     nodeSelector: {}
     # -- Tolerations for the Prometheus server.
@@ -1288,6 +1268,17 @@ prometheus:
         repository: quay.io/simplyblock-io/prometheus-config-reloader
         # -- Configuration reloader image tag.
         tag: v0.72.0
+      # The scrape configuration is not the subchart's own ConfigMap: it is
+      # `simplyblock-prometheus-config`, mounted at `configPath`. Without this
+      # the sidecar watches a directory nothing writes to.
+      # -- Mounts of the reloader sidecar. The scrape configuration, so that a change reloads it.
+      extraVolumeMounts:
+        - name: simplyblock-prometheus-config
+          mountPath: /etc/simplyblock-config
+          readOnly: true
+      # -- Directories the reloader sidecar watches, beside the subchart's own.
+      extraVolumeDirs:
+        - /etc/simplyblock-config
 
   defaultBackend:
     # -- Deploys the default backend.

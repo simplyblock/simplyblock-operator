@@ -189,7 +189,7 @@ func TestABackupStoreWithNoBucketIsRefused(t *testing.T) {
 	cluster := newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
 		c.Spec.Backup = &simplyblockv1alpha2.BackupStoreSpec{
 			Endpoint:             "https://203.0.113.20:9000",
-			CredentialsSecretRef: corev1.LocalObjectReference{Name: "backup-credentials"},
+			CredentialsSecretRef: &corev1.LocalObjectReference{Name: "backup-credentials"},
 		}
 	})
 	r := newClusterReconciler(t, &fakeControlPlane{}, &recorder{}, cluster, secret)
@@ -264,7 +264,8 @@ func TestAStepIsNeverPersistedWithoutItsDeadline(t *testing.T) {
 				obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption,
 			) error {
 				if ops, ok := obj.(*simplyblockv1alpha2.StorageClusterOps); ok {
-					if s := ops.Status.Step; s.State != "" && s.Deadline == nil {
+					// A terminal operation is never restored into a machine, so its step needs no deadline.
+					if s := ops.Status.Step; s.State != "" && s.Deadline == nil && !terminalOps(ops.Status.Phase) {
 						unbounded = append(unbounded, s.State)
 					}
 				}

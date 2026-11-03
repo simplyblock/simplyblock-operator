@@ -348,8 +348,11 @@ declares one graph, because it has no `spec.action` to key a `MultiConfig` on.
   AwaitingAPI           ← GET /_meta/ready succeeds
     │
     ▼
-  phase: Available
+  Installed             ← terminal; phase: Available
 ```
+
+`Installed` is written by steady state, so a control plane installed before the
+step existed reports it on its next pass. The phase carries health from there on.
 
 **Every applying step is an apply, so re-entering one is a no-op.** The objects
 are server-side applied with the `ControlPlane` as their owner, which means a step
@@ -1211,7 +1214,7 @@ const (
 
 // ControlPlaneStep is one step of the installation path. There is one graph
 // rather than a MultiConfig, because an entity has no spec.action to key one on.
-// +kubebuilder:validation:Enum=ApplyingFoundationDB;AwaitingFoundationDB;BuildingIndices;ApplyingDatastore;ApplyingAPI;AwaitingAPI
+// +kubebuilder:validation:Enum=ApplyingFoundationDB;AwaitingFoundationDB;BuildingIndices;ApplyingDatastore;ApplyingAPI;AwaitingAPI;Installed
 type ControlPlaneStep string
 
 const (
@@ -1224,6 +1227,7 @@ const (
 	ControlPlaneStepApplyingDatastore ControlPlaneStep = "ApplyingDatastore"
 	ControlPlaneStepApplyingAPI       ControlPlaneStep = "ApplyingAPI"
 	ControlPlaneStepAwaitingAPI       ControlPlaneStep = "AwaitingAPI"
+	ControlPlaneStepInstalled         ControlPlaneStep = "Installed"
 )
 
 // FoundationDBSpec is the sizing of the FoundationDB the operator installs.
@@ -1400,7 +1404,7 @@ type ControlPlaneStatus struct {
 	Phase ControlPlanePhase `json:"phase,omitempty"`
 
 	// Step is the position of the installation machine within Installing.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ApplyingFoundationDB','AwaitingFoundationDB','BuildingIndices','ApplyingDatastore','ApplyingAPI','AwaitingAPI']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ApplyingFoundationDB','AwaitingFoundationDB','BuildingIndices','ApplyingDatastore','ApplyingAPI','AwaitingAPI','Installed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
