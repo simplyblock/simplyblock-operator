@@ -817,6 +817,18 @@ func (r *OperatorOpsReconciler) draftFor(
 		config.Spec.Cluster = template.Template
 		notes = append(notes, template.Notes...)
 
+		// Admission accepts the flag only on Vanilla; elsewhere the environment decides it.
+		if spec.EnableCpuTopology != nil {
+			if config.Spec.Environment == simplyblockv1alpha2.KubernetesEnvironmentVanilla {
+				config.Spec.Cluster.EnableCpuTopology = ptr.To(*spec.EnableCpuTopology)
+				notes = append(notes, fmt.Sprintf("enableCpuTopology is %t, as this run was told", *spec.EnableCpuTopology))
+			} else {
+				notes = append(notes, fmt.Sprintf(
+					"enableCpuTopology from this run is ignored: the environment is %s, which decides it, "+
+						"and the document may state it only on Vanilla", config.Spec.Environment))
+			}
+		}
+
 		// The taints this run was allowed to probe through are the taints the
 		// storage nodes have to live with, so the draft states them rather than
 		// leaving a reviewer to discover that the DaemonSet schedules nowhere.

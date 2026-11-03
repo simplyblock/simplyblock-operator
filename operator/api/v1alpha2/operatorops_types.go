@@ -266,6 +266,12 @@ type DiscoverSpec struct {
 	// +optional
 	ForceJournalDevice *bool `json:"forceJournalDevice,omitempty"`
 
+	// EnableCpuTopology is copied to the draft's spec.cluster.enableCpuTopology.
+	// It applies only when the detected environment is Vanilla; every other
+	// environment decides the flag itself, and the draft notes that it was ignored.
+	// +optional
+	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`
+
 	// NetworkAttachment attaches the proposed storage nodes through Multus
 	// NetworkAttachmentDefinitions in the run's namespace instead of host
 	// networking. Absent keeps host networking, and the draft names each
