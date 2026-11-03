@@ -180,5 +180,6 @@ jobs:
             IMG_BASE=docker.io/simplyblock/simplyblock-operator \
             REBALANCER_IMG_BASE=docker.io/simplyblock/simplyblock-rebalancer \
             CLUSTER_IMAGE_BASE=docker.io/simplyblock/simplyblock CLUSTER_IMAGE_TAG=main
+          make bundle-validate
           docker build -f bundle.Dockerfile -t "docker.io/simplyblock/simplyblock-operator-bundle:$TAG" .
           docker push "docker.io/simplyblock/simplyblock-operator-bundle:$TAG"

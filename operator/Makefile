@@ -365,6 +365,10 @@ bundle: yq verify-config-yaml verify-crd-kustomization ## Generate bundle manife
 	OPENSHIFT_VERSION="$(OPENSHIFT_VERSION)" \
 	"$(YQ)" e '$(YQ_ANNOTATIONS_EXPR)' -i bundle/metadata/annotations.yaml;
 
+.PHONY: bundle-validate
+bundle-validate: ## Validate the generated bundle with the operatorframework suite OperatorHub certification runs
+	operator-sdk bundle validate ./bundle --select-optional suite=operatorframework
+
 .PHONY: bundle-dev
 bundle-dev: yq ## Generate a bundle that references images by tag, for branch builds (bundle resolves digests on Quay)
 	@set -e; \
