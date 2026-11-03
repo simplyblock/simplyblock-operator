@@ -7,12 +7,22 @@ on:
         description: "Release tag (e.g. v1.2.3); defaults to the triggering release"
         required: false
         type: string
+      attach-release:
+        description: "Upload the bundle zip to the GitHub release of that tag; false for a pre-release without one"
+        required: false
+        type: boolean
+        default: true
   workflow_dispatch:
     inputs:
       version:
         description: "Release tag (e.g. v1.2.3)"
         required: true
         type: string
+      attach-release:
+        description: "Upload the bundle zip to the GitHub release of that tag; false for a pre-release without one"
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   release:
@@ -93,6 +103,7 @@ jobs:
           zip -r "bundle-${TAG}.zip" bundle/manifests/ bundle/metadata/
 
       - name: Attach bundle zip to GitHub release
+        if: inputs.attach-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
