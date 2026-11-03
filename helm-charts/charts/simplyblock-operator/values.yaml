@@ -1094,11 +1094,11 @@ opensearch:
     enabled: false
 
 prometheus:
-  # Where the control plane pushes what it measures. A managed deployment
-  # reports to the control plane administering it, so it can turn this off.
-  # -- Installs the Prometheus subchart. A `managed` deployment that reports to its remote control
-  # plane can turn it off.
-  enabled: true
+  # The operator runs Prometheus and its Thanos sidecar as a ControlPlane
+  # component, so the subchart stays off; enabling it creates a second
+  # simplyblock-prometheus that the operator and Helm fight over.
+  # -- Installs the Prometheus subchart. Off: the ControlPlane installs Prometheus.
+  enabled: false
   simplyblock:
     # -- Prometheus service name the Control Center queries when `controlCenter.prometheusUrl` is
     # empty.
