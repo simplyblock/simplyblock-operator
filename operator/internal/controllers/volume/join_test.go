@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -349,3 +350,24 @@ func TestAPrepareFailureIsRetriedWithoutTouchingANode(t *testing.T) {
 }
 
 var _ = types.NamespacedName{}
+
+// U-135
+// Regression: 2026-11-03-cg-join-stale-step-message — the steps after Migrating
+// kept reporting "waiting on Migrating: migration ... is Running" after the
+// migration had finished, because entering a step never replaced the message
+// the step before it had written.
+func TestEnteringTheNextStepReplacesTheWaitingMessageOfThePreviousOne(t *testing.T) {
+	w := newJoinWorld(t)
+	w.offPin()
+
+	ops := w.runUntil(stepJoinMigrating, 10)
+	ops = w.run(2)
+	if !strings.Contains(ops.Status.Message, "waiting on Migrating") {
+		t.Fatalf("message = %q while the child runs, want it waiting on Migrating", ops.Status.Message)
+	}
+	w.setChildPhase(simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded)
+	ops = w.runUntil(stepSelectingSubsystem, 10)
+	if strings.Contains(ops.Status.Message, "Migrating") {
+		t.Errorf("in step %s the message still reads %q", ops.Status.Step.State, ops.Status.Message)
+	}
+}

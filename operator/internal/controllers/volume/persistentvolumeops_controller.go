@@ -472,7 +472,7 @@ func (r *PersistentVolumeOpsReconciler) enterInitialStep(
 			State:    string(machine.CurrentState()),
 			Deadline: &deadline,
 		}
-		status.Message = "the operation holds the volume and is running"
+		status.Message = runningMessage
 		if status.StartedAt == nil {
 			status.StartedAt = &now
 		}
@@ -698,6 +698,9 @@ func (r *PersistentVolumeOpsReconciler) note(
 // recordStep persists the step the operation is about to be in, with the
 // instant it expires. Both travel together, because a step persisted without
 // its deadline restores as a step that can never time out.
+//
+// The message is reset with it: whatever the previous step was waiting on is
+// no longer what the operation waits on.
 func (r *PersistentVolumeOpsReconciler) recordStep(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.PersistentVolumeOps,
@@ -707,8 +710,13 @@ func (r *PersistentVolumeOpsReconciler) recordStep(
 	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.PersistentVolumeOpsStatus) {
 		status.Phase = simplyblockv1alpha2.PersistentVolumeOpsPhaseRunning
 		status.Step = statemachine.KubeSnapshot{State: string(next), Deadline: deadline}
+		status.Message = runningMessage
 	})
 }
+
+// runningMessage is status.message while a step runs and has nothing to say
+// about what it waits on.
+const runningMessage = "the operation holds the volume and is running"
 
 // writeStatus applies the mutation and patches only when something changed.
 //

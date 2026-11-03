@@ -837,7 +837,13 @@ func (r *PersistentVolumeOpsReconciler) finishJoin(
 
 	cgSubsystemMoves.WithLabelValues(subject.clusterUUID, "succeeded").Inc()
 	cgSubsystemMoveNamespaces.WithLabelValues(subject.clusterUUID).Add(float64(len(join.Volumes)))
-	message := fmt.Sprintf("the volume and %d other member(s) are in subsystem %s", max(len(join.Volumes)-1, 0), join.TargetNQN)
+	// The move names what it moved, not what the target already held, so the
+	// message counts namespaces moved rather than members present.
+	target := "existing"
+	if join.TargetIsNew {
+		target = "new"
+	}
+	message := fmt.Sprintf("%d namespace(s) moved into the group's %s subsystem %s", len(join.Volumes), target, join.TargetNQN)
 	if note != "" {
 		message += "; " + note
 	}

@@ -355,3 +355,40 @@ func TestACommitFailureIsRetriedWithoutSuspendingAgain(t *testing.T) {
 		}
 	}
 }
+
+// U-134
+// Regression: 2026-11-03-cg-join-member-count — a volume moved alone into the
+// subsystem its group already had reported no other member in it, while the
+// group's existing member was sitting there.
+func TestAJoinIntoTheGroupsExistingSubsystemSaysSoAndCountsWhatMoved(t *testing.T) {
+	w := newJoinWorld(t)
+	w.api.move = controlplane.SubsystemMove{
+		ID: joinMoveID, TargetNQN: memberNQN, NamespacesAt: controlplane.NamespacesAtSource,
+		Volumes: []controlplane.MovingNamespace{
+			{LvolID: testVolumeID, SourceNQN: joinSourceNQN, SourceNSID: 1, NSUUID: testVolumeID, TargetNSID: 2},
+		},
+	}
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
+	}
+	want := "1 namespace(s) moved into the group's existing subsystem " + memberNQN
+	if ops.Status.Message != want {
+		t.Errorf("message = %q, want %q", ops.Status.Message, want)
+	}
+	if got := eventWith(w.events(), ReasonConsistencyGroupColocated); !strings.Contains(got, want) {
+		t.Errorf("ConsistencyGroupColocated = %q, want it to say %q", got, want)
+	}
+}
+
+// U-134
+func TestAWholeGroupMoveIntoAFreshSubsystemCountsEveryNamespace(t *testing.T) {
+	w := newJoinWorld(t)
+
+	ops := w.run(40)
+	want := "2 namespace(s) moved into the group's new subsystem " + joinTargetNQN
+	if ops.Status.Message != want {
+		t.Errorf("message = %q, want %q", ops.Status.Message, want)
+	}
+}

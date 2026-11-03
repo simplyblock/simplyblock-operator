@@ -246,6 +246,15 @@ Files: `operator/internal/controllers/volume/join_leave_test.go`, `csi-driver/in
 | U-133 | The create route is a join unless the request says leave, and an unknown purpose is a 422                                                                                         | Negative | `test_create_is_a_join_unless_the_request_says_leave`, `test_create_with_an_unknown_purpose_is_rejected`                                                                                                                                                   |
 | I-11  | Against FoundationDB: a leave reserves a fresh target, is idempotent on its request, refuses a non-member and the node limit, and its commit re-points only the leaver            | Positive | —                                                                                                                                                                                                                                                          |
 
+### Status Reporting (§7, §12)
+
+Files: `operator/internal/controllers/volume/join_swap_test.go`, `operator/internal/controllers/volume/join_test.go`
+
+| #     | Scenario                                                                                                                                                                                                                      | Type       | Test                                                                                                                            |
+|-------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|---------------------------------------------------------------------------------------------------------------------------------|
+| U-134 | A finished move reports how many namespaces it moved and whether the target subsystem was the group's existing one or a new one. Regression: a volume moved alone into a subsystem with a member reported "0 other member(s)" | Regression | `TestAJoinIntoTheGroupsExistingSubsystemSaysSoAndCountsWhatMoved`, `TestAWholeGroupMoveIntoAFreshSubsystemCountsEveryNamespace` |
+| U-135 | Entering a step replaces the message the previous step was waiting with. Regression: every step after Migrating still read "waiting on Migrating"                                                                             | Regression | `TestEnteringTheNextStepReplacesTheWaitingMessageOfThePreviousOne`                                                              |
+
 ---
 
 ## 2. Integration Tests
@@ -427,7 +436,7 @@ blindly.
 
 | Class       | Scenarios | Covered | Not covered            |
 |-------------|-----------|---------|------------------------|
-| Unit        | 133       | 130     | U-05, U-73, U-98       |
+| Unit        | 135       | 132     | U-05, U-73, U-98       |
 | Integration | 11        | 7       | I-06, I-09, I-10, I-11 |
 | E2E         | 15        | 0       | E-01 … E-15            |
 | Manual      | 5         | 0       | M-01 … M-05            |
