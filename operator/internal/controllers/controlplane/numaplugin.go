@@ -49,6 +49,8 @@ func (r *ControlPlaneReconciler) numaPluginObjects(
 	if r.NUMAPluginImage != "" {
 		daemonSet.Spec.Template.Spec.Containers[0].Image = r.NUMAPluginImage
 	}
+	container := &daemonSet.Spec.Template.Spec.Containers[0]
+	container.Image = image(container.Image)
 	return []client.Object{account, daemonSet}, nil
 }
 

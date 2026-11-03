@@ -394,6 +394,40 @@ spec:
                               rule: '!has(self.secretRef) || (has(self.secretRef.name) && size(self.secretRef.name) > 0)'
                             - message: 'enableMonitoring requires secretRef: the control plane cannot provision the monitoring stack without its admin password'
                               rule: '!has(self.enableMonitoring) || !self.enableMonitoring || has(self.secretRef)'
+                        prerequisites:
+                          default: {}
+                          description: |-
+                            Prerequisites says which cluster add-ons the operator installs when the
+                            cluster lacks them. One left false is checked for and never installed.
+                          properties:
+                            installCertManager:
+                              default: true
+                              description: |-
+                                InstallCertManager installs cert-manager when cert-manager.io/v1 is not
+                                served. It is consulted only when the control plane serves TLS issued by
+                                cert-manager. Unset is on.
+                              type: boolean
+                            installFoundationDBCRDs:
+                              default: true
+                              description: |-
+                                InstallFoundationDBCRDs applies the apps.foundationdb.org CRDs when
+                                apps.foundationdb.org/v1beta2 is not served. Unset is on.
+                              type: boolean
+                            installLocalPathProvisioner:
+                              default: true
+                              description: |-
+                                InstallLocalPathProvisioner installs local-path-provisioner when no
+                                StorageClass uses rancher.io/local-path. Its class is made the default
+                                only when the cluster has no default class. Unset is on.
+                              type: boolean
+                            installSnapshotController:
+                              default: true
+                              description: |-
+                                InstallSnapshotController installs the CSI snapshot CRDs and
+                                snapshot-controller when snapshot.storage.k8s.io/v1 is not served. Unset
+                                is on.
+                              type: boolean
+                          type: object
                         replicas:
                           default: 2
                           description: |-

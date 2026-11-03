@@ -23,6 +23,10 @@
 # Re-include the manifest the manager embeds (go:embed in controlplane/numaplugin.go)
 !operator/internal/controllers/controlplane/manifests/numa-resource-plugin.yaml
 
+# Re-include the add-on manifests the operator embeds and installs as
+# prerequisites (internal/prerequisites).
+!operator/internal/prerequisites/manifests/*.yaml
+
 # Re-include LICENSE file
 !LICENSE
 

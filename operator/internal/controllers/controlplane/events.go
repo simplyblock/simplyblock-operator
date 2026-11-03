@@ -58,6 +58,10 @@ const (
 	// provide and does not, such as the FoundationDB CRDs.
 	PrerequisiteMissing = "PrerequisiteMissing"
 
+	// PrerequisiteOutdated is an add-on the operator installed from an older
+	// manifest whose upgrade it leaves to a person.
+	PrerequisiteOutdated = "PrerequisiteOutdated"
+
 	// DuplicateControlPlane is a second ControlPlane in a Kubernetes cluster that
 	// already has one. It installs nothing, because the objects it would apply
 	// are the same fixed-name cluster-scoped objects the first one owns.

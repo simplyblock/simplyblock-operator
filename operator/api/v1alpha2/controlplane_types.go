@@ -283,6 +283,71 @@ type LocalControlPlane struct {
 	// monitoring off.
 	// +optional
 	Observability *ControlPlaneObservability `json:"observability,omitempty"`
+
+	// Prerequisites says which cluster add-ons the operator installs when the
+	// cluster lacks them. One left false is checked for and never installed.
+	// +kubebuilder:default={}
+	// +optional
+	Prerequisites ControlPlanePrerequisites `json:"prerequisites,omitempty"`
+}
+
+// ControlPlanePrerequisites lists the add-ons a control plane needs before
+// installing. Each is detected first and installed only when it is missing and
+// its flag is on; with the flag off, a missing add-on holds the install.
+// Installed add-ons are cluster-wide and outlive the ControlPlane.
+type ControlPlanePrerequisites struct {
+	// InstallFoundationDBCRDs applies the apps.foundationdb.org CRDs when
+	// apps.foundationdb.org/v1beta2 is not served. Unset is on.
+	// +kubebuilder:default=true
+	// +optional
+	InstallFoundationDBCRDs *bool `json:"installFoundationDBCRDs,omitempty"`
+
+	// InstallCertManager installs cert-manager when cert-manager.io/v1 is not
+	// served. It is consulted only when the control plane serves TLS issued by
+	// cert-manager. Unset is on.
+	// +kubebuilder:default=true
+	// +optional
+	InstallCertManager *bool `json:"installCertManager,omitempty"`
+
+	// InstallLocalPathProvisioner installs local-path-provisioner when no
+	// StorageClass uses rancher.io/local-path. Its class is made the default
+	// only when the cluster has no default class. Unset is on.
+	// +kubebuilder:default=true
+	// +optional
+	InstallLocalPathProvisioner *bool `json:"installLocalPathProvisioner,omitempty"`
+
+	// InstallSnapshotController installs the CSI snapshot CRDs and
+	// snapshot-controller when snapshot.storage.k8s.io/v1 is not served. Unset
+	// is on.
+	// +kubebuilder:default=true
+	// +optional
+	InstallSnapshotController *bool `json:"installSnapshotController,omitempty"`
+}
+
+// on reads a defaulted-true flag, treating unset as true.
+func on(b *bool) bool { return b == nil || *b }
+
+// InstallsFoundationDBCRDs reports whether missing FoundationDB CRDs are installed.
+func (p ControlPlanePrerequisites) InstallsFoundationDBCRDs() bool {
+	return on(p.InstallFoundationDBCRDs)
+}
+
+// InstallsCertManager reports whether a missing cert-manager is installed.
+func (p ControlPlanePrerequisites) InstallsCertManager() bool { return on(p.InstallCertManager) }
+
+// InstallsLocalPathProvisioner reports whether a missing local-path-provisioner is installed.
+func (p ControlPlanePrerequisites) InstallsLocalPathProvisioner() bool {
+	return on(p.InstallLocalPathProvisioner)
+}
+
+// InstallsSnapshotController reports whether a missing snapshot controller is installed.
+func (p ControlPlanePrerequisites) InstallsSnapshotController() bool {
+	return on(p.InstallSnapshotController)
+}
+
+// NeedsCertManager reports whether this control plane's TLS is issued by cert-manager.
+func (l *LocalControlPlane) NeedsCertManager() bool {
+	return l.ServesTLS() && l.TLSProvider() == ControlPlaneTLSCertManager
 }
 
 // ControlPlaneObservability is whether the control plane provisions the
