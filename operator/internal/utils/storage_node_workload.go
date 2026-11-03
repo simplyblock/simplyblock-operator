@@ -258,12 +258,12 @@ func BuildStorageNodeDaemonSet(
 	}
 
 	if tlsMutualEnabled {
-		// kubelet does not present a client certificate, so an HTTPS probe
-		// would be rejected by the snode API. Fall back to a TCP check.
+		// kubelet cannot present a client certificate, so an HTTPS probe would
+		// be rejected by the snode API. Run the check in the container
+		// instead, where the agent's own certificate is mounted alongside it.
+		readinessProbe.TimeoutSeconds = 5
 		readinessProbe.ProbeHandler = corev1.ProbeHandler{
-			TCPSocket: &corev1.TCPSocketAction{
-				Port: intstr.FromInt(5000),
-			},
+			Exec: &corev1.ExecAction{Command: []string{"python3", "-c", storageNodeAgentTLSAnswerCheck}},
 		}
 	} else if tlsEnabled {
 		readinessProbe.HTTPGet.Scheme = corev1.URISchemeHTTPS
@@ -413,21 +413,22 @@ exec python3 simplyblock_web/node_webapp.py storage_node_k8s`,
 }
 
 // storageNodeAgentTLSAnswerCheck exits 0 when the node agent on port 5000
-// answers a TLS ClientHello within three seconds. A TLS alert counts as an
-// answer: under mutual TLS the agent rejects this certificate-less client,
-// and rejecting it proves its accept loop is running. A timeout or a refused
-// connection exits non-zero.
+// completes a full, mutually authenticated TLS handshake within three
+// seconds. It runs inside the agent's own container, where the agent's
+// serving certificate is mounted at /etc/simplyblock/tls alongside the CA
+// that issued it, so the check can present that certificate as its client
+// identity and the agent's CA check accepts it. A timeout, a refused
+// connection, or a certificate failure all exit non-zero, since none of them
+// is distinguishable from the agent genuinely being unhealthy once the check
+// authenticates both ends instead of merely eliciting a rejection.
 const storageNodeAgentTLSAnswerCheck = `import socket, ssl
 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
+ctx.verify_mode = ssl.CERT_REQUIRED
+ctx.load_verify_locations("/etc/simplyblock/tls/ca.crt")
+ctx.load_cert_chain("/etc/simplyblock/tls/tls.crt", "/etc/simplyblock/tls/tls.key")
 sock = socket.create_connection(("127.0.0.1", 5000), timeout=3)
-try:
-    ctx.wrap_socket(sock).close()
-except TimeoutError:
-    raise
-except ssl.SSLError:
-    pass
+ctx.wrap_socket(sock).close()
 `
 
 // buildStorageNodeAgentLivenessProbe returns the probe that restarts a node
@@ -443,7 +444,8 @@ except ssl.SSLError:
 //
 // Without mutual TLS the kubelet asks the readiness endpoint over HTTP(S).
 // With it the kubelet's request is refused for lacking a client certificate,
-// so the check runs inside the container and settles for any TLS answer.
+// so the check runs inside the container instead, presenting the agent's own
+// certificate to complete a real handshake rather than provoke a rejection.
 func buildStorageNodeAgentLivenessProbe(httpGet *corev1.HTTPGetAction, tlsMutualEnabled bool) *corev1.Probe {
 	probe := &corev1.Probe{
 		InitialDelaySeconds: 30,
