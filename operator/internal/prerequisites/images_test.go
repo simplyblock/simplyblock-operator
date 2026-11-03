@@ -73,7 +73,7 @@ func TestImagesAreRewrittenToTheMirrorRegistry(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKey{Namespace: "simplyblock", Name: "local-path-provisioner"}, &d); err != nil {
 		t.Fatal(err)
 	}
-	want := "mirror.example:5000/rancher/local-path-provisioner:v0.0.30@sha256:"
+	want := "mirror.example:5000/simplyblock-io/local-path-provisioner:v0.0.30@sha256:"
 	if img := d.Spec.Template.Spec.Containers[0].Image; !strings.HasPrefix(img, want) {
 		t.Errorf("provisioner image = %s, want prefix %s", img, want)
 	}
@@ -81,7 +81,7 @@ func TestImagesAreRewrittenToTheMirrorRegistry(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKey{Namespace: "simplyblock", Name: "local-path-config"}, &cm); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(cm.Data["helperPod.yaml"], "mirror.example:5000/library/busybox:1.37.0@sha256:") {
+	if !strings.Contains(cm.Data["helperPod.yaml"], "mirror.example:5000/simplyblock-io/busybox:1.37.0@sha256:") {
 		t.Errorf("helper pod image not rewritten:\n%s", cm.Data["helperPod.yaml"])
 	}
 }

@@ -93,7 +93,7 @@ spec:
       serviceAccountName: local-path-provisioner-service-account
       containers:
         - name: local-path-provisioner
-          image: docker.io/rancher/local-path-provisioner:v0.0.30@sha256:9b914881170048f80ae9302f36e5b99b4a6b18af73a38adc1c66d12f65d360be
+          image: quay.io/simplyblock-io/local-path-provisioner:v0.0.30@sha256:9b914881170048f80ae9302f36e5b99b4a6b18af73a38adc1c66d12f65d360be
           imagePullPolicy: IfNotPresent
           command:
             - local-path-provisioner
@@ -162,7 +162,7 @@ data:
           effect: NoSchedule
       containers:
       - name: helper-pod
-        image: docker.io/library/busybox:1.37.0@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
+        image: quay.io/simplyblock-io/busybox:1.37.0@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
         imagePullPolicy: IfNotPresent
         securityContext:
           privileged: true
