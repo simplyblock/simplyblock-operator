@@ -218,6 +218,59 @@ func TestRunServesAPutGetRoundTrip(t *testing.T) {
 	}
 }
 
+// TestRunAllowsCopyObject proves CopyObject actually works against the
+// posix backend run builds.
+//
+// Regression: 2026-11-03-gateway-copy-object-threshold-zero — run built the
+// posix backend's PosixOpts without CopyObjectThreshold, so it kept Go's
+// zero value. versitygw's posix backend rejects any copy source whose size
+// exceeds that threshold, so every CopyObject and UploadPartCopy failed with
+// InvalidRequest, "the specified copy source is larger than the maximum
+// allowable size for a copy source: 0," no matter how small the object.
+func TestRunAllowsCopyObject(t *testing.T) {
+	client, kube, rootDir := startGateway(t)
+	ctx := context.Background()
+
+	const bucket = "copy-object-bucket"
+	deliverWhenCreated(t, kube, rootDir, bucket)
+	if _, err := client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+
+	want := []byte("hello from the simplyblock gateway")
+	if _, err := client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String("source.txt"),
+		Body:   bytes.NewReader(want),
+	}); err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+
+	if _, err := client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(bucket),
+		Key:        aws.String("copy.txt"),
+		CopySource: aws.String(bucket + "/source.txt"),
+	}); err != nil {
+		t.Fatalf("CopyObject: %v", err)
+	}
+
+	got, err := client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String("copy.txt"),
+	})
+	if err != nil {
+		t.Fatalf("GetObject on the copy: %v", err)
+	}
+	defer func() { _ = got.Body.Close() }()
+	gotBytes, err := io.ReadAll(got.Body)
+	if err != nil {
+		t.Fatalf("reading the copy's body: %v", err)
+	}
+	if !bytes.Equal(gotBytes, want) {
+		t.Errorf("copied object = %q, want %q", gotBytes, want)
+	}
+}
+
 // TestRunRecognizesABucketlinksSymlink proves --bucketlinks itself (posix.
 // PosixOpts.BucketLinks, true here): a directory this test symlinks under
 // RootDir, exactly the shape an S3Bucket's own volume takes
