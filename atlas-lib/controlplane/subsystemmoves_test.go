@@ -303,3 +303,96 @@ func TestAnUnknownMoveIsNotFound(t *testing.T) {
 		t.Errorf("commit err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestCreateSubsystemMoveAsksForAJoin(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if p, ok := body["purpose"]; ok && p != "join" {
+			t.Errorf("purpose = %v, want absent or join", p)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(moveJSON("source")))
+	})
+
+	if _, err := c.CreateSubsystemMove(context.Background(), testCluster, testGroup, testLvol, "req-1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateSubsystemLeaveAsksForALeaveAndReadsTheMove(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != groupBase+"/subsystem-moves" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["purpose"] != "leave" || body["lvol_id"] != testLvol || body["request_id"] != "req-1" {
+			t.Errorf("body = %v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(moveJSON("source")))
+	})
+
+	move, err := c.CreateSubsystemLeave(context.Background(), testCluster, testGroup, testLvol, "req-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if move.ID != testMoveID || move.TargetNQN != testTarget || !move.TargetIsNew || len(move.Volumes) != 1 {
+		t.Errorf("move = %+v", move)
+	}
+}
+
+func TestALeaveRefusalIsItsSentinel(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		conflict(w, `{"reason":"SubsystemLimitReached","message":"full","node_id":"n1","limit":4}`)
+	})
+
+	_, err := c.CreateSubsystemLeave(context.Background(), testCluster, testGroup, testLvol, "req-1")
+	if !errors.Is(err, ErrSubsystemLimitReached) {
+		t.Errorf("err = %v, want ErrSubsystemLimitReached", err)
+	}
+}
+
+func TestDetachConsistencyGroupMemberDeletesTheMember(t *testing.T) {
+	calls := 0
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Method != http.MethodDelete || r.URL.Path != groupBase+"/members/"+testLvol {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	if err := c.DetachConsistencyGroupMember(context.Background(), testCluster, testGroup, testLvol); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Errorf("calls = %d, want 1", calls)
+	}
+}
+
+func TestDetachingWhatIsGoneSucceeds(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"detail":"no such group"}`))
+	})
+
+	if err := c.DetachConsistencyGroupMember(context.Background(), testCluster, testGroup, testLvol); err != nil {
+		t.Errorf("err = %v, want nil: a retried detach must converge", err)
+	}
+}
+
+func TestAFailedDetachIsAnError(t *testing.T) {
+	for _, code := range []int{http.StatusConflict, http.StatusInternalServerError} {
+		c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(code)
+			_, _ = w.Write([]byte(`{"detail":"no"}`))
+		})
+		if err := c.DetachConsistencyGroupMember(context.Background(), testCluster, testGroup, testLvol); err == nil {
+			t.Errorf("status %d: err = nil, want an error", code)
+		}
+	}
+}

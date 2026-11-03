@@ -1,8 +1,9 @@
 // The join operation a late consistency-group label turns into
 // (design-cg-live-subsystem-flip.md §8.1): one PersistentVolumeOps with action
-// JoinConsistencyGroup per volume, which the operator runs end to end (the
-// migration to the group's node, the join, and the move into the group's
-// subsystem under a live consumer).
+// JoinConsistencyGroup per volume and group, which the operator runs end to end
+// (leaving the volume's old group when it is relabeled, the migration to the
+// group's node, the join, and the move into the group's subsystem under a live
+// consumer).
 //
 // The CSI driver only asks for the operation and reads how it went, through a
 // dynamic client, so it does not depend on the operator's API types.

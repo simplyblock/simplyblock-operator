@@ -6,6 +6,8 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
 
@@ -193,7 +195,7 @@ func TestALateLabelOnAVolumeInNoGroupRequestsTheJoinOperation(t *testing.T) {
 	if err := w.reconcile(context.Background(), pvc); err != nil {
 		t.Fatal(err)
 	}
-	want := [3]string{"cg-join-" + testLvol, "pv-app", "orders-db"}
+	want := [3]string{wantOpName("orders-db"), "pv-app", "orders-db"}
 	if len(ops.requests) != 1 || ops.requests[0] != want {
 		t.Fatalf("requests = %v, want one %v", ops.requests, want)
 	}
@@ -239,7 +241,7 @@ func TestEachPassReportsTheJoinOperationsPhase(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.phase, func(t *testing.T) {
-			ops := &fakeJoinOps{phase: tc.phase, existing: map[string]bool{"cg-join-" + testLvol: true}}
+			ops := &fakeJoinOps{phase: tc.phase, existing: map[string]bool{wantOpName("orders-db"): true}}
 			w, pvc, recorder := joinWatcher(t, "app", testLvol, groupOrdersDB(), ops)
 			if err := w.reconcile(context.Background(), pvc); err != nil {
 				t.Fatal(err)
@@ -284,5 +286,129 @@ func TestAnUnboundClaimGetsNoJoinOperation(t *testing.T) {
 	}
 	if len(ops.requests) != 0 {
 		t.Fatalf("an unbound claim must get no operation, got %v", ops.requests)
+	}
+}
+
+// wantOpName spells, for testLvol, the join operation's name independently of
+// the code under test: the volume, then the first eight hex characters of the
+// group name's SHA-256.
+func wantOpName(group string) string {
+	sum := sha256.Sum256([]byte(group))
+	return "cg-join-" + testLvol + "-" + hex.EncodeToString(sum[:])[:8]
+}
+
+// twoGroups is a membership with the volume in orders-db (g1) and a second
+// group, billing-db (g2), the label can be moved to.
+func twoGroups() *fakeMembership {
+	g1 := &controlplane.ConsistencyGroupSummary{ID: "g1", Name: "orders-db"}
+	g2 := &controlplane.ConsistencyGroupSummary{ID: "g2", Name: "billing-db"}
+	return &fakeMembership{
+		groupIDByLvol: map[string]string{testLvol: "g1"},
+		groupsByName:  map[string]*controlplane.ConsistencyGroupSummary{"orders-db": g1, "billing-db": g2},
+		groupsByID:    map[string]*controlplane.ConsistencyGroupSummary{"g1": g1, "g2": g2},
+	}
+}
+
+// Regression: 2026-11-03-cg-relabel-move. A member relabeled to another group
+// was only warned about, so a volume could never move from one consistency
+// group to another. The relabel now asks for one join operation into the new
+// group, named for the volume and that group, and the operator leaves the old
+// group as part of it.
+func TestRelabelingAMemberRequestsOneJoinOperationIntoTheNewGroup(t *testing.T) {
+	membership := twoGroups()
+	ops := &fakeJoinOps{}
+	w, pvc, recorder := joinWatcher(t, "app", testLvol, membership, ops)
+	w.colocate = false
+	pvc.Labels[consistencyGroupLabel] = "billing-db"
+
+	if err := w.reconcile(context.Background(), pvc); err != nil {
+		t.Fatal(err)
+	}
+	want := [3]string{wantOpName("billing-db"), "pv-app", "billing-db"}
+	if len(ops.requests) != 1 || ops.requests[0] != want {
+		t.Fatalf("requests = %v, want one %v", ops.requests, want)
+	}
+	if len(membership.joined)+len(membership.detached) != 0 {
+		t.Fatalf("the operator leaves and joins, the watcher must not: joined %v detached %v",
+			membership.joined, membership.detached)
+	}
+	events := drain(recorder)
+	if !hasEvent(events, "Normal ConsistencyGroupMoveStarted") || hasEvent(events, "Warning ConsistencyGroupConflict") {
+		t.Fatalf("events = %v, want ConsistencyGroupMoveStarted and no conflict", events)
+	}
+
+	// The next pass finds the same operation and creates nothing new.
+	if err := w.reconcile(context.Background(), pvc); err != nil {
+		t.Fatal(err)
+	}
+	if len(ops.requests) != 2 || ops.requests[1] != want || len(ops.existing) != 1 {
+		t.Fatalf("a second pass must ensure the same operation: requests %v existing %v", ops.requests, ops.existing)
+	}
+	if events := drain(recorder); hasEvent(events, "Normal ConsistencyGroupMoveStarted") {
+		t.Fatalf("an existing operation must not be announced as started again: %v", events)
+	}
+}
+
+// Regression: 2026-11-03-cg-relabel-move. The first join's operation is named
+// for its group too, so a later move to another group gets an operation of its
+// own instead of finding the first one Succeeded.
+func TestTheFirstJoinsOperationIsNamedForTheVolumeAndTheGroup(t *testing.T) {
+	ops := &fakeJoinOps{}
+	w, pvc, _ := joinWatcher(t, "app", testLvol, groupOrdersDB(), ops)
+	if err := w.reconcile(context.Background(), pvc); err != nil {
+		t.Fatal(err)
+	}
+	if len(ops.requests) != 1 || ops.requests[0][0] != wantOpName("orders-db") {
+		t.Fatalf("requests = %v, want the name %s", ops.requests, wantOpName("orders-db"))
+	}
+	if wantOpName("orders-db") == wantOpName("billing-db") {
+		t.Fatal("two groups must give two operation names")
+	}
+}
+
+// Regression: 2026-11-03-cg-relabel-move. Without the join operation the
+// watcher has no way to move a volume, so a relabel stays a warning and asks
+// for nothing.
+func TestWithoutTheJoinOperationARelabelStaysAConflict(t *testing.T) {
+	membership := twoGroups()
+	w, pvc, recorder := joinWatcher(t, "app", testLvol, membership, nil)
+	w.joinOps = nil
+	w.colocate = false
+	pvc.Labels[consistencyGroupLabel] = "billing-db"
+
+	if err := w.reconcile(context.Background(), pvc); err != nil {
+		t.Fatal(err)
+	}
+	if len(membership.joined)+len(membership.detached) != 0 {
+		t.Fatalf("no membership call expected: joined %v detached %v", membership.joined, membership.detached)
+	}
+	if events := drain(recorder); !hasEvent(events, "Warning ConsistencyGroupConflict") {
+		t.Fatalf("events = %v, want ConsistencyGroupConflict", events)
+	}
+}
+
+// Regression: 2026-11-03-cg-relabel-move. A label pointing back at a group
+// whose operation already Succeeded, while the volume is in another group, is
+// a rejoin the one-way rule forbids: it is a conflict, never reported as
+// colocated.
+func TestARelabelBackToAGroupTheVolumeLeftIsAConflict(t *testing.T) {
+	membership := twoGroups()
+	membership.groupIDByLvol[testLvol] = "g2"
+	ops := &fakeJoinOps{phase: "Succeeded", existing: map[string]bool{wantOpName("orders-db"): true}}
+	w, pvc, recorder := joinWatcher(t, "app", testLvol, membership, ops)
+	w.colocate = false
+
+	if err := w.reconcile(context.Background(), pvc); err != nil {
+		t.Fatal(err)
+	}
+	events := drain(recorder)
+	if !hasEvent(events, "Warning ConsistencyGroupConflict") {
+		t.Fatalf("events = %v, want ConsistencyGroupConflict", events)
+	}
+	if hasEvent(events, "Normal ConsistencyGroupColocated") {
+		t.Fatalf("a volume in another group must not be reported colocated: %v", events)
+	}
+	if len(ops.existing) != 1 {
+		t.Fatalf("no new operation expected, got %v", ops.existing)
 	}
 }

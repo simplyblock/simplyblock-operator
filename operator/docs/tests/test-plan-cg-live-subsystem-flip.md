@@ -220,6 +220,31 @@ Files: `operator/internal/webhook/persistentvolumeops_validator_test.go`, `csi-d
 | U-114 | A resume back onto the source (the rollback) drops none of the source's paths                                                                                                                                          | Negative   | `TestResumeOnTheSourceDropsNothing`                                    |
 | U-115 | The sysfs drop disconnects only controllers that are connecting or resetting, never live or deleting ones                                                                                                              | Boundary   | `TestDropStaleDisconnectsOnlyTheControllersThatAreNotLive`             |
 | U-116 | A subsystem the host does not hold has nothing to drop, and no error                                                                                                                                                   | Negative   | `TestDropStaleOfASubsystemNotAttachedDropsNothing`                     |
+| U-117 | A subsystem with no live controller keeps all its paths: the drop never removes the last paths that other volumes' held I/O waits on                                                                                   | Negative   | `TestDropStaleNeverRemovesTheLastPathsOfASubsystem`                    |
+
+### Moving Between Groups (§8.1, §8.5, §9)
+
+Files: `operator/internal/controllers/volume/join_leave_test.go`, `csi-driver/internal/csi/controller/cg_join_operation_test.go`, `atlas-lib/controlplane/subsystemmoves_test.go`, `atlas-lib/controlplane/volumes_test.go`, sbcli `tests/unit/test_cg_move_selection.py`, `tests/unit/web/api/v2/test_consistency_group_endpoints.py`, and `tests/integration/test_cg_subsystem_move.py`
+
+| #     | Scenario                                                                                                                                                                          | Type     | Test                                                                                                                                                                                                                                                       |
+|-------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-118 | A member relabeled to another group is split out of its old group's subsystem with the swap, detached from the old group, and then migrated, joined, and flipped into the new one | Positive | `TestARelabeledVolumeLeavesItsGroupsSubsystemThenItsGroupThenJoinsTheNewOne`                                                                                                                                                                               |
+| U-119 | The leave gives back every lock its swap took before the migration to the new group takes its own                                                                                 | Positive | `TestALeaveGivesBackItsLocksBeforeTheMigrationToTheNewGroup`                                                                                                                                                                                               |
+| U-120 | A member alone in its subsystem leaves without a swap                                                                                                                             | Boundary | `TestAVolumeAloneInItsSubsystemLeavesWithoutASwap`                                                                                                                                                                                                         |
+| U-121 | A split refused at the node's subsystem limit fails the operation, and the volume stays a member of its old group                                                                 | Negative | `TestALeaveRefusedAtTheSubsystemLimitFailsAndKeepsTheVolumeInItsGroup`                                                                                                                                                                                     |
+| U-122 | A rollback inside the split's window fails the operation, and the volume stays a member of its old group, in its old subsystem                                                    | Negative | `TestARollbackInsideTheLeaveWindowFailsAndKeepsTheVolumeInItsGroup`                                                                                                                                                                                        |
+| U-123 | An operator restart between the split and the detach detaches once and creates no second leave move                                                                               | Negative | `TestARestartBetweenTheSplitAndTheDetachLeavesOnce`                                                                                                                                                                                                        |
+| U-124 | A volume already a member of the named group does not leave it                                                                                                                    | Negative | `TestAVolumeAlreadyInTheNamedGroupDoesNotLeaveIt`                                                                                                                                                                                                          |
+| U-125 | The watcher answers a label changed from one group to another with one operation named for the volume and the new group, and a second pass creates nothing                        | Positive | `TestRelabelingAMemberRequestsOneJoinOperationIntoTheNewGroup`                                                                                                                                                                                             |
+| U-126 | A first join's operation is named `cg-join-<lvol>-<group>`                                                                                                                        | Positive | `TestTheFirstJoinsOperationIsNamedForTheVolumeAndTheGroup`                                                                                                                                                                                                 |
+| U-127 | With the join operation off, a relabel stays a `ConsistencyGroupConflict` and moves nothing                                                                                       | Negative | `TestWithoutTheJoinOperationARelabelStaysAConflict`                                                                                                                                                                                                        |
+| U-128 | A label changed back to a group the volume already left is a `ConsistencyGroupConflict`, never `Colocated`                                                                        | Negative | `TestARelabelBackToAGroupTheVolumeLeftIsAConflict`                                                                                                                                                                                                         |
+| U-129 | The client asks for a leave move with `purpose: leave`, a join move without it, and maps a leave refusal to its sentinel                                                          | Positive | `TestCreateSubsystemLeaveAsksForALeaveAndReadsTheMove`, `TestCreateSubsystemMoveAsksForAJoin`, `TestALeaveRefusalIsItsSentinel`                                                                                                                            |
+| U-130 | The client's detach deletes the member, treats a 404 as already detached, and reports a 409 or 500                                                                                | Boundary | `TestDetachConsistencyGroupMemberDeletesTheMember`, `TestDetachingWhatIsGoneSucceeds`, `TestAFailedDetachIsAnError`                                                                                                                                        |
+| U-131 | A volume read reports the group the volume is a member of                                                                                                                         | Positive | `TestClientVolumeReportsItsConsistencyGroup`                                                                                                                                                                                                               |
+| U-132 | The control plane's leave target is a fresh subsystem holding only the leaver, nothing when it is alone, and a refusal at the node limit or on a busy subsystem                   | Boundary | `test_a_member_sharing_its_subsystem_leaves_into_a_fresh_one_alone`, `test_a_member_alone_in_its_subsystem_moves_nothing`, `test_leaving_at_the_node_subsystem_limit_is_refused`, `test_leaving_a_subsystem_another_move_or_migration_holds_is_a_conflict` |
+| U-133 | The create route is a join unless the request says leave, and an unknown purpose is a 422                                                                                         | Negative | `test_create_is_a_join_unless_the_request_says_leave`, `test_create_with_an_unknown_purpose_is_rejected`                                                                                                                                                   |
+| I-11  | Against FoundationDB: a leave reserves a fresh target, is idempotent on its request, refuses a non-member and the node limit, and its commit re-points only the leaver            | Positive | —                                                                                                                                                                                                                                                          |
 
 ---
 
@@ -277,13 +302,14 @@ window is under `suspendTimeoutSeconds`.
 
 ### Topology (§5, §6)
 
-| #    | Scenario                                                                                                                                                                                  | Type     | Test |
-|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| E-10 | A three-node cluster: the fresh subsystem's listeners are `optimized` on the leader and `non_optimized` on the secondaries, and a host's multipath uses the optimized path after the flip | Positive | —    |
-| E-11 | A single-node cluster: the flip runs with one listener node                                                                                                                               | Boundary | —    |
-| E-12 | Members in two namespaces on two hosts move in one window                                                                                                                                 | Positive | —    |
-| E-13 | A member staged without `dmLinear` is attached: the operation fails at `AttachingPaths`, nothing is suspended, and restarting the named pod lets a retry succeed                          | Negative | —    |
-| E-14 | A stretched cluster: colocation is refused until P0-9 ships, and the join completes without it                                                                                            | Negative | —    |
+| #    | Scenario                                                                                                                                                                                               | Type     | Test |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| E-10 | A three-node cluster: the fresh subsystem's listeners are `optimized` on the leader and `non_optimized` on the secondaries, and a host's multipath uses the optimized path after the flip              | Positive | —    |
+| E-11 | A single-node cluster: the flip runs with one listener node                                                                                                                                            | Boundary | —    |
+| E-12 | Members in two namespaces on two hosts move in one window                                                                                                                                              | Positive | —    |
+| E-13 | A member staged without `dmLinear` is attached: the operation fails at `AttachingPaths`, nothing is suspended, and restarting the named pod lets a retry succeed                                       | Negative | —    |
+| E-14 | A stretched cluster: colocation is refused until P0-9 ships, and the join completes without it                                                                                                         | Negative | —    |
+| E-15 | A standalone volume on a third LVS joins G1 on another LVS, is relabeled to G2 on a third, and ends in G2's subsystem with A1 left in G1's, under fio verify (`regression_test/26`, `migrate-between`) | Positive | —    |
 
 ---
 
@@ -391,7 +417,7 @@ blindly.
 | Subsystem state  | free slot, exactly one slot, full with candidate, full with fresh, at node limit | E-01, E-07, E-05, E-06, E-08 | —                                             |
 | Consuming hosts  | none, one, several                                                               | U-76, I-01, I-02             | a host outside Kubernetes (M-05)              |
 | Lifecycle        | restart in each step, abort, deletion, terminal                                  | U-89, U-90, U-92, U-93, U-97 | control-plane restart mid-move (M-03)         |
-| Trigger          | watcher label, hand-written operation                                            | U-47, I-01                   | —                                             |
+| Trigger          | watcher label, relabel to another group, hand-written operation                  | U-47, U-125, I-01            | —                                             |
 | Version skew     | CSI node without `volume-swap`, control plane without the move endpoints         | U-74, U-58                   | —                                             |
 | Stretched        | refused                                                                          | E-14                         | colocation on a stretched cluster (P0-9)      |
 
@@ -399,12 +425,12 @@ blindly.
 
 ## 7. Coverage Summary
 
-| Class       | Scenarios | Covered | Not covered      |
-|-------------|-----------|---------|------------------|
-| Unit        | 116       | 113     | U-05, U-73, U-98 |
-| Integration | 10        | 7       | I-06, I-09, I-10 |
-| E2E         | 14        | 0       | E-01 … E-14      |
-| Manual      | 5         | 0       | M-01 … M-05      |
+| Class       | Scenarios | Covered | Not covered            |
+|-------------|-----------|---------|------------------------|
+| Unit        | 133       | 130     | U-05, U-73, U-98       |
+| Integration | 11        | 7       | I-06, I-09, I-10, I-11 |
+| E2E         | 15        | 0       | E-01 … E-15            |
+| Manual      | 5         | 0       | M-01 … M-05            |
 
 Every unit row is covered except U-05, U-73, and U-98, and seven of the ten integration
 rows are. The end-to-end and manual rows need a live cluster.
@@ -418,7 +444,8 @@ rows are. The end-to-end and manual rows need a live cluster.
 | U-73             | A connected host NQN with no matching node                             | The control plane reports no connected host NQNs to the operator, so the cross-check has nothing to read |
 | U-98             | A stale status not acted on                                            | Covered by the kind's shared status writer, which no join-specific test exercises                        |
 | I-06, I-09, I-10 | A running migration deferring the join, concurrent joins, two clusters | Not written yet. U-95 covers the deferral against a fake client                                          |
-| E-01 … E-14      | Live flips                                                             | Needs a live cluster with the new CSI node, operator, and control-plane images                           |
+| I-11             | The leave move against FoundationDB                                    | The seven sbcli integration tests are written and have not run: they need a local FoundationDB           |
+| E-01 … E-15      | Live flips                                                             | Needs a live cluster with the new CSI node, operator, and control-plane images                           |
 | M-01 … M-05      | Failure injection inside the window                                    | Needs a live cluster and manual timing                                                                   |
 | —                | 5+ node clusters                                                       | No lab of that size. The selection rule does not depend on node count beyond the HA set                  |
 | —                | Colocation on a stretched cluster                                      | P0-9 not shipped                                                                                         |

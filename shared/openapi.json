@@ -17791,6 +17791,15 @@
             "maxLength": 128,
             "minLength": 1,
             "title": "Request Id"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "join",
+              "leave"
+            ],
+            "title": "Purpose",
+            "default": "join"
           }
         },
         "type": "object",
@@ -17799,7 +17808,7 @@
           "request_id"
         ],
         "title": "ConsistencyGroupSubsystemMoveCreateDTO",
-        "description": "Request body for a subsystem move: ``lvol_id`` is the member that just\njoined. A retry with the same ``request_id`` answers with the same move."
+        "description": "Request body for a subsystem move: ``lvol_id`` is the member that just\njoined, or with ``purpose`` ``leave`` the member about to leave, which is\nsplit out of the subsystem it shares into a fresh one on its node. A retry\nwith the same ``request_id`` answers with the same move."
       },
       "ConsistencyGroupSubsystemMoveDTO": {
         "properties": {

@@ -270,13 +270,35 @@ func (c *Client) JoinConsistencyGroupMember(ctx context.Context, clusterID, grou
 func (c *Client) CreateSubsystemMove(
 	ctx context.Context, clusterID, groupID, lvolID, requestID string,
 ) (SubsystemMove, error) {
+	what := fmt.Sprintf("create a subsystem move of consistency group %s for volume %s", groupID, lvolID)
+	return c.createMove(ctx, what, clusterID, groupID, cpapi.ConsistencyGroupSubsystemMoveCreateDTO{
+		LvolId: lvolID, RequestId: requestID,
+	})
+}
+
+// CreateSubsystemLeave splits lvolID, a member about to leave the group, out of
+// the subsystem it shares with the group's other members into a fresh one on
+// its node, and reserves it. The move runs through the same prepare, move, and
+// commit calls as a join's. It is Empty when the volume shares its subsystem
+// with nobody, and requestID makes it idempotent as CreateSubsystemMove's is.
+func (c *Client) CreateSubsystemLeave(
+	ctx context.Context, clusterID, groupID, lvolID, requestID string,
+) (SubsystemMove, error) {
+	what := fmt.Sprintf("create a subsystem move of volume %s out of consistency group %s", lvolID, groupID)
+	return c.createMove(ctx, what, clusterID, groupID, cpapi.ConsistencyGroupSubsystemMoveCreateDTO{
+		LvolId: lvolID, RequestId: requestID, Purpose: ptr.To(cpapi.Leave),
+	})
+}
+
+func (c *Client) createMove(
+	ctx context.Context, what, clusterID, groupID string, body cpapi.ConsistencyGroupSubsystemMoveCreateDTO,
+) (SubsystemMove, error) {
 	cluster, group, err := groupPath(clusterID, groupID)
 	if err != nil {
 		return SubsystemMove{}, err
 	}
-	what := fmt.Sprintf("create a subsystem move of consistency group %s for volume %s", groupID, lvolID)
 	resp, err := c.api.ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithResponse(
-		ctx, cluster, group, cpapi.ConsistencyGroupSubsystemMoveCreateDTO{LvolId: lvolID, RequestId: requestID})
+		ctx, cluster, group, body)
 	if err != nil {
 		return SubsystemMove{}, fmt.Errorf("%s: %w", what, err)
 	}
@@ -284,6 +306,27 @@ func (c *Client) CreateSubsystemMove(
 		return SubsystemMove{}, refusal(what, resp.StatusCode(), resp.Body, nil)
 	}
 	return moveOf(*resp.JSON200), nil
+}
+
+// DetachConsistencyGroupMember closes lvolID's membership of the group. The
+// control plane answers a volume that is not a member as it answers one that
+// is, and a group that is gone has no membership left to close, so a retried
+// detach succeeds.
+func (c *Client) DetachConsistencyGroupMember(ctx context.Context, clusterID, groupID, lvolID string) error {
+	cluster, group, err := groupPath(clusterID, groupID)
+	if err != nil {
+		return err
+	}
+	what := fmt.Sprintf("detach volume %s from consistency group %s", lvolID, groupID)
+	resp, err := c.api.ClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDeleteWithResponse(
+		ctx, cluster, group, lvolID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	if resp.StatusCode() == http.StatusNotFound {
+		return nil
+	}
+	return noContent(what, resp.StatusCode(), resp.Body)
 }
 
 // GetSubsystemMove reads a move. An unknown move wraps errs.ErrNotFound.

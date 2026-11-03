@@ -201,6 +201,24 @@ func (e ConsistencyGroupReplicationStatusDTOState) Valid() bool {
 	}
 }
 
+// Defines values for ConsistencyGroupSubsystemMoveCreateDTOPurpose.
+const (
+	Join  ConsistencyGroupSubsystemMoveCreateDTOPurpose = "join"
+	Leave ConsistencyGroupSubsystemMoveCreateDTOPurpose = "leave"
+)
+
+// Valid indicates whether the value is a known member of the ConsistencyGroupSubsystemMoveCreateDTOPurpose enum.
+func (e ConsistencyGroupSubsystemMoveCreateDTOPurpose) Valid() bool {
+	switch e {
+	case Join:
+		return true
+	case Leave:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DevicePerformanceAssessmentDTOVerdict.
 const (
 	DevicePerformanceAssessmentDTOVerdictOk      DevicePerformanceAssessmentDTOVerdict = "ok"
@@ -1522,11 +1540,17 @@ type ConsistencyGroupResolutionDTO struct {
 }
 
 // ConsistencyGroupSubsystemMoveCreateDTO Request body for a subsystem move: “lvol_id“ is the member that just
-// joined. A retry with the same “request_id“ answers with the same move.
+// joined, or with “purpose“ “leave“ the member about to leave, which is
+// split out of the subsystem it shares into a fresh one on its node. A retry
+// with the same “request_id“ answers with the same move.
 type ConsistencyGroupSubsystemMoveCreateDTO struct {
-	LvolId    string `json:"lvol_id"`
-	RequestId string `json:"request_id"`
+	LvolId    string                                         `json:"lvol_id"`
+	Purpose   *ConsistencyGroupSubsystemMoveCreateDTOPurpose `json:"purpose,omitempty"`
+	RequestId string                                         `json:"request_id"`
 }
+
+// ConsistencyGroupSubsystemMoveCreateDTOPurpose defines model for ConsistencyGroupSubsystemMoveCreateDTO.Purpose.
+type ConsistencyGroupSubsystemMoveCreateDTOPurpose string
 
 // ConsistencyGroupSubsystemMoveDTO A consistency group's subsystem move. “id“ is empty, and “volumes“
 // too, when nothing had to move. “namespaces_at“ is “source“ or

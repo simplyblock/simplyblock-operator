@@ -71,6 +71,8 @@ var undeletableVolumeSteps = map[simplyblockv1alpha2.PersistentVolumeOpsStep]str
 
 	simplyblockv1alpha2.PersistentVolumeOpsStepJoining: "the volume is being added to its " +
 		"consistency group, and membership cannot be taken back by deleting the request",
+	simplyblockv1alpha2.PersistentVolumeOpsStepLeaving: "the volume is leaving the consistency " +
+		"group it was a member of, and leaving a group cannot be taken back by deleting the request",
 	simplyblockv1alpha2.PersistentVolumeOpsStepSuspending:       joinWindow,
 	simplyblockv1alpha2.PersistentVolumeOpsStepMovingNamespaces: joinWindow,
 	simplyblockv1alpha2.PersistentVolumeOpsStepResuming:         joinWindow,

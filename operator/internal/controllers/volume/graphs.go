@@ -113,6 +113,10 @@ const (
 	joinMigratingDeadline = 24 * time.Hour
 
 	joinJoiningDeadline = 10 * time.Minute
+	// joinLeavingDeadline bounds the leave's own calls: recording the split
+	// and detaching the volume from the group it leaves. The swap that splits
+	// it runs in the steps after SelectingSubsystem, under their deadlines.
+	joinLeavingDeadline = 10 * time.Minute
 
 	// joinSelectingDeadline covers waiting for another operation to release
 	// a volume the move touches, which can be a migration of hours.
@@ -231,9 +235,17 @@ func graphs(members int32) statemachine.MultiConfig[step] {
 				// host's data path, and what the operation reserved or created
 				// can be released.
 				stepPlanning: {
-					To:        []step{stepJoinMigrating, stepJoining},
+					To:        []step{stepJoinMigrating, stepJoining, stepLeaving},
 					Abortable: true,
 					OnEnter:   deadline(joinPlanningDeadline),
+				},
+				// A volume in another group leaves it first. The step is
+				// entered before the swap that splits the volume out of that
+				// group's subsystem and again after it, and it detaches the
+				// volume, which is one-way, so an abort cannot be honored here.
+				stepLeaving: {
+					To:      []step{stepSelectingSubsystem, stepJoinMigrating, stepJoining},
+					OnEnter: deadline(joinLeavingDeadline),
 				},
 				stepJoinMigrating: {
 					To:        []step{stepJoining},
@@ -247,7 +259,7 @@ func graphs(members int32) statemachine.MultiConfig[step] {
 					OnEnter: deadline(joinJoiningDeadline),
 				},
 				stepSelectingSubsystem: {
-					To:        []step{stepPreparingTarget},
+					To:        []step{stepPreparingTarget, stepLeaving},
 					Abortable: true,
 					OnEnter:   deadline(joinSelectingDeadline),
 				},
@@ -276,10 +288,13 @@ func graphs(members int32) statemachine.MultiConfig[step] {
 					OnEnter: deadline(joinWindowDeadline),
 				},
 				stepJoinCommitting: {
-					To:      []step{stepReleasingPaths},
+					To:      []step{stepReleasingPaths, stepLeaving},
 					OnEnter: deadline(joinCommittingDeadline),
 				},
-				stepReleasingPaths: {OnEnter: deadline(joinReleasingDeadline)},
+				stepReleasingPaths: {
+					To:      []step{stepLeaving},
+					OnEnter: deadline(joinReleasingDeadline),
+				},
 			},
 		},
 	}

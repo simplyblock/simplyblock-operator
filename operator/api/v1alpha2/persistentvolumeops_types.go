@@ -133,7 +133,7 @@ const (
 // registered kind merges these with the phases above into one enum, so that
 // Validating sits beside Completed and neither can be read without the other's
 // values in mind.
-// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Replicating;Committing;AwaitingCutover;AttachingPaths;Proceeding;Planning;Joining;SelectingSubsystem;PreparingTarget;Suspending;MovingNamespaces;Resuming;ReleasingPaths
+// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Replicating;Committing;AwaitingCutover;AttachingPaths;Proceeding;Planning;Joining;SelectingSubsystem;PreparingTarget;Suspending;MovingNamespaces;Resuming;ReleasingPaths;Leaving
 type PersistentVolumeOpsStep string
 
 const (
@@ -195,6 +195,11 @@ const (
 	// PersistentVolumeOpsStepReleasingPaths disconnects the subsystem the
 	// volumes left, on every node that no longer uses it.
 	PersistentVolumeOpsStepReleasingPaths PersistentVolumeOpsStep = "ReleasingPaths"
+	// PersistentVolumeOpsStepLeaving takes a volume out of the consistency
+	// group it is a member of, so that it can join the group its claim now
+	// names: the volume first leaves the NVMe-oF subsystem it shares with that
+	// group's members, then the group itself.
+	PersistentVolumeOpsStepLeaving PersistentVolumeOpsStep = "Leaving"
 )
 
 // SubsystemSide is which NVMe-oF subsystem a moving volume's namespace is
@@ -674,6 +679,37 @@ type JoinConsistencyGroupStatus struct {
 	// it once every node is back on the subsystem it started on.
 	// +optional
 	RollbackReason string `json:"rollbackReason,omitempty"`
+
+	// Leave is the progress of leaving the consistency group the volume was a
+	// member of when the operation started. It is absent when the volume was in
+	// no group, or already in the one spec.groupName names.
+	// +optional
+	Leave *ConsistencyGroupLeaveStatus `json:"leave,omitempty"`
+}
+
+// ConsistencyGroupLeaveStatus is how far a volume got in leaving the
+// consistency group it was a member of. Leaving a group is permanent: a volume
+// that left keeps its place in the generations taken while it was a member, and
+// never rejoins that group.
+type ConsistencyGroupLeaveStatus struct {
+	// GroupUUID is the backend UUID of the group the volume leaves.
+	// +kubebuilder:validation:Required
+	GroupUUID string `json:"groupUUID"`
+
+	// SplitNQN is the NVMe-oF subsystem the volume was moved into when it
+	// shared its subsystem with that group's members. It is empty when the
+	// volume shared its subsystem with no other volume.
+	// +optional
+	SplitNQN string `json:"splitNQN,omitempty"`
+
+	// Split is set once the volume no longer shares an NVMe-oF subsystem with
+	// the members of the group it leaves.
+	// +optional
+	Split bool `json:"split,omitempty"`
+
+	// Detached is set once the volume is no longer a member of that group.
+	// +optional
+	Detached bool `json:"detached,omitempty"`
 }
 
 // PersistentVolumeOpsStatus is the observed state of one volume operation.
@@ -685,7 +721,7 @@ type PersistentVolumeOpsStatus struct {
 	// Step is the position of the running action's state machine. It is
 	// persisted before the side effect that step performs, so a step reported
 	// here is a step that started.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating','Verifying','Replicating','Committing','AwaitingCutover','AttachingPaths','Proceeding','Planning','Joining','SelectingSubsystem','PreparingTarget','Suspending','MovingNamespaces','Resuming','ReleasingPaths']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating','Verifying','Replicating','Committing','AwaitingCutover','AttachingPaths','Proceeding','Planning','Joining','SelectingSubsystem','PreparingTarget','Suspending','MovingNamespaces','Resuming','ReleasingPaths','Leaving']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

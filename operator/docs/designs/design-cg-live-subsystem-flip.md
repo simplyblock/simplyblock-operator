@@ -2,7 +2,7 @@
 
 **Status:** Partially Implemented  
 **Author:** Israel Geoffrey (geoffrey1330)  
-**Date:** 2026-11-02  
+**Date:** 2026-11-03  
 **Test Plan:** [`tests/test-plan-cg-live-subsystem-flip.md`](../tests/test-plan-cg-live-subsystem-flip.md)
 
 ---
@@ -115,6 +115,13 @@ path.
 | Full                  | No                                                      | Yes                            | The whole group moves into a fresh subsystem                      |
 | Full                  | No                                                      | No                             | Refused with `SubsystemLimitReached`. The volume does not migrate |
 
+A label changed from one group to another starts the same action for the new
+group. The volume first leaves the old one (§8.5): when it shares the old
+group's subsystem, it is split into a fresh subsystem of its own with the same
+host swap, and the control plane then closes its membership. The four stages
+above follow for the new group. A volume never rejoins a group it has left
+(`design-consistency-groups.md` §4.3).
+
 ---
 
 ## 1. Background
@@ -211,7 +218,7 @@ Three things block a live flip today:
 │  ┌────────────────────────────────────────────────────────────────────┐  │
 │  │ CSI controller: membership watcher (spdkcsi-cg-membership)         │  │
 │  │  1. PVC gains storage.simplyblock.io/consistency-group             │  │
-│  │  2. creates PersistentVolumeOps cg-join-<lvol>                     │  │
+│  │  2. creates PersistentVolumeOps cg-join-<lvol>-<group>             │  │
 │  │     action JoinConsistencyGroup, creatorRef unset                  │  │
 │  │  3. label removed: DELETE .../members/{lvol} (unchanged)           │  │
 │  └────────────────────────────────────────────────────────────────────┘  │
@@ -279,7 +286,7 @@ entirety, as for every action of the kind.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: PersistentVolumeOps
 metadata:
-  name: cg-join-6f0c2b7e-0b8e-4b7e-9d0a-3c1f8f6a2d11
+  name: cg-join-6f0c2b7e-0b8e-4b7e-9d0a-3c1f8f6a2d11-3f9a0c12
   labels:
     storage.simplyblock.io/purpose: consistency-group-join
     app.kubernetes.io/managed-by: spdkcsi
@@ -323,8 +330,13 @@ has the full additions to the type.
 
 A `PersistentVolumeOps` with action `JoinConsistencyGroup` can also be written
 by hand, which is how an existing member outside its group's subsystem is
-brought into it. The watcher creates one only for a labeled volume that belongs
-to no group, and only when none exists for the volume (§8.1).
+brought into it. The watcher creates one for a labeled volume that belongs to no
+group, or to a group other than the label's, and only when none exists for the
+volume and that group (§8.1). Its name is `cg-join-<lvol>-<group>`, where
+`<group>` is the first eight hex digits of the SHA-256 of the group name, so a
+volume relabeled to a second group gets a second operation. When the volume is
+a member of another group, `status.joinConsistencyGroup.leave` records the
+group it leaves and how far the leave got (§8.5).
 
 ---
 
@@ -577,7 +589,9 @@ names.
   PVC labeled; watcher creates the operation
     │
     ▼
-  Planning            ← resolve the group; POST .../members/plan; preflight (§5.5)
+  Planning            ← resolve the group; read the volume's current group
+    │  a member of another group ──────────────────────▶ Leaving (§8.5)
+    │  POST .../members/plan; preflight (§5.5)
     │  on the pin                          │  off the pin
     │                                      ▼
     │                                Migrating          ← child PersistentVolumeOps Migrate
@@ -614,6 +628,14 @@ names.
   Succeeded
 ```
 
+A volume leaving another group passes through `Leaving` twice (§8.5). The
+first pass, when the volume shares the old group's subsystem, runs
+`SelectingSubsystem` through `ReleasingPaths` against the old group with a
+leave move, which splits the volume into a fresh subsystem. The second pass
+detaches the volume from the old group, then plans the join and continues at
+`Migrating` or `Joining`. A volume alone in its subsystem skips the swap and
+runs the second pass at once.
+
 The rollback path is the same `Resuming` step pointed at the source. Once a
 failure after `AttachingPaths` is classified, the reconciler calls
 `POST .../{move}/rollback` when any namespace may have left its source, records
@@ -625,7 +647,8 @@ paths, and the control plane deletes a fresh target subsystem that is empty.
 `SelectingSubsystem`, `PreparingTarget`, and `AttachingPaths`. From `Suspending`
 on, the window is bounded by the deadline, and the operation finishes or rolls
 back by itself. A join that already happened stays: membership is one-way
-(`design-consistency-groups.md` §4.3).
+(`design-consistency-groups.md` §4.3). `Leaving` is not abortable either,
+because its second pass detaches the volume, which is also one-way.
 
 The admission webhook refuses to delete the operation while its step is
 `Joining`, `Suspending`, `MovingNamespaces`, `Resuming`, or `ReleasingPaths`,
@@ -636,6 +659,9 @@ the finalizer anyway still runs the commit or the rollback below.
 |-------------------------------------------------------------------------------------------|----------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Group name resolves to nothing                                                            | `Planning`           | Held as `Pending` with `ConsistencyGroupPending`, requeued                                                                                                                                       |
 | Volume in another group, another pool, or a sibling in another group                      | `Planning`           | `Failed`, `ConsistencyGroupJoinRefused`                                                                                                                                                          |
+| Leaving: the node cannot hold the fresh subsystem the split needs                         | `SelectingSubsystem` | `Failed`, `SubsystemLimitReached`. The volume stays a member of its old group, in the old group's subsystem                                                                                      |
+| Leaving: the split is rolled back                                                         | any swap step        | `Failed` after the rollback path. The volume stays a member of its old group, in the old group's subsystem                                                                                       |
+| Leaving: the detach returns 5xx                                                           | `Leaving`            | Retried. The volume is already in its own subsystem                                                                                                                                              |
 | Preflight refuses for capacity                                                            | `Planning`           | `Failed`, `SubsystemLimitReached`. Nothing migrated                                                                                                                                              |
 | Child migration fails or aborts                                                           | `Migrating`          | `Failed`, `ConsistencyGroupMigrationFailed`. The volume stays where the child left it                                                                                                            |
 | Members endpoint returns 409                                                              | `Joining`            | `Failed`, `ConsistencyGroupJoinRefused`                                                                                                                                                          |
@@ -661,13 +687,24 @@ the finalizer anyway still runs the commit or the rollback below.
 The watcher keeps its trigger: a PVC informer, Add and Update events, and a
 5-minute resync. Its `join` path changes. For a bound PVC whose label names a
 group and whose volume belongs to no group, it ensures a `PersistentVolumeOps`
-named `cg-join-<lvol>` exists, with action `JoinConsistencyGroup` and the
+named `cg-join-<lvol>-<group>` exists, with action `JoinConsistencyGroup` and the
 label's group name, and reports its phase as an event, as it reports a
 `VolumeMigration` phase today. A failed operation is left in place, and the
 watcher does not recreate it until it is deleted, which is the retry a user asks
 for. Label removal still detaches directly.
 
-The trigger is therefore a label added to an existing volume, and nothing else.
+A label changed to name another group is the second trigger. The watcher
+requests a join of the new group, `cg-join-<lvol>-<group>`, and the operation
+leaves the old group first (§8.5). The volume's create event is
+`ConsistencyGroupMoveStarted` instead of `ConsistencyGroupJoinStarted`. When the
+operation for the label's group has already succeeded and the volume is still
+in another group, the volume was relabeled back to a group it left, which the
+one-way rule refuses, and the watcher reports `ConsistencyGroupConflict`. With
+`SPDKCSI_CG_JOIN_OPERATION` off, a relabel is a `ConsistencyGroupConflict`, as
+before.
+
+The trigger is therefore a label added to an existing volume or changed on one,
+and nothing else.
 A volume provisioned with the label is placed on the pinned node and joins the
 group at creation (`design-consistency-groups.md` §4.1), so it is a member
 before the watcher first sees it, and the watcher never creates an operation for
@@ -732,6 +769,40 @@ the same on `persistentvolumeops`:
 The operator already reconciles `persistentvolumeops` and already reads
 `volumeattachments`. It needs nothing new on the Kubernetes side.
 
+### 8.5 Moving Between Groups
+
+A volume belongs to at most one group, and a group's members share one node,
+one logical volume store, and, after a join, one subsystem. A volume that moves
+from group G1 to group G2 therefore has to stop sharing G1's subsystem before it
+can leave G1's node: a live migration moves a subsystem with everything in it,
+and the control plane refuses one that would drag another group's members along
+(`cg_colocation.plan_late_join`). The operation for G2 does this in `Leaving`,
+before it plans the join.
+
+1. **Split.** `Planning` reads the volume's current group. When it is not the
+   label's group, the operation records it in `status.joinConsistencyGroup.leave`
+   and enters `Leaving`, which asks the control plane for a leave move on G1
+   (`POST .../subsystem-moves` with `purpose: leave`). The control plane answers
+   an empty move when the volume shares its subsystem with nobody. Otherwise
+   the target is a fresh subsystem on the volume's node holding only that
+   volume, and the swap of §6 and §7 runs against G1 exactly as a join's does:
+   every host consuming the volume holds its I/O while its namespace changes
+   subsystem. G1's other members are not touched and keep their subsystem.
+2. **Detach.** Back in `Leaving`, the operation records the split, releases the
+   locks the swap took, and detaches the volume from G1
+   (`DELETE .../members/{lvol}`). The membership closes at G1's current
+   generation, and every generation that contains the volume stays restorable.
+3. **Join.** The operation plans the join with G2 and continues as any late
+   join does: `Migrating` when G2 is on another node or store, then `Joining`,
+   then the selection and the flip into G2's subsystem.
+
+The split is the only step of the leave a rollback can take back. A split that
+rolls back fails the operation with the volume still a member of G1, in G1's
+subsystem, and deleting the failed operation lets the watcher retry. Once
+detached, the volume is in no group until the join with G2 succeeds, so a
+failure after the detach leaves it standalone in its own subsystem, and the
+watcher's retry is a plain late join of G2.
+
 ---
 
 ## 9. Backend API Requirements
@@ -739,17 +810,18 @@ The operator already reconciles `persistentvolumeops` and already reads
 Paths are under `/api/v2/clusters/{cluster}/consistency-groups/{group}`, except
 the connect row, which is under `/api/v2/clusters/{cluster}`.
 
-| Method | Endpoint                                     | Notes                                                                                                                                                                                                                                                                                                                                                            |
-|--------|----------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `POST` | `/members/plan`                              | Exists. P0-2 adds `colocation: {target_nqn, target_is_new, moving_lvol_ids, refusal}`. Reserves nothing                                                                                                                                                                                                                                                          |
-| `POST` | `/members`                                   | Exists. Idempotent, 409 on refusal                                                                                                                                                                                                                                                                                                                               |
-| `POST` | `/subsystem-moves`                           | New. Body `{lvol_id, request_id}`. Runs §5 and reserves the target's slots in the claim transaction. Returns the move: `id`, `target_nqn`, `target_is_new`, and per volume `lvol_id`, `source_nqn`, `ns_uuid`, `nguid`, `target_nsid`. The same `request_id` returns the same move. 409 `SubsystemLimitReached`, 409 when a move or migration is active          |
-| `POST` | `/subsystem-moves/{id}/prepare`              | New. Creates the target on every HA node when new, with listeners (P0-5). Returns the target's connect entries for a given `host_nqn`. Idempotent                                                                                                                                                                                                                |
-| `POST` | `/subsystem-moves/{id}/move`                 | New. Body `{deadline}`. Removes every moving namespace from its source and adds it to the target at `target_nsid` on every HA node. Refuses with 409 before removing anything when `deadline` has passed. On a partial failure restores the source and returns 409 with `namespaces_at: source`. A repeat after success returns 200 with `namespaces_at: target` |
-| `POST` | `/subsystem-moves/{id}/commit`               | New. Switches every moving volume's `nqn`, `ns_id`, `namespace`, and `max_namespace_per_subsys` in one transaction, deletes empty source subsystems, and clears the move. Idempotent                                                                                                                                                                             |
-| `POST` | `/subsystem-moves/{id}/rollback`             | New. Puts every namespace back in its source when it is not there, deletes an empty fresh target, releases the reservation, and clears the move. Idempotent                                                                                                                                                                                                      |
-| `GET`  | `/subsystem-moves/{id}`                      | New. The move with `namespaces_at`                                                                                                                                                                                                                                                                                                                               |
-| `GET`  | `/storage-pools/{pool}/volumes/{id}/connect` | Exists (cluster path). Returns the source NQN until commit and the target after it                                                                                                                                                                                                                                                                               |
+| Method   | Endpoint                                     | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+|----------|----------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `POST`   | `/members/plan`                              | Exists. P0-2 adds `colocation: {target_nqn, target_is_new, moving_lvol_ids, refusal}`. Reserves nothing                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `POST`   | `/members`                                   | Exists. Idempotent, 409 on refusal                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `POST`   | `/subsystem-moves`                           | New. Body `{lvol_id, request_id, purpose}`. `purpose: leave` splits an open member into a fresh subsystem on its node, alone, and answers an empty move when it shares its subsystem with nobody (§8.5). With `purpose: join`, the default, it runs §5 and reserves the target's slots in the claim transaction. Returns the move: `id`, `target_nqn`, `target_is_new`, and per volume `lvol_id`, `source_nqn`, `ns_uuid`, `nguid`, `target_nsid`. The same `request_id` returns the same move. 409 `SubsystemLimitReached`, 409 when a move or migration is active |
+| `POST`   | `/subsystem-moves/{id}/prepare`              | New. Creates the target on every HA node when new, with listeners (P0-5). Returns the target's connect entries for a given `host_nqn`. Idempotent                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `POST`   | `/subsystem-moves/{id}/move`                 | New. Body `{deadline}`. Removes every moving namespace from its source and adds it to the target at `target_nsid` on every HA node. Refuses with 409 before removing anything when `deadline` has passed. On a partial failure restores the source and returns 409 with `namespaces_at: source`. A repeat after success returns 200 with `namespaces_at: target`                                                                                                                                                                                                    |
+| `POST`   | `/subsystem-moves/{id}/commit`               | New. Switches every moving volume's `nqn`, `ns_id`, `namespace`, and `max_namespace_per_subsys` in one transaction, deletes empty source subsystems, and clears the move. Idempotent                                                                                                                                                                                                                                                                                                                                                                                |
+| `POST`   | `/subsystem-moves/{id}/rollback`             | New. Puts every namespace back in its source when it is not there, deletes an empty fresh target, releases the reservation, and clears the move. Idempotent                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `GET`    | `/subsystem-moves/{id}`                      | New. The move with `namespaces_at`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `DELETE` | `/members/{lvol}`                            | Exists. Closes the volume's membership. The operator treats a 404 as already detached                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `GET`    | `/storage-pools/{pool}/volumes/{id}/connect` | Exists (cluster path). Returns the source NQN until commit and the target after it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 ---
 
@@ -803,6 +875,10 @@ always the joining one.
 | Event                                                                                                           | Type    | Reason                              |
 |-----------------------------------------------------------------------------------------------------------------|---------|-------------------------------------|
 | The watcher created the operation for the label                                                                 | Normal  | `ConsistencyGroupJoinStarted`       |
+| The watcher created the operation for a label changed from one group to another                                 | Normal  | `ConsistencyGroupMoveStarted`       |
+| The volume left the subsystem it shared with its old group's members, into one of its own                       | Normal  | `ConsistencyGroupSplit`             |
+| The volume left its old group                                                                                   | Normal  | `ConsistencyGroupLeft`              |
+| The label names a group the volume already left, which the one-way rule refuses                                 | Warning | `ConsistencyGroupConflict`          |
 | The group needs a fresh subsystem and the node is at its subsystem limit                                        | Warning | `SubsystemLimitReached`             |
 | Every moving namespace is in the group's subsystem and every host resumed                                       | Normal  | `ConsistencyGroupColocated`         |
 | A consuming host cannot swap, naming the host and the PVC to restart                                            | Warning | `SubsystemSwapUnavailable`          |
@@ -907,7 +983,7 @@ const (
 )
 
 // PersistentVolumeOpsStep is one step of a running volume operation.
-// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Replicating;Committing;AwaitingCutover;AttachingPaths;Proceeding;Planning;Joining;SelectingSubsystem;PreparingTarget;Suspending;MovingNamespaces;Resuming;ReleasingPaths
+// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Replicating;Committing;AwaitingCutover;AttachingPaths;Proceeding;Planning;Joining;SelectingSubsystem;PreparingTarget;Suspending;MovingNamespaces;Resuming;ReleasingPaths;Leaving
 type PersistentVolumeOpsStep string
 
 const (
@@ -935,6 +1011,11 @@ const (
 	// PersistentVolumeOpsStepReleasingPaths disconnects the subsystem the
 	// volumes left on every node that no longer uses it.
 	PersistentVolumeOpsStepReleasingPaths PersistentVolumeOpsStep = "ReleasingPaths"
+	// PersistentVolumeOpsStepLeaving takes a volume out of the consistency
+	// group it is a member of, so that it can join the group its claim now
+	// names: the volume first leaves the NVMe-oF subsystem it shares with that
+	// group's members, then the group itself.
+	PersistentVolumeOpsStepLeaving PersistentVolumeOpsStep = "Leaving"
 )
 
 // SubsystemSide is which subsystem a moving volume's namespace is exported by.
@@ -1068,6 +1149,36 @@ type JoinConsistencyGroupStatus struct {
 	// +listMapKey=node
 	// +optional
 	Hosts []SwapHost `json:"hosts,omitempty"`
+
+	// Leave is how far the volume got in leaving the group it was a member of
+	// when the operation started. Absent when it was in no group.
+	// +optional
+	Leave *ConsistencyGroupLeaveStatus `json:"leave,omitempty"`
+}
+
+// ConsistencyGroupLeaveStatus is how far a volume got in leaving the
+// consistency group it was a member of. Leaving a group is permanent: a volume
+// that left keeps its place in the generations taken while it was a member, and
+// never rejoins that group.
+type ConsistencyGroupLeaveStatus struct {
+	// GroupUUID is the backend UUID of the group the volume leaves.
+	// +kubebuilder:validation:Required
+	GroupUUID string `json:"groupUUID"`
+
+	// SplitNQN is the NVMe-oF subsystem the volume was moved into when it
+	// shared its subsystem with that group's members. It is empty when the
+	// volume shared its subsystem with no other volume.
+	// +optional
+	SplitNQN string `json:"splitNQN,omitempty"`
+
+	// Split is set once the volume no longer shares an NVMe-oF subsystem with
+	// the members of the group it leaves.
+	// +optional
+	Split bool `json:"split,omitempty"`
+
+	// Detached is set once the volume is no longer a member of that group.
+	// +optional
+	Detached bool `json:"detached,omitempty"`
 }
 
 // Added to PersistentVolumeOpsSpec, with the rule that pairs it with the action:

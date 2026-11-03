@@ -107,3 +107,35 @@ func TestDropStaleOfASubsystemNotAttachedDropsNothing(t *testing.T) {
 		t.Fatalf("dropped %d, err %v; want nothing dropped and no error for a subsystem the host does not hold", n, err)
 	}
 }
+
+// A subsystem whose every controller is down (its node restarting, say) still
+// carries the I/O of the volumes left in it, which the kernel holds until a
+// path comes back. Dropping those controllers would delete those volumes'
+// devices, so a subsystem with no live controller is left as it is.
+func TestDropStaleNeverRemovesTheLastPathsOfASubsystem(t *testing.T) {
+	root := t.TempDir()
+	dirs := map[string]string{}
+	for _, name := range []string{"nvme1", "nvme2"} {
+		dirs[name] = controllerDir(t, root, name)
+		if err := os.WriteFile(filepath.Join(dirs[name], "delete_controller"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	drop := SysfsDropStale(fakeSubsystems{sub: nvme.Subsystem{NQN: sourceNQN, Controllers: []nvme.Controller{
+		{ID: "nvme1", SysfsPath: dirs["nvme1"], State: "connecting"},
+		{ID: "nvme2", SysfsPath: dirs["nvme2"], State: "resetting"},
+	}}})
+
+	n, err := drop(ctx, sourceNQN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("dropped %d controller(s) of a subsystem with no live path, want none", n)
+	}
+	for name, dir := range dirs {
+		if got, _ := os.ReadFile(filepath.Join(dir, "delete_controller")); len(got) != 0 {
+			t.Errorf("%s: wrote %q to delete_controller of a subsystem's last paths", name, got)
+		}
+	}
+}

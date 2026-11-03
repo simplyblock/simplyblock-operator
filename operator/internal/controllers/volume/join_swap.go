@@ -171,7 +171,7 @@ func (r *PersistentVolumeOpsReconciler) joinAttach(
 		if err != nil {
 			return "", false, err
 		}
-		prepared, err := r.Join.PrepareSubsystemMove(ctx, subject.clusterUUID, join.GroupUUID, join.MoveID, hostNQN)
+		prepared, err := r.Join.PrepareSubsystemMove(ctx, subject.clusterUUID, moveGroupOf(join), join.MoveID, hostNQN)
 		if err != nil {
 			return "", false, err
 		}
@@ -298,7 +298,7 @@ func (r *PersistentVolumeOpsReconciler) joinMove(
 			}
 		}
 
-		_, err := r.Join.StartSubsystemMove(ctx, subject.clusterUUID, join.GroupUUID, join.MoveID, join.SuspendDeadline.Time)
+		_, err := r.Join.StartSubsystemMove(ctx, subject.clusterUUID, moveGroupOf(join), join.MoveID, join.SuspendDeadline.Time)
 		switch {
 		case errors.Is(err, controlplane.ErrDeadlinePassed), errors.Is(err, controlplane.ErrMoveFailed),
 			errors.Is(err, controlplane.ErrMoveConflict):
@@ -330,7 +330,7 @@ func (r *PersistentVolumeOpsReconciler) joinResume(
 	join := joinOf(ops)
 	back := join.RollbackReason != ""
 	if back && join.NamespacesAt != simplyblockv1alpha2.SubsystemSideSource {
-		if err := r.Join.RollbackSubsystemMove(ctx, subject.clusterUUID, join.GroupUUID, join.MoveID); err != nil {
+		if err := r.Join.RollbackSubsystemMove(ctx, subject.clusterUUID, moveGroupOf(join), join.MoveID); err != nil {
 			return "", false, err
 		}
 		if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.PersistentVolumeOpsStatus) {
@@ -440,7 +440,7 @@ func (r *PersistentVolumeOpsReconciler) joinRelease(
 			return "", false, err
 		}
 	}
-	return "", true, nil
+	return afterSwap(join), true, nil
 }
 
 // beginRollback stops moving the group forward. The reason is recorded first,
@@ -474,7 +474,7 @@ func (r *PersistentVolumeOpsReconciler) beginRollback(
 	}
 	if !held {
 		join := joinOf(ops)
-		if err := r.Join.RollbackSubsystemMove(ctx, subject.clusterUUID, join.GroupUUID, join.MoveID); err != nil {
+		if err := r.Join.RollbackSubsystemMove(ctx, subject.clusterUUID, moveGroupOf(join), join.MoveID); err != nil {
 			return ctrl.Result{RequeueAfter: joinInsideWindow}, r.note(ctx, ops,
 				fmt.Sprintf("rolling back: %s; releasing the move: %v", reason, err))
 		}

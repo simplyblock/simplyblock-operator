@@ -49,10 +49,25 @@ func SysfsRescan(subs nvme.SubsystemResolver) func(ctx context.Context, nqn stri
 // serves no I/O, and while it exists it keeps the identity of every namespace
 // it last saw registered with the kernel, which refuses the same namespace in
 // any other subsystem. A subsystem the host does not hold has nothing to drop.
+//
+// Only a subsystem that still has a live controller is touched. One whose every
+// controller is down (its node restarting, say) carries the I/O of the volumes
+// left in it, held by the kernel until a path comes back, and dropping those
+// controllers would delete those volumes' devices.
 func SysfsDropStale(subs nvme.SubsystemResolver) func(ctx context.Context, nqn string) (int, error) {
 	return func(ctx context.Context, nqn string) (int, error) {
 		sub, err := subs.ByNQN(ctx, nqn)
 		if err != nil {
+			return 0, nil
+		}
+		live := false
+		for _, c := range sub.Controllers {
+			if c.State == "live" {
+				live = true
+				break
+			}
+		}
+		if !live {
 			return 0, nil
 		}
 		dropped := 0

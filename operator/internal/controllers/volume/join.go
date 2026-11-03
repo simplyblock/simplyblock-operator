@@ -61,6 +61,7 @@ const (
 	stepJoinResuming       = simplyblockv1alpha2.PersistentVolumeOpsStepResuming
 	stepJoinCommitting     = stepCommitting
 	stepReleasingPaths     = simplyblockv1alpha2.PersistentVolumeOpsStepReleasingPaths
+	stepLeaving            = simplyblockv1alpha2.PersistentVolumeOpsStepLeaving
 )
 
 const (
@@ -86,6 +87,8 @@ type JoinClient interface {
 	PlanConsistencyGroupJoin(ctx context.Context, clusterID, groupID, lvolID string) (controlplane.JoinPlan, error)
 	JoinConsistencyGroupMember(ctx context.Context, clusterID, groupID, lvolID string) error
 	CreateSubsystemMove(ctx context.Context, clusterID, groupID, lvolID, requestID string) (controlplane.SubsystemMove, error)
+	CreateSubsystemLeave(ctx context.Context, clusterID, groupID, lvolID, requestID string) (controlplane.SubsystemMove, error)
+	DetachConsistencyGroupMember(ctx context.Context, clusterID, groupID, lvolID string) error
 	GetSubsystemMove(ctx context.Context, clusterID, groupID, moveID string) (controlplane.SubsystemMove, error)
 	PrepareSubsystemMove(ctx context.Context, clusterID, groupID, moveID, hostNQN string) (controlplane.PreparedMove, error)
 	StartSubsystemMove(ctx context.Context, clusterID, groupID, moveID string, deadline time.Time) (controlplane.SubsystemMove, error)
@@ -248,6 +251,11 @@ func (r *PersistentVolumeOpsReconciler) advanceJoin(
 			// it, so the commit is retried for as long as it takes: failing
 			// here would leave the records naming the source.
 		case stepReleasingPaths:
+			// A host left unconfirmed keeps an idle path to the subsystem it
+			// left, which its own teardown removes.
+			if leaving(joinOf(ops)) {
+				return r.enterJoinStep(ctx, ops, machine, stepLeaving)
+			}
 			return r.finishJoin(ctx, ops, subject,
 				"some hosts were not confirmed to have released the subsystem they left")
 		default:
@@ -328,6 +336,8 @@ func (r *PersistentVolumeOpsReconciler) performJoin(
 	switch current {
 	case stepPlanning:
 		return r.joinPlan(ctx, ops, subject)
+	case stepLeaving:
+		return r.joinLeave(ctx, ops, subject)
 	case stepJoinMigrating:
 		return r.joinMigrate(ctx, ops, subject)
 	case stepJoining:
@@ -352,9 +362,33 @@ func (r *PersistentVolumeOpsReconciler) performJoin(
 	return "", false, fatalf("step %s is not a step of a join", current)
 }
 
-// joinPlan asks the control plane what the join takes, and refuses one that can
-// never finish before anything moves.
+// joinPlan sends a volume that is a member of another group to leave it first,
+// and plans the join of any other.
 func (r *PersistentVolumeOpsReconciler) joinPlan(
+	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
+) (step, bool, error) {
+	if joinOf(ops).Leave == nil {
+		volume, err := r.API.Volume(ctx, subject.handle.Handle())
+		if err != nil {
+			return "", false, fmt.Errorf("read the consistency group of volume %s: %w", subject.handle.VolumeID, err)
+		}
+		if volume.GroupID != "" && volume.GroupID != joinOf(ops).GroupUUID {
+			// Written ahead of the step: every later pass routes the swap to
+			// the group the volume leaves by this record.
+			if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.PersistentVolumeOpsStatus) {
+				joinStatus(status).Leave = &simplyblockv1alpha2.ConsistencyGroupLeaveStatus{GroupUUID: volume.GroupID}
+			}); err != nil {
+				return "", false, err
+			}
+			return stepLeaving, true, nil
+		}
+	}
+	return r.planJoin(ctx, ops, subject)
+}
+
+// planJoin asks the control plane what the join takes, and refuses one that can
+// never finish before anything moves.
+func (r *PersistentVolumeOpsReconciler) planJoin(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
 ) (step, bool, error) {
 	plan, err := r.Join.PlanConsistencyGroupJoin(ctx, subject.clusterUUID, joinOf(ops).GroupUUID, subject.handle.VolumeID)
@@ -505,6 +539,9 @@ func (r *PersistentVolumeOpsReconciler) joinMember(
 func (r *PersistentVolumeOpsReconciler) joinSelect(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
 ) (step, bool, error) {
+	if joinOf(ops).MoveID == "" && leaving(joinOf(ops)) {
+		return r.selectLeave(ctx, ops, subject)
+	}
 	if joinOf(ops).MoveID == "" {
 		move, err := r.Join.CreateSubsystemMove(ctx, subject.clusterUUID, joinOf(ops).GroupUUID,
 			subject.handle.VolumeID, string(ops.UID))
@@ -533,21 +570,35 @@ func (r *PersistentVolumeOpsReconciler) joinSelect(
 				eventProse: "The volume is in its consistency group's subsystem",
 			}
 		}
-		volumes, err := r.movingVolumes(ctx, move)
-		if err != nil {
-			return "", false, err
-		}
-		if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.PersistentVolumeOpsStatus) {
-			join := joinStatus(status)
-			join.MoveID = move.ID
-			join.TargetNQN = move.TargetNQN
-			join.TargetIsNew = move.TargetIsNew
-			join.Volumes = volumes
-		}); err != nil {
+		if err := r.recordMove(ctx, ops, move); err != nil {
 			return "", false, err
 		}
 	}
+	return r.lockAndFindHosts(ctx, ops, subject)
+}
 
+// recordMove writes a created move into status.
+func (r *PersistentVolumeOpsReconciler) recordMove(
+	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, move controlplane.SubsystemMove,
+) error {
+	volumes, err := r.movingVolumes(ctx, move)
+	if err != nil {
+		return err
+	}
+	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.PersistentVolumeOpsStatus) {
+		join := joinStatus(status)
+		join.MoveID = move.ID
+		join.TargetNQN = move.TargetNQN
+		join.TargetIsNew = move.TargetIsNew
+		join.Volumes = volumes
+	})
+}
+
+// lockAndFindHosts locks every volume the recorded move touches and records the
+// hosts consuming them.
+func (r *PersistentVolumeOpsReconciler) lockAndFindHosts(
+	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
+) (step, bool, error) {
 	if acquired, err := r.lockMove(ctx, ops, subject); err != nil || !acquired {
 		return "", false, err
 	}
@@ -725,7 +776,7 @@ func (r *PersistentVolumeOpsReconciler) joinPrepare(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
 ) (step, bool, error) {
 	join := joinOf(ops)
-	if _, err := r.Join.PrepareSubsystemMove(ctx, subject.clusterUUID, join.GroupUUID, join.MoveID, ""); err != nil {
+	if _, err := r.Join.PrepareSubsystemMove(ctx, subject.clusterUUID, moveGroupOf(join), join.MoveID, ""); err != nil {
 		if errors.Is(err, errs.ErrAlreadyExists) || errors.Is(err, errs.ErrNotFound) {
 			return "", false, rollbackf("the control plane refused to prepare the target: %v", err)
 		}
@@ -742,13 +793,23 @@ func (r *PersistentVolumeOpsReconciler) joinCommit(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
 ) (step, bool, error) {
 	join := joinOf(ops)
-	if err := r.Join.CommitSubsystemMove(ctx, subject.clusterUUID, join.GroupUUID, join.MoveID); err != nil {
+	if err := r.Join.CommitSubsystemMove(ctx, subject.clusterUUID, moveGroupOf(join), join.MoveID); err != nil {
 		return "", false, err
 	}
 	if len(join.Hosts) == 0 {
-		return "", true, nil
+		return afterSwap(join), true, nil
 	}
 	return stepReleasingPaths, true, nil
+}
+
+// afterSwap is the step after a swap that settled: the rest of the leave when
+// the swap split the volume out of the group it leaves, and the end of the
+// operation otherwise.
+func afterSwap(join simplyblockv1alpha2.JoinConsistencyGroupStatus) step {
+	if join.RollbackReason == "" && leaving(join) {
+		return stepLeaving
+	}
+	return ""
 }
 
 // endJoin ends an operation a step finished early.
@@ -792,7 +853,7 @@ func (r *PersistentVolumeOpsReconciler) failJoin(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject, reason, message string,
 ) (ctrl.Result, error) {
 	if join := joinOf(ops); join.MoveID != "" {
-		if err := r.Join.RollbackSubsystemMove(ctx, subject.clusterUUID, join.GroupUUID, join.MoveID); err != nil {
+		if err := r.Join.RollbackSubsystemMove(ctx, subject.clusterUUID, moveGroupOf(join), join.MoveID); err != nil {
 			return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops,
 				fmt.Sprintf("%s; releasing the reserved move: %v", message, err))
 		}
@@ -855,7 +916,7 @@ func (r *PersistentVolumeOpsReconciler) unwindJoin(
 		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, "the abort waits for the migration to stop")
 	}
 	if join := joinOf(ops); join.MoveID != "" {
-		if err := r.Join.RollbackSubsystemMove(ctx, subject.clusterUUID, join.GroupUUID, join.MoveID); err != nil {
+		if err := r.Join.RollbackSubsystemMove(ctx, subject.clusterUUID, moveGroupOf(join), join.MoveID); err != nil {
 			return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops,
 				fmt.Sprintf("the abort waits for the reserved move to be released: %v", err))
 		}
@@ -902,9 +963,9 @@ func (r *PersistentVolumeOpsReconciler) teardownJoin(
 		}
 		toTarget := join.NamespacesAt == simplyblockv1alpha2.SubsystemSideTarget && join.RollbackReason == ""
 		if toTarget {
-			err = r.Join.CommitSubsystemMove(ctx, cluster, join.GroupUUID, join.MoveID)
+			err = r.Join.CommitSubsystemMove(ctx, cluster, moveGroupOf(join), join.MoveID)
 		} else {
-			err = r.Join.RollbackSubsystemMove(ctx, cluster, join.GroupUUID, join.MoveID)
+			err = r.Join.RollbackSubsystemMove(ctx, cluster, moveGroupOf(join), join.MoveID)
 		}
 		if err != nil {
 			r.event(ops, corev1.EventTypeWarning, ReasonCleanupBlocked,

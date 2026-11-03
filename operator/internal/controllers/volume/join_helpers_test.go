@@ -111,6 +111,61 @@ type fakeJoinAPI struct {
 	// commitErrs are answered in turn, then success.
 	commitErrs  []error
 	rollbackErr error
+
+	// leave is what a leave answers with, and leaveErr its refusal.
+	leave    controlplane.SubsystemMove
+	leaveErr error
+
+	// detachErrs are answered in turn, then success, and detached counts the
+	// detaches that succeeded. onDetach runs after each of those.
+	detachErrs []error
+	detached   int
+	onDetach   func()
+
+	// moveGroups is every subsystem-move call, each as the call's name and the
+	// group it addressed. It is how a test tells a move on the group the volume
+	// leaves from one on the group it joins.
+	moveGroups []string
+}
+
+// byID is the move a call addresses: the leave or the join's.
+func (f *fakeJoinAPI) byID(moveID string) controlplane.SubsystemMove {
+	if moveID != "" && moveID == f.leave.ID {
+		return f.leave
+	}
+	return f.move
+}
+
+func (f *fakeJoinAPI) onGroup(call, groupID string) {
+	f.moveGroups = append(f.moveGroups, call+" "+groupID)
+}
+
+func (f *fakeJoinAPI) CreateSubsystemLeave(
+	_ context.Context, _, groupID, _, requestID string,
+) (controlplane.SubsystemMove, error) {
+	f.log.add("leave")
+	f.onGroup("leave", groupID)
+	f.requestIDs = append(f.requestIDs, requestID)
+	if f.leaveErr != nil {
+		return controlplane.SubsystemMove{}, f.leaveErr
+	}
+	return f.leave, nil
+}
+
+func (f *fakeJoinAPI) DetachConsistencyGroupMember(_ context.Context, _, groupID, _ string) error {
+	f.log.add("detach %s", groupID)
+	if len(f.detachErrs) > 0 {
+		err := f.detachErrs[0]
+		f.detachErrs = f.detachErrs[1:]
+		if err != nil {
+			return err
+		}
+	}
+	f.detached++
+	if f.onDetach != nil {
+		f.onDetach()
+	}
+	return nil
 }
 
 func (f *fakeJoinAPI) ConsistencyGroupNamed(
@@ -134,9 +189,10 @@ func (f *fakeJoinAPI) JoinConsistencyGroupMember(context.Context, string, string
 }
 
 func (f *fakeJoinAPI) CreateSubsystemMove(
-	_ context.Context, _, _, _, requestID string,
+	_ context.Context, _, groupID, _, requestID string,
 ) (controlplane.SubsystemMove, error) {
 	f.log.add("create")
+	f.onGroup("create", groupID)
 	f.requestIDs = append(f.requestIDs, requestID)
 	if f.createErr != nil {
 		return controlplane.SubsystemMove{}, f.createErr
@@ -144,26 +200,28 @@ func (f *fakeJoinAPI) CreateSubsystemMove(
 	return f.move, nil
 }
 
-func (f *fakeJoinAPI) GetSubsystemMove(context.Context, string, string, string) (controlplane.SubsystemMove, error) {
-	return f.move, nil
+func (f *fakeJoinAPI) GetSubsystemMove(_ context.Context, _, _, moveID string) (controlplane.SubsystemMove, error) {
+	return f.byID(moveID), nil
 }
 
 // PrepareSubsystemMove answers the way the control plane does: the target's
 // paths only for a named host, since the connect entries are a host's own, and
 // none for a call that names no host.
 func (f *fakeJoinAPI) PrepareSubsystemMove(
-	_ context.Context, _, _, _, hostNQN string,
+	_ context.Context, _, groupID, moveID, hostNQN string,
 ) (controlplane.PreparedMove, error) {
 	f.log.add("prepare")
+	f.onGroup("prepare", groupID)
 	f.prepareHosts = append(f.prepareHosts, hostNQN)
 	if f.prepareErr != nil {
 		return controlplane.PreparedMove{}, f.prepareErr
 	}
+	move := f.byID(moveID)
 	if hostNQN == "" {
-		return controlplane.PreparedMove{Move: f.move, Target: lvol.Connection{NQN: f.move.TargetNQN}}, nil
+		return controlplane.PreparedMove{Move: move, Target: lvol.Connection{NQN: move.TargetNQN}}, nil
 	}
-	return controlplane.PreparedMove{Move: f.move, Target: lvol.Connection{
-		NQN: f.move.TargetNQN,
+	return controlplane.PreparedMove{Move: move, Target: lvol.Connection{
+		NQN: move.TargetNQN,
 		Endpoints: []lvol.Endpoint{
 			{Transport: "tcp", Address: "10.0.0.1", Port: 4420},
 			{Transport: "tcp", Address: "10.0.0.2", Port: 4420},
@@ -172,20 +230,22 @@ func (f *fakeJoinAPI) PrepareSubsystemMove(
 }
 
 func (f *fakeJoinAPI) StartSubsystemMove(
-	_ context.Context, _, _, _ string, deadline time.Time,
+	_ context.Context, _, groupID, moveID string, deadline time.Time,
 ) (controlplane.SubsystemMove, error) {
 	f.log.add("move")
+	f.onGroup("move", groupID)
 	f.deadlines = append(f.deadlines, deadline)
 	if f.startErr != nil {
 		return controlplane.SubsystemMove{}, f.startErr
 	}
-	moved := f.move
+	moved := f.byID(moveID)
 	moved.NamespacesAt = controlplane.NamespacesAtTarget
 	return moved, nil
 }
 
-func (f *fakeJoinAPI) CommitSubsystemMove(context.Context, string, string, string) error {
+func (f *fakeJoinAPI) CommitSubsystemMove(_ context.Context, _, groupID, _ string) error {
 	f.log.add("commit")
+	f.onGroup("commit", groupID)
 	if len(f.commitErrs) > 0 {
 		err := f.commitErrs[0]
 		f.commitErrs = f.commitErrs[1:]
@@ -194,8 +254,9 @@ func (f *fakeJoinAPI) CommitSubsystemMove(context.Context, string, string, strin
 	return nil
 }
 
-func (f *fakeJoinAPI) RollbackSubsystemMove(context.Context, string, string, string) error {
+func (f *fakeJoinAPI) RollbackSubsystemMove(_ context.Context, _, groupID, _ string) error {
 	f.log.add("rollback")
+	f.onGroup("rollback", groupID)
 	return f.rollbackErr
 }
 
