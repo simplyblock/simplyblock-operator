@@ -218,7 +218,7 @@ func nodeVolumes(n objectNames, driver string) []corev1.Volume {
 		hostPathVolume("stack-records", stackRecordsHostDir, &dirOrCreate),
 		configMapVolume("csi-nodeserver-config", n.nodeServerConfigMap, true),
 		configMapVolume("csi-config", n.configMap, false),
-		secretVolume("csi-secret", n.secretV2),
+		credentialsVolume(n.secretV2),
 	}
 }
 
@@ -291,7 +291,7 @@ func controllerStatefulSet(d *simplyblockv1alpha2.SimplyblockDriver, image strin
 			},
 		},
 		configMapVolume("csi-config", n.configMap, false),
-		secretVolume("csi-secret", n.secretV2),
+		credentialsVolume(n.secretV2),
 	}
 	if v := tlsVolume(d, n.controllerClientSecret); v != nil {
 		volumes = append(volumes, *v)

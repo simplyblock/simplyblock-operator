@@ -341,7 +341,7 @@ func MDSObjects(
 			hostPathVolume("kvm", "/dev/kvm", ptr.To(corev1.HostPathCharDev)),
 			hostPathVolume("tun", "/dev/net/tun", ptr.To(corev1.HostPathCharDev)),
 			configMapVolume("csi-config", n.configMap, false),
-			secretVolume("csi-secret", n.secretV2),
+			credentialsVolume(n.secretV2),
 		},
 		linkVolumes(),
 	)
