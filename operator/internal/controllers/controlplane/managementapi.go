@@ -64,6 +64,7 @@ func managementAPIObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object 
 		fdbExporterDeployment(cp),
 		fdbExporterService(ns),
 	}
+	objects = append(objects, prometheusObjects(cp)...)
 	return append(objects, servingCertificateObjects(cp)...)
 }
 

@@ -75,8 +75,8 @@ type component struct {
 //
 // It is exactly the set the install applies, which is what makes it watchable:
 // a component the operator does not own is one it cannot report a count for, and
-// the observability half the chart still renders is therefore absent from here
-// rather than reported as missing.
+// the observability half the chart still renders (Graylog, Grafana) is therefore
+// absent from here rather than reported as missing.
 var componentTable = []component{
 	{
 		name: ComponentFDBCluster, kind: kindFoundationDB, essential: true,
@@ -111,6 +111,10 @@ var componentTable = []component{
 		why: "design-controlplane.md §12 Q5 leaves this open, and non-essential " +
 			"is the default a component takes until somebody decides: nothing in " +
 			"the install path or the data path reads the store",
+	},
+	{
+		name: ComponentPrometheus, kind: kindStatefulSet, essential: false,
+		why: "it keeps the record of what happened; the fleet serves without it",
 	},
 	{
 		name: ComponentFDBExporter, kind: kindDeployment, essential: false,
