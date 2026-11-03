@@ -337,7 +337,7 @@ bundle: yq verify-config-yaml verify-crd-kustomization ## Generate bundle manife
 	    *) echo "ERROR: $$1 is on $$registry; only quay.io and public.ecr.aws are supported" >&2; return 1;; \
 	  esac; \
 	  curl -sI "https://$$registry/v2/$$repo/manifests/$$2" -H "$$auth" -H "Accept: $(MANIFEST_ACCEPT)" \
-	    | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'; \
+	    | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n' || true; \
 	}; \
 	CLUSTER_DIGEST=$$(digest_of "$(CLUSTER_IMAGE_BASE)" "$(CLUSTER_IMAGE_TAG)"); \
 	test -n "$$CLUSTER_DIGEST" \
