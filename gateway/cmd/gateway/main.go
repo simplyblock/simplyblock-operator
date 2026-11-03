@@ -46,6 +46,13 @@ const (
 	maxRequests       = 100000
 	multipartMaxParts = 10000
 
+	// copyObjectThreshold is the S3 spec's own CopyObject/UploadPartCopy
+	// source-size limit. posix.PosixOpts has no internal default for it
+	// (unlike versitygw's own CLI, which refuses to start below 1), so an
+	// embedder that leaves it unset gets Go's zero value and every copy
+	// source is rejected as too large.
+	copyObjectThreshold = 5 * 1024 * 1024 * 1024
+
 	healthPath = "/healthz"
 
 	// bucketPollInterval is how often CreateBucket and DeleteBucket re-read
@@ -107,6 +114,7 @@ func run(ctx context.Context, cfg config.Config, cli client.Client) error {
 		// a CreateBucket call would. This is what posix.PosixOpts's own doc
 		// comment calls out that case for.
 		ValidateBucketNames: true,
+		CopyObjectThreshold: copyObjectThreshold,
 	})
 	if err != nil {
 		return fmt.Errorf("starting the posix backend at %s: %w", cfg.RootDir, err)
