@@ -86,3 +86,17 @@ func TestTheNUMAPluginImageIsConfigurable(t *testing.T) {
 		t.Errorf("image = %q, want the configured one", got)
 	}
 }
+
+// The plugin runs as root whatever the image's USER is. It creates its socket in
+// kubelet's root-owned /var/lib/kubelet/device-plugins with every capability
+// dropped, so only uid 0 can register it, and a certified image runs non-root.
+func TestTheNUMAPluginRunsAsRoot(t *testing.T) {
+	c, _ := reconciledManaged(t, "")
+	sc := numaPlugin(t, c).Spec.Template.Spec.Containers[0].SecurityContext
+	if sc == nil || sc.RunAsUser == nil || *sc.RunAsUser != 0 {
+		t.Errorf("securityContext.runAsUser = %v, want 0", sc)
+	}
+	if sc != nil && (sc.Privileged == nil || *sc.Privileged || len(sc.Capabilities.Drop) == 0) {
+		t.Error("running as root must not widen the rest: privileged stays false and every capability stays dropped")
+	}
+}
