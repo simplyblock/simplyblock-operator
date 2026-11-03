@@ -47,7 +47,7 @@ image:
     pullPolicy: Always
   numaResource:
     repository: quay.io/simplyblock-io/numa-resource-plugin
-    tag: latest
+    tag: v1.0.0
     pullPolicy: Always
   mgmtAPI:
     repository: quay.io/simplyblock-io/python

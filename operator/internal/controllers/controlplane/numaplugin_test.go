@@ -100,3 +100,12 @@ func TestTheNUMAPluginRunsAsRoot(t *testing.T) {
 		t.Error("running as root must not widen the rest: privileged stays false and every capability stays dropped")
 	}
 }
+
+// Without SB_NUMA_PLUGIN_IMAGE the plugin runs a pinned release, never latest:
+// the DaemonSet pulls on every restart, so a moving tag reaches every cluster.
+func TestTheNUMAPluginDefaultsToAPinnedRelease(t *testing.T) {
+	c, _ := reconciledManaged(t, "")
+	if got := numaPlugin(t, c).Spec.Template.Spec.Containers[0].Image; got != "quay.io/simplyblock-io/numa-resource-plugin:v1.0.0" {
+		t.Errorf("default image = %q, want quay.io/simplyblock-io/numa-resource-plugin:v1.0.0", got)
+	}
+}
