@@ -140,8 +140,37 @@ func TestUnstatedNodeFlagsAreTheEnvironments(t *testing.T) {
 	if workload.EnableKubeletConfiguration == nil || *workload.EnableKubeletConfiguration {
 		t.Errorf("Talos's kubelet flag is %v, want false", workload.EnableKubeletConfiguration)
 	}
-	if workload.EnableCpuTopology != nil {
-		t.Errorf("Talos's CPU topology flag is %v, want unset", *workload.EnableCpuTopology)
+	if workload.EnableCpuTopology == nil || !*workload.EnableCpuTopology {
+		t.Errorf("Talos's CPU topology flag is %v, want the default true", workload.EnableCpuTopology)
+	}
+}
+
+// CPU topology is on by default in every environment.
+func TestCPUTopologyDefaultsOn(t *testing.T) {
+	for _, env := range []simplyblockv1alpha2.KubernetesEnvironment{
+		simplyblockv1alpha2.KubernetesEnvironmentVanilla,
+		simplyblockv1alpha2.KubernetesEnvironmentOpenShift,
+		simplyblockv1alpha2.KubernetesEnvironmentTalos,
+		simplyblockv1alpha2.KubernetesEnvironmentEKS,
+		simplyblockv1alpha2.KubernetesEnvironmentK3s,
+	} {
+		config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) { c.Spec.Environment = env })
+		workload := reconcilerFor(t).buildWorkload(config)
+		if workload.EnableCpuTopology == nil || !*workload.EnableCpuTopology {
+			t.Errorf("%s: CPU topology flag is %v, want true", env, workload.EnableCpuTopology)
+		}
+	}
+}
+
+// A Vanilla document can still turn CPU topology off.
+func TestAVanillaDocumentTurnsCPUTopologyOff(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentVanilla
+		c.Spec.Cluster.EnableCpuTopology = ptr.To(false)
+	})
+	workload := reconcilerFor(t).buildWorkload(config)
+	if workload.EnableCpuTopology == nil || *workload.EnableCpuTopology {
+		t.Errorf("the CPU topology flag is %v, want the document's false", workload.EnableCpuTopology)
 	}
 }
 

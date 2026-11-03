@@ -463,14 +463,15 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 
 	// The environment is a shorthand and this is where it is spent. Naming
 	// OpenShift once decides all three, after which nothing reads the field
-	// again and the nodes carry the resolved flags (§3.1).
+	// again and the nodes carry the resolved flags (§3.1). CPU topology is on
+	// everywhere unless a Vanilla document turns it off below.
+	workload.EnableCpuTopology = ptr.To(true)
 	switch config.Spec.Environment {
 	case simplyblockv1alpha2.KubernetesEnvironmentOpenShift:
 		// The block's presence is the statement, and the document's own block
 		// is what fills it: a deployment onto a fleet whose workers sit in a
 		// custom machine-config pool names that pool there.
 		workload.OpenShift = openShiftOf(config.Spec.Cluster)
-		workload.EnableCpuTopology = ptr.To(true)
 		// Stated rather than left nil. The renderer reads an unset flag as skipping
 		// the kubelet configuration, and the settings this product has shipped
 		// for OpenShift all configure it, so silence here would change what an

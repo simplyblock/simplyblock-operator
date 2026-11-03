@@ -552,9 +552,8 @@ spec:
                         description: |-
                           EnableCpuTopology turns on topology-aware CPU assignment on the storage
                           nodes. It is valid only when spec.environment is Vanilla, whose workers
-                          the environment does not describe. Every other environment decides it:
-                          OpenShift turns it on, and the rest leave it off. Unset on a Vanilla
-                          document leaves it off.
+                          the environment does not describe. It defaults to on in every
+                          environment; only a Vanilla document can turn it off.
                         type: boolean
                       enableDriveFormat:
                         description: |-
