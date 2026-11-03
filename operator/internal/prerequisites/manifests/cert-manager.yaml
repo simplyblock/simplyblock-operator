@@ -12911,7 +12911,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: cert-manager-cainjector
-          image: "quay.io/jetstack/cert-manager-cainjector:v1.16.2@sha256:593abc7bf8b926d6fcb9c63b91504ad85e1379b25056aa5dee90b35505ab3211"
+          image: "quay.io/simplyblock-io/cert-manager-cainjector:v1.16.2@sha256:593abc7bf8b926d6fcb9c63b91504ad85e1379b25056aa5dee90b35505ab3211"
           imagePullPolicy: IfNotPresent
           args:
           - --v=2
@@ -12973,13 +12973,13 @@ spec:
           type: RuntimeDefault
       containers:
         - name: cert-manager-controller
-          image: "quay.io/jetstack/cert-manager-controller:v1.16.2@sha256:0eec9c89554011c9aa16eea88ab89a91b32dc8d6eb96307b7fc2dcd6bbbc7fcf"
+          image: "quay.io/simplyblock-io/cert-manager-controller:v1.16.2@sha256:0eec9c89554011c9aa16eea88ab89a91b32dc8d6eb96307b7fc2dcd6bbbc7fcf"
           imagePullPolicy: IfNotPresent
           args:
           - --v=2
           - --cluster-resource-namespace=$(POD_NAMESPACE)
           - --leader-election-namespace=kube-system
-          - --acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:v1.16.2@sha256:6ea8176c5baa6a7f6b1262ac7b51f5888006b4c57ec574b708e3bc11c8fe441c
+          - --acme-http01-solver-image=quay.io/simplyblock-io/cert-manager-acmesolver:v1.16.2@sha256:6ea8176c5baa6a7f6b1262ac7b51f5888006b4c57ec574b708e3bc11c8fe441c
           - --max-concurrent-challenges=60
           ports:
           - containerPort: 9402
