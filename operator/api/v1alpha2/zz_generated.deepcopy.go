@@ -1332,6 +1332,11 @@ func (in *DiscoverSpec) DeepCopyInto(out *DiscoverSpec) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.EnableCpuTopology != nil {
+		in, out := &in.EnableCpuTopology, &out.EnableCpuTopology
+		*out = new(bool)
+		**out = **in
+	}
 	if in.NetworkAttachment != nil {
 		in, out := &in.NetworkAttachment, &out.NetworkAttachment
 		*out = new(NetworkAttachmentSelection)

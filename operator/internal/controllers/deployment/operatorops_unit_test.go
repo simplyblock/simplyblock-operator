@@ -1016,3 +1016,51 @@ func TestAGrowthDraftCarriesNoTolerations(t *testing.T) {
 		t.Errorf("a growth draft describes a cluster: %+v", config.Spec.Cluster)
 	}
 }
+
+// draftWithCPUTopology drafts a one-worker fleet in env with the run's
+// enableCpuTopology set to want.
+func draftWithCPUTopology(
+	t *testing.T, env simplyblockv1alpha2.KubernetesEnvironment, want *bool,
+) (*simplyblockv1alpha2.ClusterDeploymentConfig, []string) {
+	t.Helper()
+	r := &OperatorOpsReconciler{Client: fake.NewClientBuilder().WithScheme(opsScheme(t)).Build()}
+	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
+	ops.Status.Environment = env
+	plan := discoverypkg.Plan{Workers: []discoverypkg.Worker{{
+		Name: "worker-01", Report: nodeprobe.Report{Node: "worker-01"},
+	}}}
+	config, notes, err := r.draftFor(context.Background(), ops,
+		&simplyblockv1alpha2.DiscoverSpec{EnableCpuTopology: want}, plan)
+	if err != nil {
+		t.Fatalf("the fleet was refused: %v", err)
+	}
+	return config, notes
+}
+
+// A Vanilla run that asks for CPU topology drafts a document that states it.
+func TestTheDraftCarriesTheRunsCPUTopology(t *testing.T) {
+	config, notes := draftWithCPUTopology(t, simplyblockv1alpha2.KubernetesEnvironmentVanilla, ptr.To(true))
+	if got := config.Spec.Cluster.EnableCpuTopology; got == nil || !*got {
+		t.Fatalf("the draft's enableCpuTopology is %v, want true; the notes are %v", got, notes)
+	}
+}
+
+// Outside Vanilla the environment decides the flag and admission refuses it on
+// the document, so the draft leaves it unset and a note says why.
+func TestTheDraftLeavesCPUTopologyToANonVanillaEnvironment(t *testing.T) {
+	config, notes := draftWithCPUTopology(t, simplyblockv1alpha2.KubernetesEnvironmentTalos, ptr.To(true))
+	if got := config.Spec.Cluster.EnableCpuTopology; got != nil {
+		t.Errorf("the draft's enableCpuTopology is %v on Talos, want unset", *got)
+	}
+	if !slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(n, "enableCpuTopology") }) {
+		t.Errorf("the notes are %v, and none of them explains enableCpuTopology", notes)
+	}
+}
+
+// A run that does not ask leaves the flag unset.
+func TestTheDraftLeavesCPUTopologyUnsetWhenNotAsked(t *testing.T) {
+	config, _ := draftWithCPUTopology(t, simplyblockv1alpha2.KubernetesEnvironmentVanilla, nil)
+	if got := config.Spec.Cluster.EnableCpuTopology; got != nil {
+		t.Errorf("the draft's enableCpuTopology is %v, want unset", *got)
+	}
+}

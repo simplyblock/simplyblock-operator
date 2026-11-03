@@ -178,6 +178,12 @@ spec:
                       with disks in its infra nodes meant those disks to be the storage, so a draft
                       proposes them ahead of the workers rather than leaving them out.
                     type: boolean
+                  enableCpuTopology:
+                    description: |-
+                      EnableCpuTopology is copied to the draft's spec.cluster.enableCpuTopology.
+                      It applies only when the detected environment is Vanilla; every other
+                      environment decides the flag itself, and the draft notes that it was ignored.
+                    type: boolean
                   enableLogicalBlockDevices:
                     description: |-
                       EnableLogicalBlockDevices scans a worker's available logical block devices
