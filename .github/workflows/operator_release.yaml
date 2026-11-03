@@ -108,18 +108,20 @@ jobs:
 
       - name: Generate bundle
         env:
-          CLUSTER_IMAGE_BASE: ${{ inputs.cluster-image-base }}
-          CLUSTER_IMAGE_TAG: ${{ inputs.cluster-image-tag }}
-          SPDK_IMAGE_BASE: ${{ inputs.spdk-image-base }}
-          SPDK_IMAGE_TAG: ${{ inputs.spdk-image-tag }}
+          # Not the Makefile's own names: an empty environment variable counts
+          # as set for ?=, so it would replace the default instead of keeping it.
+          IN_CLUSTER_IMAGE_BASE: ${{ inputs.cluster-image-base }}
+          IN_CLUSTER_IMAGE_TAG: ${{ inputs.cluster-image-tag }}
+          IN_SPDK_IMAGE_BASE: ${{ inputs.spdk-image-base }}
+          IN_SPDK_IMAGE_TAG: ${{ inputs.spdk-image-tag }}
         run: |
           make bundle \
             VERSION=${{ steps.version.outputs.bundle_version }} \
             IMG_TAG=${{ steps.version.outputs.tag }} \
-            ${CLUSTER_IMAGE_BASE:+CLUSTER_IMAGE_BASE=$CLUSTER_IMAGE_BASE} \
-            ${CLUSTER_IMAGE_TAG:+CLUSTER_IMAGE_TAG=$CLUSTER_IMAGE_TAG} \
-            ${SPDK_IMAGE_BASE:+SPDK_IMAGE_BASE=$SPDK_IMAGE_BASE} \
-            ${SPDK_IMAGE_TAG:+SPDK_IMAGE_TAG=$SPDK_IMAGE_TAG}
+            ${IN_CLUSTER_IMAGE_BASE:+CLUSTER_IMAGE_BASE=$IN_CLUSTER_IMAGE_BASE} \
+            ${IN_CLUSTER_IMAGE_TAG:+CLUSTER_IMAGE_TAG=$IN_CLUSTER_IMAGE_TAG} \
+            ${IN_SPDK_IMAGE_BASE:+SPDK_IMAGE_BASE=$IN_SPDK_IMAGE_BASE} \
+            ${IN_SPDK_IMAGE_TAG:+SPDK_IMAGE_TAG=$IN_SPDK_IMAGE_TAG}
 
       # The same validation OperatorHub certification runs, before anything is pushed.
       - name: Validate bundle
