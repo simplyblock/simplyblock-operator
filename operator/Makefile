@@ -329,18 +329,22 @@ bundle: yq verify-config-yaml verify-crd-kustomization ## Generate bundle manife
 	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
 	test -n "$$OPERATOR_DIGEST" \
 	  || { echo "ERROR: could not fetch digest for $(IMG_BASE):$(IMG_TAG) — is the image pushed?"; exit 1; }; \
-	CLUSTER_DIGEST=$$(curl -sI \
-	  "https://quay.io/v2/simplyblock-io/simplyblock/manifests/$(CLUSTER_IMAGE_TAG)" \
-	  -H "Accept: $(MANIFEST_ACCEPT)" \
-	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
-	SPDK_REPO=$$(printf %s "$(SPDK_IMAGE_BASE)" | cut -d/ -f2-); \
-	SPDK_TOKEN=$$(curl -s "https://public.ecr.aws/token/?scope=repository:$$SPDK_REPO:pull" \
-	  | sed -n 's/.*"token":"\([^"]*\)".*/\1/p'); \
-	SPDK_DIGEST=$$(curl -sI \
-	  "https://public.ecr.aws/v2/$$SPDK_REPO/manifests/$(SPDK_IMAGE_TAG)" \
-	  -H "Authorization: Bearer $$SPDK_TOKEN" \
-	  -H "Accept: $(MANIFEST_ACCEPT)" \
-	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	digest_of() { \
+	  registry=$${1%%/*}; repo=$${1#*/}; \
+	  case "$$registry" in \
+	    quay.io) auth="";; \
+	    public.ecr.aws) auth="Authorization: Bearer $$(curl -s "https://public.ecr.aws/token/?scope=repository:$$repo:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')";; \
+	    *) echo "ERROR: $$1 is on $$registry; only quay.io and public.ecr.aws are supported" >&2; return 1;; \
+	  esac; \
+	  curl -sI "https://$$registry/v2/$$repo/manifests/$$2" -H "$$auth" -H "Accept: $(MANIFEST_ACCEPT)" \
+	    | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'; \
+	}; \
+	CLUSTER_DIGEST=$$(digest_of "$(CLUSTER_IMAGE_BASE)" "$(CLUSTER_IMAGE_TAG)"); \
+	test -n "$$CLUSTER_DIGEST" \
+	  || { echo "ERROR: could not fetch digest for $(CLUSTER_IMAGE_BASE):$(CLUSTER_IMAGE_TAG)"; exit 1; }; \
+	SPDK_DIGEST=$$(digest_of "$(SPDK_IMAGE_BASE)" "$(SPDK_IMAGE_TAG)"); \
+	test -n "$$SPDK_DIGEST" \
+	  || { echo "ERROR: could not fetch digest for $(SPDK_IMAGE_BASE):$(SPDK_IMAGE_TAG)"; exit 1; }; \
 	REBALANCER_DIGEST=$$(curl -sI \
 	  "https://quay.io/v2/simplyblock-io/simplyblock-rebalancer/manifests/$(IMG_TAG)" \
 	  -H "Accept: $(MANIFEST_ACCEPT)" \

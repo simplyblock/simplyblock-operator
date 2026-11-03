@@ -11,6 +11,11 @@ on:
         required: false
         type: string
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Image tag to publish to Quay as well (e.g. v26.4.0-beta3.1); empty builds the branch tag only"
+        required: false
+        type: string
 
 jobs:
   build-and-push:
