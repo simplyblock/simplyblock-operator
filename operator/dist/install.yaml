@@ -2825,6 +2825,40 @@ spec:
                             admin password'
                           rule: '!has(self.enableMonitoring) || !self.enableMonitoring
                             || has(self.secretRef)'
+                      prerequisites:
+                        default: {}
+                        description: |-
+                          Prerequisites says which cluster add-ons the operator installs when the
+                          cluster lacks them. One left false is checked for and never installed.
+                        properties:
+                          installCertManager:
+                            default: true
+                            description: |-
+                              InstallCertManager installs cert-manager when cert-manager.io/v1 is not
+                              served. It is consulted only when the control plane serves TLS issued by
+                              cert-manager. Unset is on.
+                            type: boolean
+                          installFoundationDBCRDs:
+                            default: true
+                            description: |-
+                              InstallFoundationDBCRDs applies the apps.foundationdb.org CRDs when
+                              apps.foundationdb.org/v1beta2 is not served. Unset is on.
+                            type: boolean
+                          installLocalPathProvisioner:
+                            default: true
+                            description: |-
+                              InstallLocalPathProvisioner installs local-path-provisioner when no
+                              StorageClass uses rancher.io/local-path. Its class is made the default
+                              only when the cluster has no default class. Unset is on.
+                            type: boolean
+                          installSnapshotController:
+                            default: true
+                            description: |-
+                              InstallSnapshotController installs the CSI snapshot CRDs and
+                              snapshot-controller when snapshot.storage.k8s.io/v1 is not served. Unset
+                              is on.
+                            type: boolean
+                        type: object
                       replicas:
                         default: 2
                         description: |-
@@ -5867,25 +5901,25 @@ spec:
                   off the running objects.
                 properties:
                   enableMutualTLS:
-                    default: false
                     description: |-
                       EnableMutualTLS additionally requires each plugin to present a client
                       certificate, rather than dialing the control plane anonymously over
                       the encrypted connection EnableTLS alone provides. Ignored when
-                      EnableTLS is false, the same as the Helm value it replaces.
+                      EnableTLS is false, the same as the Helm value it replaces. Unset follows
+                      the ControlPlane's spec.source.local.tls.enableMutualTLS.
                     type: boolean
                   enableTLS:
-                    default: false
-                    description: EnableTLS turns on TLS between both plugins and the
-                      control plane.
+                    description: |-
+                      EnableTLS turns on TLS between both plugins and the control plane.
+                      Unset follows the ControlPlane's spec.source.local.tls.enableTLS.
                     type: boolean
                   provider:
-                    default: cert-manager
                     description: |-
                       Provider selects where the CA bundle (and, with EnableMutualTLS, the
                       client certificate) comes from. Required reading whenever EnableTLS is
                       true: the two providers mount a differently shaped volume, and neither
-                      shape can be inferred from anything else on this object.
+                      shape can be inferred from anything else on this object. Unset follows
+                      the ControlPlane's provider, and is cert-manager without one.
                     enum:
                     - OpenShift
                     - cert-manager
@@ -18765,9 +18799,10 @@ rules:
   - ""
   resources:
   - namespaces
-  - pods/log
   verbs:
+  - create
   - get
+  - patch
 - apiGroups:
   - ""
   resources:
@@ -18819,6 +18854,12 @@ rules:
   - watch
 - apiGroups:
   - ""
+  resources:
+  - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - ""
   - events.k8s.io
   resources:
   - events
@@ -18831,6 +18872,7 @@ rules:
   - mutatingwebhookconfigurations
   - validatingwebhookconfigurations
   verbs:
+  - create
   - get
   - list
   - patch
@@ -18849,8 +18891,32 @@ rules:
   resources:
   - customresourcedefinitions
   verbs:
+  - create
   - list
   - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resourceNames:
+  - certificaterequests.cert-manager.io
+  - certificates.cert-manager.io
+  - challenges.acme.cert-manager.io
+  - clusterissuers.cert-manager.io
+  - foundationdbbackups.apps.foundationdb.org
+  - foundationdbclusters.apps.foundationdb.org
+  - foundationdbrestores.apps.foundationdb.org
+  - issuers.cert-manager.io
+  - orders.acme.cert-manager.io
+  - volumegroupsnapshotclasses.groupsnapshot.storage.k8s.io
+  - volumegroupsnapshotcontents.groupsnapshot.storage.k8s.io
+  - volumegroupsnapshots.groupsnapshot.storage.k8s.io
+  - volumesnapshotclasses.snapshot.storage.k8s.io
+  - volumesnapshotcontents.snapshot.storage.k8s.io
+  - volumesnapshots.snapshot.storage.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - get
+  - patch
 - apiGroups:
   - apiextensions.k8s.io
   resourceNames:
@@ -18940,6 +19006,14 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - clusterissuers
+  verbs:
+  - create
+  - get
+  - patch
 - apiGroups:
   - cluster.open-cluster-management.io
   resources:
@@ -19099,6 +19173,7 @@ rules:
   - delete
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - storage.k8s.io
@@ -19865,6 +19940,8 @@ spec:
     matchLabels:
       app.kubernetes.io/name: simplyblock-operator
       control-plane: controller-manager
+  strategy:
+    type: Recreate
   template:
     metadata:
       annotations:
@@ -19936,6 +20013,9 @@ spec:
         - mountPath: /tmp/k8s-webhook-server/serving-certs
           name: webhook-certs
           readOnly: true
+        - mountPath: /etc/simplyblock/tls
+          name: tls
+          readOnly: true
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -19951,6 +20031,10 @@ spec:
         secret:
           optional: true
           secretName: webhook-server-cert
+      - name: tls
+        secret:
+          optional: true
+          secretName: simplyblock-operator-client-tls
 ---
 apiVersion: apiregistration.k8s.io/v1
 kind: APIService

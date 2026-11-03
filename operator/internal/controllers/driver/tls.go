@@ -18,7 +18,11 @@
 package driver
 
 import (
+	"strings"
+
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -172,4 +176,61 @@ func tlsVolumeMount(d *simplyblockv1alpha2.SimplyblockDriver) []corev1.VolumeMou
 		return nil
 	}
 	return []corev1.VolumeMount{{Name: tlsVolumeName, MountPath: tlsMountPath, ReadOnly: true}}
+}
+
+// clientCertificates issues the client certificates both plugins mount for
+// mutual TLS through cert-manager, signed by the CA issuer the control plane's
+// certificates come from. The chart used to issue them; an OLM install has no
+// chart, so the driver issues what it mounts.
+func clientCertificates(d *simplyblockv1alpha2.SimplyblockDriver) []client.Object {
+	if !mutualTLSEnabled(d) || tlsProvider(d) != simplyblockv1alpha2.DriverTLSProviderCertManager {
+		return nil
+	}
+	n := names(d)
+	certificate := func(commonName, secretName string) client.Object {
+		u := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "cert-manager.io/v1",
+			"kind":       "Certificate",
+			"spec": map[string]any{
+				"commonName": commonName,
+				"secretName": secretName,
+				"issuerRef":  map[string]any{"kind": "ClusterIssuer", "name": utils.CertManagerClusterIssuerName},
+				"usages":     []any{"digital signature", "key encipherment", "client auth"},
+			},
+		}}
+		u.SetName(strings.TrimSuffix(secretName, "-tls"))
+		u.SetNamespace(d.Namespace)
+		return u
+	}
+	return []client.Object{
+		certificate(d.Name+"-csi-controller", n.controllerClientSecret),
+		certificate(d.Name+"-csi-node", n.nodeClientSecret),
+	}
+}
+
+// inheritTLS fills the driver's unset TLS fields from the control plane this
+// cluster hosts, so a driver that states nothing talks to it the way it
+// serves. A field the driver states is kept. Without a local control plane an
+// unset field is off, the driver's behavior before inheritance existed.
+func inheritTLS(stated simplyblockv1alpha2.DriverTLS, cp *simplyblockv1alpha2.ControlPlane) simplyblockv1alpha2.DriverTLS {
+	enable, mutual := false, false
+	provider := simplyblockv1alpha2.DriverTLSProviderCertManager
+	if cp != nil && cp.Spec.Source.Local != nil {
+		local := cp.Spec.Source.Local
+		enable, mutual = local.ServesTLS(), local.RequiresClientCertificate()
+		if local.TLSProvider() == simplyblockv1alpha2.ControlPlaneTLSOpenShift {
+			provider = simplyblockv1alpha2.DriverTLSProviderOpenShift
+		}
+	}
+	out := stated
+	if out.EnableTLS == nil {
+		out.EnableTLS = &enable
+	}
+	if out.EnableMutualTLS == nil {
+		out.EnableMutualTLS = &mutual
+	}
+	if out.Provider == "" {
+		out.Provider = provider
+	}
+	return out
 }

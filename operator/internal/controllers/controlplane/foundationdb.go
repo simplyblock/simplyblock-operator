@@ -31,6 +31,7 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -77,8 +78,8 @@ var fdbBackupGVK = schema.GroupVersionKind{
 // than the deployment's. Moving FoundationDB forward is a release of this
 // operator.
 const (
-	fdbOperatorImage = "quay.io/simplyblock-io/fdb-kubernetes-operator:v2.13.0"
-	fdbMonitorImage  = "quay.io/simplyblock-io/fdb-kubernetes-monitor:7.3.63"
+	fdbOperatorImage = "quay.io/simplyblock-io/fdb-kubernetes-operator:v2.13.0@sha256:880d19f6d15198c54b5b03073768d1f8231430c7bbcb4fcb7247eece8e0b7687"
+	fdbMonitorImage  = "quay.io/simplyblock-io/fdb-kubernetes-monitor:7.3.63@sha256:348929437e4203dcf38f7788b85b86723c4250c2a5981213a73b8c6fe238fcd2"
 	fdbVersionString = "7.3.63"
 )
 
@@ -260,7 +261,7 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 		}, peerVolumeIf(peerTLS)...),
 		InitContainers: []corev1.Container{{
 			Name:  "foundationdb-kubernetes-init-7-3",
-			Image: fdbMonitorImage,
+			Image: image(fdbMonitorImage),
 			Args: []string{
 				"--copy-library", "7.3",
 				"--copy-binary", "fdbcli",
@@ -275,7 +276,7 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 		}},
 		Containers: []corev1.Container{{
 			Name:    "manager",
-			Image:   fdbOperatorImage,
+			Image:   image(fdbOperatorImage),
 			Command: []string{"/manager"},
 			Args:    []string{"--health-probe-bind-address=:9443"},
 			// The operator reconciles the database, so it reaches it the way its
@@ -575,16 +576,15 @@ func redundancyMode(processes int64) string {
 	}
 }
 
-// fdbMonitorImageRepository is the monitor image without its tag, which is the
-// form mainContainer.imageConfigs takes: the FoundationDB operator appends the
-// version it is running.
+// fdbMonitorImageRepository is the monitor image without its tag or digest,
+// which is the form mainContainer.imageConfigs takes: the FoundationDB operator
+// appends the version it is running, so this one image is pulled by tag.
 func fdbMonitorImageRepository() string {
-	for i := len(fdbMonitorImage) - 1; i >= 0; i-- {
-		if fdbMonitorImage[i] == ':' {
-			return fdbMonitorImage[:i]
-		}
+	ref, _, _ := strings.Cut(image(fdbMonitorImage), "@")
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		ref = ref[:i]
 	}
-	return fdbMonitorImage
+	return ref
 }
 
 // toAnyMap converts a string map to the shape an unstructured object holds.

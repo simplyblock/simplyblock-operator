@@ -26,8 +26,7 @@ YQ_CSV_EXPR = .metadata.annotations.containerImage = strenv(OPERATOR_IMG) \
   | .spec.relatedImages = [{"name": "simplyblock-operator", "image": strenv(OPERATOR_IMG)}, \
     {"name": "simplyblock", "image": strenv(CLUSTER_IMG)}, \
     {"name": "ultra-spdk", "image": strenv(SPDK_IMG)}, \
-    {"name": "simplyblock-rebalancer", "image": strenv(REBALANCER_IMG)}, \
-    {"name": "numa-resource-plugin", "image": strenv(NUMA_PLUGIN_IMG)}] \
+    {"name": "simplyblock-rebalancer", "image": strenv(REBALANCER_IMG)}] \
   | .spec.install.spec.deployments[0].spec.template.spec.containers[0].image = strenv(OPERATOR_IMG) \
   | (.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[] | select(.name == "SB_NODEPROBE_IMAGE")).value = strenv(OPERATOR_IMG) \
   | (.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[] | select(.name == "SB_OPERATOR_IMAGE")).value = strenv(OPERATOR_TAGGED_IMG) \
