@@ -11,6 +11,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -75,4 +76,26 @@ func TestLocalPathStoresVolumesUnderVar(t *testing.T) {
 		return
 	}
 	t.Fatal("no ConfigMap in the local-path manifest")
+}
+
+// Volumes are `local`, not the upstream default `hostPath`: kubelet relabels
+// a local volume to the pod's SELinux context on mount and never relabels a
+// hostPath, so on RHCOS a hostPath volume stays var_t and the pod cannot
+// write it. The class's annotation survives the default-class mutation.
+func TestLocalPathProvisionsLocalVolumesForSELinux(t *testing.T) {
+	ctx := context.Background()
+	c := fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).Build()
+	if err := LocalPathProvisioner.Install(ctx, c, InstallOptions{Namespace: "simplyblock"}); err != nil {
+		t.Fatal(err)
+	}
+	var sc storagev1.StorageClass
+	if err := c.Get(ctx, client.ObjectKey{Name: "local-path"}, &sc); err != nil {
+		t.Fatal(err)
+	}
+	if got := sc.Annotations["defaultVolumeType"]; got != "local" {
+		t.Errorf("StorageClass annotation defaultVolumeType = %q, want local (hostPath volumes are not SELinux-relabeled)", got)
+	}
+	if sc.Annotations[defaultClassAnnotation] != annotationTrue {
+		t.Error("the default-class annotation was lost when the volume type annotation was kept")
+	}
 }

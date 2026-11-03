@@ -121,6 +121,15 @@ apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: local-path
+  annotations:
+    # Provision `local` volumes rather than the upstream default `hostPath`.
+    # kubelet relabels a local volume to the pod's SELinux context on every
+    # mount and never relabels a hostPath, so on an SELinux-enforcing node OS
+    # (RHCOS, and so every OpenShift worker) a hostPath volume under /var
+    # stays var_t and the pod cannot write it: MinIO fails to start and
+    # fdbserver exits with "File could not be written" while its monitor
+    # keeps the pod Running.
+    defaultVolumeType: local
 provisioner: rancher.io/local-path
 volumeBindingMode: WaitForFirstConsumer
 reclaimPolicy: Delete
