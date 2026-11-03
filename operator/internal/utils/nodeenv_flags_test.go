@@ -41,7 +41,7 @@ func TestEveryFlagTheGeneratorPassesIsOneNodeConfigureAccepts(t *testing.T) {
 		"--max-lvol": true, "--max-size": true, "--model": true,
 		"--nodes-per-socket": true, "--nvme-devices": true, "--pci-allowed": true,
 		"--pci-blocked": true, "--size-range": true, "--sockets-to-use": true,
-		"--upgrade": true,
+		"--upgrade": true, "--lblk-journal-device": true,
 	}
 
 	for _, field := range strings.Fields(generator) {
