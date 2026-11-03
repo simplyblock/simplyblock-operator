@@ -320,8 +320,8 @@ verify-crd-kustomization: ## Check that every generated CRD is listed in config/
 	@hack/check-crd-kustomization.sh
 
 .PHONY: bundle
-bundle: yq verify-config-yaml verify-crd-kustomization ## Generate bundle manifests with digest-pinned images (operator image must be pushed first)
-	@set -e; \
+bundle: yq kustomize verify-config-yaml verify-crd-kustomization ## Generate bundle manifests with digest-pinned images (operator image must be pushed first)
+	@set -e; export PATH="$(BIN_DIR):$$PATH"; \
 	operator-sdk generate kustomize manifests -q; \
 	OPERATOR_DIGEST=$$(curl -sI \
 	  "https://quay.io/v2/simplyblock-io/simplyblock-operator/manifests/$(IMG_TAG)" \
@@ -333,14 +333,22 @@ bundle: yq verify-config-yaml verify-crd-kustomization ## Generate bundle manife
 	  "https://quay.io/v2/simplyblock-io/simplyblock/manifests/$(CLUSTER_IMAGE_TAG)" \
 	  -H "Accept: $(MANIFEST_ACCEPT)" \
 	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	test -n "$$CLUSTER_DIGEST" \
+	  || { echo "ERROR: could not fetch digest for $(CLUSTER_IMAGE_BASE):$(CLUSTER_IMAGE_TAG)"; exit 1; }; \
+	SPDK_HOST=$$(printf %s "$(SPDK_IMAGE_BASE)" | cut -d/ -f1); \
 	SPDK_REPO=$$(printf %s "$(SPDK_IMAGE_BASE)" | cut -d/ -f2-); \
-	SPDK_TOKEN=$$(curl -s "https://public.ecr.aws/token/?scope=repository:$$SPDK_REPO:pull" \
-	  | sed -n 's/.*"token":"\([^"]*\)".*/\1/p'); \
+	SPDK_AUTH=""; \
+	if [ "$$SPDK_HOST" = public.ecr.aws ]; then \
+	  SPDK_AUTH="Authorization: Bearer $$(curl -s "https://public.ecr.aws/token/?scope=repository:$$SPDK_REPO:pull" \
+	    | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"; \
+	fi; \
 	SPDK_DIGEST=$$(curl -sI \
-	  "https://public.ecr.aws/v2/$$SPDK_REPO/manifests/$(SPDK_IMAGE_TAG)" \
-	  -H "Authorization: Bearer $$SPDK_TOKEN" \
+	  "https://$$SPDK_HOST/v2/$$SPDK_REPO/manifests/$(SPDK_IMAGE_TAG)" \
+	  $${SPDK_AUTH:+-H "$$SPDK_AUTH"} \
 	  -H "Accept: $(MANIFEST_ACCEPT)" \
 	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	test -n "$$SPDK_DIGEST" \
+	  || { echo "ERROR: could not fetch digest for $(SPDK_IMAGE_BASE):$(SPDK_IMAGE_TAG)"; exit 1; }; \
 	REBALANCER_DIGEST=$$(curl -sI \
 	  "https://quay.io/v2/simplyblock-io/simplyblock-rebalancer/manifests/$(IMG_TAG)" \
 	  -H "Accept: $(MANIFEST_ACCEPT)" \
@@ -353,8 +361,8 @@ bundle: yq verify-config-yaml verify-crd-kustomization ## Generate bundle manife
 	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
 	test -n "$$NUMA_PLUGIN_DIGEST" \
 	  || { echo "ERROR: could not fetch digest for $(NUMA_PLUGIN_IMAGE_BASE):$(NUMA_PLUGIN_IMAGE_TAG)"; exit 1; }; \
-	(cd config/manager && kustomize edit set image controller=$(IMG_BASE)@$$OPERATOR_DIGEST); \
-	kustomize build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION); \
+	(cd config/manager && "$(KUSTOMIZE)" edit set image controller=$(IMG_BASE)@$$OPERATOR_DIGEST); \
+	"$(KUSTOMIZE)" build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION); \
 	OPERATOR_IMG="$(IMG_BASE)@$$OPERATOR_DIGEST" \
 	OPERATOR_TAGGED_IMG="$(IMG_BASE):$(IMG_TAG)@$$OPERATOR_DIGEST" \
 	CLUSTER_IMG="$(CLUSTER_IMAGE_BASE):$(CLUSTER_IMAGE_TAG)@$$CLUSTER_DIGEST" \
@@ -370,11 +378,11 @@ bundle-validate: ## Validate the generated bundle with the operatorframework sui
 	operator-sdk bundle validate ./bundle --select-optional suite=operatorframework
 
 .PHONY: bundle-dev
-bundle-dev: yq ## Generate a bundle that references images by tag, for branch builds (bundle resolves digests on Quay)
-	@set -e; \
+bundle-dev: yq kustomize ## Generate a bundle that references images by tag, for branch builds (bundle resolves digests on Quay)
+	@set -e; export PATH="$(BIN_DIR):$$PATH"; \
 	operator-sdk generate kustomize manifests -q; \
-	(cd config/manager && kustomize edit set image controller=$(IMG_BASE):$(IMG_TAG)); \
-	kustomize build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION); \
+	(cd config/manager && "$(KUSTOMIZE)" edit set image controller=$(IMG_BASE):$(IMG_TAG)); \
+	"$(KUSTOMIZE)" build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION); \
 	OPERATOR_IMG="$(IMG_BASE):$(IMG_TAG)" \
 	OPERATOR_TAGGED_IMG="$(IMG_BASE):$(IMG_TAG)" \
 	CLUSTER_IMG="$(CLUSTER_IMAGE_BASE):$(CLUSTER_IMAGE_TAG)" \
