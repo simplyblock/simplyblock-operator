@@ -24,14 +24,14 @@ image:
   simplyblock:
     # -- Control plane image, written to `ControlPlane.spec.source.local.image`. It is also the default
     # storage node image.
-    repository: quay.io/simplyblock-io/simplyblock
+    repository: registry.simplyblock.ai/simplyblock/simplyblock
     # -- Control plane image tag.
     tag: "main"
     # -- Control plane image pull policy.
     pullPolicy: Always
   operator:
     # -- Simplyblock Operator image.
-    repository: quay.io/simplyblock-io/simplyblock-operator
+    repository: registry.simplyblock.ai/simplyblock/simplyblock-operator
     # -- Simplyblock Operator image tag.
     tag: "main"
     # -- Simplyblock Operator image pull policy.
@@ -1310,11 +1310,10 @@ controlCenter:
   fullnameOverride: ""
 
   image:
-    # defaults to quay.io when unset
     # -- Control Center image registry. Empty uses `quay.io`.
-    registry: ""
+    registry: "registry.simplyblock.ai"
     # -- Control Center image repository.
-    repository: simplyblock-io/control-center
+    repository: simplyblock/control-center
     # inherits .Chart.AppVersion when unset. This chart's appVersion is a
     # floating tag, so pin a released console tag here for production.
     # -- Control Center image tag. Empty uses the chart's `appVersion`. Pin a released tag in
@@ -1504,9 +1503,9 @@ controlCenter:
   mock:
     enabled: false
     image:
-      # defaults to quay.io when unset
-      registry: ""
-      repository: simplyblock-io/control-center-mock
+      # Empty uses quay.io.
+      registry: "registry.simplyblock.ai"
+      repository: simplyblock/control-center-mock
       # inherits .Chart.AppVersion when unset
       tag: ""
       pullPolicy: IfNotPresent
