@@ -371,13 +371,16 @@ const webAPIHealthPath = "/api/v1/health/fdb"
 // serving certificate does not name 127.0.0.1. Without mutual TLS the kubelet
 // probes directly, over HTTPS when the API serves TLS.
 //
-// Two failures five seconds apart take a pod out, so a FoundationDB recovery of
-// a few seconds does not empty the Service.
+// Six failures five seconds apart take a pod out: a FoundationDB recovery or a
+// replacement moving roles pauses the database for seconds, and a probe that
+// failed both replicas on that would empty the Service and turn a slow answer
+// into a refused connection. A pod that never comes up, the case the probe is
+// for, still stays out of the Service until it answers.
 func webAPIReadinessProbe(managed *simplyblockv1alpha2.LocalControlPlane) *corev1.Probe {
 	probe := &corev1.Probe{
 		PeriodSeconds:    5,
 		TimeoutSeconds:   4,
-		FailureThreshold: 2,
+		FailureThreshold: 6,
 		SuccessThreshold: 1,
 	}
 	switch {

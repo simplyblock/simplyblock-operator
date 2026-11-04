@@ -70,12 +70,12 @@ func TestWebAPIReadinessWithoutMutualTLSIsAnHTTPGet(t *testing.T) {
 	}
 }
 
-// A FoundationDB recovery of a few seconds must not take every replica out at
-// once: one failure alone never makes a pod unready.
+// A FoundationDB stall of up to half a minute must not take every replica out
+// of the Service at once.
 func TestWebAPIReadinessToleratesABriefDatabaseStall(t *testing.T) {
 	probe := webAPIProbeOf(t, simplyblockv1alpha2.ControlPlaneTLS{})
-	if probe.FailureThreshold < 2 {
-		t.Errorf("a single failed probe takes the pod out (failureThreshold=%d)", probe.FailureThreshold)
+	if stall := probe.FailureThreshold * probe.PeriodSeconds; stall < 30 {
+		t.Errorf("a database stall of %ds takes every replica out of the Service", stall)
 	}
 	if probe.TimeoutSeconds >= probe.PeriodSeconds {
 		t.Errorf("the probe timeout (%ds) is not shorter than its period (%ds)", probe.TimeoutSeconds, probe.PeriodSeconds)
