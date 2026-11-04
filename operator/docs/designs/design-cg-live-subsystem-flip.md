@@ -458,7 +458,10 @@ the same label. The VDO volume, its pool, and the volume group are untouched by
 a swap: only the bottom mapping's table changes, and the layers above it hold
 the mapping open throughout.
 
-`SPDKCSI_DM_INDIRECTION` defaults to on. The stack record still decides the shape
+`SPDKCSI_DM_INDIRECTION` defaults to on, and the operator sets it to `false` only
+when the SimplyblockDriver sets `spec.disableDeviceMapperIndirection`. A join that
+meets a volume staged without the layer names that field when it is set, since a
+restage would leave the layer out again. The stack record still decides the shape
 of a staged volume, so a volume never gains or loses the layer under a live
 consumer (§14).
 
@@ -827,11 +830,12 @@ the connect row, which is under `/api/v2/clusters/{cluster}`.
 
 ## 10. Configuration
 
-| Field                                             | Type  | Default | Description                                                                                                              |
-|---------------------------------------------------|-------|---------|--------------------------------------------------------------------------------------------------------------------------|
-| `spec.joinConsistencyGroup.suspendTimeoutSeconds` | int32 | 10      | Longest time any host holds I/O. 1 to 30. Immutable                                                                      |
-| `SPDKCSI_DM_INDIRECTION` (CSI node)               | bool  | `true`  | Stage fresh volumes of every shape behind `dmLinear`. Read at stage time only                                            |
-| `SPDKCSI_CG_JOIN_OPERATION` (CSI controller)      | bool  | `true`  | The watcher creates `JoinConsistencyGroup` operations. Off, it falls back to today's join and pre-join `VolumeMigration` |
+| Field                                                     | Type  | Default | Description                                                                                                              |
+|-----------------------------------------------------------|-------|---------|--------------------------------------------------------------------------------------------------------------------------|
+| `spec.joinConsistencyGroup.suspendTimeoutSeconds`         | int32 | 10      | Longest time any host holds I/O. 1 to 30. Immutable                                                                      |
+| `SPDKCSI_DM_INDIRECTION` (CSI node)                       | bool  | `true`  | Stage fresh volumes of every shape behind `dmLinear`. Read at stage time only                                            |
+| `spec.disableDeviceMapperIndirection` (SimplyblockDriver) | bool  | `false` | `true` renders `SPDKCSI_DM_INDIRECTION=false` on the node plugin                                                         |
+| `SPDKCSI_CG_JOIN_OPERATION` (CSI controller)              | bool  | `true`  | The watcher creates `JoinConsistencyGroup` operations. Off, it falls back to today's join and pre-join `VolumeMigration` |
 
 `SPDKCSI_CG_COLOCATE` and `SPDKCSI_CG_CLIENT_SWAP_READY` are removed once
 `SPDKCSI_CG_JOIN_OPERATION` is on by default, because the operation reads each

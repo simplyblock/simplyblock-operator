@@ -14,6 +14,7 @@ import (
 
 	"github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/volstack/swaprpc"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -152,6 +153,56 @@ func TestAVolumeThatCannotSwapFailsNamingItsClaim(t *testing.T) {
 	}
 	if e := eventWith(w.events(), ReasonSubsystemSwapUnavailable); !strings.Contains(e, "app/member") {
 		t.Errorf("SubsystemSwapUnavailable event = %q, want it to name claim app/member", e)
+	}
+}
+
+// csiDriver is the SimplyblockDriver that provisioned the test volumes.
+func csiDriver(disableIndirection bool) *simplyblockv1alpha2.SimplyblockDriver {
+	return &simplyblockv1alpha2.SimplyblockDriver{
+		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock", Namespace: testNamespace},
+		Spec: simplyblockv1alpha2.SimplyblockDriverSpec{
+			DriverName:                     CSIDriverName,
+			DisableDeviceMapperIndirection: disableIndirection,
+		},
+	}
+}
+
+// A volume staged without the device-mapper layer is restaged with it once its
+// pod restarts, unless the driver stages every volume without it. Then the
+// restart the refusal suggests stages the volume the same way, and the retry
+// fails the same way, so the refusal names the field that has to change first.
+func TestAVolumeThatCannotSwapUnderADriverWithoutTheIndirectionNamesTheField(t *testing.T) {
+	w := newJoinWorld(t, csiDriver(true))
+	w.node(memberHost).notSwappable[handleOf(memberVolumeID)] = true
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed {
+		t.Fatalf("phase = %q (%s), want Failed", ops.Status.Phase, ops.Status.Message)
+	}
+	e := eventWith(w.events(), ReasonSubsystemSwapUnavailable)
+	if !strings.Contains(e, "app/member") {
+		t.Errorf("SubsystemSwapUnavailable event = %q, want it to name claim app/member", e)
+	}
+	if !strings.Contains(e, "SimplyblockDriver "+testNamespace+"/simplyblock") ||
+		!strings.Contains(e, "spec.disableDeviceMapperIndirection") {
+		t.Errorf("SubsystemSwapUnavailable event = %q, want it to name SimplyblockDriver %s/simplyblock "+
+			"and spec.disableDeviceMapperIndirection", e, testNamespace)
+	}
+}
+
+// Under a driver that leaves the indirection on, a restart is the whole remedy,
+// and the refusal does not send anyone to a field that is already right.
+func TestAVolumeThatCannotSwapUnderADriverWithTheIndirectionSuggestsOnlyARestart(t *testing.T) {
+	w := newJoinWorld(t, csiDriver(false))
+	w.node(memberHost).notSwappable[handleOf(memberVolumeID)] = true
+
+	w.run(40)
+	e := eventWith(w.events(), ReasonSubsystemSwapUnavailable)
+	if !strings.Contains(e, "restart its pod") {
+		t.Errorf("SubsystemSwapUnavailable event = %q, want it to suggest restarting the pod", e)
+	}
+	if strings.Contains(e, "disableDeviceMapperIndirection") {
+		t.Errorf("SubsystemSwapUnavailable event = %q names a field the driver leaves unset", e)
 	}
 }
 

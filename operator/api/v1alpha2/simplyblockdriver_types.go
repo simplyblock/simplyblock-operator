@@ -339,6 +339,15 @@ type SimplyblockDriverSpec struct {
 	// +optional
 	EnableCSIAddons *bool `json:"enableCSIAddons,omitempty"`
 
+	// DisableDeviceMapperIndirection stages new volumes directly on their NVMe
+	// device instead of behind a device-mapper linear device. Without that
+	// layer a volume cannot move to another NVMe subsystem while a pod uses
+	// it, so it cannot join a consistency group live. The layer costs a little
+	// CPU per I/O. A change applies to volumes staged after it; a volume keeps
+	// the layout it was staged with until its pods stop and it is staged again.
+	// +optional
+	DisableDeviceMapperIndirection bool `json:"disableDeviceMapperIndirection,omitempty"`
+
 	// TLS configures whether both plugins reach the control plane over TLS.
 	// Unset is plaintext, the shape every deployment ran before this field
 	// existed. Adopting a deployment that already runs TLS requires this to

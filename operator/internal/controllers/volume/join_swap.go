@@ -119,6 +119,29 @@ func (r *PersistentVolumeOpsReconciler) swapUnavailable(
 	return rollbackf("%s", message)
 }
 
+// driverWithoutIndirection is the SimplyblockDriver that provisioned pv when it
+// stages volumes without the device-mapper indirection, and nil otherwise. A
+// volume such a driver stages is restaged the same way, so a pod restart alone
+// does not make it swappable.
+func (r *PersistentVolumeOpsReconciler) driverWithoutIndirection(
+	ctx context.Context, pv *corev1.PersistentVolume,
+) (*simplyblockv1alpha2.SimplyblockDriver, error) {
+	if pv.Spec.CSI == nil {
+		return nil, nil
+	}
+	var drivers simplyblockv1alpha2.SimplyblockDriverList
+	if err := r.List(ctx, &drivers); err != nil {
+		return nil, fmt.Errorf("list the CSI drivers this operator manages: %w", err)
+	}
+	for i := range drivers.Items {
+		d := &drivers.Items[i]
+		if d.Spec.DriverName == pv.Spec.CSI.Driver && d.Spec.DisableDeviceMapperIndirection {
+			return d, nil
+		}
+	}
+	return nil, nil
+}
+
 // updateHost applies a change to one host's record in status.
 func (r *PersistentVolumeOpsReconciler) updateHost(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, node string,
@@ -157,12 +180,25 @@ func (r *PersistentVolumeOpsReconciler) joinAttach(
 			return "", false, fmt.Errorf("describe the volumes on %s: %w", host.Node, err)
 		}
 		for _, state := range states {
-			if !state.Swappable {
-				return "", false, r.swapUnavailable(ctx, ops, subject,
-					"claim %s on host %s was staged without the device-mapper layer the swap re-points; "+
-						"restart its pod so it is staged again, then delete this operation to retry",
-					volumes.claimOfPV[state.Handle], host.Node)
+			if state.Swappable {
+				continue
 			}
+			driver, err := r.driverWithoutIndirection(ctx, subject.pv)
+			if err != nil {
+				return "", false, err
+			}
+			if driver != nil {
+				return "", false, r.swapUnavailable(ctx, ops, subject,
+					"claim %s on host %s was staged without the device-mapper layer the swap re-points, "+
+						"and SimplyblockDriver %s/%s sets spec.disableDeviceMapperIndirection, so a restage "+
+						"would leave it out again. Clear that field, restart the claim's pod so it is staged "+
+						"again, then delete this operation to retry",
+					volumes.claimOfPV[state.Handle], host.Node, driver.Namespace, driver.Name)
+			}
+			return "", false, r.swapUnavailable(ctx, ops, subject,
+				"claim %s on host %s was staged without the device-mapper layer the swap re-points; "+
+					"restart its pod so it is staged again, then delete this operation to retry",
+				volumes.claimOfPV[state.Handle], host.Node)
 		}
 		// The connect entries are a host's own (its DHCHAP secret among them),
 		// so the control plane answers them only for a named host, and each host
