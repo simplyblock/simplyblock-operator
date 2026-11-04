@@ -310,6 +310,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 			Env:             env,
 			VolumeMounts:    append([]corev1.VolumeMount{clusterFileMount()}, tlsMount(managed)...),
 			Resources:       webAPIResources(managed),
+			ReadinessProbe:  webAPIReadinessProbe(managed),
 		}},
 		Volumes: append([]corev1.Volume{clusterFileVolumeSource()},
 			tlsVolume(managed)...),
@@ -340,6 +341,49 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 			},
 		},
 	}
+}
+
+// webAPIHealthPath is the v1 API's /health/fdb under its /api/v1 mount. It answers
+// without credentials and reads one key from FoundationDB, so a pod passes only
+// once it listens and reaches the database.
+const webAPIHealthPath = "/api/v1/health/fdb"
+
+// webAPIReadinessProbe keeps the Service from routing to a pod that does not
+// answer yet. Without it a replacement pod receives connections the moment its
+// container starts, before the API listens, and callers see connection refused
+// for the seconds that takes; a rollout or a drain does this to every pod.
+//
+// The kubelet cannot present a client certificate, so under mutual TLS the
+// probe runs curl in the container with the pod's own certificate. The server
+// is not verified: the probe connects to its own pod over loopback, and the
+// serving certificate does not name 127.0.0.1. Without mutual TLS the kubelet
+// probes directly, over HTTPS when the API serves TLS.
+//
+// Two failures five seconds apart take a pod out, so a FoundationDB recovery of
+// a few seconds does not empty the Service.
+func webAPIReadinessProbe(managed *simplyblockv1alpha2.LocalControlPlane) *corev1.Probe {
+	probe := &corev1.Probe{
+		PeriodSeconds:    5,
+		TimeoutSeconds:   4,
+		FailureThreshold: 2,
+		SuccessThreshold: 1,
+	}
+	switch {
+	case managed.RequiresClientCertificate():
+		probe.Exec = &corev1.ExecAction{Command: []string{
+			"curl", "--fail", "--silent", "--show-error", "--insecure", "--max-time", "3",
+			"--output", "/dev/null",
+			"--cert", tlsMountPath + "/tls.crt", "--key", tlsMountPath + "/tls.key",
+			"https://127.0.0.1:" + strconv.Itoa(webAPIPort) + webAPIHealthPath,
+		}}
+	case managed.ServesTLS():
+		probe.HTTPGet = &corev1.HTTPGetAction{
+			Path: webAPIHealthPath, Port: intstr.FromInt32(webAPIPort), Scheme: corev1.URISchemeHTTPS,
+		}
+	default:
+		probe.HTTPGet = &corev1.HTTPGetAction{Path: webAPIHealthPath, Port: intstr.FromInt32(webAPIPort)}
+	}
+	return probe
 }
 
 // webAPIResources is what the management API asks for, or what the spec states.
