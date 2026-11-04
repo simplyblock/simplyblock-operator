@@ -157,7 +157,7 @@ jobs:
       - name: Run Trivy on branch image (gating)
         id: trivy-branch
         continue-on-error: true
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ matrix.image }}:${{ steps.tags.outputs.branch_tag }}
           format: json
@@ -169,11 +169,13 @@ jobs:
 
       - name: Run Trivy on released image (informational)
         if: matrix.line != 'main'
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ matrix.image }}:${{ steps.tags.outputs.release_tag }}
           format: json
           output: trivy-release.json
+          # Trivy is already on PATH from the gating scan; reinstalling fails.
+          skip-setup-trivy: true
           severity: CRITICAL,HIGH,MEDIUM
           ignore-unfixed: true
           exit-code: '0'
@@ -232,11 +234,13 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Generate SBOM (CycloneDX)
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ matrix.image }}:${{ steps.tags.outputs.branch_tag }}
           format: cyclonedx
           output: sbom.cdx.json
+          # Trivy is already on PATH from the gating scan; reinstalling fails.
+          skip-setup-trivy: true
 
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
