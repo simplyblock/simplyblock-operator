@@ -491,6 +491,12 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 						"key": cordonTaint, "durationInSeconds": int64(0),
 					}},
 					"taintReplacementTimeSeconds": int64(0),
+					// An EKS node group update cordons every old node at once. The
+					// default, 10% of the fault domains or at least one, then
+					// stops the operator from replacing anything, and the drains
+					// time out behind fdbDisruptionBudget. maxConcurrentReplacements
+					// still takes the processes one at a time.
+					"maxFaultDomainsWithTaintedProcessGroups": "100%",
 				},
 			},
 			"faultDomain": map[string]any{"key": "kubernetes.io/hostname"},

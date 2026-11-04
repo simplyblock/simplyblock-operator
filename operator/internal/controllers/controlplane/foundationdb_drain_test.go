@@ -29,6 +29,10 @@ func TestFoundationDBReplacesProcessesOnACordonedNode(t *testing.T) {
 		"spec", "automationOptions", "replacements", "taintReplacementTimeSeconds"); after != 0 {
 		t.Errorf("a tainted process waits %ds before it is replaced", after)
 	}
+	if limit, _, _ := unstructured.NestedString(cluster.Object,
+		"spec", "automationOptions", "replacements", "maxFaultDomainsWithTaintedProcessGroups"); limit != "100%" {
+		t.Errorf("maxFaultDomainsWithTaintedProcessGroups is %q: cordoning every node at once replaces nothing", limit)
+	}
 	if enabled, _, _ := unstructured.NestedBool(cluster.Object,
 		"spec", "automationOptions", "replacements", "enabled"); !enabled {
 		t.Error("replacements are off, so the taint option does nothing")
