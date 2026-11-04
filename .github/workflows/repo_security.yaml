@@ -154,6 +154,22 @@ jobs:
           output-format: json
           output-file: grype-release.json
 
+      # setup-trivy downloads from get.trivy.dev, which has stopped resolving;
+      # install from the GitHub release instead and skip the action's setup.
+      - name: Install Trivy
+        env:
+          TRIVY_VERSION: 0.70.0
+        run: |
+          base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          tarball="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "${base}/${tarball}"
+          curl -fsSLO "${base}/trivy_${TRIVY_VERSION}_checksums.txt"
+          grep " ${tarball}\$" "trivy_${TRIVY_VERSION}_checksums.txt" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf "$tarball" -C "$HOME/.local/bin" trivy
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Run Trivy on branch image (gating)
         id: trivy-branch
         continue-on-error: true
@@ -162,6 +178,7 @@ jobs:
           image-ref: ${{ matrix.image }}:${{ steps.tags.outputs.branch_tag }}
           format: json
           output: trivy-branch.json
+          skip-setup-trivy: true
           severity: CRITICAL,HIGH,MEDIUM
           ignore-unfixed: true
           exit-code: '1'
@@ -174,7 +191,6 @@ jobs:
           image-ref: ${{ matrix.image }}:${{ steps.tags.outputs.release_tag }}
           format: json
           output: trivy-release.json
-          # Trivy is already on PATH from the gating scan; reinstalling fails.
           skip-setup-trivy: true
           severity: CRITICAL,HIGH,MEDIUM
           ignore-unfixed: true
@@ -239,7 +255,6 @@ jobs:
           image-ref: ${{ matrix.image }}:${{ steps.tags.outputs.branch_tag }}
           format: cyclonedx
           output: sbom.cdx.json
-          # Trivy is already on PATH from the gating scan; reinstalling fails.
           skip-setup-trivy: true
 
       - name: Upload SBOM artifact
