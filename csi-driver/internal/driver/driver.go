@@ -344,6 +344,9 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	}
 
 	nodeName := cd.GetNodeID()
+	// Before the service serves: a fresh stage reads the answer.
+	ns.ProbeDeviceMapper(context.Background(), nodeName)
+
 	podGuardian, err := guardian.Start(context.Background(), guardian.NewDefaultConfig(nodeName), manager)
 	if err != nil {
 		// A guardian that will not start costs pod restarts on total path loss,

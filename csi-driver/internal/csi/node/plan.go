@@ -82,7 +82,8 @@ const (
 	// shapePlain with the dmLinear indirection above the fabric, so a volume's
 	// namespace can move to another subsystem under a live consumer
 	// (consistency-group co-location). Chosen for a fresh stage when the node
-	// runs with SPDKCSI_DM_INDIRECTION, and afterwards by the stack record:
+	// runs with SPDKCSI_DM_INDIRECTION on a host with device-mapper, and
+	// afterward by the stack record:
 	// a volume never gains or loses the layer under a staged consumer.
 	shapeIndirectRawBlock
 	shapeIndirectPlain
@@ -150,12 +151,18 @@ func indirect(shape stackShape) stackShape {
 	return shape
 }
 
-// dmIndirectionEnabled is SPDKCSI_DM_INDIRECTION: stage new volumes of every
-// shape behind the dmLinear indirection. On unless the variable says off, since
-// a volume staged without it can never have its namespace moved to another
-// subsystem under a live consumer.
-func dmIndirectionEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("SPDKCSI_DM_INDIRECTION"))) {
+// dmIndirectionEnabled is whether a fresh stage builds the dmLinear
+// indirection: SPDKCSI_DM_INDIRECTION does not turn it off, and the host has
+// device-mapper to build it with. On by default, since a volume staged without
+// it can never have its namespace moved to another subsystem under a live
+// consumer.
+func (ns *Server) dmIndirectionEnabled() bool {
+	return ns.deviceMapper && settingOn(os.Getenv(dmIndirectionEnv))
+}
+
+// settingOn reads SPDKCSI_DM_INDIRECTION: on unless it says off.
+func settingOn(setting string) bool {
+	switch strings.ToLower(strings.TrimSpace(setting)) {
 	case "0", "false", "no", "off":
 		return false
 	}

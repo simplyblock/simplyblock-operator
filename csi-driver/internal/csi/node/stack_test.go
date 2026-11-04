@@ -116,6 +116,9 @@ func newStackedServer(t *testing.T, runner stackRunner) (*Server, string) {
 		mounter:     mount.NewWith(k8smount.NewFakeMounter(nil), nil),
 		stack:       s,
 		volumeLocks: csicommon.NewVolumeLocks(),
+		// The hosts these tests stand in for have device-mapper. A test about a
+		// host without it clears this.
+		deviceMapper: true,
 	}, recordDir
 }
 

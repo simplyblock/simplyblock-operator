@@ -461,7 +461,10 @@ the mapping open throughout.
 `SPDKCSI_DM_INDIRECTION` defaults to on, and the operator sets it to `false` only
 when the SimplyblockDriver sets `spec.disableDeviceMapperIndirection`. A join that
 meets a volume staged without the layer names that field when it is set, since a
-restage would leave the layer out again. The stack record still decides the shape
+restage would leave the layer out again. The node plugin also probes the host at
+start (`modprobe dm_mod`, then `dmsetup targets` must list `linear`). A host without
+it stages directly whatever the variable says, and the plugin logs a warning naming
+the node and what is lost. The stack record still decides the shape
 of a staged volume, so a volume never gains or loses the layer under a live
 consumer (§14).
 
