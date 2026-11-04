@@ -76,6 +76,23 @@ const (
 	preconnectKindCutover = "cutover"
 	preconnectKindLate    = "late"
 
+	// annotCutoverObserved is set once the backend has reported cutover_pending
+	// for the slot's current cutover attempt. A slot can also be put into
+	// cutover_pending ahead of the backend (the per-volume commit path does so
+	// right after POST .../replication/commit); this tells the two apart when
+	// the backend later reports the relationship as replicating or absent: an
+	// observed attempt that is no longer pending was abandoned by the backend,
+	// an unobserved one may simply not have reached cutover_pending yet.
+	annotCutoverObserved      = "replication.simplyblock.io/cutover-observed"
+	annotCutoverObservedValue = "true"
+
+	// annotReattachedStopped is set when the slot re-attached its policy
+	// because the backend reported the volume's replication as stopped. If the
+	// backend still reports it stopped after that, the slot goes to error
+	// instead of re-attaching in a loop.
+	annotReattachedStopped      = "replication.simplyblock.io/reattached-stopped"
+	annotReattachedStoppedValue = "true"
+
 	backendStateCutoverPending = "cutover_pending"
 	backendStateCutoverDone    = "cutover_done"
 	backendStateFailedOver     = "failed_over"
@@ -89,6 +106,7 @@ type replVolumeReplicationStatus struct {
 	TargetLvolID    string      `json:"target_lvol_id"`
 	SourceClusterID string      `json:"source_cluster_id"`
 	TargetClusterID string      `json:"target_cluster_id"`
+	TargetPoolID    string      `json:"target_pool_id"`
 	Mode            string      `json:"mode"`
 	State           string      `json:"state"`
 	Direction       string      `json:"direction"`
@@ -304,6 +322,17 @@ func (r *ReplicationSlotReconciler) reconcileReplicating(
 		log.Error(err, "GET replication failed during sync", "slot", slot.Name)
 		return ctrl.Result{RequeueAfter: replSlotRequeueReplicating}, nil
 	}
+
+	// A relationship-less or replicating source volume must actually replicate:
+	// the backend stops replication on its own when a migration plan is
+	// canceled or a cutover is abandoned (policy detached), and the slot then
+	// kept reporting "replicating" for a volume nothing replicated any more.
+	if r.mayCheckStoppedReplication(slot, status) {
+		if res, handled, err := r.reconcileStoppedReplication(ctx, slot, apiClient, clusterID, poolID, volumeID); handled {
+			return res, err
+		}
+	}
+
 	if status == nil {
 		// The LVolReplication object only exists after a cutover or failover — during normal
 		// replication the backend returns 404. This is expected; keep polling.
@@ -615,7 +644,28 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		log.Error(err, "GET replication failed in cutover_pending", "slot", slot.Name)
 		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
 	}
+	if status != nil && status.State == backendStateCutoverPending &&
+		slot.Annotations[annotCutoverObserved] != annotCutoverObservedValue {
+		annotPatch := client.MergeFrom(slot.DeepCopy())
+		if slot.Annotations == nil {
+			slot.Annotations = map[string]string{}
+		}
+		slot.Annotations[annotCutoverObserved] = annotCutoverObservedValue
+		if err := r.Patch(ctx, slot, annotPatch); err != nil {
+			return ctrl.Result{Requeue: true}, nil
+		}
+	}
 	if status == nil || status.State != backendStateCutoverPending {
+		// The backend did not complete the cutover: the final step failed, the
+		// attempt budget ran out, the task or the migration plan was canceled.
+		// It then puts the relationship back to replicating (or there is none,
+		// replication having been stopped), and the slot must follow instead
+		// of waiting for a cutover that will not come (bf12 2026-11-04: slots
+		// cutover_pending for 16 h, a new migration round blocked behind them).
+		isFailback := proceedClusterID != clusterID
+		if !isFailback && (status == nil || status.State == utils.ReplicationBackendStateReplicating) {
+			return r.releaseAbandonedCutover(ctx, slot, apiClient, status, clusterID, poolID, volumeID)
+		}
 		// During failback the target cluster always has the stale failed_over record
 		// from the original failover. That record exists from the moment the slot is
 		// placed in cutover_pending K8s state — spanning the entire shrink phase —
@@ -1027,6 +1077,217 @@ func (r *ReplicationSlotReconciler) applyAdvancedBackendStateForFailback(
 			"slot", slot.Name, "backendState", status.State)
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
+}
+
+// replVolumeReplicationHealth is the part of
+// GET /api/v2/clusters/{cluster}/storage-pools/{pool}/volumes/{vol}/replication/status
+// the slot reads. Resyncing is true while the volume's final cutover task
+// (replication_final) has not finished, or a divergence catch-up runs.
+type replVolumeReplicationHealth struct {
+	Role      string `json:"role"`
+	State     string `json:"state"`
+	Resyncing bool   `json:"resyncing"`
+}
+
+// cutoverInFlight reports whether the backend still runs a cutover for the
+// volume. A 404 (volume gone, or a control plane without the status endpoint)
+// reads as not in flight.
+func (r *ReplicationSlotReconciler) cutoverInFlight(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterID, poolID, volumeID string,
+) (bool, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication/status",
+		clusterID, poolID, volumeID)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false, err
+	}
+	if status == http.StatusNotFound {
+		return false, nil
+	}
+	if status >= 300 {
+		return false, fmt.Errorf("status %d: %s", status, string(body))
+	}
+	var h replVolumeReplicationHealth
+	if err := json.Unmarshal(body, &h); err != nil {
+		return false, fmt.Errorf("unmarshal replication health: %w", err)
+	}
+	return h.Resyncing, nil
+}
+
+// releaseAbandonedCutover takes a slot out of cutover_pending once the backend
+// reports the relationship as replicating, or reports none, for a cutover that
+// did not happen. It goes back to replicating; the next replicating poll then
+// reflects a replication the backend stopped altogether (see
+// reconcileStoppedReplication).
+//
+// A slot put into cutover_pending ahead of the backend (per-volume commit) has
+// not seen cutover_pending yet, and a replicating relationship is then just the
+// state before the task prepares the cutover: it is only released once the
+// backend has no cutover task in flight for the volume.
+func (r *ReplicationSlotReconciler) releaseAbandonedCutover(
+	ctx context.Context,
+	slot *simplyblockv1alpha1.ReplicationSlot,
+	apiClient *webapi.Client,
+	status *replVolumeReplicationStatus,
+	clusterID, poolID, volumeID string,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	if slot.Annotations[annotCutoverObserved] != annotCutoverObservedValue {
+		inFlight, err := r.cutoverInFlight(ctx, apiClient, clusterID, poolID, volumeID)
+		if err != nil {
+			log.Error(err, "GET replication/status failed in cutover_pending", "slot", slot.Name)
+			return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
+		}
+		if inFlight {
+			// Commit queued; the task has not prepared the cutover yet.
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+	}
+
+	// A preconnect Job of the abandoned attempt connected paths of a target
+	// that is gone; the next attempt must build its own.
+	var job batchv1.Job
+	jobKey := types.NamespacedName{Namespace: slot.Namespace, Name: replSlotPreconnectJobName(volumeID)}
+	if err := r.Get(ctx, jobKey, &job); err == nil && job.Annotations[annotPreconnectKind] == preconnectKindCutover {
+		if delErr := r.Delete(ctx, &job, client.PropagationPolicy(metav1.DeletePropagationBackground)); delErr != nil && !apierrors.IsNotFound(delErr) {
+			log.Error(delErr, "Failed to delete preconnect job of abandoned cutover", "job", job.Name)
+		}
+	}
+
+	// The next attempt starts afresh: it must create its preconnect Job and
+	// signal proceed again.
+	_, observed := slot.Annotations[annotCutoverObserved]
+	_, signaled := slot.Annotations[annotCutoverProceedSignaled]
+	if observed || signaled {
+		annotPatch := client.MergeFrom(slot.DeepCopy())
+		delete(slot.Annotations, annotCutoverObserved)
+		delete(slot.Annotations, annotCutoverProceedSignaled)
+		if err := r.Patch(ctx, slot, annotPatch); err != nil {
+			return ctrl.Result{Requeue: true}, nil
+		}
+	}
+
+	targetLvolID, targetNQN := "", ""
+	if status != nil {
+		targetLvolID, targetNQN = status.TargetLvolID, status.TargetNQN
+		if targetLvolID != "" && !r.targetVolumeExists(ctx, apiClient, status) {
+			// The relationship still names the clone the abandoned attempt
+			// built and the backend deleted.
+			targetLvolID, targetNQN = "", ""
+		}
+	}
+
+	statusPatch := client.MergeFrom(slot.DeepCopy())
+	slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateReplicating)
+	slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionSource)
+	slot.Status.TargetLvolID = targetLvolID
+	slot.Status.TargetNQN = targetNQN
+	if status == nil {
+		slot.Status.Message = "Cutover did not complete; the backend has no active replication relationship"
+	} else {
+		slot.Status.Message = "Cutover did not complete; back to replicating"
+	}
+	if err := r.Status().Patch(ctx, slot, statusPatch); err != nil {
+		return ctrl.Result{Requeue: true}, nil
+	}
+	log.Info("Backend released the cutover without completing it; slot back to replicating",
+		"slot", slot.Name, "relationship", status != nil)
+	r.Recorder.Eventf(slot, nil, corev1.EventTypeWarning, "CutoverAbandoned", "CutoverAbandoned",
+		"Cutover of volume %s did not complete on the backend; slot back to replicating", volumeID)
+	// Re-check promptly whether replication itself is still running.
+	return ctrl.Result{RequeueAfter: time.Second}, nil
+}
+
+// targetVolumeExists reports whether the relationship's target volume still
+// exists. Unknown (no pool in the record, a failed read) reads as existing.
+func (r *ReplicationSlotReconciler) targetVolumeExists(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	status *replVolumeReplicationStatus,
+) bool {
+	if status.TargetClusterID == "" || status.TargetPoolID == "" {
+		return true
+	}
+	vol, err := apiClient.GetVolume(ctx, status.TargetClusterID, status.TargetPoolID, status.TargetLvolID)
+	if err != nil {
+		return true
+	}
+	return vol != nil
+}
+
+// mayCheckStoppedReplication reports whether the slot's volume is the side
+// that should be replicating: no relationship record, or a replicating one
+// with this volume as its source, on a source slot outside a failback.
+func (r *ReplicationSlotReconciler) mayCheckStoppedReplication(
+	slot *simplyblockv1alpha1.ReplicationSlot,
+	status *replVolumeReplicationStatus,
+) bool {
+	if slot.Status.Direction == string(simplyblockv1alpha1.ReplicationSlotDirectionTarget) ||
+		slot.Annotations[annotFailbackTarget] != "" {
+		return false
+	}
+	return status == nil || (status.State == utils.ReplicationBackendStateReplicating && status.IsSource)
+}
+
+// reconcileStoppedReplication reflects a replication the backend stopped
+// (do_replicate cleared: policy detached by a canceled migration plan or an
+// abandoned cutover) on a slot that still says replicating. The slot still
+// asks for its policy, so it re-attaches it -- what deleting the slot did by
+// hand on bf12. Should the backend still report replication stopped after
+// that, the slot goes to error rather than re-attaching in a loop.
+// handled=false means the volume replicates (or its state is unknown) and the
+// caller carries on.
+func (r *ReplicationSlotReconciler) reconcileStoppedReplication(
+	ctx context.Context,
+	slot *simplyblockv1alpha1.ReplicationSlot,
+	apiClient *webapi.Client,
+	clusterID, poolID, volumeID string,
+) (ctrl.Result, bool, error) {
+	log := logf.FromContext(ctx)
+
+	vol, err := apiClient.GetVolume(ctx, clusterID, poolID, volumeID)
+	if err != nil || vol == nil || vol.DoReplicate == nil {
+		return ctrl.Result{}, false, nil
+	}
+	reattached := slot.Annotations[annotReattachedStopped] == annotReattachedStoppedValue
+	if *vol.DoReplicate {
+		if reattached {
+			annotPatch := client.MergeFrom(slot.DeepCopy())
+			delete(slot.Annotations, annotReattachedStopped)
+			if err := r.Patch(ctx, slot, annotPatch); err != nil {
+				log.Error(err, "Failed to clear re-attach marker", "slot", slot.Name)
+			}
+		}
+		return ctrl.Result{}, false, nil
+	}
+
+	if reattached {
+		res, err := r.setError(ctx, slot,
+			"replication is not running on the backend (do_replicate=false) even after re-attaching the policy")
+		return res, true, err
+	}
+
+	annotPatch := client.MergeFrom(slot.DeepCopy())
+	if slot.Annotations == nil {
+		slot.Annotations = map[string]string{}
+	}
+	slot.Annotations[annotReattachedStopped] = annotReattachedStoppedValue
+	if err := r.Patch(ctx, slot, annotPatch); err != nil {
+		return ctrl.Result{Requeue: true}, true, nil
+	}
+	statusPatch := client.MergeFrom(slot.DeepCopy())
+	slot.Status.State = "" // re-attach on the next pass
+	slot.Status.Message = "Replication stopped on the backend; re-attaching the policy"
+	if err := r.Status().Patch(ctx, slot, statusPatch); err != nil {
+		return ctrl.Result{Requeue: true}, true, nil
+	}
+	log.Info("Backend replication stopped; re-attaching the policy", "slot", slot.Name, "volume", volumeID)
+	r.Recorder.Eventf(slot, nil, corev1.EventTypeWarning, "ReplicationStopped", "ReplicationStopped",
+		"Replication of volume %s was stopped on the backend; re-attaching policy %s", volumeID, slot.Spec.PolicyRef)
+	return ctrl.Result{RequeueAfter: time.Second}, true, nil
 }
 
 func (r *ReplicationSlotReconciler) SetupWithManager(mgr ctrl.Manager) error {
