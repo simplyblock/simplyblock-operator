@@ -113,6 +113,10 @@ func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 	return append(objects, fdbPeerCertificate(cp)...)
 }
 
+// fdbClusterNameLabel is the label every FoundationDB pod carries with its
+// cluster's name.
+const fdbClusterNameLabel = "foundationdb.org/fdb-cluster-name"
+
 // fdbMinimumRecoveryTimeForExclusion is the uptime, in seconds, the
 // FoundationDB operator waits for after a recovery before it excludes a process.
 // It still keeps an exclusion from following a recovery straight away.
@@ -135,7 +139,7 @@ func fdbDisruptionBudget(namespace string) *policyv1.PodDisruptionBudget {
 		Spec: policyv1.PodDisruptionBudgetSpec{
 			MaxUnavailable: ptr.To(intstr.FromInt32(0)),
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{
-				"foundationdb.org/fdb-cluster-name": ComponentFDBCluster,
+				fdbClusterNameLabel: ComponentFDBCluster,
 			}},
 		},
 	}
@@ -320,6 +324,12 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 				// a time, that alone approaches the 15 minutes an EKS node group
 				// update allows a drain.
 				"--minimum-recovery-time-for-exclusion=" + strconv.Itoa(fdbMinimumRecoveryTimeForExclusion),
+				// Without it the operator does not watch nodes at all, and a cordon
+				// changes nothing it watches: taintReplacementOptions then acts only
+				// whenever something else happens to start a reconcile. With it, a
+				// taint change on a node reconciles the cluster whose pods (by this
+				// label) run there.
+				"--cluster-label-key-for-node-trigger=" + fdbClusterNameLabel,
 			},
 			// The operator reconciles the database, so it reaches it the way its
 			// processes reach each other and needs the same material.

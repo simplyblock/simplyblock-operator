@@ -70,3 +70,14 @@ func TestFoundationDBOperatorExcludesSoonAfterARecovery(t *testing.T) {
 			deployment.Spec.Template.Spec.Containers[0].Args, want)
 	}
 }
+
+// A cordon reaches the operator only if it watches nodes, which takes the
+// label its pods carry the cluster name under.
+func TestFoundationDBOperatorReconcilesOnNodeTaints(t *testing.T) {
+	deployment := fdbOperatorDeployment(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{}))
+	want := "--cluster-label-key-for-node-trigger=foundationdb.org/fdb-cluster-name"
+	if !slices.Contains(deployment.Spec.Template.Spec.Containers[0].Args, want) {
+		t.Errorf("the FoundationDB operator runs with %v, so a cordon never reaches it",
+			deployment.Spec.Template.Spec.Containers[0].Args)
+	}
+}
