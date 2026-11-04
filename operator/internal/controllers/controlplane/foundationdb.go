@@ -35,6 +35,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -42,6 +43,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/ptr"
@@ -105,8 +107,32 @@ func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 		fdbPodRoleBindingObject(ns),
 		fdbOperatorDeployment(cp),
 		foundationDBCluster(cp),
+		fdbDisruptionBudget(ns),
 	}
 	return append(objects, fdbPeerCertificate(cp)...)
+}
+
+// cordonTaint is the taint a cordon puts on a node, and so the first effect of
+// kubectl drain.
+const cordonTaint = "node.kubernetes.io/unschedulable"
+
+// fdbDisruptionBudget refuses every eviction of a FoundationDB pod. An evicted
+// log or storage process takes its role with it, and the database waits for a
+// replacement to start, on a node-local volume possibly never, before it
+// accepts writes again. Under this budget a drain waits instead, while the
+// operator replaces the processes on the cordoned node (taintReplacementOptions
+// above); it deletes the old pods itself, which a budget does not stop, and the
+// drain then finishes.
+func fdbDisruptionBudget(namespace string) *policyv1.PodDisruptionBudget {
+	return &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{Name: ComponentFDBCluster, Namespace: namespace},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			MaxUnavailable: ptr.To(intstr.FromInt32(0)),
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{
+				"foundationdb.org/fdb-cluster-name": ComponentFDBCluster,
+			}},
+		},
+	}
 }
 
 // foundationDBClusterScoped is the half of that set the garbage collector will
@@ -429,7 +455,18 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 			"useExplicitListenAddress":      true,
 			"minimumUptimeSecondsForBounce": int64(60),
 			"automationOptions": map[string]any{
-				"replacements": map[string]any{"enabled": true},
+				"replacements": map[string]any{
+					"enabled": true,
+					// A cordon -- the first thing kubectl drain does -- makes the
+					// operator replace the node's processes at once: it starts
+					// their replacements elsewhere, excludes the old ones, and
+					// deletes them. fdbDisruptionBudget keeps the drain from
+					// evicting them in the meantime.
+					"taintReplacementOptions": []any{map[string]any{
+						"key": cordonTaint, "durationInSeconds": int64(0),
+					}},
+					"taintReplacementTimeSeconds": int64(0),
+				},
 			},
 			"faultDomain": map[string]any{"key": "kubernetes.io/hostname"},
 			"labels": map[string]any{
