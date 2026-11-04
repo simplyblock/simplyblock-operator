@@ -31,6 +31,7 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -111,6 +112,11 @@ func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 	}
 	return append(objects, fdbPeerCertificate(cp)...)
 }
+
+// fdbMinimumRecoveryTimeForExclusion is the uptime, in seconds, the
+// FoundationDB operator waits for after a recovery before it excludes a process.
+// It still keeps an exclusion from following a recovery straight away.
+const fdbMinimumRecoveryTimeForExclusion = 30
 
 // cordonTaint is the taint a cordon puts on a node, and so the first effect of
 // kubectl drain.
@@ -305,7 +311,16 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 			Name:    "manager",
 			Image:   image(fdbOperatorImage),
 			Command: []string{"/manager"},
-			Args:    []string{"--health-probe-bind-address=:9443"},
+			Args: []string{
+				"--health-probe-bind-address=:9443",
+				// The operator excludes a process only once the database has been up
+				// this long since its last recovery. A replacement joining causes a
+				// recovery, so the default 120 s is spent on every replaced process
+				// before the old one can go: with a node's processes replaced one at
+				// a time, that alone approaches the 15 minutes an EKS node group
+				// update allows a drain.
+				"--minimum-recovery-time-for-exclusion=" + strconv.Itoa(fdbMinimumRecoveryTimeForExclusion),
+			},
 			// The operator reconciles the database, so it reaches it the way its
 			// processes reach each other and needs the same material.
 			Env: append([]corev1.EnvVar{{

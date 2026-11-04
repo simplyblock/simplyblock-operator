@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/utils/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -78,5 +79,41 @@ func TestWebAPIReadinessToleratesABriefDatabaseStall(t *testing.T) {
 	}
 	if probe.TimeoutSeconds >= probe.PeriodSeconds {
 		t.Errorf("the probe timeout (%ds) is not shorter than its period (%ds)", probe.TimeoutSeconds, probe.PeriodSeconds)
+	}
+}
+
+// A stopping pod keeps serving until its endpoint is gone everywhere, and has
+// time left afterwards to finish.
+func TestWebAPIKeepsServingWhileItIsRemovedFromTheService(t *testing.T) {
+	spec := webAPIDeployment(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{})).Spec.Template.Spec
+	hook := spec.Containers[0].Lifecycle
+	if hook == nil || hook.PreStop == nil || hook.PreStop.Exec == nil {
+		t.Fatal("the management API stops the moment it is told to, before the Service has dropped it")
+	}
+	if got := strings.Join(hook.PreStop.Exec.Command, " "); got != "sleep 10" {
+		t.Errorf("preStop runs %q, want sleep 10", got)
+	}
+	if spec.TerminationGracePeriodSeconds == nil || *spec.TerminationGracePeriodSeconds <= 10 {
+		t.Errorf("the grace period %v leaves no time after the preStop sleep", spec.TerminationGracePeriodSeconds)
+	}
+}
+
+// A drain takes one management API pod at a time.
+func TestWebAPIDisruptionBudgetAllowsOnePodAtATime(t *testing.T) {
+	cp := aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{})
+	var budget *policyv1.PodDisruptionBudget
+	for _, obj := range managementAPIObjects(cp) {
+		if b, ok := obj.(*policyv1.PodDisruptionBudget); ok && b.Name == ComponentWebAPI {
+			budget = b
+		}
+	}
+	if budget == nil {
+		t.Fatal("the management API has no PodDisruptionBudget")
+	}
+	if budget.Spec.MaxUnavailable == nil || budget.Spec.MaxUnavailable.IntValue() != 1 {
+		t.Errorf("the budget allows %v unavailable, want 1", budget.Spec.MaxUnavailable)
+	}
+	if got := budget.Spec.Selector.MatchLabels[appLabel]; got != ComponentWebAPI {
+		t.Errorf("the budget selects %q", got)
 	}
 }

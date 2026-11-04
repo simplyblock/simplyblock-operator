@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"slices"
 	"testing"
 
 	policyv1 "k8s.io/api/policy/v1"
@@ -56,5 +57,16 @@ func TestFoundationDBPodsCannotBeEvicted(t *testing.T) {
 	}
 	if got := budget.Spec.Selector.MatchLabels["foundationdb.org/fdb-cluster-name"]; got != ComponentFDBCluster {
 		t.Errorf("the budget selects cluster %q, want %q", got, ComponentFDBCluster)
+	}
+}
+
+// The operator waits less than its default 120 s after a recovery before it
+// excludes a process, so a node's replacements fit an EKS drain.
+func TestFoundationDBOperatorExcludesSoonAfterARecovery(t *testing.T) {
+	deployment := fdbOperatorDeployment(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{}))
+	want := "--minimum-recovery-time-for-exclusion=30"
+	if !slices.Contains(deployment.Spec.Template.Spec.Containers[0].Args, want) {
+		t.Errorf("the FoundationDB operator runs with %v, want %s",
+			deployment.Spec.Template.Spec.Containers[0].Args, want)
 	}
 }
