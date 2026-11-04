@@ -1216,7 +1216,7 @@ prometheus:
     # -- Path of the simplyblock Prometheus configuration.
     configPath: /etc/simplyblock-config/prometheus.yml
     # -- Additional volumes of the Prometheus pod: the scrape configuration, the object store
-    # configuration, and the TLS client certificate and CA.
+    # configuration, and the TLS CA.
     extraVolumes:
       - name: simplyblock-prometheus-config
         configMap:
@@ -1224,14 +1224,8 @@ prometheus:
       - name: objstore-config
         configMap:
           name: simplyblock-objstore-config
-      - name: prometheus-client-tls
-        secret:
-          secretName: simplyblock-prometheus-client-tls
-          optional: true
-      # The CA the control plane's certificate is verified against. It is its
-      # own volume because the client certificate above is issued only for
-      # mutual TLS, and a scrape that encrypts without verifying is one an
-      # in-cluster impersonator answers.
+      # The CA the control plane's certificate is verified against: a scrape
+      # that encrypts without verifying is one an in-cluster impersonator answers.
       - name: prometheus-ca-tls
         secret:
           secretName: simplyblock-ca-bundle-tls
@@ -1240,9 +1234,6 @@ prometheus:
     extraVolumeMounts:
       - name: simplyblock-prometheus-config
         mountPath: /etc/simplyblock-config
-      - name: prometheus-client-tls
-        mountPath: /etc/prometheus/certs
-        readOnly: true
       - name: prometheus-ca-tls
         mountPath: /etc/prometheus/ca
         readOnly: true
