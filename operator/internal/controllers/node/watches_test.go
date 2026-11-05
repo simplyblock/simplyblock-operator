@@ -48,7 +48,7 @@ func TestAClusterEventWakesItsOwnNodes(t *testing.T) {
 func TestAWorkerEventWakesTheNodesOnIt(t *testing.T) {
 	elsewhere := anOpsNode()
 	elsewhere.Name = "a-node-on-another-worker"
-	elsewhere.Spec.WorkerNode = "worker-9"
+	elsewhere.Spec.WorkerNode = opsElsewhere
 	r, _ := aSteadyNode(t, aControlPlane(), elsewhere)
 
 	requests := r.nodesOn(context.Background(), aWorker(opsWorker, true))
