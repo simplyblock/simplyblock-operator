@@ -552,9 +552,10 @@ spec:
                         description: |-
                           EnableCpuTopology turns on topology-aware CPU assignment on the storage
                           nodes. It is valid only when spec.environment is Vanilla, whose workers
-                          the environment does not describe. Every other environment decides it:
-                          OpenShift turns it on, and the rest leave it off. Unset on a Vanilla
-                          document leaves it off.
+                          the environment does not describe, or OpenShift, whose fleets differ in
+                          who owns the kubelet configuration (see EnableKubeletConfiguration).
+                          Every other environment decides it and leaves it off. Unset, a Vanilla
+                          document leaves it off and an OpenShift document turns it on.
                         type: boolean
                       enableDriveFormat:
                         description: |-
@@ -597,13 +598,20 @@ spec:
                       enableKubeletConfiguration:
                         description: |-
                           EnableKubeletConfiguration lets the storage nodes rewrite the kubelet
-                          configuration of their workers and restart the kubelet. It is valid only
-                          when spec.environment is Vanilla, for a fleet whose workers keep the
-                          configuration where the storage node cannot write it. Every other
-                          environment decides it: on for OpenShift, Rancher, and K3s, and off for
-                          Talos, EKS, GKE, AKS, and OKE, whose kubelet configuration is not
-                          writable or is rebuilt with every node. Unset on a Vanilla document
-                          turns it on.
+                          configuration of their workers and restart the kubelet. On OpenShift that
+                          is the KubeletConfig a storage node creates for its machine-config pool,
+                          and the rolling reboot of that pool which applying it takes.
+
+                          It is valid only when spec.environment is Vanilla, for a fleet whose
+                          workers keep the configuration where the storage node cannot write it, or
+                          OpenShift, for a fleet that manages the pool's KubeletConfig itself.
+                          Stating it false there leaves the kubelet as the fleet configured it: a
+                          storage node then neither creates a KubeletConfig nor waits for the pool
+                          to roll, so CPU pinning holds only if that kubelet already runs the static
+                          CPU manager. Every other environment decides it: on for Rancher and K3s,
+                          and off for Talos, EKS, GKE, AKS, and OKE, whose kubelet configuration is
+                          not writable or is rebuilt with every node. Unset, a Vanilla or OpenShift
+                          document turns it on.
                         type: boolean
                       enableNodeAffinity:
                         description: |-

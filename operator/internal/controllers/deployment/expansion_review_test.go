@@ -130,6 +130,45 @@ func TestAVanillaDocumentStatesItsNodeFlags(t *testing.T) {
 	}
 }
 
+// An OpenShift fleet that manages its pool's KubeletConfig itself keeps CPU
+// topology and turns the storage nodes' kubelet configuration off. The document
+// is what says so, and the expansion carries it to the nodes rather than the
+// environment's default.
+func TestAnOpenShiftDocumentCanLeaveTheKubeletToTheFleet(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentOpenShift
+		c.Spec.Cluster.EnableKubeletConfiguration = ptr.To(false)
+		c.Spec.Cluster.EnableCpuTopology = ptr.To(true)
+	})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if workload.EnableKubeletConfiguration == nil || *workload.EnableKubeletConfiguration {
+		t.Errorf("the kubelet flag is %v, want the document's false over OpenShift's true",
+			workload.EnableKubeletConfiguration)
+	}
+	if workload.EnableCpuTopology == nil || !*workload.EnableCpuTopology {
+		t.Errorf("the CPU topology flag is %v, want true", workload.EnableCpuTopology)
+	}
+	if workload.OpenShift == nil {
+		t.Error("stating the flags dropped the OpenShift block the environment sets")
+	}
+}
+
+// The flags are read for exactly the environments admission lets state them.
+func TestTheEnvironmentsThatStateNodeFlagsMatchAdmission(t *testing.T) {
+	for environment, want := range map[simplyblockv1alpha2.KubernetesEnvironment]bool{
+		simplyblockv1alpha2.KubernetesEnvironmentVanilla:   true,
+		simplyblockv1alpha2.KubernetesEnvironmentOpenShift: true,
+		simplyblockv1alpha2.KubernetesEnvironmentTalos:     false,
+		simplyblockv1alpha2.KubernetesEnvironmentEKS:       false,
+		simplyblockv1alpha2.KubernetesEnvironmentRancher:   false,
+	} {
+		if got := statesNodeFlags(environment); got != want {
+			t.Errorf("statesNodeFlags(%s) = %v, want %v", environment, got, want)
+		}
+	}
+}
+
 // A document that states neither leaves both to the environment, as before.
 func TestUnstatedNodeFlagsAreTheEnvironments(t *testing.T) {
 	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
