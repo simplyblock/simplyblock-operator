@@ -167,14 +167,22 @@ func (r *StorageNodeOpsReconciler) guardWaitingWindow(
 		// A remote node's worker is the peer site's to guard.
 		return nil
 	}
-	if !servingPhase(node.Status.Phase) {
+	if nodeAlreadyDown(node.Status.Status) {
 		// A node that is already down has no SPDK process to protect, and its
 		// cluster stays unready because of it, so a guard would hold the drain
 		// for as long as the node stays down — including the maintenance that
 		// is meant to bring it back. A guard raised while it was still up comes
 		// down, unless a sibling socket's window on the same worker needs it.
+		//
+		// Both budgets come down. The manager's own would otherwise stand until
+		// the window reached Releasing, which it cannot while the gate holds it
+		// on this very node: on a converged worker that is the same drain
+		// blocked one object over.
 		guarded, err := r.workerStillGuarded(ctx, ops, node)
 		if err != nil || guarded {
+			return err
+		}
+		if err := r.Workload.ReleaseSelfOn(ctx, node.Namespace, node.Spec.WorkerNode); err != nil {
 			return err
 		}
 		return r.Workload.AllowEviction(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode)
@@ -182,19 +190,22 @@ func (r *StorageNodeOpsReconciler) guardWaitingWindow(
 	return r.guardWorker(ctx, node)
 }
 
-// servingPhase reports whether a node in this phase may still have an SPDK
-// process a drain would kill. A node being provisioned or restarted counts: it
-// is on its way to serving, and the drain is what would stop it getting there.
-func servingPhase(phase simplyblockv1alpha2.StorageNodePhase) bool {
-	switch phase {
-	case simplyblockv1alpha2.StorageNodePhaseOffline,
-		simplyblockv1alpha2.StorageNodePhaseFailed,
-		simplyblockv1alpha2.StorageNodePhaseRemoving,
-		simplyblockv1alpha2.StorageNodePhaseRemoved:
-		return false
-	default:
-		return true
-	}
+// nodeAlreadyDown reports a node, by the lifecycle the control plane reports
+// for it, whose SPDK process is gone or going and which no drain can therefore
+// harm: shut down, or leaving the cluster.
+//
+// It is the control plane's status rather than the phase, because the phase
+// folds in nodes a drain would still hurt. A suspended node reads as Offline
+// and still runs SPDK — ShuttingDown sends it a graceful shutdown for that
+// reason, and so must not have let the drain kill it first. An unreachable or
+// timed-out node reads as Failed and is usually a blip; a guard that came down
+// on one would hand the pod to the drain's next retry, and going back up a pass
+// later is too late. Those keep their guard, and the window waits with them.
+//
+// An unknown or empty status is a node this cannot vouch for, and it is guarded.
+func nodeAlreadyDown(status string) bool {
+	return status == nodeStatusOffline || status == nodeStatusInShutdown ||
+		utils.NodeIsLeaving(status)
 }
 
 // guardWorker raises the budgets that make a drain of the node's worker wait.
