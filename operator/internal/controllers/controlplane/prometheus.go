@@ -262,8 +262,8 @@ func prometheusStatefulSet(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Statefu
 		},
 	}
 	// The same class as the database and the object store, for the same reason.
-	if fdb := foundationDBSpecOf(cp); fdb != nil && fdb.StorageClassName != "" {
-		claim.Spec.StorageClassName = ptr.To(fdb.StorageClassName)
+	if class := storageClassOf(cp); class != "" {
+		claim.Spec.StorageClassName = ptr.To(class)
 	}
 
 	return &appsv1.StatefulSet{

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -21,6 +22,17 @@ type InstallOptions struct {
 	// Namespace is where a namespaced add-on is installed instead of its
 	// upstream namespace. Empty keeps the upstream one.
 	Namespace string
+
+	// Tolerations are added to the pods of every Deployment and Job an add-on
+	// runs, so it schedules where the control plane does on a cluster whose
+	// nodes are all tainted. They are not part of the digest: changing them
+	// later does not reinstall an add-on.
+	Tolerations []corev1.Toleration
+
+	// AWSRoleARN annotates the ServiceAccount of an add-on that calls AWS
+	// APIs, the EBS CSI driver's controller, so it authenticates through that
+	// IAM role on Amazon EKS. Empty leaves it to the node's instance role.
+	AWSRoleARN string
 }
 
 var pinnedImage = regexp.MustCompile(`(?:image: "?|-image=)([^"\s]+@sha256:[0-9a-f]{64})`)

@@ -54,6 +54,9 @@ type Prerequisite struct {
 	probe schema.GroupVersionKind
 	// present overrides the probe for an add-on that serves no API.
 	present func(context.Context, client.Reader) (bool, error)
+	// presentProbe says what present looks for, for the message naming what
+	// is missing.
+	presentProbe string
 	// mutate adjusts the parsed objects against the live cluster before apply.
 	mutate func(context.Context, client.Reader, []*unstructured.Unstructured) error
 	// marker is the one object whose labels say who installed the add-on and
@@ -68,6 +71,10 @@ type Prerequisite struct {
 	// AutoUpgrade re-applies an outdated install of ours. Off for an add-on
 	// whose upgrades have their own supported path, which is left to a person.
 	AutoUpgrade bool
+
+	// awsRoleServiceAccount is the ServiceAccount annotated with
+	// InstallOptions.AWSRoleARN, for an add-on that calls AWS APIs.
+	awsRoleServiceAccount string
 
 	file string
 }
@@ -97,10 +104,35 @@ var (
 		AutoUpgrade: true,
 		file:        "manifests/snapshot-controller.yaml",
 	}
+	// EBSCSIDriver is the AWS EBS CSI driver, wanted on Amazon EKS only. Any
+	// CSIDriver ebs.csi.aws.com counts as present, the EKS add-on's included,
+	// and is never touched.
+	EBSCSIDriver = Prerequisite{
+		Name:                  "aws-ebs-csi-driver",
+		present:               ebsCSIDriverPresent,
+		presentProbe:          "the CSIDriver " + EBSCSIProvisioner,
+		marker:                objectRef{schema.GroupVersionKind{Group: "storage.k8s.io", Version: "v1", Kind: "CSIDriver"}, EBSCSIProvisioner, ""},
+		workload:              deploymentRef("kube-system", "ebs-csi-controller"),
+		AutoUpgrade:           true,
+		awsRoleServiceAccount: "ebs-csi-controller-sa",
+		file:                  "manifests/aws-ebs-csi-driver.yaml",
+	}
+	// EBSStorageClass is a gp3 StorageClass of the EBS CSI driver, wanted on
+	// Amazon EKS only. A gp3 class of the driver under any name counts as
+	// present; GP3StorageClassName says which one the control plane uses.
+	EBSStorageClass = Prerequisite{
+		Name:         "ebs-gp3-storageclass",
+		present:      gp3ClassPresent,
+		presentProbe: "a StorageClass using " + EBSCSIProvisioner + " with type gp3",
+		mutate:       defaultClassIfNone,
+		marker:       objectRef{schema.GroupVersionKind{Group: "storage.k8s.io", Version: "v1", Kind: "StorageClass"}, "simplyblock-gp3", ""},
+		file:         "manifests/ebs-gp3-storageclass.yaml",
+	}
 	LocalPathProvisioner = Prerequisite{
-		Name:    "local-path-provisioner",
-		present: localPathPresent,
-		mutate:  defaultLocalPathClassIfNone,
+		Name:         "local-path-provisioner",
+		present:      localPathPresent,
+		presentProbe: "a StorageClass using " + localPathProvisionerName,
+		mutate:       defaultClassIfNone,
 		// Installed beside the control plane, so the SCC and Pod Security
 		// grants an OpenShift install already gives that namespace cover it.
 		relocatable: true,
@@ -113,7 +145,7 @@ var (
 
 // All lists every prerequisite, in the order they are checked.
 func All() []Prerequisite {
-	return []Prerequisite{FoundationDBCRDs, CertManager, LocalPathProvisioner, SnapshotController}
+	return []Prerequisite{FoundationDBCRDs, CertManager, EBSCSIDriver, EBSStorageClass, LocalPathProvisioner, SnapshotController}
 }
 
 // Present reports whether the add-on is already on the cluster.
@@ -135,7 +167,7 @@ func (p Prerequisite) Present(ctx context.Context, c client.Reader, mapper meta.
 // Probe names what Present looks for, for a message that says what is missing.
 func (p Prerequisite) Probe() string {
 	if p.present != nil {
-		return "a StorageClass using " + localPathProvisionerName
+		return p.presentProbe
 	}
 	return p.probe.GroupVersion().String()
 }
@@ -179,6 +211,13 @@ func (p Prerequisite) objects(opts InstallOptions) ([]*unstructured.Unstructured
 		annotations[AnnotationDigest] = p.Digest(opts)
 		u.SetAnnotations(annotations)
 		rewriteImages(u, opts.ImageRegistry)
+		if err := addTolerations(u, opts.Tolerations); err != nil {
+			return nil, fmt.Errorf("%s: %w", p.file, err)
+		}
+		if opts.AWSRoleARN != "" && u.GetKind() == "ServiceAccount" && u.GetName() == p.awsRoleServiceAccount {
+			annotations[AnnotationAWSRoleARN] = opts.AWSRoleARN
+			u.SetAnnotations(annotations)
+		}
 		if p.relocatable && opts.Namespace != "" {
 			if u.GetKind() == kindNamespace {
 				continue
@@ -263,9 +302,9 @@ func localPathPresent(ctx context.Context, c client.Reader) (bool, error) {
 	return false, nil
 }
 
-// defaultLocalPathClassIfNone marks the installed class as the default on a
+// defaultClassIfNone marks the installed class as the default on a
 // cluster that has none, and never displaces an existing default.
-func defaultLocalPathClassIfNone(ctx context.Context, c client.Reader, objs []*unstructured.Unstructured) error {
+func defaultClassIfNone(ctx context.Context, c client.Reader, objs []*unstructured.Unstructured) error {
 	var classes storagev1.StorageClassList
 	if err := c.List(ctx, &classes); err != nil {
 		return fmt.Errorf("listing StorageClasses: %w", err)
