@@ -257,6 +257,13 @@ func (r *StorageNodeOpsReconciler) Reconcile(
 		return ctrl.Result{}, r.releaseLock(ctx, &ops)
 	}
 
+	// A maintenance window guards its worker before either gate can hold it,
+	// because the drain that raised it does not wait for admission
+	// (guardWaitingWindow).
+	if err := r.guardWaitingWindow(ctx, &ops); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// The cluster gate is the admission check of §7.1, and it is not the same as
 	// the lock. An operation that moves data into a cluster that is mid-rebalance
 	// or not active is either rejected by the control plane or succeeds into an
@@ -639,6 +646,11 @@ func (r *StorageNodeOpsReconciler) teardown(
 	} else if pending {
 		return ctrl.Result{RequeueAfter: opsRetry}, nil
 	}
+	// A window deleted before it finished leaves no guard behind. One that never
+	// ran used to hold nothing; it now holds its worker from the first pass
+	// (guardWaitingWindow), and a budget nobody removes makes the worker
+	// undrainable for good.
+	r.clearMaintenanceMarkers(ctx, ops)
 	if err := r.releaseLock(ctx, ops); err != nil {
 		return ctrl.Result{}, err
 	}
