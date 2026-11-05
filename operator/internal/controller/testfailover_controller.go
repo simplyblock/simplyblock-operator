@@ -663,9 +663,19 @@ func backendDelete(ctx context.Context, api *webapi.Client, what, endpoint strin
 // source is still the same backend volume the drill recovered from. It is
 // best-effort: when the projection cannot be re-read it does not fail the drill,
 // but a projection that shows a different handle is a genuine invariant breach.
+//
+// A group drill is checked against the group's members instead, since that is
+// where it recorded them from (resolveSourceGroup). A PV's handle names the
+// volume the PV was created on, which a fail-over or a relocate leaves behind:
+// the PV keeps the handle while the member is the volume the move made, so
+// comparing the two failed every drill of an application that had ever moved
+// (realbed, 2026-11-04).
 func (r *TestFailoverReconciler) sourceUnchanged(ctx context.Context, tf *simplyblockv1alpha2.TestFailover) bool {
 	if len(tf.Status.Clones) == 0 || tf.Status.Clones[0].SourceHandle == "" {
 		return true
+	}
+	if tf.Spec.Scope == simplyblockv1alpha2.TestFailoverScopeGroup {
+		return r.groupMembersUnchanged(ctx, tf)
 	}
 	pv, ok := r.readViewResult(ctx, tf, "src-pv")
 	if !ok {
@@ -676,6 +686,51 @@ func (r *TestFailoverReconciler) sourceUnchanged(ctx context.Context, tf *simply
 		return true
 	}
 	return handle == tf.Status.Clones[0].SourceHandle
+}
+
+// groupMembersUnchanged reports whether the group's members are still the
+// volumes the drill recorded, handle for handle, built as resolveSourceGroup
+// builds them. Like sourceUnchanged, it does not fail the drill when the
+// backend cannot be read; a group that is gone, or whose members differ, is a
+// breach.
+func (r *TestFailoverReconciler) groupMembersUnchanged(ctx context.Context, tf *simplyblockv1alpha2.TestFailover) bool {
+	srcUUID, err := r.resolveGroupSourceUUID(ctx, tf)
+	if err != nil {
+		return true
+	}
+	api := webapi.NewClient()
+	if secret, secErr := r.clusterSecret(ctx, tf.Namespace, tf.Spec.SourceCluster); secErr == nil && secret != "" {
+		ctx = webapi.WithBearerToken(ctx, secret)
+	}
+	group, err := api.GetConsistencyGroupByName(ctx, srcUUID, tf.Spec.SourceRef)
+	if err != nil {
+		return true
+	}
+	if group == nil {
+		return false
+	}
+	memberIDs, err := api.GetConsistencyGroupMembers(ctx, srcUUID, group.UUID)
+	if err != nil {
+		return true
+	}
+	memberVols, err := api.ResolveMemberVolumes(ctx, srcUUID, memberIDs)
+	if err != nil || len(memberVols) != len(memberIDs) {
+		return true
+	}
+	now := make(map[string]bool, len(memberIDs))
+	for _, id := range memberIDs {
+		v := memberVols[id]
+		now[srcUUID+":"+v.PoolID+":"+v.LvolID] = true
+	}
+	if len(now) != len(tf.Status.Clones) {
+		return false
+	}
+	for _, c := range tf.Status.Clones {
+		if !now[c.SourceHandle] {
+			return false
+		}
+	}
+	return true
 }
 
 // readViewResult reads an existing view's projected object without creating one.
