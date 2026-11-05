@@ -16,7 +16,7 @@ OPENSHIFT_VERSION ?= v4.19
 
 # Related images deployed by the operator (used in relatedImages for airgap support)
 CLUSTER_IMAGE_BASE ?= quay.io/simplyblock-io/simplyblock
-CLUSTER_IMAGE_TAG  ?= 26.4.0-beta4
+CLUSTER_IMAGE_TAG  ?= 26.4.0-beta5
 SPDK_IMAGE_BASE    ?= quay.io/simplyblock-io/ultra
 SPDK_IMAGE_TAG     ?= 26.4.0-beta4
 NUMA_PLUGIN_IMAGE_BASE ?= quay.io/simplyblock-io/numa-resource-plugin
