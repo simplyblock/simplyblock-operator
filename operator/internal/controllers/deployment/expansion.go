@@ -514,11 +514,14 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 	}
 
 	// Vanilla says nothing about how its workers are built, so a Vanilla
-	// document may state both flags itself. Admission refuses them on every
-	// other environment, and they are read only here, so a document admitted
-	// before that rule cannot override what its environment decided.
+	// document may state both flags itself. So may an OpenShift one: what it
+	// decides above is the default for a fleet that leaves the kubelet to the
+	// storage nodes, and a fleet that manages its pool's KubeletConfig itself
+	// states the kubelet flag false. Admission refuses them on every other
+	// environment, and they are read only here, so a document admitted before
+	// that rule cannot override what its environment decided.
 	if template := config.Spec.Cluster; template != nil &&
-		config.Spec.Environment == simplyblockv1alpha2.KubernetesEnvironmentVanilla {
+		statesNodeFlags(config.Spec.Environment) {
 		if template.EnableKubeletConfiguration != nil {
 			workload.EnableKubeletConfiguration = ptr.To(*template.EnableKubeletConfiguration)
 		}
@@ -527,6 +530,20 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		}
 	}
 	return workload
+}
+
+// statesNodeFlags reports whether a document in this environment may state the
+// kubelet and CPU topology flags itself. It is the admission rule's list, and
+// the two have to agree: a flag admitted and then ignored here is a setting the
+// reviewer approved that the cluster never got.
+func statesNodeFlags(environment simplyblockv1alpha2.KubernetesEnvironment) bool {
+	switch environment {
+	case simplyblockv1alpha2.KubernetesEnvironmentVanilla,
+		simplyblockv1alpha2.KubernetesEnvironmentOpenShift:
+		return true
+	default:
+		return false
+	}
 }
 
 // awaitCluster waits for the control plane to have created the cluster, which is
