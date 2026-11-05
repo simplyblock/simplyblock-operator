@@ -2,3 +2,10 @@ resources:
   - bases/simplyblock-operator.clusterserviceversion.yaml
   - ../default
   - ../samples
+
+# OLM owns the webhook serving certificate; see manager_olm_patch.yaml.
+patches:
+  - path: manager_olm_patch.yaml
+    target:
+      kind: Deployment
+      name: .*controller-manager

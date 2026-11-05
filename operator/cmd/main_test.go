@@ -114,6 +114,11 @@ func TestValidateTLSConfiguration(t *testing.T) {
 			groups:      []string{certManagerAPIGroup},
 		},
 		{
+			name:        "olm provider needs no api group",
+			tlsEnabled:  true,
+			tlsProvider: utils.TLSProviderOLM,
+		},
+		{
 			name:        "unsupported provider rejected",
 			tlsEnabled:  true,
 			tlsProvider: "vault",

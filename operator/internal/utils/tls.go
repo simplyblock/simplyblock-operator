@@ -7,8 +7,15 @@ import (
 )
 
 const (
-	TLSProviderOpenShift           = "openshift"
-	TLSProviderCertManager         = "cert-manager"
+	TLSProviderOpenShift   = "openshift"
+	TLSProviderCertManager = "cert-manager"
+	// TLSProviderOLM is valid for the operator's own SB_TLS_PROVIDER only, and
+	// only says where the admission webhooks' serving certificate comes from:
+	// OLM generates it from the CSV's webhookdefinitions, mounts it at
+	// WebhookCertDir, injects its CA into the webhook configurations, and
+	// rotates it. The operator then provisions nothing. It is not a provider a
+	// ControlPlane or a SimplyblockDriver can name.
+	TLSProviderOLM                 = "olm"
 	OpenShiftServingCertAnnotation = "service.beta.openshift.io/serving-cert-secret-name"
 	CertManagerClusterIssuerName   = "simplyblock-certificate-authority-issuer"
 )
@@ -38,6 +45,12 @@ func IsOpenShiftTLSProvider(provider string) bool {
 
 func IsCertManagerTLSProvider(provider string) bool {
 	return NormalizeTLSProvider(provider) == TLSProviderCertManager
+}
+
+// IsOLMTLSProvider reports whether OLM supplies the webhook serving certificate.
+// See TLSProviderOLM.
+func IsOLMTLSProvider(provider string) bool {
+	return NormalizeTLSProvider(provider) == TLSProviderOLM
 }
 
 func ServingCertServiceAnnotations(tlsEnabled bool, tlsProvider, secretName string) map[string]string {

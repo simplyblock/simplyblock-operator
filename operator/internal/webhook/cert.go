@@ -52,6 +52,17 @@ func SetupWebhookCertificate(mgr ctrl.Manager, namespace, tlsProvider string) (c
 	}
 	dnsName := fmt.Sprintf("%s.%s.svc", utils.WebhookServiceName, namespace)
 
+	// Under OLM the certificate is OLM's: it mounts its own serving cert at
+	// WebhookCertDir and owns every webhook configuration's caBundle. A rotator
+	// here would write a Secret the pod never mounts, find the files on disk
+	// still OLM's, and restart the pod on every start (RestartOnSecretRefresh).
+	if utils.IsOLMTLSProvider(tlsProvider) {
+		if err := mgr.Add(&mountedCertWaiter{certDir: utils.WebhookCertDir, ready: ready}); err != nil {
+			return nil, fmt.Errorf("add OLM webhook certificate waiter: %w", err)
+		}
+		return ready, nil
+	}
+
 	if utils.IsCertManagerTLSProvider(tlsProvider) {
 		if err := mgr.Add(&certManagerProvisioner{
 			client:    mgr.GetClient(),

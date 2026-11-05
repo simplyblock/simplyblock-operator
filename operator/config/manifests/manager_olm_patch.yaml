@@ -1,0 +1,26 @@
+# Applied to the bundle only (config/manifests), never to `make deploy` or the
+# chart. Under OLM the admission webhooks' serving certificate is OLM's: it is
+# generated from the CSV's webhookdefinitions, mounted at
+# /tmp/k8s-webhook-server/serving-certs, injected into every webhook
+# configuration, and rotated by OLM. SB_TLS_PROVIDER=olm tells the operator to
+# provision nothing and wait for those files, and the self-signed Secret volume
+# config/default mounts at the same path is dropped, since OLM replaces it anyway.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: system
+spec:
+  template:
+    spec:
+      containers:
+      - name: manager
+        env:
+        - name: SB_TLS_PROVIDER
+          value: olm
+        volumeMounts:
+        - mountPath: /tmp/k8s-webhook-server/serving-certs
+          $patch: delete
+      volumes:
+      - name: webhook-certs
+        $patch: delete

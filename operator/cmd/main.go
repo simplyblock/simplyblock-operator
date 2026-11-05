@@ -169,6 +169,11 @@ func validateTLSConfiguration(discoveryClient serverGroupsGetter, providerSet bo
 	if !providerSet {
 		return nil
 	}
+	// OLM installs the certificate itself and needs no API group from the
+	// cluster: the CSV that names this provider only installs where OLM runs.
+	if utils.IsOLMTLSProvider(tlsProvider) {
+		return nil
+	}
 	if !utils.TLSProviderSupported(tlsProvider) {
 		return fmt.Errorf("unsupported SB_TLS_PROVIDER %q", tlsProvider)
 	}
@@ -1315,7 +1320,8 @@ func main() {
 	// +kubebuilder:scaffold:builder
 
 	// Provision the admission webhooks' serving certificate at runtime (self-signed
-	// via cert-controller, or from cert-manager when SB_TLS_PROVIDER=cert-manager).
+	// via cert-controller, from cert-manager when SB_TLS_PROVIDER=cert-manager, or
+	// mounted by OLM when SB_TLS_PROVIDER=olm, as the bundle sets it).
 	// Conversion is not served here: it runs as its own Deployment
 	// (design-api-upgrade.md §6.1, cmd/conversion-webhook).
 	webhookReady, err := internalwebhook.SetupWebhookCertificate(mgr, operatorNamespace, tlsProvider)
