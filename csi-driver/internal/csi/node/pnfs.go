@@ -298,7 +298,7 @@ func (ns *Server) stagePNFSVolume(
 
 	// Read from the attached device, the only place it can come from: the
 	// target assigns it.
-	nguid, devicePath, err := ns.namespaceIdentity(ctx, req.GetVolumeId())
+	nguid, devicePath, err := namespaceIdentity(ctx, req.GetVolumeId())
 	if err != nil {
 		return err
 	}
@@ -330,8 +330,14 @@ func (ns *Server) hostNQN() nfsexport.HostNQNFunc {
 }
 
 // namespaceIdentity finds the attached namespace and reports its NGUID and
-// device node.
-func (ns *Server) namespaceIdentity(
+// device node, read fresh from sysfs on every call (see
+// nvme.SysfsDeviceResolver). A variable rather than a plain function, not for
+// staging -- it only ever had one caller -- but because the periodic alias
+// reconciliation in pnfs_prime.go reruns this same lookup on a timer for
+// every staged pNFS volume, to catch a device node changing under one after
+// a reconnect ensureDeviceAlias never ran again for (issue 10), and its tests
+// need to stand in for a live NVMe-oF attach.
+var namespaceIdentity = func(
 	ctx context.Context,
 	volumeHandle string,
 ) (nguid, devicePath string, err error) {

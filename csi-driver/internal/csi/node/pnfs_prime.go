@@ -198,8 +198,56 @@ func (p *layoutPrimer) isStagingMount(m nfsclient.Mount) bool {
 		strings.Contains(m.MountPoint, "/globalmount")
 }
 
+// deviceAlias refreshes the by-id alias the kernel resolves a pNFS block
+// layout through. A variable, not a direct call to ensureDeviceAlias, so
+// tests can observe a refresh without writing under /dev/disk/by-id.
+var deviceAlias = ensureDeviceAlias
+
+// reconcileDeviceAliases re-derives every live pNFS staging mount's current
+// (nguid, devicePath) from sysfs and refreshes its alias, every tick,
+// regardless of whether this mount's own transport reconnected.
+//
+// ensureDeviceAlias otherwise only ran once, at NodeStageVolume. A device
+// node can change under an already-staged volume without this process
+// running any code synchronously with it -- the background NVMe-oF path
+// repair in internal/reconnect, or healStack repairing an unhealthy stack on
+// a later publish, neither of which touches the alias -- because device
+// nodes are assigned in attach order and a reconnect elsewhere on the node
+// can hand a freed one to a different namespace entirely. Only re-checking
+// ground truth on a schedule catches that (issue 10). See
+// docs/device-event-unification-idea.md for the event-driven alternative
+// this stands in for, deferred for now because the complexity is not
+// justified by the gain: the observed failure was ten days stale, not a
+// sub-poll-interval race.
+//
+// The volume ID each mount resolves against is read off its own mount
+// point, this driver's own staging-path convention
+// (getStagingTargetPath: stagingParentPath + "/" + volumeID) -- a pNFS stage
+// never stashes one, so there is nothing else to read it back from.
+func reconcileDeviceAliases(ctx context.Context, primer *layoutPrimer, mounts []nfsclient.Mount) {
+	for _, m := range mounts {
+		if !primer.isStagingMount(m) {
+			continue
+		}
+		volumeID := filepath.Base(m.MountPoint)
+		nguid, devicePath, err := namespaceIdentity(ctx, volumeID)
+		if err != nil {
+			// No device currently backs this volume: total path loss, or
+			// caught between reconnects. Already reported elsewhere
+			// (internal/initiator's presence tracking); nothing new to alias.
+			klog.V(2).Infof("pnfs: no current device for %s, alias left as is: %v", volumeID, err)
+			continue
+		}
+		if _, err := deviceAlias(nguid, devicePath); err != nil {
+			klog.Warningf("pnfs: could not refresh the device alias for %s: %v", volumeID, err)
+		}
+	}
+}
+
 // KeepLayoutsPrimed probes every pNFS staging mount of this driver when it is
-// first seen and after every reconnect to its server, until ctx ends.
+// first seen and after every reconnect to its server, until ctx ends. It
+// also keeps every such mount's device alias current; see
+// reconcileDeviceAliases.
 func KeepLayoutsPrimed(ctx context.Context, driverName string) {
 	primer := newLayoutPrimer(driverName)
 	ticker := time.NewTicker(primeInterval)
@@ -209,6 +257,7 @@ func KeepLayoutsPrimed(ctx context.Context, driverName string) {
 		if err != nil {
 			klog.Warningf("pnfs: reading the NFS mounts to keep layouts primed: %v", err)
 		}
+		reconcileDeviceAliases(ctx, primer, mounts)
 		for _, path := range primer.due(mounts) {
 			go func(path string) {
 				// Blocks while the server is in its grace period, which is
