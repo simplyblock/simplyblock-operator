@@ -10,7 +10,9 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/csi-driver/internal/clusters"
+	"github.com/simplyblock/csi-driver/internal/controlplane"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
@@ -34,7 +36,14 @@ func (cs *Server) ValidateVolumeCapabilities(
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	if _, err := sbclient.VolumeInfo(ctx, spdkVol.VolumeID, ""); err != nil {
+	// A moved volume's handle names a source the move deleted: the volume
+	// serving it is the one to check.
+	err = cs.onActiveVolume(ctx, volumeID, spdkVol, sbclient,
+		func(h *lvol.Handle, c *controlplane.ClusterClient) error {
+			_, err := c.VolumeInfo(ctx, h.VolumeID, "")
+			return err
+		})
+	if err != nil {
 		return nil, classifyValidateVolumeCapabilitiesError(err)
 	}
 
@@ -77,7 +86,16 @@ func (cs *Server) ControllerGetVolume(
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 
-	volumeInfo, err := sbclient.VolumeInfo(ctx, spdkVol.VolumeID, "")
+	// A moved volume's handle names a source the move deleted, so its health
+	// is the health of the volume serving it; reporting the deleted source
+	// marked every failed-over or relocated volume abnormal ("not found").
+	var volumeInfo map[string]string
+	err = cs.onActiveVolume(ctx, volumeID, spdkVol, sbclient,
+		func(h *lvol.Handle, c *controlplane.ClusterClient) error {
+			info, err := c.VolumeInfo(ctx, h.VolumeID, "")
+			volumeInfo = info
+			return err
+		})
 	if err != nil {
 		klog.Errorf("failed to get spdkVol for %s: %v", volumeID, err)
 

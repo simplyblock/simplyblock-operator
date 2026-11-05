@@ -127,6 +127,54 @@ func TestCallsOnAMovedVolumesHandleReachTheTarget(t *testing.T) {
 	})
 }
 
+// The health and the capabilities of a moved volume are the target's: on the
+// source's handle, ControllerGetVolume reported every failed-over or relocated
+// volume abnormal ("LVol id or name not found"), and ValidateVolumeCapabilities
+// could not confirm it (realbed, 2026-11-02 and 2026-11-04).
+func TestTheHealthOfAMovedVolumeIsTheTargets(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("get volume", func(t *testing.T) {
+		mock := newMockSBCLI()
+		defer mock.Close()
+		cs := newTestControllerServer(t, mock)
+		movedVolume(mock)
+
+		got, err := cs.ControllerGetVolume(ctx, &csi.ControllerGetVolumeRequest{VolumeId: movedHandle})
+
+		if err != nil {
+			t.Fatalf("ControllerGetVolume: %v", err)
+		}
+		if c := got.GetStatus().GetVolumeCondition(); c.GetAbnormal() {
+			t.Errorf("the moved volume is reported abnormal: %s", c.GetMessage())
+		}
+		if id := got.GetVolume().GetVolumeId(); id != movedHandle {
+			t.Errorf("volume id = %q, want the handle asked about, %q", id, movedHandle)
+		}
+	})
+
+	t.Run("validate capabilities", func(t *testing.T) {
+		mock := newMockSBCLI()
+		defer mock.Close()
+		cs := newTestControllerServer(t, mock)
+		movedVolume(mock)
+
+		got, err := cs.ValidateVolumeCapabilities(ctx, &csi.ValidateVolumeCapabilitiesRequest{
+			VolumeId: movedHandle,
+			VolumeCapabilities: []*csi.VolumeCapability{{
+				AccessMode: &csi.VolumeCapability_AccessMode{Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER},
+			}},
+		})
+
+		if err != nil {
+			t.Fatalf("ValidateVolumeCapabilities: %v", err)
+		}
+		if got.GetConfirmed() == nil {
+			t.Error("the capabilities of the moved volume were not confirmed")
+		}
+	})
+}
+
 // U-117: a handle whose volume still exists is not redirected, and the
 // relationship endpoint is not called.
 func TestAHandleWhoseVolumeExistsIsNotRedirected(t *testing.T) {
