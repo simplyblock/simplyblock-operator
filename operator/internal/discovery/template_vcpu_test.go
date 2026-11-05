@@ -1,6 +1,6 @@
 // What the draft proposes for vcpuCount, against what the control plane admits.
 //
-// The draft gives SPDK 10% of the logical CPUs of the socket the storage node
+// The draft gives SPDK 15% of the logical CPUs of the socket the storage node
 // runs on, at least 5, shared among the storage nodes of that socket. It never
 // asks for more than the socket has beyond the two CPUs the node preparation
 // reserves for the kubelet, because the SPDK pod requests its whole core count
@@ -34,13 +34,13 @@ func TestTheDraftVCPUCountIsAShareOfTheSocket(t *testing.T) {
 		logical, physical, nps int
 		want                   int32
 	}{
-		{"a large socket gets a tenth, not all of it", 320, 160, 1, 32},
-		{"64 CPUs", 64, 32, 1, 6},
-		{"a tenth below the default minimum is raised to it", 16, 8, 1, DefaultMinimumVCPUCount},
+		{"a large socket gets 15%, not all of it", 320, 160, 1, 48},
+		{"64 CPUs", 64, 32, 1, 9},
+		{"15% below the default minimum is raised to it", 16, 8, 1, DefaultMinimumVCPUCount},
 		{"the default minimum still fits beside the reserve", 8, 8, 1, 5},
 		{"capped at what the socket has beyond the reserve", 6, 6, 1, 4},
 		{"too small for the reserve, floored at the API minimum", 5, 5, 1, MinimumVCPUCount},
-		{"two storage nodes share the socket's tenth", 320, 160, 2, 16},
+		{"two storage nodes share the socket's 15%", 320, 160, 2, 24},
 		{"two storage nodes each keep the default minimum", 64, 32, 2, DefaultMinimumVCPUCount},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

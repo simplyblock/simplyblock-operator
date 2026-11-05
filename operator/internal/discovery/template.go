@@ -46,10 +46,10 @@ const (
 	// applications; handing SPDK the whole socket starves all of them, and on a
 	// large socket asks for more allocatable CPU than any worker has left, so
 	// the SPDK pod never schedules.
-	DefaultVCPUSharePercent = 10
+	DefaultVCPUSharePercent = 15
 
 	// DefaultMinimumVCPUCount is the smallest vcpuCount a draft proposes on its
-	// own. Ten percent of a small socket is too little for a storage node to
+	// own. Fifteen percent of a small socket is too little for a storage node to
 	// carry its pollers.
 	DefaultMinimumVCPUCount = 5
 
