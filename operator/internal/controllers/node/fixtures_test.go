@@ -47,6 +47,10 @@ const (
 	opsWorker    = "worker-1"
 	opsTarget    = "worker-2"
 
+	// opsElsewhere is a worker none of the fixtures' objects are on: where another
+	// node's window runs, or where the manager runs when it is not on opsWorker.
+	opsElsewhere = "worker-9"
+
 	// opsNodeID is the backend node behind the object, and opsPeerID a second
 	// node of the same cluster — the one a drain moves volumes to.
 	opsNodeID = "node-1111"

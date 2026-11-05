@@ -106,7 +106,7 @@ func TestAWindowTheClusterGateHoldsGuardsItsWorker(t *testing.T) {
 }
 
 func TestAWindowWaitingForASlotGuardsItsWorker(t *testing.T) {
-	other, itsNode := aRunningWindow("another-window", "another-node", "worker-9")
+	other, itsNode := aRunningWindow("another-window", "another-node", opsElsewhere)
 	spdk := anSpdkPod(opsWorker, "4420")
 	r, apiClient := anOpsWorld(t, aControlPlane(), other, itsNode, spdk)
 
@@ -148,7 +148,7 @@ func TestDeletingAFinishedWindowLeavesTheNextWindowsSelfBudget(t *testing.T) {
 	next := aWindow("next-window")
 	next.Status.Phase = simplyblockv1alpha2.StorageNodeOpsPhaseRunning
 	next.Status.Step = kubeStep(stepShuttingDown)
-	finished, itsNode := aRunningWindow("finished-window", "finished-node", "worker-9")
+	finished, itsNode := aRunningWindow("finished-window", "finished-node", opsElsewhere)
 	finished.Status.Phase = simplyblockv1alpha2.StorageNodeOpsPhaseSucceeded
 	finished.Finalizers = []string{OpsFinalizer}
 	r, apiClient := anOpsWorld(t, aControlPlane(), next, finished, itsNode)
@@ -226,8 +226,8 @@ func TestAWaitingWindowOnANodeAlreadyDownHoldsNoDrain(t *testing.T) {
 // from under a window on the manager's own worker.
 func TestAGuardStandingDownElsewhereLeavesTheManagersBudget(t *testing.T) {
 	r, apiClient, _ := aWaitingWorld(t)
-	r.Workload.ManagerNode = "worker-9"
-	if err := r.Workload.ProtectSelf(context.Background(), opsNamespace, "worker-9"); err != nil {
+	r.Workload.ManagerNode = opsElsewhere
+	if err := r.Workload.ProtectSelf(context.Background(), opsNamespace, opsElsewhere); err != nil {
 		t.Fatalf("holding the manager for worker-9's window: %v", err)
 	}
 
