@@ -90,13 +90,13 @@ func (h *FoundationDBEvictionHandler) Handle(ctx context.Context, req admission.
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("read processGroupsToRemove: %w", err))
 	}
-	present := processGroupsInStatus(cluster)
+	present, replacing := processGroupsInStatus(cluster)
 
 	if slices.Contains(toRemove, processGroup) {
 		return retryLater(fmt.Sprintf("FoundationDB process group %s is being replaced", processGroup))
 	}
 	for _, other := range toRemove {
-		if present[other] {
+		if replacing[other] {
 			return retryLater(fmt.Sprintf(
 				"FoundationDB process group %s is waiting for %s to be replaced first", processGroup, other))
 		}
@@ -124,19 +124,35 @@ func (h *FoundationDBEvictionHandler) Handle(ctx context.Context, req admission.
 	return retryLater(fmt.Sprintf("FoundationDB process group %s is being replaced", processGroup))
 }
 
-// processGroupsInStatus is the set of process groups the FoundationDB operator
-// still reports, which is every group not yet fully removed.
-func processGroupsInStatus(cluster *unstructured.Unstructured) map[string]bool {
+// processGroupsInStatus reads the process groups the FoundationDB operator
+// still reports: present is every group not yet fully removed, and replacing
+// the ones not yet fully excluded.
+//
+// A group is done for this handler once it is excluded: its roles and data have
+// moved and its pod is being deleted. The operator keeps it in its status until
+// it includes the old address again, which waits for the database to have been
+// up for --minimum-recovery-time-for-inclusion (600 s by default); a drain
+// waiting for that would sit idle for most of the 15 minutes an EKS node group
+// update allows it.
+func processGroupsInStatus(cluster *unstructured.Unstructured) (present, replacing map[string]bool) {
 	groups, _, _ := unstructured.NestedSlice(cluster.Object, "status", "processGroups")
-	present := make(map[string]bool, len(groups))
+	present = make(map[string]bool, len(groups))
+	replacing = make(map[string]bool, len(groups))
 	for _, g := range groups {
-		if m, ok := g.(map[string]any); ok {
-			if id, ok := m["processGroupID"].(string); ok {
-				present[id] = true
-			}
+		m, ok := g.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, ok := m["processGroupID"].(string)
+		if !ok {
+			continue
+		}
+		present[id] = true
+		if excluded, _ := m["exclusionTimestamp"].(string); excluded == "" {
+			replacing[id] = true
 		}
 	}
-	return present
+	return present, replacing
 }
 
 // retryLater refuses an eviction the way a PodDisruptionBudget does: 429,

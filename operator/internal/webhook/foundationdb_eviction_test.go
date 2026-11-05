@@ -3,6 +3,7 @@ package webhook
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	admissionv1 "k8s.io/api/admission/v1"
@@ -34,7 +35,8 @@ func fdbPod(name, processGroup string) *corev1.Pod {
 }
 
 // fdbCluster is the FoundationDBCluster with the process groups toRemove in
-// its spec and present in its status.
+// its spec and present in its status. An ID ending in "+excluded" is present
+// and fully excluded.
 func fdbCluster(toRemove []string, present ...string) *unstructured.Unstructured {
 	cluster := &unstructured.Unstructured{}
 	cluster.SetGroupVersionKind(foundationDBClusterGVK)
@@ -45,7 +47,11 @@ func fdbCluster(toRemove []string, present ...string) *unstructured.Unstructured
 	}
 	groups := make([]any, 0, len(present))
 	for _, id := range present {
-		groups = append(groups, map[string]any{"processGroupID": id})
+		group := map[string]any{"processGroupID": strings.TrimSuffix(id, "+excluded")}
+		if strings.HasSuffix(id, "+excluded") {
+			group["exclusionTimestamp"] = "2026-11-05T07:48:05Z"
+		}
+		groups = append(groups, group)
 	}
 	_ = unstructured.SetNestedSlice(cluster.Object, groups, "status", "processGroups")
 	return cluster
@@ -152,5 +158,18 @@ func TestOtherEvictionsAreAllowed(t *testing.T) {
 		if resp := evict(t, h, pod, false); !resp.Allowed {
 			t.Errorf("eviction of %s refused: %+v", pod, resp.Result)
 		}
+	}
+}
+
+// A process group that is fully excluded no longer holds the next one back,
+// although the operator still reports it until it includes its address again.
+func TestAnExcludedProcessGroupNoLongerBlocksTheNext(t *testing.T) {
+	h, c := evictionHandler(t, fdbPod("simplyblock-fdb-cluster-log-1", "log-1"),
+		fdbCluster([]string{"storage-1"}, "storage-1+excluded", "log-1"))
+
+	wantRetry(t, evict(t, h, "simplyblock-fdb-cluster-log-1", false))
+	got := toRemoveOf(t, c)
+	if len(got) != 2 || got[1] != "log-1" {
+		t.Errorf("processGroupsToRemove = %v, want [storage-1 log-1]", got)
 	}
 }
