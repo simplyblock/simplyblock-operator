@@ -22,6 +22,11 @@ import (
 const (
 	evictionNamespace = "simplyblock"
 	evictionCluster   = "simplyblock-fdb-cluster"
+
+	logGroup     = "log-1"
+	storageGroup = "storage-1"
+	logPod       = "simplyblock-fdb-cluster-" + logGroup
+	storagePod   = "simplyblock-fdb-cluster-" + storageGroup
 )
 
 func fdbPod(name, processGroup string) *corev1.Pod {
@@ -96,19 +101,19 @@ func wantRetry(t *testing.T, resp admission.Response) {
 // The first eviction of a FoundationDB pod is refused and starts its
 // replacement.
 func TestEvictingAFoundationDBPodStartsItsReplacement(t *testing.T) {
-	h, c := evictionHandler(t, fdbPod("simplyblock-fdb-cluster-log-1", "log-1"), fdbCluster(nil, "log-1", "log-2"))
+	h, c := evictionHandler(t, fdbPod(logPod, logGroup), fdbCluster(nil, logGroup, "log-2"))
 
-	wantRetry(t, evict(t, h, "simplyblock-fdb-cluster-log-1", false))
-	if got := toRemoveOf(t, c); len(got) != 1 || got[0] != "log-1" {
+	wantRetry(t, evict(t, h, logPod, false))
+	if got := toRemoveOf(t, c); len(got) != 1 || got[0] != logGroup {
 		t.Errorf("processGroupsToRemove = %v, want [log-1]", got)
 	}
 }
 
 // Retries while the replacement runs are refused and change nothing.
 func TestEvictionIsRefusedWhileTheReplacementRuns(t *testing.T) {
-	h, c := evictionHandler(t, fdbPod("simplyblock-fdb-cluster-log-1", "log-1"), fdbCluster([]string{"log-1"}, "log-1"))
+	h, c := evictionHandler(t, fdbPod(logPod, logGroup), fdbCluster([]string{logGroup}, logGroup))
 
-	wantRetry(t, evict(t, h, "simplyblock-fdb-cluster-log-1", false))
+	wantRetry(t, evict(t, h, logPod, false))
 	if got := toRemoveOf(t, c); len(got) != 1 {
 		t.Errorf("processGroupsToRemove = %v, want it unchanged", got)
 	}
@@ -117,11 +122,11 @@ func TestEvictionIsRefusedWhileTheReplacementRuns(t *testing.T) {
 // A second process group waits until the first is gone: one replacement at a
 // time.
 func TestASecondEvictionWaitsForTheFirstReplacement(t *testing.T) {
-	h, c := evictionHandler(t, fdbPod("simplyblock-fdb-cluster-storage-1", "storage-1"),
-		fdbCluster([]string{"log-1"}, "log-1", "storage-1"))
+	h, c := evictionHandler(t, fdbPod(storagePod, storageGroup),
+		fdbCluster([]string{logGroup}, logGroup, storageGroup))
 
-	wantRetry(t, evict(t, h, "simplyblock-fdb-cluster-storage-1", false))
-	if got := toRemoveOf(t, c); len(got) != 1 || got[0] != "log-1" {
+	wantRetry(t, evict(t, h, storagePod, false))
+	if got := toRemoveOf(t, c); len(got) != 1 || got[0] != logGroup {
 		t.Errorf("processGroupsToRemove = %v, want [log-1] only", got)
 	}
 }
@@ -129,20 +134,20 @@ func TestASecondEvictionWaitsForTheFirstReplacement(t *testing.T) {
 // A finished replacement no longer blocks the next one, and is dropped from
 // the list.
 func TestAFinishedReplacementIsDroppedFromTheList(t *testing.T) {
-	h, c := evictionHandler(t, fdbPod("simplyblock-fdb-cluster-storage-1", "storage-1"),
-		fdbCluster([]string{"log-1"}, "storage-1", "log-9"))
+	h, c := evictionHandler(t, fdbPod(storagePod, storageGroup),
+		fdbCluster([]string{logGroup}, storageGroup, "log-9"))
 
-	wantRetry(t, evict(t, h, "simplyblock-fdb-cluster-storage-1", false))
-	if got := toRemoveOf(t, c); len(got) != 1 || got[0] != "storage-1" {
+	wantRetry(t, evict(t, h, storagePod, false))
+	if got := toRemoveOf(t, c); len(got) != 1 || got[0] != storageGroup {
 		t.Errorf("processGroupsToRemove = %v, want [storage-1]", got)
 	}
 }
 
 // A dry run changes nothing.
 func TestADryRunEvictionStartsNothing(t *testing.T) {
-	h, c := evictionHandler(t, fdbPod("simplyblock-fdb-cluster-log-1", "log-1"), fdbCluster(nil, "log-1"))
+	h, c := evictionHandler(t, fdbPod(logPod, logGroup), fdbCluster(nil, logGroup))
 
-	wantRetry(t, evict(t, h, "simplyblock-fdb-cluster-log-1", true))
+	wantRetry(t, evict(t, h, logPod, true))
 	if got := toRemoveOf(t, c); len(got) != 0 {
 		t.Errorf("a dry run set processGroupsToRemove to %v", got)
 	}
@@ -164,12 +169,12 @@ func TestOtherEvictionsAreAllowed(t *testing.T) {
 // A process group that is fully excluded no longer holds the next one back,
 // although the operator still reports it until it includes its address again.
 func TestAnExcludedProcessGroupNoLongerBlocksTheNext(t *testing.T) {
-	h, c := evictionHandler(t, fdbPod("simplyblock-fdb-cluster-log-1", "log-1"),
-		fdbCluster([]string{"storage-1"}, "storage-1+excluded", "log-1"))
+	h, c := evictionHandler(t, fdbPod(logPod, logGroup),
+		fdbCluster([]string{storageGroup}, storageGroup+"+excluded", logGroup))
 
-	wantRetry(t, evict(t, h, "simplyblock-fdb-cluster-log-1", false))
+	wantRetry(t, evict(t, h, logPod, false))
 	got := toRemoveOf(t, c)
-	if len(got) != 2 || got[1] != "log-1" {
+	if len(got) != 2 || got[1] != logGroup {
 		t.Errorf("processGroupsToRemove = %v, want [storage-1 log-1]", got)
 	}
 }
