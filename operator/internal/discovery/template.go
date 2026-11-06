@@ -94,6 +94,11 @@ type TemplateOptions struct {
 	// fleet's disks do not say which one. journalDeviceFor is what it does, and
 	// what it does not.
 	ForceJournalDevice bool
+
+	// Network is the network the discovery run itself states, in its
+	// spec.discover.network. It overrides both the seed's and the one the plan
+	// would propose.
+	Network *simplyblockv1alpha2.StorageNetworkSpec
 }
 
 // ClusterTemplateFor proposes the cluster for a plan.
@@ -116,6 +121,11 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 	}
 
 	switch {
+	case opts.Network != nil:
+		out.Template.Network = opts.Network.DeepCopy()
+		out.Notes = append(out.Notes, "network is the one this run states in spec.discover.network, "+
+			"rather than the one derived from the workers' interfaces. A cluster's network is fixed when it "+
+			"is created, so this is the line to correct now or never")
 	case seed.Network != nil:
 		out.Template.Network = seed.Network.DeepCopy()
 		out.Notes = append(out.Notes, statedNote("network", "the one the installation stated"))
