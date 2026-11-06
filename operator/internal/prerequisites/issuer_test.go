@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -59,6 +60,40 @@ func TestIssuerChainIsCreatedWhereMissing(t *testing.T) {
 		t.Error("the CA bundle Certificate was not created in the control plane's namespace")
 	} else if s, _, _ := unstructured.NestedString(b.Object, "spec", "secretName"); s != "simplyblock-ca-bundle-tls" {
 		t.Errorf("CA bundle secretName = %q, want simplyblock-ca-bundle-tls, which the driver mounts", s)
+	}
+}
+
+// A ClusterIssuer reads its CA Secret from cert-manager's cluster resource
+// namespace, so an explicit --cluster-resource-namespace wins over the
+// controller's own namespace.
+func TestCACertificateFollowsClusterResourceNamespace(t *testing.T) {
+	d := certManagerController("security")
+	d.Spec.Template.Spec.Containers = []corev1.Container{{
+		Name: "cert-manager-controller",
+		Args: []string{"--v=2", "--cluster-resource-namespace=pki"},
+	}}
+	c := fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).WithObjects(d).Build()
+	if err := EnsureCertManagerIssuerChain(context.Background(), c, "simplyblock"); err != nil {
+		t.Fatalf("EnsureCertManagerIssuerChain: %v", err)
+	}
+	if get(t, c, certificateGVK, "pki", caCertificateName) == nil {
+		t.Error("the CA Certificate was not created in the cluster resource namespace")
+	}
+}
+
+// The chart's default, $(POD_NAMESPACE), means the controller's own namespace.
+func TestPodNamespaceReferenceMeansControllerNamespace(t *testing.T) {
+	d := certManagerController("certmanager")
+	d.Spec.Template.Spec.Containers = []corev1.Container{{
+		Name: "cert-manager-controller",
+		Args: []string{"--cluster-resource-namespace=$(POD_NAMESPACE)"},
+	}}
+	c := fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).WithObjects(d).Build()
+	if err := EnsureCertManagerIssuerChain(context.Background(), c, "simplyblock"); err != nil {
+		t.Fatalf("EnsureCertManagerIssuerChain: %v", err)
+	}
+	if get(t, c, certificateGVK, "certmanager", caCertificateName) == nil {
+		t.Error("the CA Certificate was not created in the controller's namespace")
 	}
 }
 

@@ -1669,12 +1669,12 @@ tls:
     createSelfSignedIssuer: true
     # -- ClusterIssuer the chart mints its CA certificate from.
     cluster-issuer: selfsigned
-    # Namespace where cert-manager is installed. The chart's CA secret is placed
-    # here so that the ClusterIssuer can locate it (ClusterIssuers always read CA
-    # secrets from the cert-manager controller namespace).
-    # -- Namespace cert-manager runs in. The chart places its CA Secret there so the ClusterIssuer can
-    # read it.
-    namespace: cert-manager
+    # Namespace the chart's CA Secret goes in, so the ClusterIssuer can read it.
+    # Empty finds cert-manager's controller and uses its cluster resource
+    # namespace; set it where the cluster cannot be read, as with helm template.
+    # -- cert-manager's cluster resource namespace. Empty detects it from the cert-manager controller
+    # Deployment, and falls back to `cert-manager` when rendering offline.
+    namespace: ""
 
   # Mutual TLS (clients present and verify certificates). Only allowed when
   # provider == cert-manager. On by default, with tls.enabled: the chart issues a

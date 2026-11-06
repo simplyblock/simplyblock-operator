@@ -166,3 +166,33 @@ serving-cert annotation).
 simplyblock-csi-link-tls
 {{- end -}}
 {{- end -}}
+
+{{/*
+cert-manager's cluster resource namespace, where a ClusterIssuer reads its CA
+Secret. tls.cert-manager.namespace wins; otherwise the controller Deployment is
+found by its labels and its --cluster-resource-namespace, else its own
+namespace, is used. Offline (helm template) it falls back to cert-manager.
+The operator resolves it the same way in internal/prerequisites/issuer.go.
+*/}}
+{{- define "simplyblock.certManagerNamespace" -}}
+{{- $ns := index .Values.tls "cert-manager" "namespace" -}}
+{{- if not $ns -}}
+{{-   range (lookup "apps/v1" "Deployment" "" "").items -}}
+{{-     $l := .metadata.labels | default dict -}}
+{{-     if and (not $ns) (eq (get $l "app.kubernetes.io/name") "cert-manager") (eq (get $l "app.kubernetes.io/component") "controller") -}}
+{{-       $ns = .metadata.namespace -}}
+{{-       range .spec.template.spec.containers -}}
+{{-         range .args -}}
+{{-           if hasPrefix "--cluster-resource-namespace=" . -}}
+{{-             $v := trimPrefix "--cluster-resource-namespace=" . -}}
+{{-             if and $v (not (hasPrefix "$(" $v)) -}}
+{{-               $ns = $v -}}
+{{-             end -}}
+{{-           end -}}
+{{-         end -}}
+{{-       end -}}
+{{-     end -}}
+{{-   end -}}
+{{- end -}}
+{{- $ns | default "cert-manager" -}}
+{{- end -}}

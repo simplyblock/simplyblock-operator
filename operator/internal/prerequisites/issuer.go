@@ -8,6 +8,7 @@ package prerequisites
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -33,7 +34,8 @@ const (
 	// presents to the management API; the bundle's Deployment mounts it.
 	OperatorClientSecretName = "simplyblock-operator-client-tls"
 
-	defaultCertManagerNamespace = "cert-manager"
+	defaultCertManagerNamespace  = "cert-manager"
+	clusterResourceNamespaceFlag = "--cluster-resource-namespace="
 )
 
 // EnsureCertManagerIssuerChain creates the issuer chain unless a CA
@@ -93,8 +95,9 @@ func EnsureCertManagerIssuerChain(ctx context.Context, c client.Client, namespac
 	return nil
 }
 
-// certManagerNamespace is where cert-manager's controller runs, found by its
-// standard labels, or cert-manager's default namespace when none is found.
+// certManagerNamespace is cert-manager's cluster resource namespace, where a
+// ClusterIssuer reads its CA Secret: the controller's explicit
+// --cluster-resource-namespace, else the namespace it runs in, else the default.
 func certManagerNamespace(ctx context.Context, c client.Reader) (string, error) {
 	var deployments appsv1.DeploymentList
 	if err := c.List(ctx, &deployments, client.MatchingLabels{
@@ -103,10 +106,20 @@ func certManagerNamespace(ctx context.Context, c client.Reader) (string, error) 
 	}); err != nil {
 		return "", fmt.Errorf("finding cert-manager's controller: %w", err)
 	}
-	if len(deployments.Items) > 0 {
-		return deployments.Items[0].Namespace, nil
+	if len(deployments.Items) == 0 {
+		return defaultCertManagerNamespace, nil
 	}
-	return defaultCertManagerNamespace, nil
+	d := deployments.Items[0]
+	for _, ctr := range d.Spec.Template.Spec.Containers {
+		for _, arg := range ctr.Args {
+			ns, ok := strings.CutPrefix(arg, clusterResourceNamespaceFlag)
+			// $(POD_NAMESPACE), the chart's default, is the controller's own.
+			if ok && ns != "" && !strings.HasPrefix(ns, "$(") {
+				return ns, nil
+			}
+		}
+	}
+	return d.Namespace, nil
 }
 
 func certManagerObject(kind, namespace, name string, spec map[string]any) *unstructured.Unstructured {
