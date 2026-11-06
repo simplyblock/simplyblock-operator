@@ -137,6 +137,7 @@ type DeviceFilter struct {
 // +kubebuilder:validation:XValidation:rule="!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.deviceFilter) || !(has(self.deviceFilter.pcieAllowList) || has(self.deviceFilter.pcieDenyList) || has(self.deviceFilter.pcieModel))",message="the PCI filters select NVMe devices and cannot be combined with enableLogicalBlockDevices; use blockAllowList and blockDenyList"
 // +kubebuilder:validation:XValidation:rule="(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.deviceFilter) || !(has(self.deviceFilter.blockAllowList) || has(self.deviceFilter.blockDenyList))",message="blockAllowList and blockDenyList select logical block devices and require enableLogicalBlockDevices"
 // +kubebuilder:validation:XValidation:rule="!(has(self.workers) && size(self.workers) > 0 && has(self.nodeSelector) && size(self.nodeSelector) > 0)",message="spec.discover names workers and also carries a nodeSelector; state one or the other"
+// +kubebuilder:validation:XValidation:rule="!has(self.network) || !has(self.network.spdkOnHostNetwork) || !self.network.spdkOnHostNetwork || !has(self.networkAttachment)",message="network.spdkOnHostNetwork cannot be combined with networkAttachment, which attaches the storage nodes through Multus"
 type DiscoverSpec struct {
 	// ConfigName is the ClusterDeploymentConfig to write. Absent generates one
 	// from the run's timestamp, so that a second discovery never overwrites the
@@ -283,6 +284,13 @@ type DiscoverSpec struct {
 	// host networking, and the run says so with a Warning event.
 	// +optional
 	NetworkAttachment *NetworkAttachmentSelection `json:"networkAttachment,omitempty"`
+
+	// Network states the cluster network the draft proposes. Absent, a run
+	// proposes spdkOnHostNetwork, binding the host's primary NIC on workers with
+	// no additional interface. Set podNetwork: true to run the SPDK pods on the
+	// pod network instead. A cluster's network is fixed once it is created.
+	// +optional
+	Network *StorageNetworkSpec `json:"network,omitempty"`
 
 	// DeviceFilter narrows which of an inspected worker's devices reach the
 	// draft. Empty reports every device the worker advertises, including the one

@@ -94,6 +94,11 @@ type TemplateOptions struct {
 	// fleet's disks do not say which one. journalDeviceFor is what it does, and
 	// what it does not.
 	ForceJournalDevice bool
+
+	// Network is the network the discovery run itself states, in its
+	// spec.discover.network. It overrides both the seed's and the one the plan
+	// would propose.
+	Network *simplyblockv1alpha2.StorageNetworkSpec
 }
 
 // ClusterTemplateFor proposes the cluster for a plan.
@@ -116,6 +121,11 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 	}
 
 	switch {
+	case opts.Network != nil:
+		out.Template.Network = opts.Network.DeepCopy()
+		out.Notes = append(out.Notes, "network is the one this run states in spec.discover.network, "+
+			"rather than the one derived from the workers' interfaces. A cluster's network is fixed when it "+
+			"is created, so this is the line to correct now or never")
 	case seed.Network != nil:
 		out.Template.Network = seed.Network.DeepCopy()
 		out.Notes = append(out.Notes, statedNote("network", "the one the installation stated"))
@@ -125,8 +135,8 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 			"draft have a data interface. Each group names its own NICs. A cluster's network is fixed when it is "+
 			"created, so this is the line to correct now or never")
 	case plan.Unattached:
-		out.Template.Network = podNetworkOnly()
-		out.Notes = append(out.Notes, "network is the pod network, because no worker has a data interface of its own. "+
+		out.Template.Network = hostNetwork()
+		out.Notes = append(out.Notes, "network runs the SPDK pods on the host network, on the primary NIC, because no worker has a data interface of its own. "+
 			"A cluster's network is fixed when it is created, so this is the line to correct now or never")
 	}
 
@@ -895,11 +905,6 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
-}
-
-// podNetworkOnly is the network of a cluster that serves data on the pod network.
-func podNetworkOnly() *simplyblockv1alpha2.StorageNetworkSpec {
-	return &simplyblockv1alpha2.StorageNetworkSpec{PodNetwork: true}
 }
 
 // hostNetwork is the network of a cluster whose SPDK pods bind host NICs. The NICs

@@ -49,6 +49,15 @@ spec:
     {{ $field }}: true
     {{- end }}
     {{- end }}
+    {{- with $d.network }}
+    {{- if and .podNetwork .spdkOnHostNetwork }}
+    {{- fail "discovery.network.podNetwork and discovery.network.spdkOnHostNetwork are exclusive; set one." }}
+    {{- end }}
+    {{- if or .podNetwork .spdkOnHostNetwork }}
+    network:
+      {{ if .podNetwork }}podNetwork{{ else }}spdkOnHostNetwork{{ end }}: true
+    {{- end }}
+    {{- end }}
     {{- /* Host networking unless management names an attachment; data alone describes nothing deployable. */}}
     {{- with $d.networkAttachment }}
     {{- if and .data (not .management) }}

@@ -14,7 +14,7 @@ spec:
     minHugePagesSize: 16G
     name: discovered-discover-fail-05-cluster
     network:
-      podNetwork: true
+      spdkOnHostNetwork: true
     stripe:
       dataChunks: 1
       parityChunks: 1

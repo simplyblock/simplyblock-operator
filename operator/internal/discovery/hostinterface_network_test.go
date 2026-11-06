@@ -1,12 +1,13 @@
 // Tests that a draft states the data NICs it chose as spec.cluster.network host
-// interfaces, keeps the management NIC in the group's mgmtInterface, and puts a
-// fleet with no data NIC on the pod network.
+// interfaces, keeps the management NIC in the group's mgmtInterface, and keeps a
+// fleet with no data NIC on the host network unless the run states otherwise.
 package discovery
 
 import (
 	"fmt"
 	"testing"
 
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
@@ -73,7 +74,9 @@ func TestAWorkerWithOtherInterfaceNamesKeepsItsOwnGroup(t *testing.T) {
 	}
 }
 
-func TestAFleetWithNoDataInterfaceIsDraftedOnThePodNetwork(t *testing.T) {
+// Regression: a fleet with no data NIC was drafted on the pod network. With no
+// network stated, the host network is the default, binding the primary NIC.
+func TestAFleetWithNoDataInterfaceIsDraftedOnTheHostNetwork(t *testing.T) {
 	plan := Planner{}.Plan(uniformFleet(3), nil)
 
 	template, err := ClusterTemplateFor("c", plan, TemplateOptions{})
@@ -81,7 +84,23 @@ func TestAFleetWithNoDataInterfaceIsDraftedOnThePodNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	network := template.Template.Network
-	if network == nil || !network.PodNetwork {
-		t.Fatalf("the template's network is %+v, want the pod network", network)
+	if network == nil || !network.SpdkOnHostNetwork || network.PodNetwork {
+		t.Fatalf("the template's network is %+v, want the host network", network)
+	}
+}
+
+// A run that states the pod network gets it, whatever the workers carry.
+func TestAStatedPodNetworkOverridesTheHostNetwork(t *testing.T) {
+	plan := Planner{}.Plan(storageNICFleet(3), nil)
+
+	template, err := ClusterTemplateFor("c", plan, TemplateOptions{
+		Network: &simplyblockv1alpha2.StorageNetworkSpec{PodNetwork: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	network := template.Template.Network
+	if network == nil || !network.PodNetwork || network.SpdkOnHostNetwork {
+		t.Fatalf("the template's network is %+v, want the stated pod network", network)
 	}
 }

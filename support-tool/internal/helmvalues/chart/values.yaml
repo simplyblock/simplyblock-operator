@@ -289,6 +289,14 @@ discovery:
   # fails. The draft notes which disk was taken.
   forceJournalDevice: false
 
+  # The cluster network the draft proposes. With neither set, the SPDK pods run on
+  # the host network. The two are exclusive.
+  network:
+    # -- Runs the SPDK pods on the host network. The default when neither is set.
+    spdkOnHostNetwork: false
+    # -- Runs the SPDK pods on the pod network instead of the host network.
+    podNetwork: false
+
   # Attach the proposed storage nodes through Multus NetworkAttachmentDefinitions
   # instead of host networking. Both are names of definitions in the run's
   # namespace. With neither set, the storage nodes stay on host networking. With
