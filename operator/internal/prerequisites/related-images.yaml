@@ -29,3 +29,16 @@
   image: quay.io/simplyblock-io/prometheus:v2.51.0@sha256:5ccad477d0057e62a7cd1981ffcc43785ac10c5a35522dc207466ff7e7ec845f
 - name: thanos
   image: quay.io/simplyblock-io/thanos:v0.31.0@sha256:e7d337d6ac2aea3f0f9314ec9830291789e16e2b480b9d353be02d05ce7f2a7e
+# Amazon EKS only: the AWS EBS CSI driver the operator installs when the cluster has none.
+- name: ebs-csi-attacher
+  image: public.ecr.aws/csi-components/csi-attacher:v4.13.0-eksbuild.2@sha256:cadd3f0523aa96f1eb829ca2ec50163e6c76df8957fa3b5461a5fa49ea1125d3
+- name: ebs-csi-node-driver-registrar
+  image: public.ecr.aws/csi-components/csi-node-driver-registrar:v2.18.0-eksbuild.2@sha256:18cc159a05a6522323d782ec3fbd9db6a75d39ffcb4862959731dde37b5e7a5c
+- name: ebs-csi-provisioner
+  image: public.ecr.aws/csi-components/csi-provisioner:v6.4.0-eksbuild.2@sha256:f52a6698f1ca5d3f422c3e0f1a242f819a1b2f47e24aaf88c3c7e961b0463522
+- name: ebs-csi-resizer
+  image: public.ecr.aws/csi-components/csi-resizer:v2.3.0-eksbuild.2@sha256:46410bcf1b45a9bc42edb64db7b52b2792edb4582653373d7d04a48cbf1b890a
+- name: ebs-livenessprobe
+  image: public.ecr.aws/csi-components/livenessprobe:v2.20.0-eksbuild.2@sha256:8e6b3565bfce2e20a7e0e19a16f174f3ff270a43cd70386febafac715cc4a703
+- name: ebs-aws-ebs-csi-driver
+  image: public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.67.1@sha256:96f37d60fdd966c319e39ce41e2a13256d67b52ae3e6202b7de713d38ea1085f

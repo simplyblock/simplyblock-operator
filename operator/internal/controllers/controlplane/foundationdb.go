@@ -421,7 +421,7 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 			},
 		},
 		"volumeClaimTemplate": map[string]any{
-			"spec": volumeClaimSpec(fdb),
+			"spec": volumeClaimSpec(storageClassOf(cp)),
 		},
 	}
 	if selector := foundationDBNodeSelector(cp); len(selector) > 0 {
@@ -532,15 +532,15 @@ func fdbContainer(fdb *simplyblockv1alpha2.FoundationDBSpec, peerTLS bool) map[s
 // class leaves the field out rather than writing an empty string, which is the
 // difference between the cluster's default class and a class literally named
 // nothing.
-func volumeClaimSpec(fdb *simplyblockv1alpha2.FoundationDBSpec) map[string]any {
+func volumeClaimSpec(class string) map[string]any {
 	spec := map[string]any{
 		"accessModes": []any{string(corev1.ReadWriteOnce)},
 		"resources": map[string]any{
 			"requests": map[string]any{"storage": fdbCoordinatorDisk},
 		},
 	}
-	if fdb != nil && fdb.StorageClassName != "" {
-		spec["storageClassName"] = fdb.StorageClassName
+	if class != "" {
+		spec["storageClassName"] = class
 	}
 	return spec
 }

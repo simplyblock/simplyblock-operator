@@ -31,6 +31,16 @@ func foundationDBSpecOf(cp *simplyblockv1alpha2.ControlPlane) *simplyblockv1alph
 	return nil
 }
 
+// storageClassOf is the StorageClass of the control plane's volumes: the one
+// the spec names, else the one the operator chose on Amazon EKS and recorded
+// in the status. Empty leaves the claims to the cluster's default class.
+func storageClassOf(cp *simplyblockv1alpha2.ControlPlane) string {
+	if fdb := foundationDBSpecOf(cp); fdb != nil && fdb.StorageClassName != "" {
+		return fdb.StorageClassName
+	}
+	return cp.Status.StorageClassName
+}
+
 // apiReplicas is how many management API instances to run. Two is the default
 // and the number the phases assume: a single instance makes Degraded unreachable
 // for this component and turns every restart into an outage.

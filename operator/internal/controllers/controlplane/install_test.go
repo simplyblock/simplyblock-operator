@@ -567,7 +567,7 @@ func TestTheCoordinatorCountAndTheRedundancyModeAgree(t *testing.T) {
 func TestAnUnsetStorageClassIsAbsentRatherThanEmpty(t *testing.T) {
 	cp := localControlPlane()
 
-	claim := volumeClaimSpec(foundationDBSpecOf(cp))
+	claim := volumeClaimSpec(storageClassOf(cp))
 
 	if _, present := claim["storageClassName"]; present {
 		t.Error("storageClassName is written for a spec that states none")
@@ -576,7 +576,7 @@ func TestAnUnsetStorageClassIsAbsentRatherThanEmpty(t *testing.T) {
 	cp.Spec.Source.Local.FoundationDB = &simplyblockv1alpha2.FoundationDBSpec{
 		StorageClassName: "fast",
 	}
-	claim = volumeClaimSpec(foundationDBSpecOf(cp))
+	claim = volumeClaimSpec(storageClassOf(cp))
 	if claim["storageClassName"] != "fast" {
 		t.Errorf("storageClassName = %v, want fast", claim["storageClassName"])
 	}

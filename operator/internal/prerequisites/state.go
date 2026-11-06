@@ -41,7 +41,7 @@ type objectRef struct {
 
 // deploymentRef names the Deployment an add-on runs as.
 func deploymentRef(namespace, name string) *objectRef {
-	return &objectRef{schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, name, namespace}
+	return &objectRef{schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: kindDeployment}, name, namespace}
 }
 
 func crdRef(name string) objectRef {
