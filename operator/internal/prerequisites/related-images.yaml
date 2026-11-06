@@ -13,7 +13,7 @@
 - name: cert-manager-controller
   image: quay.io/simplyblock-io/cert-manager-controller:v1.16.2@sha256:0eec9c89554011c9aa16eea88ab89a91b32dc8d6eb96307b7fc2dcd6bbbc7fcf
 - name: cert-manager-webhook
-  image: quay.io/jetstack/cert-manager-webhook:v1.16.2@sha256:64c4d5dd55d7d00e5b162e21887f9bffbf1e531ee0668eaf801fae9bd54e536d
+  image: quay.io/simplyblock-io/cert-manager-webhook:v1.16.2@sha256:64c4d5dd55d7d00e5b162e21887f9bffbf1e531ee0668eaf801fae9bd54e536d
 - name: snapshot-controller
   image: quay.io/simplyblock-io/snapshot-controller:v8.2.0@sha256:9dade8f2f3ab29e3919c41b343f8d77b12178ac51f25574d7ed2d45a3e3ef69d
 - name: fdb-kubernetes-operator

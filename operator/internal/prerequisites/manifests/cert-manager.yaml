@@ -13054,7 +13054,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: cert-manager-webhook
-          image: "quay.io/jetstack/cert-manager-webhook:v1.16.2@sha256:64c4d5dd55d7d00e5b162e21887f9bffbf1e531ee0668eaf801fae9bd54e536d"
+          image: "quay.io/simplyblock-io/cert-manager-webhook:v1.16.2@sha256:64c4d5dd55d7d00e5b162e21887f9bffbf1e531ee0668eaf801fae9bd54e536d"
           imagePullPolicy: IfNotPresent
           args:
           - --v=2
