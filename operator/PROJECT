@@ -72,4 +72,22 @@ resources:
   kind: BackupRestore
   path: github.com/simplyblock/simplyblock-operator/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: simplyblock.io
+  group: storage
+  kind: S3Bucket
+  path: github.com/simplyblock/simplyblock-operator/api/v1alpha2
+  version: v1alpha2
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: simplyblock.io
+  group: storage
+  kind: ObjectStore
+  path: github.com/simplyblock/simplyblock-operator/api/v1alpha2
+  version: v1alpha2
 version: "3"

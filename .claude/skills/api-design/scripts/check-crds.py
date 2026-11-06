@@ -40,8 +40,11 @@ from pathlib import Path
 # Every directory a CRD type can be declared in. The group is versioned, so a
 # kind that is new starts at the current version rather than in v1alpha1, and an
 # audit that read only the first directory would stop covering a kind on the day
-# it moved.
-API_DIRS = ("operator/api/v1alpha1", "operator/api/v1alpha2")
+# it moved. objectstore.simplyblock.io is a second API group entirely
+# (design-bucket-provisioning.md §7.1), nested under its own group name rather
+# than bare api/v1alpha1 the way storage.simplyblock.io's first version was,
+# because a second group arriving after the first always nests this way.
+API_DIRS = ("operator/api/v1alpha1", "operator/api/v1alpha2", "operator/api/objectstore/v1alpha1")
 
 # The one the repository is located by. Any of them would do, and the first is
 # the one that has always been there.
