@@ -297,6 +297,51 @@ other_operator_running() {
     return 1
 }
 
+# In a namespace of its own, everything is simplyblock's except what Kubernetes
+# and OpenShift put into every namespace. A namespace shared with other
+# operators (openshift-operators for an OperatorHub install, or any namespace
+# with another operator's CSV in it) keeps everything that is not recognizably
+# simplyblock's: by name, or by the chart's or the operator's labels. Workloads,
+# PVCs, Secrets, and RBAC there are removed one by one, never with --all.
+shared_namespace=false
+if [[ "$NAMESPACE" == openshift-operators || "$NAMESPACE" == operators ]]; then
+    shared_namespace=true
+elif olm_installed; then
+    if ! foreign_csvs=$($KUBECTL get "clusterserviceversions.$OLM_GROUP" -n "$NAMESPACE" \
+        -l '!olm.copiedFrom' -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null); then
+        shared_namespace=true  # unknown is treated as shared
+    elif awk -v pkg="${OLM_PACKAGE}." 'NF && index($0, pkg) != 1 {found=1} END {exit !found}' <<< "$foreign_csvs"; then
+        shared_namespace=true
+    fi
+fi
+
+simplyblock_owned() {
+    local kind="$1" name="$2" labels
+    [[ "$name" == *simplyblock* || "$name" == sb-* || "$name" == metrics-apiserver-cert ]] && return 0
+    labels=$($KUBECTL get "$kind" "$name" -n "$NAMESPACE" -o jsonpath='{.metadata.labels}' 2>/dev/null) || return 1
+    [[ "$labels" == *simplyblock* ]]
+}
+
+# Deletes every $1 in the namespace whose name does not match $2, and in a
+# shared namespace only those that are simplyblock's.
+delete_all_but() {
+    local kind="$1" keep="$2" name
+    for name in $($KUBECTL get "$kind" -n "$NAMESPACE" \
+        -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true); do
+        [[ "$name" =~ $keep ]] && continue
+        if $shared_namespace && ! simplyblock_owned "$kind" "$name"; then
+            continue
+        fi
+        info "Deleting $kind $name..."
+        $KUBECTL delete "$kind" "$name" -n "$NAMESPACE" --ignore-not-found \
+            --timeout=60s >/dev/null 2>&1 || warn "  Could not delete $kind $name"
+    done
+}
+
+if $shared_namespace; then
+    warn "Namespace '$NAMESPACE' is shared with other operators; removing only simplyblock's objects from it."
+fi
+
 # Read now, while the StorageClusters exist: step 2 deletes them, and step 4
 # finds the clusters' StorageClasses by these UUIDs.
 CLUSTER_UUIDS=$($KUBECTL get "storageclusters.$CRD_GROUP" -n "$NAMESPACE" \
@@ -621,16 +666,23 @@ fi
 # ---------------------------------------------------------------------------
 section "Removing remaining workloads in namespace '$NAMESPACE'"
 
-for kind in pod daemonset deployment statefulset replicaset; do
-    count=$($KUBECTL get "$kind" -n "$NAMESPACE" --ignore-not-found --no-headers 2>/dev/null | wc -l | tr -d ' ')
-    if [[ "$count" -gt 0 ]]; then
-        info "Deleting ${count} ${kind}(s)..."
-        $KUBECTL delete "$kind" --all -n "$NAMESPACE" \
-            --ignore-not-found --timeout=60s 2>/dev/null || true
-    else
-        info "No ${kind}s found."
-    fi
-done
+if $shared_namespace; then
+    # Controllers before their pods, or a deleted pod is replaced.
+    for kind in daemonset deployment statefulset replicaset pod; do
+        delete_all_but "$kind" '^$'
+    done
+else
+    for kind in pod daemonset deployment statefulset replicaset; do
+        count=$($KUBECTL get "$kind" -n "$NAMESPACE" --ignore-not-found --no-headers 2>/dev/null | wc -l | tr -d ' ')
+        if [[ "$count" -gt 0 ]]; then
+            info "Deleting ${count} ${kind}(s)..."
+            $KUBECTL delete "$kind" --all -n "$NAMESPACE" \
+                --ignore-not-found --timeout=60s 2>/dev/null || true
+        else
+            info "No ${kind}s found."
+        fi
+    done
+fi
 
 # A pod whose containers have all exited but which kubelet still has not removed
 # is held by a volume it cannot unmount: with the CSI driver uninstalled, no node
@@ -685,6 +737,9 @@ pvcs=$($KUBECTL get pvc -n "$NAMESPACE" --ignore-not-found -o jsonpath='{.items[
 pvs_to_delete=()
 
 for pvc in $pvcs; do
+    if $shared_namespace && ! simplyblock_owned pvc "$pvc"; then
+        continue
+    fi
     pv=$($KUBECTL get pvc "$pvc" -n "$NAMESPACE" --ignore-not-found \
         -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)
     [[ -n "$pv" ]] && pvs_to_delete+=("$pv")
@@ -786,28 +841,9 @@ section "Removing generated certificates, secrets, and RBAC in '$NAMESPACE'"
 # Certificates and Issuers go first, or cert-manager reissues the Secrets.
 CERT_GROUP="cert-manager.io"
 if $KUBECTL get crd "certificates.$CERT_GROUP" >/dev/null 2>&1; then
-    for kind in "certificates.$CERT_GROUP" "issuers.$CERT_GROUP"; do
-        for name in $($KUBECTL get "$kind" -n "$NAMESPACE" \
-            -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true); do
-            info "Deleting $kind $name..."
-            $KUBECTL delete "$kind" "$name" -n "$NAMESPACE" --ignore-not-found \
-                --timeout=30s >/dev/null 2>&1 || warn "  Could not delete $kind $name"
-        done
-    done
+    delete_all_but "certificates.$CERT_GROUP" '^$'
+    delete_all_but "issuers.$CERT_GROUP" '^$'
 fi
-
-# Everything in the namespace is simplyblock's, except what Kubernetes and
-# OpenShift put into every namespace.
-delete_all_but() {
-    local kind="$1" keep="$2" name
-    for name in $($KUBECTL get "$kind" -n "$NAMESPACE" \
-        -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true); do
-        [[ "$name" =~ $keep ]] && continue
-        info "Deleting $kind $name..."
-        $KUBECTL delete "$kind" "$name" -n "$NAMESPACE" --ignore-not-found \
-            --timeout=30s >/dev/null 2>&1 || warn "  Could not delete $kind $name"
-    done
-}
 delete_all_but secret '^(default|builder|deployer|pipeline)-(token|dockercfg)-'
 delete_all_but configmap '^(kube-root-ca\.crt|openshift-service-ca\.crt)$'
 delete_all_but service '^$'
