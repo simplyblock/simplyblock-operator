@@ -1,0 +1,64 @@
+# One S3 gateway: its Deployment, its Service, and that Service's serving
+# certificate.
+#
+# Two fields carry the weight. spec.buckets is what every bucket created
+# through the S3 API is provisioned with, because a CreateBucket request
+# carries no size or storage class of its own -- so the capacity below is
+# per bucket, not a total, and the storage class must select the pnfs
+# fstype or no bucket ever leaves Pending.
+#
+# spec.envFrom is the other. The operator injects GATEWAY_OBJECTSTORE,
+# GATEWAY_NAMESPACE, GATEWAY_BUCKET_STORAGE_CLASS, GATEWAY_BUCKET_CAPACITY_BYTES,
+# GATEWAY_ROOT_DIR and the TLS paths itself; it injects no credentials. The
+# gateway refuses to start without ROOT_ACCESS_KEY_ID and
+# ROOT_SECRET_ACCESS_KEY, so the Secret below is required, not decorative.
+# Vault-backed IAM is opted into in the same Secret by setting
+# VGW_IAM_VAULT_ENDPOINT_URL; without it the gateway serves the root account
+# alone.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: objectstore-sample-credentials
+type: Opaque
+stringData:
+  ROOT_ACCESS_KEY_ID: simplyblock
+  ROOT_SECRET_ACCESS_KEY: simplyblock
+---
+# The StorageClass every bucket's backing volume is created against. pnfs is
+# what makes the volume RWX, which is what lets every gateway pod of this
+# ObjectStore see every bucket.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: simplyblock-pnfs
+provisioner: csi.simplyblock.io
+parameters:
+  csi.storage.k8s.io/fstype: pnfs
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+volumeBindingMode: Immediate
+---
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ObjectStore
+metadata:
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: objectstore-sample
+spec:
+  image: simplyblock/gateway:s3
+  port: 9000
+  replicas: 1
+  # cert-manager, not the OpenShift default: the OpenShift provider issues
+  # nothing of its own and relies on the service-ca-operator honoring an
+  # annotation, which a plain Kubernetes cluster has nobody to do. Selecting
+  # cert-manager here makes the operator create a Certificate against the
+  # ClusterIssuer simplyblock-certificate-authority-issuer, which must
+  # already exist.
+  tlsProvider: cert-manager
+  envFrom:
+  - secretRef:
+      name: objectstore-sample-credentials
+  buckets:
+    storageClassName: simplyblock-pnfs
+    capacityBytes: 10737418240
