@@ -255,6 +255,10 @@ func (e *recordingExports) EnsureExport(_ context.Context, _ string, spec Export
 
 func (e *recordingExports) DeleteExport(context.Context, string) (bool, error) { return true, nil }
 
+func (e *recordingExports) MetadataServerConfigured(context.Context) (bool, error) {
+	return true, nil
+}
+
 func (e *recordingExports) SetExportSize(context.Context, string, int64) (bool, error) {
 	return true, nil
 }
