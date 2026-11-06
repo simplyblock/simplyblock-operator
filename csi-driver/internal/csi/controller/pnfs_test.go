@@ -178,6 +178,11 @@ type fakeRegistry struct {
 	exists    bool
 	sized     []string
 	size      int64
+	noMDS     bool
+}
+
+func (f *fakeRegistry) MetadataServerConfigured(context.Context) (bool, error) {
+	return !f.noMDS, nil
 }
 
 func (f *fakeRegistry) EnsureExport(_ context.Context, name string, _ ExportSpec) (ExportRecord, error) {

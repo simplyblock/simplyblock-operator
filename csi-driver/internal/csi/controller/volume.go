@@ -53,6 +53,12 @@ func (cs *Server) CreateVolume(
 		}
 	}
 
+	if pnfs {
+		if err := cs.refuseWithoutMetadataServer(ctx); err != nil {
+			return nil, err
+		}
+	}
+
 	selection, err := cs.resolveClusterSelection(ctx, req)
 	if err != nil {
 		klog.Errorf("failed to resolve cluster selection for volume %s: %v", volumeID, err)

@@ -27,6 +27,13 @@ var nfsExportGVR = schema.GroupVersionResource{
 	Resource: "nfsexports",
 }
 
+// simplyblockDriverGVR is read only to learn whether spec.pnfs.mds is set.
+var simplyblockDriverGVR = schema.GroupVersionResource{
+	Group:    "storage.simplyblock.io",
+	Version:  "v1alpha2",
+	Resource: "simplyblockdrivers",
+}
+
 // dynamicExportRegistry creates and reads NFSExport records.
 type dynamicExportRegistry struct {
 	client dynamic.Interface
@@ -112,6 +119,7 @@ func recordFrom(object *unstructured.Unstructured) ExportRecord {
 		ServiceAddress: get("status", "serviceAddress"),
 		ExportPath:     get("spec", "exportPath"),
 		Message:        get("status", "message"),
+		Deleting:       object.GetDeletionTimestamp() != nil,
 	}
 }
 
@@ -175,4 +183,23 @@ func (r *dynamicExportRegistry) SetExportSize(
 		return false, fmt.Errorf("recording the size of export %s: %w", name, err)
 	}
 	return true, nil
+}
+
+// MetadataServerConfigured reports whether any SimplyblockDriver sets
+// spec.pnfs.mds. Listed across namespaces: the driver does not know which one
+// the operator watches, and a false "configured" only falls back to the
+// operator refusing the export, as before.
+func (r *dynamicExportRegistry) MetadataServerConfigured(ctx context.Context) (bool, error) {
+	listed, err := r.client.Resource(simplyblockDriverGVR).Namespace(metav1.NamespaceAll).
+		List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, fmt.Errorf("listing SimplyblockDrivers: %w", err)
+	}
+	for i := range listed.Items {
+		mds, found, _ := unstructured.NestedFieldNoCopy(listed.Items[i].Object, "spec", "pnfs", "mds")
+		if found && mds != nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }

@@ -18,6 +18,8 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/klog/v2"
 
 	"github.com/simplyblock/atlas/lvol"
 	export "github.com/simplyblock/atlas/nfsexport"
@@ -129,6 +131,9 @@ type ExportRecord struct {
 	ServiceAddress string
 	ExportPath     string
 	Message        string
+	// Deleting is set once the record carries a deletion timestamp: the
+	// operator is tearing it down and it will never become Ready.
+	Deleting bool
 }
 
 // ExportRegistry is how the controller creates and reads export records. An
@@ -142,6 +147,11 @@ type ExportRegistry interface {
 	// is not the moment it is deleted: the operator holds a finalizer while it
 	// tears the host down.
 	DeleteExport(ctx context.Context, name string) (gone bool, err error)
+
+	// MetadataServerConfigured reports whether any SimplyblockDriver sets
+	// spec.pnfs.mds. Without one no export can ever reach Ready, so a pNFS
+	// claim is refused before its backing volume is allocated.
+	MetadataServerConfigured(ctx context.Context) (bool, error)
 
 	// SetExportSize records a volume's new capacity on the export serving it,
 	// and reports whether there was one. The write bumps the record's
@@ -265,6 +275,12 @@ func (cs *Server) createPNFSVolume(
 	if err != nil {
 		return nil, err
 	}
+	if record.Phase == "Degraded" || record.Deleting {
+		// The export will never serve this volume. Returning a final error
+		// with the backing volume still allocated leaks it: no PV is ever
+		// created, so DeleteVolume is never called (SFAM-2845).
+		return nil, cs.rollBackPNFSVolume(ctx, csiVolume.GetVolumeId(), name, record)
+	}
 	if err := checkExportReady(name, record); err != nil {
 		return nil, err
 	}
@@ -278,4 +294,63 @@ func (cs *Server) createPNFSVolume(
 		volume.AccessibleTopology = csiVolume.GetAccessibleTopology()
 	}
 	return &csi.CreateVolumeResponse{Volume: volume}, nil
+}
+
+// refuseWithoutMetadataServer refuses a pNFS claim when no SimplyblockDriver
+// configures a metadata server. Checked before the backing volume exists: a
+// claim that cannot be served must not allocate anything, because a claim that
+// never binds never gets a PV, and without a PV nothing ever calls DeleteVolume
+// (SFAM-2845).
+//
+// FailedPrecondition is final, and correct: nothing was created. The
+// provisioner still retries the claim with backoff, so it binds once
+// spec.pnfs.mds is set.
+func (cs *Server) refuseWithoutMetadataServer(ctx context.Context) error {
+	if cs.exports == nil {
+		// ensureExportRecord refuses this case with its own message.
+		return nil
+	}
+	configured, err := cs.exports.MetadataServerConfigured(ctx)
+	if err != nil {
+		if apierrors.IsForbidden(err) {
+			// A driver deployed with an older role cannot read the CR. Fall
+			// back to letting the operator refuse, as before.
+			klog.Warningf("cannot check for a pNFS metadata server, proceeding: %v", err)
+			return nil
+		}
+		return status.Errorf(codes.Unavailable,
+			"checking for a pNFS metadata server: %v", err)
+	}
+	if !configured {
+		return status.Error(codes.FailedPrecondition,
+			"no SimplyblockDriver configures a pNFS metadata server; set spec.pnfs.mds")
+	}
+	return nil
+}
+
+// rollBackPNFSVolume removes the export and the backing volume of a pNFS
+// volume that will never be served, then refuses the claim.
+//
+// The refusal is final only once the rollback is complete. Until then it is
+// Unavailable, so the provisioner calls again and the rollback resumes: the
+// operator holds a finalizer on the export while it tears its host down, and
+// the backing volume must wait for that. DeleteVolume already does both, in
+// that order, and is idempotent.
+func (cs *Server) rollBackPNFSVolume(
+	ctx context.Context, volumeID, name string, record ExportRecord,
+) error {
+	why := record.Message
+	if record.Deleting && why == "" {
+		why = "the export is being deleted"
+	}
+	if _, err := cs.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: volumeID}); err != nil {
+		return status.Errorf(codes.Unavailable,
+			"export %s cannot be served (%s); rolling back volume %s: %v",
+			name, why, volumeID, err)
+	}
+	if record.Phase == "Degraded" {
+		return errExportDegraded(name, why)
+	}
+	return status.Errorf(codes.FailedPrecondition,
+		"export %s was deleted before it became ready; volume %s rolled back", name, volumeID)
 }
