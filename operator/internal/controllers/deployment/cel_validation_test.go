@@ -332,9 +332,10 @@ func TestAnOpenShiftBlockNeedsAnOpenShiftEnvironment(t *testing.T) {
 }
 
 // The kubelet and CPU topology flags are the environment's to decide everywhere
-// but Vanilla, whose workers it does not describe, so a document states them
-// only for a Vanilla fleet.
-func TestTheKubeletAndTopologyFlagsNeedAVanillaEnvironment(t *testing.T) {
+// but Vanilla, whose workers it does not describe, and OpenShift, whose fleets
+// may manage the pool's KubeletConfig themselves, so a document states them only
+// for one of those.
+func TestTheKubeletAndTopologyFlagsNeedAVanillaOrOpenShiftEnvironment(t *testing.T) {
 	apiClient := apiServer(t)
 	for _, set := range []func(*simplyblockv1alpha2.ClusterTemplate){
 		func(c *simplyblockv1alpha2.ClusterTemplate) { c.EnableKubeletConfiguration = ptr.To(false) },
@@ -355,6 +356,11 @@ func TestTheKubeletAndTopologyFlagsNeedAVanillaEnvironment(t *testing.T) {
 		config.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentVanilla
 		if err := apiClient.Update(context.Background(), config); err != nil {
 			t.Fatalf("a Vanilla document was refused the flag: %v", err)
+		}
+
+		config.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentOpenShift
+		if err := apiClient.Update(context.Background(), config); err != nil {
+			t.Fatalf("an OpenShift document was refused the flag: %v", err)
 		}
 	}
 }
