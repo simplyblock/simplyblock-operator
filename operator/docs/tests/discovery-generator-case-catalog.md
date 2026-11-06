@@ -447,6 +447,7 @@ The question each unratified rung is really asking:
 | HELD-09 | 16 loopback devices and 4 free disks                               | The 4 disks drafted. The loopbacks absent from `Explain` and present in `RefusalLines`                                             | `CM`    |
 | HELD-10 | Half the controllers idle and half in use, no block devices        | Only the idle half is offered                                                                                                      | `CM`    |
 | HELD-11 | Userspace controllers whose process table the probe could not read | Refused, and the message says whether anything is driving them could not be established. An unchecked controller is not a free one | `CM`    |
+| HELD-12 | Every local SSD a member of the RAID array GKE assembled           | The worker refused, each disk a RAID member naming `md0` and its level, and the message blames the pool's ephemeral-storage SSDs   | `CM`    |
 
 ## 11. Refusal cases
 

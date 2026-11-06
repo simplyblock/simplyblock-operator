@@ -277,6 +277,13 @@ type Disk struct {
 	// software-RAID array it is a member of. A device with a holder is a device
 	// in use, and the holder is the readable reason.
 	Holders []string
+
+	// RAIDLevel is the level of a software-RAID array, raid0 or raid1 or
+	// raid5, as the md driver reports it, and is empty for anything that is
+	// not an array. It is read so that a member's refusal can say what kind
+	// of array took it: a RAID-0 is striped and every member is unrecoverable
+	// data, which is a different finding from a mirror a member could leave.
+	RAIDLevel string
 }
 
 // Scan reports every block device the host presents, ordered by kernel name so
@@ -346,6 +353,9 @@ func scanOne(cfg ScanConfig, dir, name string) (Disk, error) {
 		Kind:       classify(dir, name),
 		Partitions: partitionsOf(dir, name),
 		Holders:    childNames(filepath.Join(dir, "holders")),
+	}
+	if disk.Kind == KindMDRaid {
+		disk.RAIDLevel = strings.TrimSpace(sysfs.String(dir, "md", "level"))
 	}
 
 	resolved, err := filepath.EvalSymlinks(dir)

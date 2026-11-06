@@ -624,10 +624,17 @@ func (r *OperatorOpsReconciler) write(
 		// Counted rather than listed per worker, because this message is carried
 		// by an event and an event is refused past 1024 characters. The
 		// per-worker detail is not lost: every device refusal above went out as
-		// its own DeviceDeclined event.
+		// its own DeviceDeclined event. The environment's own explanation, when
+		// it has one, is added within the same budget.
+		advice := plan.Advice(ops.Status.Environment)
+		budget := maxEventMessage - len(refusalPreamble)
+		if advice != "" {
+			advice = ". " + advice
+			budget -= len(advice)
+		}
 		return false, refusef(OperationFailed,
-			"no worker has a device this run would use: %s",
-			plan.ExplainWithin(maxEventMessage-len(refusalPreamble)))
+			"no worker has a device this run would use: %s%s",
+			plan.ExplainWithin(budget), advice)
 	}
 
 	config, notes, err := r.draftFor(ctx, ops, spec, plan)

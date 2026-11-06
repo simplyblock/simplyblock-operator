@@ -465,3 +465,34 @@ func TestAnExactSizeIsWrittenExactly(t *testing.T) {
 		}
 	}
 }
+
+func TestAvailableRuleSaysWhatHoldsADevice(t *testing.T) {
+	// "Stacked, Busy" names two grounds and nothing a reviewer can look at. The
+	// probe recorded which array holds the disk and why the kernel refused it,
+	// and the reason carries both, for the grounds whose detail names a thing.
+	held := disk("nvme0n1", "0000:00:04.0", 0, tb)
+	held.Available = false
+	held.Content = ""
+	held.Rejections = []nodeprobe.Rejection{
+		{Reason: string(blockdev.ReasonRAIDMember), Detail: "a member of the MD RAID array md0 (raid0)"},
+		{Reason: string(blockdev.ReasonBusy), Detail: "the kernel refused an exclusive open: md0 holds it"},
+	}
+
+	ok, why := admit(AvailableRule{}, held)
+	if ok {
+		t.Fatal("admitted a RAID member")
+	}
+	for _, want := range []string{string(blockdev.ReasonRAIDMember), "md0 (raid0)", "md0 holds it"} {
+		if !strings.Contains(why, want) {
+			t.Errorf("the reason %q does not carry %q", why, want)
+		}
+	}
+
+	// A mount's detail is a list of paths, which is long and adds nothing to
+	// "Mounted" that the reviewer needs in a one-line count, so it stays in the
+	// report.
+	mounted := refused(disk("nvme1n1", "0000:00:05.0", 0, tb), blockdev.ReasonMounted)
+	if _, why := admit(AvailableRule{}, mounted); strings.Contains(why, mounted.Rejections[0].Detail) {
+		t.Errorf("the reason %q quotes the mount detail", why)
+	}
+}

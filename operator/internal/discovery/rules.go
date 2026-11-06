@@ -177,12 +177,27 @@ func (r AvailableRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool,
 
 	reasons := make([]string, 0, len(device.Rejections))
 	for _, rejection := range device.Rejections {
+		if detailNamesAThing[blockdev.Reason(rejection.Reason)] && rejection.Detail != "" {
+			reasons = append(reasons, fmt.Sprintf("%s (%s)", rejection.Reason, rejection.Detail))
+			continue
+		}
 		reasons = append(reasons, rejection.Reason)
 	}
 	if len(reasons) == 0 {
 		return false, "the probe did not report it as available and gave no reason"
 	}
 	return false, "the probe refused it: " + strings.Join(reasons, ", ")
+}
+
+// detailNamesAThing lists the grounds whose name alone leaves the reader
+// without the thing to look at, so the probe's detail travels with them: which
+// array or which device-mapper node holds the disk, and why the kernel refused
+// it. The others either say it all in their name, or carry a detail that is a
+// list of paths, which a one-line count has no room for and the report keeps.
+var detailNamesAThing = map[blockdev.Reason]bool{
+	blockdev.ReasonRAIDMember: true,
+	blockdev.ReasonStacked:    true,
+	blockdev.ReasonBusy:       true,
 }
 
 // emptyPartition reports whether device is a partition refused only for being

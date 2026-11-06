@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // Reason is a ground on which a device was refused.
@@ -62,12 +63,24 @@ const (
 	ReasonSwapArea Reason = "SwapArea"
 
 	// ReasonStacked is a device another device is built on: the device-mapper
-	// node of a volume group that took it, or a RAID array it is a member of.
+	// node of a volume group that took it, an encrypted volume opened on it, a
+	// multipath map over it. A software-RAID array is its own reason below.
 	ReasonStacked Reason = "Stacked"
 
-	// ReasonBusy is a device the kernel refused to hand over for a reason none
-	// of the readable sources named. It is the backstop, and a device refused
-	// on this ground alone is one to look at by hand.
+	// ReasonRAIDMember is a device a software-RAID array is built on. The
+	// detail names the array and its level, because the array is the thing to
+	// look at and who assembled it is the question: GKE builds a RAID-0 out of
+	// a node pool's local SSDs when the pool attaches them as ephemeral
+	// storage, so on such a node every disk is a member of md0 and none is
+	// free, and a reader told only "held by md0" is left to work out what md0
+	// is.
+	ReasonRAIDMember Reason = "RAIDMember"
+
+	// ReasonBusy is a device the kernel refused to hand over. The kernel gives
+	// no reason, so the detail supplies one when a readable source found it:
+	// the array or the device-mapper node that holds the device, the mount, or
+	// the swap. A device refused on this ground alone is one to look at by
+	// hand, and the detail says so.
 	ReasonBusy Reason = "Busy"
 
 	// ReasonUnreadable is a device whose usage or whose content could not be
@@ -235,9 +248,16 @@ func (in Inspector) Candidates(ctx context.Context) ([]Candidate, error) {
 		prober = NewProber()
 	}
 
+	// The holders by name, so that a member can say what kind of device took
+	// it: an array is reported as one, and the rest as a stack.
+	byName := make(map[string]Disk, len(disks))
+	for _, disk := range disks {
+		byName[disk.Name] = disk
+	}
+
 	candidates := make([]Candidate, 0, len(disks))
 	for _, disk := range disks {
-		candidate := judge(ctx, prober, disk, usage[disk.Name])
+		candidate := judge(ctx, prober, disk, usage[disk.Name], byName)
 		candidate.StablePath = links.Preferred(disk.Path)
 		candidates = append(candidates, candidate)
 	}
@@ -254,7 +274,7 @@ func (in Inspector) Candidates(ctx context.Context) ([]Candidate, error) {
 // is on the disk. Being a partition does not either, because a logical block
 // device run may take one, and it needs the reading to know the partition is
 // empty.
-func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidate {
+func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage, byName map[string]Disk) Candidate {
 	c := Candidate{Disk: disk, Usage: usage}
 
 	if disk.Kind != KindDisk {
@@ -282,11 +302,15 @@ func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidat
 	if usage.Swap {
 		c.reject(ReasonSwapArea, "the device is an active swap area")
 	}
-	if len(usage.Holders) > 0 {
-		c.reject(ReasonStacked, fmt.Sprintf("held by %v", usage.Holders))
+	arrays, stacked := splitHolders(usage.Holders, byName)
+	for _, array := range arrays {
+		c.reject(ReasonRAIDMember, "a member of the MD RAID array "+describeArray(array))
+	}
+	if len(stacked) > 0 {
+		c.reject(ReasonStacked, fmt.Sprintf("held by %v", stacked))
 	}
 	if usage.Busy {
-		c.reject(ReasonBusy, "the kernel refused an exclusive open, and gives no reason")
+		c.reject(ReasonBusy, busyDetail(usage))
 	}
 	if usage.ProbeErr != nil {
 		c.reject(ReasonUnreadable, fmt.Sprintf("the kernel could not be asked: %v", usage.ProbeErr))
@@ -359,6 +383,47 @@ func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidat
 		c.reject(ReasonUnreadable, "the reading came back unpopulated")
 	}
 	return c
+}
+
+// splitHolders sorts a device's holders into the software-RAID arrays among
+// them and everything else, so that each gets the reason that names it. A
+// holder the scan did not list is reported as a stack, which is what it is:
+// something is built on the device, and nothing more is known about it.
+func splitHolders(holders []string, byName map[string]Disk) (arrays []Disk, stacked []string) {
+	for _, name := range holders {
+		if holder, ok := byName[name]; ok && holder.Kind == KindMDRaid {
+			arrays = append(arrays, holder)
+			continue
+		}
+		stacked = append(stacked, name)
+	}
+	return arrays, stacked
+}
+
+// describeArray names an array with its level, when the md driver reported
+// one: "md0 (raid0)," or "md0" for an array whose level could not be read.
+func describeArray(array Disk) string {
+	if array.RAIDLevel == "" {
+		return array.Name
+	}
+	return fmt.Sprintf("%s (%s)", array.Name, array.RAIDLevel)
+}
+
+// busyDetail explains the kernel's refusal by whatever readable source already
+// accounts for it. The kernel itself gives no reason, and a detail that said so
+// beside a holder the reading found would send the reader looking for a reason
+// that is already on the list.
+func busyDetail(usage Usage) string {
+	const refused = "the kernel refused an exclusive open"
+	switch {
+	case len(usage.Holders) > 0:
+		return fmt.Sprintf("%s: %s holds it", refused, strings.Join(usage.Holders, " and "))
+	case len(usage.Mountpoints) > 0:
+		return refused + ": it is mounted"
+	case usage.Swap:
+		return refused + ": it is an active swap area"
+	}
+	return refused + ", and gives no reason"
 }
 
 // reject records a ground.
