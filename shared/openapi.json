@@ -246,6 +246,12 @@
               }
             }
           },
+          "400": {
+            "description": "A refused field (detail.message)"
+          },
+          "409": {
+            "description": "leader_site names the lost site (detail.message)"
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -546,6 +552,98 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/reachability": {
+      "get": {
+        "summary": "Clusters:Reachability",
+        "description": "Run the storage-node monitor's management-address probe once, now,\nagainst the nodes of ``site`` (every node of the cluster without one;\nremoved nodes excepted) and answer, per node, whether it answered. Reads\nnothing the monitor recorded and records nothing. 400 for a site the\ncluster does not have, and for any site on a cluster without sync\nreplication.\n\nWith ``address`` (repeatable), probe exactly those addresses instead -\nhosts that are not storage nodes yet, such as the workers a follower\noperator's preflight checks (design-stretched \u00a75.4) - one row per\naddress in request order, ``id`` and ``site`` empty. 400 together with\n``site``, for an address that is not an IPv4/IPv6 literal (no name is\never resolved), and for more than MAX_REACHABILITY_ADDRESSES.",
+        "operationId": "clusters_reachability_api_v2_clusters__cluster_id__reachability_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: only the nodes of this site",
+              "title": "Site"
+            },
+            "description": "Sync replication: only the nodes of this site"
+          },
+          {
+            "name": "address",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Probe these management addresses (IP literals, repeatable, at most 64) instead of the nodes; not with site",
+              "title": "Address"
+            },
+            "description": "Probe these management addresses (IP literals, repeatable, at most 64) instead of the nodes; not with site"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NodeReachabilityDTO"
+                  },
+                  "title": "Response Clusters Reachability Api V2 Clusters  Cluster Id  Reachability Get"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A bad site, site with address, a non-literal address, or too many addresses (detail.message)"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/start": {
       "post": {
         "summary": "Clusters:Start",
@@ -818,6 +916,52 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/grow-devices": {
+      "post": {
+        "summary": "Clusters:Grow Devices",
+        "description": "Grow all lblk data devices of the cluster online by the same factor.\n\nEvery block device is rescanned (for example, after its LUN was grown on\nthe storage array), and every device grows by the smallest growth factor\nof all of them; the rest of a larger block device stays unused\n(`unused_size`). If one block device did not grow, nothing grows\n(`grown` false, `reason`). Device weights and data placement never change.\nA block device smaller than its device is refused, listed in `shrunk`\nand `errors`, and raises the device_shrunk alert.",
+        "operationId": "clusters_grow_devices_api_v2_clusters__cluster_id__grow_devices_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceGrowthDTO"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -2872,6 +3016,75 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/resize": {
+      "post": {
+        "summary": "Clusters:Storage Nodes:Devices:Resize",
+        "description": "Grow an lblk device online to the size its block device now has.\n\nThe storage node's host re-reads the size of the block device (for\nexample, a LUN grown on its storage array) and the device takes it over\nwithout interrupting I/O. Shrinking is refused. The placement weight of\nthe device stays at its original size, so the added capacity is only\nfully usable once all data devices of the cluster have grown by the same\nfactor; `uniform` and `warning` report it.",
+        "operationId": "clusters_storage_nodes_devices_resize_api_v2_clusters__cluster_id__storage_nodes__storage_node_id__devices__device_id__resize_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "storage_node_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Storage Node Id"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceResizeDTO"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The device cannot be grown"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/restart": {
       "post": {
         "summary": "Clusters:Storage Nodes:Devices:Restart",
@@ -4593,6 +4806,7 @@
     "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/connect": {
       "get": {
         "summary": "Clusters:Storage-Pools:Volumes:Connect",
+        "description": "The volume's connection entries. On a sync-replication cluster the\npaths are those of the site the volume's LVS is currently led from\n(``lvs_active_site``, which promote and demote set); the caller does not\nchoose a site - leadership is control-plane state, so connect reads it\nrather than being told it.",
         "operationId": "clusters_storage_pools_volumes_connect_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__connect_get",
         "security": [
           {
@@ -4962,6 +5176,138 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/suspend": {
+      "post": {
+        "summary": "Clusters:Storage-Pools:Volumes:Suspend",
+        "operationId": "clusters_storage_pools_volumes_suspend_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__suspend_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "pool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pool Id"
+            }
+          },
+          {
+            "name": "volume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Volume Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean",
+                  "title": "Response Clusters Storage Pools Volumes Suspend Api V2 Clusters  Cluster Id  Storage Pools  Pool Id  Volumes  Volume Id  Suspend Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/resume": {
+      "post": {
+        "summary": "Clusters:Storage-Pools:Volumes:Resume",
+        "operationId": "clusters_storage_pools_volumes_resume_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__resume_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "pool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pool Id"
+            }
+          },
+          {
+            "name": "volume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Volume Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean",
+                  "title": "Response Clusters Storage Pools Volumes Resume Api V2 Clusters  Cluster Id  Storage Pools  Pool Id  Volumes  Volume Id  Resume Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/clone": {
       "post": {
         "summary": "Clusters:Storage-Pools:Volumes:Clone",
@@ -5317,7 +5663,7 @@
           "replication"
         ],
         "summary": "Clusters:Storage-Pools:Volumes:Replication:Status",
-        "description": "The typed steady-state replication status.\n\nUnlike the relationship read above, which serves cutover records and 404s\nfor a volume's whole healthy replicated life, this endpoint always answers\nfor a volume that exists: ``state: not_replicating, role: none`` is the\nvalid answer for an unreplicated volume. The csi-addons adapter derives\nits conditions and ``lastSyncTime`` from this read on every reconcile.",
+        "description": "The typed steady-state replication status.\n\nUnlike the relationship read above, which serves cutover records and 404s\nfor a volume's whole healthy replicated life, this endpoint always answers\nfor a volume that exists: ``state: not_replicating, role: none`` is the\nvalid answer for an unreplicated volume. The csi-addons adapter derives\nits conditions and ``lastSyncTime`` from this read on every reconcile.\n\nOn a sync-replication cluster the same DTO carries the site replication's\nstatus: role ``source`` on the site the volume is served from, state\n``in_sync`` or ``degraded`` (``resyncing`` set while a catch-up runs),\n``outstanding_bytes`` = the bytes behind. ``site`` is optional - a status\nread is cluster-wide, so a caller with no site to assert (the csi-addons\nadapter) is answered for the volume's led site.",
         "operationId": "clusters_storage_pools_volumes_replication_status_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_status_get",
         "security": [
           {
@@ -5354,6 +5700,24 @@
               "format": "uuid",
               "title": "Volume Id"
             }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: the site the caller acts from",
+              "title": "Site"
+            },
+            "description": "Sync replication: the site the caller acts from"
           }
         ],
         "responses": {
@@ -5363,6 +5727,93 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ReplicationStatusDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/sync-status": {
+      "get": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Storage-Pools:Volumes:Replication:Sync-Status",
+        "description": "The sync-replication status of the volume seen from ``site``: its role\nthere and the cluster-wide state (the worst over every LVS, the same for\nevery volume). ``site`` is optional (a status read is cluster-wide; a\nmissing one resolves to the volume's led site). 400 on a cluster without\nsync replication.",
+        "operationId": "clusters_storage_pools_volumes_replication_sync_status_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_sync_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "pool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pool Id"
+            }
+          },
+          {
+            "name": "volume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Volume Id"
+            }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: the site the caller acts from",
+              "title": "Site"
+            },
+            "description": "Sync replication: the site the caller acts from"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncReplicationStatusDTO"
                 }
               }
             }
@@ -5590,7 +6041,7 @@
           "replication"
         ],
         "summary": "Clusters:Storage-Pools:Volumes:Replication:Failover",
-        "description": "Bring the volume up on the target cluster.\n\nThe counterpart's id is read back from this volume's replication\nrelationship, its connection paths from the target volume's `connect`.\n\n``generation`` selects WHICH retained point-in-time to come up on: 0 (the\ndefault) is the newest, 1 the one before it, and so on through the\nhistory a retention schedule keeps. Failing over to an older generation\nis the recovery path for a logical corruption, which the newest copy has\nfaithfully replicated.\n\n``planned=True`` gates on a completed demote (P0-3) so a planned swap\nloses nothing: 409 while demote is still converging (retryable -- 409\nmust never become a code the controller reads as permission to force,\nsince that controller escalates on ANY FAILED_PRECONDITION from a\nforce=false promote with no wait-and-retry grace period of its own).\nWhen no demote was ever requested, the source's own health decides: a\ngenuinely healthy, still-serving source means there is nothing to fail\nover -- this is the vendored csi-addons controller's OWN first-ever\nreconcile of a `VolumeReplication` that already lives here, not a\ndisaster, and this call succeeds as the no-op it is. A source that is\nNOT healthy gets 412, the caller's premise that it was reachable to\ndemote was wrong, and 412 is what lets the controller's own\nforce-escalation take over. Unplanned failover (the default) ignores\ndemote state entirely, unchanged from today: its whole premise is that\nthe source may never have been reachable to demote.",
+        "description": "Bring the volume up on the target cluster.\n\nThe counterpart's id is read back from this volume's replication\nrelationship, its connection paths from the target volume's `connect`.\n\n``generation`` selects WHICH retained point-in-time to come up on: 0 (the\ndefault) is the newest, 1 the one before it, and so on through the\nhistory a retention schedule keeps. Failing over to an older generation\nis the recovery path for a logical corruption, which the newest copy has\nfaithfully replicated.\n\n``planned=True`` gates on a completed demote (P0-3) so a planned swap\nloses nothing: 409 while demote is still converging (retryable -- 409\nmust never become a code the controller reads as permission to force,\nsince that controller escalates on ANY FAILED_PRECONDITION from a\nforce=false promote with no wait-and-retry grace period of its own).\nWhen no demote was ever requested, the source's own health decides: a\ngenuinely healthy, still-serving source means there is nothing to fail\nover -- this is the vendored csi-addons controller's OWN first-ever\nreconcile of a `VolumeReplication` that already lives here, not a\ndisaster, and this call succeeds as the no-op it is. A source that is\nNOT healthy gets 412, the caller's premise that it was reachable to\ndemote was wrong, and 412 is what lets the controller's own\nforce-escalation take over. Unplanned failover (the default) ignores\ndemote state entirely, unchanged from today: its whole premise is that\nthe source may never have been reachable to demote.\n\nOn a sync-replication cluster this is the promote of the volume on\n``site`` (required), forced unless ``planned``\n(``sync_replication_controller.sync_promote_lvol``): 200 with its\nconnection strings on ``site`` once served there; 409 while the promote\ntask runs (the call that queues it included - call again), for a gate\nthat fails or a promote the decision table refuses (a volume still served\non the other site, the list in ``detail.volumes``); 412 when the site the\nvolume is served from is not online and the call is not forced.",
         "operationId": "clusters_storage_pools_volumes_replication_failover_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_failover_post",
         "security": [
           {
@@ -5647,11 +6098,32 @@
               "default": false,
               "title": "Planned"
             }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: the site the caller acts from",
+              "title": "Site"
+            },
+            "description": "Sync replication: the site the caller acts from"
           }
         ],
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "200": {
+            "description": "Sync replication: the volume's connection strings on the promoted site (SyncPromoteResultDTO). Async: {\"warnings\": [...]} when a consistency-group generation does not match the current membership."
           },
           "422": {
             "description": "Validation Error",
@@ -5754,7 +6226,7 @@
           "replication"
         ],
         "summary": "Clusters:Storage-Pools:Volumes:Replication:Demote",
-        "description": "Fence the source and confirm the last write replicated (P0-3).\n\nSynchronous and re-drivable, not queued: each call does only the work its\ncurrent state calls for (fence + trigger the final snapshot once, then\njust check whether it has landed), so the caller re-invokes this route\nuntil it reports 204. A 202 means still waiting -- call again, the same\nway `GET .../status` is re-read rather than pushed.",
+        "description": "Fence the source and confirm the last write replicated (P0-3).\n\nSynchronous and re-drivable, not queued: each call does only the work its\ncurrent state calls for (fence + trigger the final snapshot once, then\njust check whether it has landed), so the caller re-invokes this route\nuntil it reports 204. A 202 means still waiting -- call again, the same\nway `GET .../status` is re-read rather than pushed.\n\nOn a sync-replication cluster: fence the volume on ``site`` (required),\nsynchronously - 204 (also when it is not served there), 409 when the gate\nfails (the replicas are not in sync).",
         "operationId": "clusters_storage_pools_volumes_replication_demote_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_demote_post",
         "security": [
           {
@@ -5791,6 +6263,24 @@
               "format": "uuid",
               "title": "Volume Id"
             }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: the site the caller acts from",
+              "title": "Site"
+            },
+            "description": "Sync replication: the site the caller acts from"
           }
         ],
         "responses": {
@@ -5819,7 +6309,7 @@
           "replication"
         ],
         "summary": "Clusters:Storage-Pools:Volumes:Replication:Failback",
-        "description": "Point replication back at a source cluster. The cutover itself is\n`commit`.",
+        "description": "Point replication back at a source cluster. The cutover itself is\n`commit`. A no-op on a sync-replication cluster (its resync is automatic).",
         "operationId": "clusters_storage_pools_volumes_replication_failback_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_failback_post",
         "security": [
           {
@@ -7975,7 +8465,7 @@
           "replication"
         ],
         "summary": "Clusters:Replication:Relationships:Detail",
-        "description": "Replication relationship for a volume, resolvable even when the source volume\nhas been deleted (e.g. after replication-commit --delete-source). The CSI driver\nuses this to redirect NodeStageVolume to the active volume on the target cluster.",
+        "description": "Replication relationship for a volume, resolvable even when the source volume\nhas been deleted (e.g. after replication-commit --delete-source). The CSI driver\nuses this to redirect NodeStageVolume to the active volume on the target cluster.\nAlways 404 on a sync-replication cluster: its volumes keep their identity on\nboth sites.",
         "operationId": "clusters_replication_relationships_detail_api_v2_clusters__cluster_id__replication_relationships__lvol_id__get",
         "security": [
           {
@@ -9717,7 +10207,7 @@
           "consistency-groups"
         ],
         "summary": "Clusters:Consistency-Groups:Replication:Configure",
-        "description": "Enable or disable group replication (design-csi-addons-replication.md\n\u00a714.4): a policy id attaches the whole group to that group replication\npolicy; ``null`` detaches it (the group and its members stay grouped by\nlabel). A refused attach is a 409: not a consistency-group policy, a missing\npolicy, or a member that cannot start replicating under it (a policy whose\ntarget is the group's own cluster, refused by replication_start). Unmapped,\nthe last was an unhandled 500 (run 20261020-1300-ebs, test 2).",
+        "description": "Enable or disable group replication (design-csi-addons-replication.md\n\u00a714.4): a policy id attaches the whole group to that group replication\npolicy; ``null`` detaches it (the group and its members stay grouped by\nlabel). A refused attach is a 409: not a consistency-group policy, a missing\npolicy, or a member that cannot start replicating under it (a policy whose\ntarget is the group's own cluster, refused by replication_start). Unmapped,\nthe last was an unhandled 500 (run 20261020-1300-ebs, test 2). A no-op on a\nsync-replication cluster, where every volume is replicated to the other site.",
         "operationId": "clusters_consistency_groups_replication_configure_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_put",
         "security": [
           {
@@ -9779,7 +10269,7 @@
           "consistency-groups"
         ],
         "summary": "Clusters:Consistency-Groups:Replication:Status",
-        "description": "The group's replication status as one unit: oldest recovery point, worst\nmember lag and health, summed backlog (design-csi-addons-replication.md\n\u00a714.4/\u00a714.6). Never 404s -- a group with no replicating member reports\n``state: not_replicating``.",
+        "description": "The group's replication status as one unit: oldest recovery point, worst\nmember lag and health, summed backlog (design-csi-addons-replication.md\n\u00a714.4/\u00a714.6). Never 404s -- a group with no replicating member reports\n``state: not_replicating``.\n\nOn a sync-replication cluster: the cluster-wide site replication status\n(the same for every member, not summed) and the group's role on ``site`` -\n``source`` only when every member is served there. ``site`` is optional (a\nstatus read is cluster-wide; a missing one resolves to the members' led\nsite), the read the csi-addons adapter makes with no site to assert.",
         "operationId": "clusters_consistency_groups_replication_status_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_status_get",
         "security": [
           {
@@ -9806,6 +10296,24 @@
               "format": "uuid",
               "title": "Group Id"
             }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: the site the caller acts from",
+              "title": "Site"
+            },
+            "description": "Sync replication: the site the caller acts from"
           }
         ],
         "responses": {
@@ -9815,6 +10323,83 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ConsistencyGroupReplicationStatusDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/sync-status": {
+      "get": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Replication:Sync-Status",
+        "description": "The sync-replication status of the group seen from ``site``: its role\nthere (``primary`` only when every member is served there) and the\ncluster-wide state. ``site`` is optional (a status read is cluster-wide; a\nmissing one resolves to the members' led site). 400 on a cluster without\nsync replication.",
+        "operationId": "clusters_consistency_groups_replication_sync_status_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_sync_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: the site the caller acts from",
+              "title": "Site"
+            },
+            "description": "Sync replication: the site the caller acts from"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncReplicationStatusDTO"
                 }
               }
             }
@@ -9897,7 +10482,7 @@
           "consistency-groups"
         ],
         "summary": "Clusters:Consistency-Groups:Replication:Failover",
-        "description": "Fail the whole group over as ONE unit (design-csi-addons-replication.md\n\u00a714.4): every member is pinned to the same group generation, all-or-nothing.\n\nA group without a policy is not refused: after a relocate demoted the group\nand the demoted source volumes were deleted, the group is detached and empty,\nand the promote on the peer restores it from its newest replicated generation\nthere (failover_group). Only when nothing can be promoted is it a 409.",
+        "description": "Fail the whole group over as ONE unit (design-csi-addons-replication.md\n\u00a714.4): every member is pinned to the same group generation, all-or-nothing.\n\nA group without a policy is not refused: after a relocate demoted the group\nand the demoted source volumes were deleted, the group is detached and empty,\nand the promote on the peer restores it from its newest replicated generation\nthere (failover_group). Only when nothing can be promoted is it a 409.\n\nOn a sync-replication cluster: the promote of every member on ``site``\n(required) as one, forced unless ``planned``\n(``sync_replication_controller.sync_promote_group``) - 200\n``{\"members\": [{lvol_id, connection_strings}]}`` once all are served\nthere; 409 in progress / gate / refused, 412 as for a volume.",
         "operationId": "clusters_consistency_groups_replication_failover_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_failover_post",
         "security": [
           {
@@ -9924,6 +10509,34 @@
               "format": "uuid",
               "title": "Group Id"
             }
+          },
+          {
+            "name": "planned",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Planned"
+            }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: the site the caller acts from",
+              "title": "Site"
+            },
+            "description": "Sync replication: the site the caller acts from"
           }
         ],
         "responses": {
@@ -9931,11 +10544,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Clusters Consistency Groups Replication Failover Api V2 Clusters  Cluster Id  Consistency Groups  Group Id  Replication Failover Post"
-                }
+                "schema": {}
               }
             }
           },
@@ -9958,7 +10567,7 @@
           "consistency-groups"
         ],
         "summary": "Clusters:Consistency-Groups:Replication:Demote",
-        "description": "Demote the whole group: fence every member and confirm each one's last\nwrite replicated (design-csi-addons-replication.md \u00a714.4). Re-drivable, not\nqueued: 204 once every member is demoted, 202 (with per-member detail) while\nany is still converging, 500 on a hard failure.",
+        "description": "Demote the whole group: fence every member and confirm each one's last\nwrite replicated (design-csi-addons-replication.md \u00a714.4). Re-drivable, not\nqueued: 204 once every member is demoted, 202 (with per-member detail) while\nany is still converging, 500 on a hard failure.\n\nOn a sync-replication cluster: fence every member on ``site`` (required),\none gate for all - 204, 409 when the gate fails.",
         "operationId": "clusters_consistency_groups_replication_demote_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_demote_post",
         "security": [
           {
@@ -9985,6 +10594,24 @@
               "format": "uuid",
               "title": "Group Id"
             }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: the site the caller acts from",
+              "title": "Site"
+            },
+            "description": "Sync replication: the site the caller acts from"
           }
         ],
         "responses": {
@@ -10013,7 +10640,7 @@
           "consistency-groups"
         ],
         "summary": "Clusters:Consistency-Groups:Replication:Failback",
-        "description": "Fail the whole group back: point every member's replication back at the\nsource cluster (design-csi-addons-replication.md \u00a714.4). The cutover itself is\neach member's own commit.",
+        "description": "Fail the whole group back: point every member's replication back at the\nsource cluster (design-csi-addons-replication.md \u00a714.4). The cutover itself is\neach member's own commit. A no-op on a sync-replication cluster (its resync\nis automatic).",
         "operationId": "clusters_consistency_groups_replication_failback_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_failback_post",
         "security": [
           {
@@ -10055,6 +10682,194 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/sites/{site}/status": {
+      "get": {
+        "tags": [
+          "sync-replication"
+        ],
+        "summary": "Clusters:Sites:Status",
+        "description": "The site's record: whether the cluster records it as lost and in\nwhich state (``draining`` / ``down`` by the storage-node monitor,\n``fencing`` / ``done`` by a fence), its latest fence task, its nodes.",
+        "operationId": "clusters_sites_status_api_v2_clusters__cluster_id__sites__site__status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "site",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Site"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteRecordDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/sites/{site}/fence": {
+      "post": {
+        "tags": [
+          "sync-replication"
+        ],
+        "summary": "Clusters:Sites:Fence",
+        "description": "Fence the site as a whole: the backend's disaster site steps, run once\nfor the site (sync_replication_controller.fence_site) - the liveness\nproof of each of its nodes, then the site recorded lost, its devices\nunavailable, its nodes offline, every volume of every store led from it\nfenced there. Leadership does not move: a forced promote on the\nsurviving site opens the volumes afterwards.\n\nIdempotent and resumable: 202 with the task while the fence runs (the\ncall that queues it included - call again), 200 with the site's record\nonce the cluster records the site ``done``, 409 while the fence is\nrefused - a node of the site may still run, another site is lost, the\nmonitor drains the site, a site activation runs, no other site serves,\nor the last fence task failed its proof (reported once, with its\n``task_id``; the next call queues a new attempt).",
+        "operationId": "clusters_sites_fence_api_v2_clusters__cluster_id__sites__site__fence_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "site",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Site"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "202": {
+            "description": "The fence runs: call again (Location: the task)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteFenceTaskDTO"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused while the site's loss is not proven (detail.message; detail.task_id names a failed fence task, reported once)"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/sites/{site}/unfence": {
+      "post": {
+        "tags": [
+          "sync-replication"
+        ],
+        "summary": "Clusters:Sites:Unfence",
+        "description": "A confirmation, not an action: the site returns by the backend's own\nsite activation once its nodes are back. 200 with the site's record once\nthe cluster no longer records the site as lost, 409 while it does.",
+        "operationId": "clusters_sites_unfence_api_v2_clusters__cluster_id__sites__site__unfence_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "site",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Site"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteRecordDTO"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The cluster still records the site as lost"
           },
           "422": {
             "description": "Validation Error",
@@ -10508,52 +11323,6 @@
         "responses": {
           "204": {
             "description": "Successful Response"
-          }
-        }
-      }
-    },
-    "/api/v2/clusters/{cluster_id}/grow-devices": {
-      "post": {
-        "summary": "Clusters:Grow Devices",
-        "description": "Grow all lblk data devices of the cluster online by the same factor.\n\nEvery block device is rescanned (for example, after its LUN was grown on\nthe storage array), and every device grows by the smallest growth factor\nof all of them; the rest of a larger block device stays unused\n(`unused_size`). If one block device did not grow, nothing grows\n(`grown` false, `reason`). Device weights and data placement never change.\nA block device smaller than its device is refused, listed in `shrunk`\nand `errors`, and raises the device_shrunk alert.",
-        "operationId": "clusters_grow_devices_api_v2_clusters__cluster_id__grow_devices_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeviceGrowthDTO"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
           }
         }
       }
@@ -11471,6 +12240,16 @@
             "type": "boolean",
             "title": "Atomic 4K"
           },
+          "page_copy": {
+            "type": "boolean",
+            "title": "Page Copy",
+            "default": false
+          },
+          "md_journal": {
+            "type": "boolean",
+            "title": "Md Journal",
+            "default": false
+          },
           "secret": {
             "type": "string",
             "format": "password",
@@ -11488,25 +12267,6 @@
           "backup_enabled": {
             "type": "boolean",
             "title": "Backup Enabled"
-          },
-          "capacity": {
-            "$ref": "#/components/schemas/CapacityStatDTO"
-          },
-          "snode_api_service": {
-            "type": "string",
-            "title": "Snode Api Service"
-          },
-          "spdk_proxy_service": {
-            "type": "string",
-            "title": "Spdk Proxy Service"
-          },
-          "spdk_proxy_tls_secret": {
-            "type": "string",
-            "title": "Spdk Proxy Tls Secret"
-          },
-          "node_label_suffix": {
-            "type": "string",
-            "title": "Node Label Suffix"
           },
           "sync_replication": {
             "type": "boolean",
@@ -11527,6 +12287,25 @@
             "type": "string",
             "title": "Leader Site",
             "default": ""
+          },
+          "capacity": {
+            "$ref": "#/components/schemas/CapacityStatDTO"
+          },
+          "snode_api_service": {
+            "type": "string",
+            "title": "Snode Api Service"
+          },
+          "spdk_proxy_service": {
+            "type": "string",
+            "title": "Spdk Proxy Service"
+          },
+          "spdk_proxy_tls_secret": {
+            "type": "string",
+            "title": "Spdk Proxy Tls Secret"
+          },
+          "node_label_suffix": {
+            "type": "string",
+            "title": "Node Label Suffix"
           }
         },
         "type": "object",
@@ -11745,16 +12524,6 @@
             "title": "Is Single Node",
             "default": false
           },
-          "sync_replication": {
-            "type": "boolean",
-            "title": "Sync Replication",
-            "default": false
-          },
-          "leader_site": {
-            "type": "string",
-            "title": "Leader Site",
-            "default": ""
-          },
           "fabric": {
             "type": "string",
             "title": "Fabric",
@@ -11820,6 +12589,16 @@
             "title": "Enable Failure Domain",
             "default": false
           },
+          "sync_replication": {
+            "type": "boolean",
+            "title": "Sync Replication",
+            "default": false
+          },
+          "leader_site": {
+            "type": "string",
+            "title": "Leader Site",
+            "default": ""
+          },
           "max_subsys": {
             "type": "integer",
             "minimum": 0.0,
@@ -11854,6 +12633,16 @@
             "type": "boolean",
             "title": "Atomic 4K",
             "default": false
+          },
+          "page_copy": {
+            "type": "boolean",
+            "title": "Page Copy",
+            "default": false
+          },
+          "md_journal": {
+            "type": "boolean",
+            "title": "Md Journal",
+            "default": true
           },
           "snode_api_service": {
             "type": "string",
@@ -12519,6 +13308,53 @@
         ],
         "title": "DeviceDTO"
       },
+      "DeviceGrowthDTO": {
+        "properties": {
+          "grown": {
+            "type": "boolean",
+            "title": "Grown"
+          },
+          "factor": {
+            "type": "number",
+            "title": "Factor"
+          },
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceGrowthEntryDTO"
+            },
+            "type": "array",
+            "title": "Devices"
+          },
+          "errors": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Errors"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "shrunk": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Shrunk",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "grown",
+          "factor",
+          "devices",
+          "errors",
+          "reason"
+        ],
+        "title": "DeviceGrowthDTO"
+      },
       "DeviceHealthAssessmentDTO": {
         "properties": {
           "reporter": {
@@ -12960,6 +13796,72 @@
           "verdict"
         ],
         "title": "DevicePerformanceAssessmentDTO"
+      },
+      "DeviceRebalanceDTO": {
+        "properties": {
+          "weights_updated": {
+            "type": "boolean",
+            "title": "Weights Updated"
+          },
+          "started": {
+            "type": "boolean",
+            "title": "Started"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "weights_updated",
+          "started",
+          "reason"
+        ],
+        "title": "DeviceRebalanceDTO"
+      },
+      "DeviceResizeDTO": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "old_size": {
+            "type": "integer",
+            "title": "Old Size"
+          },
+          "new_size": {
+            "type": "integer",
+            "title": "New Size"
+          },
+          "placement_size": {
+            "type": "integer",
+            "title": "Placement Size"
+          },
+          "resized": {
+            "type": "boolean",
+            "title": "Resized"
+          },
+          "uniform": {
+            "type": "boolean",
+            "title": "Uniform"
+          },
+          "warning": {
+            "type": "string",
+            "title": "Warning",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "old_size",
+          "new_size",
+          "placement_size",
+          "resized",
+          "uniform"
+        ],
+        "title": "DeviceResizeDTO"
       },
       "DeviceSmartAssessmentDTO": {
         "properties": {
@@ -14131,6 +15033,13 @@
             },
             "type": "array",
             "title": "Ips"
+          },
+          "resource": {
+            "type": "string",
+            "maxLength": 316,
+            "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$",
+            "title": "Resource",
+            "default": ""
           }
         },
         "type": "object",
@@ -14140,6 +15049,35 @@
         ],
         "title": "NetworkAttachment",
         "description": "One NetworkAttachmentDefinition the pod joins, as the operator states it. The\nnode record keeps these as plain dicts, which is what the record's base model stores."
+      },
+      "NodeReachabilityDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "mgmt_ip": {
+            "type": "string",
+            "title": "Mgmt Ip"
+          },
+          "site": {
+            "type": "string",
+            "title": "Site"
+          },
+          "reachable": {
+            "type": "boolean",
+            "title": "Reachable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "mgmt_ip",
+          "site",
+          "reachable"
+        ],
+        "title": "NodeReachabilityDTO",
+        "description": "One node's answer to the storage-node monitor's management-address\nprobe, run once on demand (``GET /clusters/{id}/reachability``)."
       },
       "NvmeConnectEntry": {
         "properties": {
@@ -15164,6 +16102,113 @@
         "title": "SecondaryTarget",
         "description": "The kind of secondary store, numbered as the data plane's RPC expects."
       },
+      "SiteFenceTaskDTO": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Task Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id"
+        ],
+        "title": "SiteFenceTaskDTO",
+        "description": "A site fence in progress (the 202 answer of ``fence``): the fence task,\nalso readable at ``/clusters/{id}/tasks/{task_id}/``."
+      },
+      "SiteNodeDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "online",
+              "offline",
+              "suspended",
+              "in_shutdown",
+              "removed",
+              "in_restart",
+              "in_creation",
+              "unreachable",
+              "schedulable",
+              "down",
+              "in_removal",
+              "pending_removal",
+              "migrating_devices",
+              "migrating_lvols",
+              "removed_failed"
+            ],
+            "title": "Status"
+          },
+          "mgmt_ip": {
+            "type": "string",
+            "title": "Mgmt Ip"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "mgmt_ip"
+        ],
+        "title": "SiteNodeDTO",
+        "description": "A node of a site, as the site record lists it. ``id`` is the storage\nnode's id (``StorageNodeDTO.id``)."
+      },
+      "SiteRecordDTO": {
+        "properties": {
+          "site": {
+            "type": "string",
+            "title": "Site"
+          },
+          "lost": {
+            "type": "boolean",
+            "title": "Lost"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "",
+              "draining",
+              "down",
+              "fencing",
+              "done"
+            ],
+            "title": "State"
+          },
+          "fence_task_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fence Task Id"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/SiteNodeDTO"
+            },
+            "type": "array",
+            "title": "Nodes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "site",
+          "lost",
+          "state",
+          "nodes"
+        ],
+        "title": "SiteRecordDTO",
+        "description": "What the control plane records about one site of a sync-replication\ncluster (``GET /clusters/{id}/sites/{site}/status``, and the 200 answers\nof ``fence`` / ``unfence``): ``lost`` when the cluster records it as its\nlost site, ``state`` that record's ``lost_site_state`` (``draining`` /\n``down`` written by the storage-node monitor, ``fencing`` / ``done``\nby a fence), the latest site-level fence task, the site's nodes."
+      },
       "SnapshotDTO": {
         "properties": {
           "id": {
@@ -15410,6 +16455,11 @@
             "type": "integer",
             "title": "Failure Domain"
           },
+          "site": {
+            "type": "string",
+            "title": "Site",
+            "default": ""
+          },
           "capacity": {
             "$ref": "#/components/schemas/CapacityStatDTO"
           }
@@ -15619,6 +16669,17 @@
             ],
             "title": "Failure Domain"
           },
+          "site": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site"
+          },
           "expand": {
             "type": "boolean",
             "title": "Expand",
@@ -15813,6 +16874,94 @@
         ],
         "title": "StoragePoolParams"
       },
+      "SyncReplicationStatusDTO": {
+        "properties": {
+          "site": {
+            "type": "string",
+            "title": "Site"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "primary",
+              "secondary"
+            ],
+            "title": "Role"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "degraded",
+              "resyncing"
+            ],
+            "title": "State"
+          },
+          "last_replicated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Replicated At"
+          },
+          "lag_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lag Seconds"
+          },
+          "bytes_behind": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Bytes Behind",
+            "default": 0
+          },
+          "diverged": {
+            "type": "boolean",
+            "title": "Diverged"
+          },
+          "completed": {
+            "type": "boolean",
+            "title": "Completed"
+          },
+          "degraded": {
+            "type": "boolean",
+            "title": "Degraded"
+          },
+          "resyncing": {
+            "type": "boolean",
+            "title": "Resyncing"
+          },
+          "peer_ready": {
+            "type": "boolean",
+            "title": "Peer Ready"
+          }
+        },
+        "type": "object",
+        "required": [
+          "site",
+          "role",
+          "state",
+          "diverged",
+          "completed",
+          "degraded",
+          "resyncing",
+          "peer_ready"
+        ],
+        "title": "SyncReplicationStatusDTO",
+        "description": "The sync-replication status of a volume or consistency group seen from\none site (``GET .../replication/sync-status?site=``).\n\nEverything but ``role`` is cluster-wide (the worst over every LVS), so\nevery volume and group answers the same: csi-addons' GetReplicationStatus\n(``state``, ``last_replicated_at``, ``lag_seconds``, ``bytes_behind``,\n``diverged``) and GetSecondaryReadiness (``peer_ready = completed and not\ndegraded and not resyncing``)."
+      },
       "TargetParams": {
         "properties": {
           "target_name": {
@@ -15933,7 +17082,10 @@
               "group_backup_delete",
               "cluster_expand",
               "replication_final",
-              "fdb_backup"
+              "fdb_backup",
+              "sync_promote",
+              "sync_resync",
+              "sync_site_fence"
             ],
             "title": "Function Name"
           },
@@ -16095,6 +17247,17 @@
               }
             ],
             "title": "Two Node Arbitration"
+          },
+          "leader_site": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leader Site"
           },
           "two_node_fencing_authority": {
             "anyOf": [
@@ -16921,6 +18084,17 @@
             "type": "boolean",
             "title": "Encrypt",
             "default": false
+          },
+          "site": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site"
           }
         },
         "type": "object",
@@ -17363,53 +18537,6 @@
           "spdk_image"
         ],
         "title": "_UpdateParams"
-      },
-      "DeviceGrowthDTO": {
-        "properties": {
-          "grown": {
-            "type": "boolean",
-            "title": "Grown"
-          },
-          "factor": {
-            "type": "number",
-            "title": "Factor"
-          },
-          "devices": {
-            "items": {
-              "$ref": "#/components/schemas/DeviceGrowthEntryDTO"
-            },
-            "type": "array",
-            "title": "Devices"
-          },
-          "errors": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "title": "Errors"
-          },
-          "reason": {
-            "type": "string",
-            "title": "Reason"
-          },
-          "shrunk": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Shrunk",
-            "default": []
-          }
-        },
-        "type": "object",
-        "required": [
-          "grown",
-          "factor",
-          "devices",
-          "errors",
-          "reason"
-        ],
-        "title": "DeviceGrowthDTO"
       },
       "DeviceGrowthEntryDTO": {
         "properties": {

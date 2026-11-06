@@ -255,7 +255,7 @@ type fakeControlPlane struct {
 
 	serviceClassesCalls    int
 	setServiceClassesCalls int
-	growDevicesCalls  int
+	growDevicesCalls       int
 }
 
 func (f *fakeControlPlane) Endpoint(context.Context) string { return f.endpoint }

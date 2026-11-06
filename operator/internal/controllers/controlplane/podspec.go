@@ -39,9 +39,8 @@ const (
 	lvolNVMfPortStart = "9110"
 
 	// prometheusHost and prometheusPort are where the control plane pushes the
-	// metrics it collects. The chart deploys that Prometheus as a subchart and
-	// still does, so the install names the same Service.
-	prometheusHost = "simplyblock-prometheus"
+	// metrics it collects: the Prometheus this install runs.
+	prometheusHost = ComponentPrometheus
 	prometheusPort = "9090"
 
 	// logLevelKey is the key in the shared ConfigMap every workload reads its

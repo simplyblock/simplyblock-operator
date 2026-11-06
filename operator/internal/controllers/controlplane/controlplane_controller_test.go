@@ -21,6 +21,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -295,6 +296,7 @@ func TestALoopbackEndpointIsRefused(t *testing.T) {
 // group the API server does not know is an error that reconciling does not fix.
 func TestAMissingFoundationDBGroupHoldsTheInstallWithAReason(t *testing.T) {
 	cp := localControlPlane()
+	cp.Spec.Source.Local.Prerequisites.InstallFoundationDBCRDs = ptr.To(false)
 	c := newClient(t, cp)
 	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
 

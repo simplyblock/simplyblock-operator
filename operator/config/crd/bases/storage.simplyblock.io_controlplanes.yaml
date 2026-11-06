@@ -189,6 +189,21 @@ spec:
                               type: string
                           type: object
                           x-kubernetes-map-type: atomic
+                        eksRoleARN:
+                          description: |-
+                            EKSRoleARN is the IAM role this control plane's pods and every
+                            StorageCluster's storage-node pods in this namespace assume, through a
+                            service account annotated with it (eks.amazonaws.com/role-arn). Amazon
+                            EKS's pod-identity webhook reads that annotation and injects the
+                            credentials the AWS SDK's default provider chain picks up from there,
+                            which is what lets a StorageCluster's backup.credentials name
+                            ProviderChain on EKS.
+
+                            Left unset, the service accounts this operator creates carry no such
+                            annotation, which is correct off Amazon EKS and on an EKS cluster whose
+                            pods authenticate another way.
+                          pattern: ^arn:aws[a-zA-Z0-9-]*:iam::[0-9]{12}:role/.+$
+                          type: string
                         foundationDB:
                           description: FoundationDB sizes the FoundationDB the management API stores its state in.
                           properties:
@@ -394,6 +409,40 @@ spec:
                               rule: '!has(self.secretRef) || (has(self.secretRef.name) && size(self.secretRef.name) > 0)'
                             - message: 'enableMonitoring requires secretRef: the control plane cannot provision the monitoring stack without its admin password'
                               rule: '!has(self.enableMonitoring) || !self.enableMonitoring || has(self.secretRef)'
+                        prerequisites:
+                          default: {}
+                          description: |-
+                            Prerequisites says which cluster add-ons the operator installs when the
+                            cluster lacks them. One left false is checked for and never installed.
+                          properties:
+                            installCertManager:
+                              default: true
+                              description: |-
+                                InstallCertManager installs cert-manager when cert-manager.io/v1 is not
+                                served. It is consulted only when the control plane serves TLS issued by
+                                cert-manager. Unset is on.
+                              type: boolean
+                            installFoundationDBCRDs:
+                              default: true
+                              description: |-
+                                InstallFoundationDBCRDs applies the apps.foundationdb.org CRDs when
+                                apps.foundationdb.org/v1beta2 is not served. Unset is on.
+                              type: boolean
+                            installLocalPathProvisioner:
+                              default: true
+                              description: |-
+                                InstallLocalPathProvisioner installs local-path-provisioner when no
+                                StorageClass uses rancher.io/local-path. Its class is made the default
+                                only when the cluster has no default class. Unset is on.
+                              type: boolean
+                            installSnapshotController:
+                              default: true
+                              description: |-
+                                InstallSnapshotController installs the CSI snapshot CRDs and
+                                snapshot-controller when snapshot.storage.k8s.io/v1 is not served. Unset
+                                is on.
+                              type: boolean
+                          type: object
                         replicas:
                           default: 2
                           description: |-
@@ -704,9 +753,9 @@ spec:
                   type: string
                 step:
                   description: |-
-                    Step is the position of the installation machine within Installing. The
-                    rule repeats the ControlPlaneStep enum because a marker cannot reach a
-                    field of the shared snapshot type.
+                    Step is the position of the installation machine, and Installed once the
+                    installation is complete. The rule repeats the ControlPlaneStep enum
+                    because a marker cannot reach a field of the shared snapshot type.
                   properties:
                     claim:
                       description: |-
@@ -746,7 +795,7 @@ spec:
                   type: object
                   x-kubernetes-validations:
                     - message: unknown step
-                      rule: '!has(self.state) || self.state in [''ApplyingFoundationDB'',''AwaitingFoundationDB'',''BuildingIndices'',''ApplyingDatastore'',''ApplyingAPI'',''AwaitingAPI'']'
+                      rule: '!has(self.state) || self.state in [''ApplyingFoundationDB'',''AwaitingFoundationDB'',''BuildingIndices'',''ApplyingDatastore'',''ApplyingAPI'',''AwaitingAPI'',''Installed'']'
                 version:
                   description: Version is the version the management API reports.
                   type: string

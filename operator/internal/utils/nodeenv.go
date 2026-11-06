@@ -93,5 +93,6 @@ ARGS="--max-lvol=${MAX_SUBSYS_COUNT}"
 [ -n "${BLK_SERIALS}" ] && ARGS="${ARGS} --blk-serials=\"${BLK_SERIALS}\""
 [ -n "${LBLK_JM_PERCENT}" ] && ARGS="${ARGS} --jm-percent=\"${LBLK_JM_PERCENT}\""
 [ "${LBLK_FORCE_FORMAT}" = "true" ] && ARGS="${ARGS} --force"
+[ "${LBLK_JOURNAL_DEVICE}" = "true" ] && ARGS="${ARGS} --lblk-journal-device"
 ARGS="${ARGS}`
 }

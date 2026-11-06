@@ -80,18 +80,6 @@ func parseSyncDetail(body []byte) syncDetail {
 	return d
 }
 
-// withQuery adds query parameters to a generated request.
-func withQuery(params map[string]string) cpapi.RequestEditorFn {
-	return func(_ context.Context, req *http.Request) error {
-		q := req.URL.Query()
-		for k, v := range params {
-			q.Set(k, v)
-		}
-		req.URL.RawQuery = q.Encode()
-		return nil
-	}
-}
-
 // syncError turns a refused sync verb into the error a caller classifies.
 func syncError(what string, code int, body []byte) error {
 	d := parseSyncDetail(body)
@@ -137,7 +125,7 @@ func (c *Client) SyncDemoteVolume(ctx context.Context, h lvol.VolumeHandle, site
 		return err
 	}
 	resp, err := c.api.ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostWithResponse(
-		ctx, cluster, pool, volume, withQuery(map[string]string{"site": site}))
+		ctx, cluster, pool, volume, &cpapi.ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostParams{Site: &site})
 	if err != nil {
 		return fmt.Errorf("demote volume %s on site %s: %w", h, site, err)
 	}
@@ -157,9 +145,10 @@ func (c *Client) SyncPromoteVolume(ctx context.Context, h lvol.VolumeHandle, sit
 	}
 	params := &cpapi.ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams{
 		Planned: &planned,
+		Site:    &site,
 	}
 	resp, err := c.api.ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostWithResponse(
-		ctx, cluster, pool, volume, params, withQuery(map[string]string{"site": site}))
+		ctx, cluster, pool, volume, params)
 	if err != nil {
 		return SyncPromoteResult{}, fmt.Errorf("promote volume %s on site %s: %w", h, site, err)
 	}

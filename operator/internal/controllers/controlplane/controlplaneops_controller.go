@@ -884,6 +884,10 @@ func (r *ControlPlaneOpsReconciler) finish(
 	ops.Status.Message = message
 	ops.Status.CompletedAt = &now
 	ops.Status.ObservedGeneration = ops.Generation
+	// A success reports the terminal step; a failure keeps the step it broke on.
+	if phase == simplyblockv1alpha2.ControlPlaneOpsPhaseSucceeded {
+		ops.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.ControlPlaneOpsStepCompleted)}
+	}
 	if err := r.Status().Patch(ctx, ops, client.MergeFrom(base)); err != nil {
 		return ctrl.Result{}, err
 	}

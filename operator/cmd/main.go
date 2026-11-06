@@ -694,6 +694,8 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("controlplane-controller"),
+		// Air-gapped clusters pull every image the install deploys from this mirror.
+		ImageMirrorRegistry: os.Getenv("SB_IMAGE_MIRROR_REGISTRY"),
 
 		NUMAPluginImage: os.Getenv(controlplanecontroller.NUMAPluginImageEnv),
 	}).SetupWithManager(ctrlMgr); err != nil {
@@ -1328,6 +1330,10 @@ func main() {
 	// exists. failurePolicy=Ignore keeps pod creation unblocked during the gap.
 	go func() {
 		<-webhookReady
+		mgr.GetWebhookServer().Register("/validate-v1-pod-eviction-foundationdb",
+			&webhook.Admission{Handler: &internalwebhook.FoundationDBEvictionHandler{Client: mgr.GetClient()}})
+		setupLog.Info("registered FoundationDB eviction webhook")
+
 		mgr.GetWebhookServer().Register("/mutate-v1-pod-simplyblock-rebalancer",
 			&webhook.Admission{Handler: &internalwebhook.SimplyblockRebalancerInjector{Client: mgr.GetClient()}})
 		setupLog.Info("registered simplyblock-rebalancer mutating webhook")

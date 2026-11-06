@@ -60,7 +60,7 @@ const (
 )
 
 // ClusterDeploymentConfigStep is one step of the expansion path.
-// +kubebuilder:validation:Enum=Validating;CreatingCluster;AwaitingCluster;CreatingNodes;Activating
+// +kubebuilder:validation:Enum=Validating;CreatingCluster;AwaitingCluster;CreatingNodes;Activating;Completed
 type ClusterDeploymentConfigStep string
 
 const (
@@ -77,6 +77,9 @@ const (
 	// cluster that serves nothing behind a document reporting Expanded, with
 	// nothing saying that one more thing is required of anybody.
 	ClusterDeploymentConfigStepActivating ClusterDeploymentConfigStep = "Activating"
+	// ClusterDeploymentConfigStepCompleted is the terminal step of a document
+	// that expanded.
+	ClusterDeploymentConfigStepCompleted ClusterDeploymentConfigStep = "Completed"
 )
 
 // KubernetesEnvironment is the distribution a deployment targets. The values are
@@ -481,6 +484,10 @@ type ClusterTemplate struct {
 	// EnableJournalDevice dedicates the smallest NVMe device on each of this
 	// deployment's workers to the journal manager, instead of carving a journal
 	// partition out of every device.
+	//
+	// For logical block devices it dedicates the smallest device of each node
+	// to the journal, instead of carving one journal partition out of that
+	// device (the default journal split), and needs two devices per node.
 	//
 	// It is here rather than on a node set because it is immutable on the cluster
 	// it lands on, for the reason SocketsToUse is: the on-disk layout a fleet was
@@ -913,7 +920,7 @@ type ClusterDeploymentConfigStatus struct {
 	Phase ClusterDeploymentConfigPhase `json:"phase,omitempty"`
 
 	// Step is the position of the expansion machine within Expanding.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','CreatingCluster','AwaitingCluster','CreatingNodes','Activating']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','CreatingCluster','AwaitingCluster','CreatingNodes','Activating','Completed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

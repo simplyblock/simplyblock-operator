@@ -23,9 +23,10 @@ rules:
   - ""
   resources:
   - namespaces
-  - pods/log
   verbs:
+  - create
   - get
+  - patch
 - apiGroups:
   - ""
   resources:
@@ -77,6 +78,12 @@ rules:
   - watch
 - apiGroups:
   - ""
+  resources:
+  - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - ""
   - events.k8s.io
   resources:
   - events
@@ -89,6 +96,7 @@ rules:
   - mutatingwebhookconfigurations
   - validatingwebhookconfigurations
   verbs:
+  - create
   - get
   - list
   - patch
@@ -107,8 +115,32 @@ rules:
   resources:
   - customresourcedefinitions
   verbs:
+  - create
   - list
   - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resourceNames:
+  - certificaterequests.cert-manager.io
+  - certificates.cert-manager.io
+  - challenges.acme.cert-manager.io
+  - clusterissuers.cert-manager.io
+  - foundationdbbackups.apps.foundationdb.org
+  - foundationdbclusters.apps.foundationdb.org
+  - foundationdbrestores.apps.foundationdb.org
+  - issuers.cert-manager.io
+  - orders.acme.cert-manager.io
+  - volumegroupsnapshotclasses.groupsnapshot.storage.k8s.io
+  - volumegroupsnapshotcontents.groupsnapshot.storage.k8s.io
+  - volumegroupsnapshots.groupsnapshot.storage.k8s.io
+  - volumesnapshotclasses.snapshot.storage.k8s.io
+  - volumesnapshotcontents.snapshot.storage.k8s.io
+  - volumesnapshots.snapshot.storage.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - get
+  - patch
 - apiGroups:
   - apiextensions.k8s.io
   resourceNames:
@@ -198,6 +230,14 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - clusterissuers
+  verbs:
+  - create
+  - get
+  - patch
 - apiGroups:
   - cluster.open-cluster-management.io
   resources:
@@ -357,6 +397,7 @@ rules:
   - delete
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - storage.k8s.io

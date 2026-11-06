@@ -50,7 +50,7 @@ image:
     # -- NUMA resource plugin image.
     repository: quay.io/simplyblock-io/numa-resource-plugin
     # -- NUMA resource plugin image tag.
-    tag: latest
+    tag: v1.0.0
 rbac:
   # Specifies whether RBAC resources should be created
   # -- RBAC switch. Not read by the chart templates.
@@ -622,6 +622,17 @@ controlplane:
     # `controlplane.managed.credentialsSecretRef`. Empty grants no additional credential.
     adminTokenSecretRef: ""
 
+    # The IAM role this control plane's pods and every StorageCluster's
+    # storage-node pods in this namespace assume, through a ServiceAccount
+    # annotated with it (eks.amazonaws.com/role-arn). It is what lets a
+    # StorageCluster's spec.backup.credentials name ProviderChain on Amazon
+    # EKS, with no access key stored anywhere in Kubernetes. Empty leaves the
+    # accounts this chart creates without the annotation, which is correct
+    # off EKS.
+    # -- IAM role ARN to annotate this release's ServiceAccounts with (`eks.amazonaws.com/role-arn`), for
+    # S3 backup credentials through Amazon EKS's pod-identity webhook. Empty adds no annotation.
+    eksRoleARN: ""
+
   # Where the control plane is, for deployment.profile: managed.
   managed:
     # Base URL of the management API. Required for that profile. A loopback or
@@ -1083,11 +1094,11 @@ opensearch:
     enabled: false
 
 prometheus:
-  # Where the control plane pushes what it measures. A managed deployment
-  # reports to the control plane administering it, so it can turn this off.
-  # -- Installs the Prometheus subchart. A `managed` deployment that reports to its remote control
-  # plane can turn it off.
-  enabled: true
+  # The operator runs Prometheus and its Thanos sidecar as a ControlPlane
+  # component, so the subchart stays off; enabling it creates a second
+  # simplyblock-prometheus that the operator and Helm fight over.
+  # -- Installs the Prometheus subchart. Off: the ControlPlane installs Prometheus.
+  enabled: false
   simplyblock:
     # -- Prometheus service name the Control Center queries when `controlCenter.prometheusUrl` is
     # empty.

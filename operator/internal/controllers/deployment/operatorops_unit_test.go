@@ -396,6 +396,9 @@ func TestDiscoverFailsWhenNoWorkerIsFree(t *testing.T) {
 	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseFailed {
 		t.Fatalf("the run is %q, want Failed", ops.Status.Phase)
 	}
+	if ops.Status.Step.State != string(simplyblockv1alpha2.OperatorOpsStepInspecting) {
+		t.Errorf("a failed run is on step %q, want the step it broke on, Inspecting", ops.Status.Step.State)
+	}
 	if !strings.Contains(ops.Status.Message, "no worker is free") {
 		t.Errorf("the message is %q, and it does not say what was wrong", ops.Status.Message)
 	}
@@ -470,6 +473,9 @@ func TestDiscoverWritesADraftFromTheReports(t *testing.T) {
 	if ops.Status.CompletedAt == nil {
 		t.Error("a finished run does not say when it finished")
 	}
+	if ops.Status.Step.State != string(simplyblockv1alpha2.OperatorOpsStepCompleted) {
+		t.Errorf("a succeeded run is on step %q, want Completed", ops.Status.Step.State)
+	}
 
 	configs := r.configs()
 	if len(configs) != 1 {
@@ -510,9 +516,9 @@ func TestDiscoverWritesADraftFromTheReports(t *testing.T) {
 	if config.Spec.Cluster == nil {
 		t.Fatal("the document proposes no cluster")
 	}
-	if config.Spec.Cluster.VCPUCount == nil || *config.Spec.Cluster.VCPUCount != 14 {
-		t.Errorf("the cluster asks for %v vCPUs, want the 16 logical CPUs of the chosen node less the two kept for the system",
-			config.Spec.Cluster.VCPUCount)
+	if config.Spec.Cluster.VCPUCount == nil || *config.Spec.Cluster.VCPUCount != 5 {
+		t.Errorf("the cluster asks for %v vCPUs, want 5: a tenth of the 16 logical CPUs of the chosen node, raised to the default minimum",
+			ptr.IntFromOrZero(config.Spec.Cluster.VCPUCount))
 	}
 	if config.Spec.Cluster.MaxSubsystemCount == nil {
 		t.Error("the cluster names no maxSubsystemCount, which the API requires")

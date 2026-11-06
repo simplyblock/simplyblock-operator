@@ -135,6 +135,9 @@ func TestTheLastStepFinishingEndsTheOperation(t *testing.T) {
 	if got.Status.Phase != simplyblockv1alpha2.StorageNodeOpsPhaseSucceeded {
 		t.Errorf("phase = %q, want Succeeded", got.Status.Phase)
 	}
+	if want := string(simplyblockv1alpha2.StorageNodeOpsStepCompleted); got.Status.Step.State != want {
+		t.Errorf("step = %q, want %q once the operation succeeded", got.Status.Step.State, want)
+	}
 	if holder := lockHolder(t, apiClient); holder != "" {
 		t.Errorf("the node is still held by %q after the operation finished", holder)
 	}
@@ -447,6 +450,9 @@ func TestAStepThatOutlivedItsDeadlineFailsTheOperation(t *testing.T) {
 	got := operationRead(t, apiClient, "a-drain")
 	if got.Status.Phase != simplyblockv1alpha2.StorageNodeOpsPhaseFailed {
 		t.Errorf("phase = %q, want Failed", got.Status.Phase)
+	}
+	if got.Status.Step.State != string(stepMigratingVolumes) {
+		t.Errorf("step = %q, want the step the operation failed in", got.Status.Step.State)
 	}
 	if !announcedReason(r, StepDeadlineExceeded) {
 		t.Error("nothing announced the expiry, so a failed operation looks like a slow one")

@@ -154,14 +154,31 @@ jobs:
           output-format: json
           output-file: grype-release.json
 
+      # setup-trivy downloads from get.trivy.dev, which has stopped resolving;
+      # install from the GitHub release instead and skip the action's setup.
+      - name: Install Trivy
+        env:
+          TRIVY_VERSION: 0.70.0
+        run: |
+          base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          tarball="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "${base}/${tarball}"
+          curl -fsSLO "${base}/trivy_${TRIVY_VERSION}_checksums.txt"
+          grep " ${tarball}\$" "trivy_${TRIVY_VERSION}_checksums.txt" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf "$tarball" -C "$HOME/.local/bin" trivy
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Run Trivy on branch image (gating)
         id: trivy-branch
         continue-on-error: true
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ matrix.image }}:${{ steps.tags.outputs.branch_tag }}
           format: json
           output: trivy-branch.json
+          skip-setup-trivy: true
           severity: CRITICAL,HIGH,MEDIUM
           ignore-unfixed: true
           exit-code: '1'
@@ -169,11 +186,12 @@ jobs:
 
       - name: Run Trivy on released image (informational)
         if: matrix.line != 'main'
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ matrix.image }}:${{ steps.tags.outputs.release_tag }}
           format: json
           output: trivy-release.json
+          skip-setup-trivy: true
           severity: CRITICAL,HIGH,MEDIUM
           ignore-unfixed: true
           exit-code: '0'
@@ -232,11 +250,12 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Generate SBOM (CycloneDX)
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ matrix.image }}:${{ steps.tags.outputs.branch_tag }}
           format: cyclonedx
           output: sbom.cdx.json
+          skip-setup-trivy: true
 
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
