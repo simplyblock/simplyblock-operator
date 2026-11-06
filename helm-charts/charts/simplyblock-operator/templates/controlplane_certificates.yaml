@@ -9,14 +9,13 @@ spec:
   selfSigned: {}
 {{- end }}
 ---
-# The CA Certificate must live in the cert-manager namespace so that the
-# ClusterIssuer below can read its backing secret. ClusterIssuers always look
-# for CA secrets in the namespace where cert-manager itself is running.
+# The CA Certificate lives in cert-manager's cluster resource namespace, the
+# only place the ClusterIssuer below reads its Secret from.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: simplyblock-certificate-authority
-  namespace: {{ index .Values.tls "cert-manager" "namespace" }}
+  namespace: {{ include "simplyblock.certManagerNamespace" . }}
 spec:
   isCA: true
   commonName: simplyblock-certificate-authority
