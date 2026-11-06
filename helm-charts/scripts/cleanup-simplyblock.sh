@@ -320,6 +320,21 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 0c. Remove the OLM Subscription, or OLM restarts the operator step 0 stops
+# ---------------------------------------------------------------------------
+if $KUBECTL get crd subscriptions.operators.coreos.com >/dev/null 2>&1; then
+    section "Removing the OLM Subscription in '$NAMESPACE'"
+    subs=$($KUBECTL get subscriptions.operators.coreos.com -n "$NAMESPACE" -o \
+        jsonpath='{range .items[?(@.spec.name=="simplyblock-operator")]}{.metadata.name} {.status.installedCSV}{"\n"}{end}' 2>/dev/null || true)
+    while read -r sub csv; do
+        [[ -z "$sub" ]] && continue
+        info "Deleting Subscription $sub and ClusterServiceVersion ${csv:-none}..."
+        $KUBECTL delete subscriptions.operators.coreos.com "$sub" -n "$NAMESPACE" --ignore-not-found || true
+        [[ -n "$csv" ]] && { $KUBECTL delete csv "$csv" -n "$NAMESPACE" --ignore-not-found || true; }
+    done <<< "$subs"
+fi
+
+# ---------------------------------------------------------------------------
 # 0. Release simplyblock volumes while the CSI node plugin still runs
 # ---------------------------------------------------------------------------
 section "Releasing simplyblock volumes mounted in namespace '$NAMESPACE'"
@@ -394,7 +409,8 @@ fi
 # ---------------------------------------------------------------------------
 section "Removing CRs and finalizers"
 
-CRDS=$($KUBECTL get crd -o name 2>/dev/null | grep "$CRD_GROUP" | sed 's|customresourcedefinition.apiextensions.k8s.io/||')
+# The FoundationDB CRDs come from the chart's crds/ directory, which helm uninstall keeps.
+CRDS=$($KUBECTL get crd -o name 2>/dev/null | { grep -E "$CRD_GROUP|apps\.foundationdb\.org" || true; } | sed 's|customresourcedefinition.apiextensions.k8s.io/||')
 
 for crd in $CRDS; do
     resources=$($KUBECTL get "$crd" -n "$NAMESPACE" --ignore-not-found -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)
@@ -651,6 +667,15 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 4a. Remove the cluster-scoped objects of the operator's local-path-provisioner
+# ---------------------------------------------------------------------------
+section "Removing the local-path-provisioner installed by the operator"
+
+LP_SELECTOR="storage.simplyblock.io/installed-prerequisite=local-path-provisioner"
+$KUBECTL delete storageclass,clusterrolebinding,clusterrole -l "$LP_SELECTOR" \
+    --ignore-not-found --timeout=30s || warn "Could not delete the local-path-provisioner objects"
+
+# ---------------------------------------------------------------------------
 # 4b. Remove Deployments in kube-system owned by this Helm release
 # ---------------------------------------------------------------------------
 section "Removing kube-system Deployments owned by '$HELM_RELEASE'"
@@ -694,7 +719,8 @@ done
 
 # Confirm CRDs removed
 section "Confirming CRD removal"
-remaining_crds=$($KUBECTL get crd -o name 2>/dev/null | grep "$CRD_GROUP" | wc -l | tr -d ' ')
+# grep -c exits 1 on zero matches, which pipefail and set -e would turn into an exit.
+remaining_crds=$($KUBECTL get crd -o name 2>/dev/null | grep -cE "$CRD_GROUP|apps\.foundationdb\.org" || true)
 if [[ "$remaining_crds" -eq 0 ]]; then
     info "All CRDs removed successfully."
 elif [[ "${#blocked_crds[@]}" -gt 0 ]]; then
@@ -705,8 +731,61 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 5a. Remove the cluster-scoped objects and node keys the operator created
+# ---------------------------------------------------------------------------
+# These are shared by every simplyblock install, so they go only when no CRD was
+# kept for an install in another namespace.
+section "Removing operator-created cluster-scoped objects"
+
+if [[ "${#blocked_crds[@]}" -gt 0 ]]; then
+    warn "Another namespace still uses simplyblock; leaving the shared cluster-scoped objects and node labels."
+else
+    $KUBECTL delete csidriver,clusterrolebinding,clusterrole \
+        -l "storage.simplyblock.io/managed-by" --ignore-not-found --timeout=30s || \
+        warn "Could not delete the operator-managed cluster-scoped objects"
+    # The operator creates the storage-node role and binding without labels.
+    $KUBECTL delete clusterrolebinding "simplyblock-storage-node-binding-${NAMESPACE}" \
+        --ignore-not-found --timeout=30s || warn "Could not delete the storage-node ClusterRoleBinding"
+    $KUBECTL delete clusterrole simplyblock-storage-node-role \
+        --ignore-not-found --timeout=30s || warn "Could not delete the storage-node ClusterRole"
+    if $KUBECTL get crd clusterissuers.cert-manager.io >/dev/null 2>&1; then
+        $KUBECTL delete clusterissuer -l "storage.simplyblock.io/installed-prerequisite" \
+            --ignore-not-found --timeout=30s || warn "Could not delete the simplyblock ClusterIssuer"
+    fi
+
+    info "Removing simplyblock labels and annotations from nodes..."
+    # Prints `node label-keys annotation-keys` per node, each key list comma-joined
+    # with a trailing `-` per key; `_` stands for an empty list.
+    node_keys=$($KUBECTL get nodes -o json 2>/dev/null | python3 -c '
+import json, sys
+prefixes = ("storage.simplyblock.io/", "subnet.storage.simplyblock.io/", "topology.simplyblock.io/")
+for n in json.load(sys.stdin).get("items", []):
+    m = n["metadata"]
+    keys = lambda d: " ".join(k + "-" for k in (d or {}) if k.startswith(prefixes)) or "_"
+    print(m["name"], keys(m.get("labels")).replace(" ", ","), keys(m.get("annotations")).replace(" ", ","))
+' 2>/dev/null) || { warn "Could not list nodes; leaving their labels."; node_keys=""; }
+    while read -r node labels annotations; do
+        [[ -z "$node" ]] && continue
+        if [[ "$labels" != _ ]]; then
+            # shellcheck disable=SC2086
+            $KUBECTL label node "$node" ${labels//,/ } >/dev/null || warn "Could not remove labels from $node"
+        fi
+        if [[ "$annotations" != _ ]]; then
+            # shellcheck disable=SC2086
+            $KUBECTL annotate node "$node" ${annotations//,/ } >/dev/null || warn "Could not remove annotations from $node"
+        fi
+    done <<< "$node_keys"
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Remove the namespace
+# ---------------------------------------------------------------------------
+section "Removing namespace '$NAMESPACE'"
+$KUBECTL delete namespace "$NAMESPACE" --ignore-not-found --timeout=300s || \
+    warn "Namespace '$NAMESPACE' was not removed within 300s"
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 section "Cleanup complete"
 info "Namespace: $NAMESPACE"
-info "If the namespace itself should be removed, run: $KUBECTL delete namespace $NAMESPACE"
