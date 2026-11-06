@@ -21,6 +21,20 @@ func webAPIProbeOf(t *testing.T, tls simplyblockv1alpha2.ControlPlaneTLS) *corev
 	return probe
 }
 
+func webAPILivenessProbeOf(t *testing.T, tls simplyblockv1alpha2.ControlPlaneTLS) *corev1.Probe {
+	t.Helper()
+	probe := webAPIDeployment(aLocalControlPlane(tls)).Spec.Template.Spec.Containers[0].LivenessProbe
+	if probe == nil {
+		t.Fatal("the management API has no liveness probe, so a hung process is never restarted")
+	}
+	return probe
+}
+
+// Regression: the readiness probe asked the v1 API's combined listen-and-reach
+// endpoint. v2 splits that into /_meta/health (the process answers) and
+// /_meta/ready (it can reach the database), and the probes below pin each to
+// its own.
+//
 // Under mutual TLS the kubelet has no certificate to present, so the probe runs
 // in the container and presents the pod's own.
 func TestWebAPIReadinessUnderMutualTLSPresentsThePodCertificate(t *testing.T) {
@@ -34,7 +48,7 @@ func TestWebAPIReadinessUnderMutualTLSPresentsThePodCertificate(t *testing.T) {
 		"--fail",
 		"--cert " + tlsMountPath + "/tls.crt",
 		"--key " + tlsMountPath + "/tls.key",
-		"https://127.0.0.1:5000" + webAPIHealthPath,
+		"https://127.0.0.1:5000" + webAPIReadyPath,
 	} {
 		if !strings.Contains(command, want) {
 			t.Errorf("probe command %q lacks %q", command, want)
@@ -62,6 +76,45 @@ func TestWebAPIReadinessWithoutMutualTLSIsAnHTTPGet(t *testing.T) {
 			if get == nil {
 				t.Fatalf("the probe is %+v, not an HTTP GET", probe.ProbeHandler)
 			}
+			if get.Path != webAPIReadyPath || get.Port.IntValue() != webAPIPort || get.Scheme != tc.scheme {
+				t.Errorf("the probe asks %s %s:%d, want %s %s:%d",
+					get.Scheme, get.Path, get.Port.IntValue(), tc.scheme, webAPIReadyPath, webAPIPort)
+			}
+		})
+	}
+}
+
+// The liveness probe asks only whether the process answers, so a FoundationDB
+// outage that the readiness probe is right to take the pod out of the Service
+// for must not also restart it. It is the same transport switch as readiness,
+// aimed at the endpoint that does not touch the database.
+func TestWebAPILivenessUnderMutualTLSPresentsThePodCertificate(t *testing.T) {
+	probe := webAPILivenessProbeOf(t, simplyblockv1alpha2.ControlPlaneTLS{})
+
+	if probe.Exec == nil {
+		t.Fatalf("the probe is %+v; the kubelet cannot pass a client certificate", probe.ProbeHandler)
+	}
+	command := strings.Join(probe.Exec.Command, " ")
+	if !strings.Contains(command, "https://127.0.0.1:5000"+webAPIHealthPath) {
+		t.Errorf("probe command %q does not ask %s", command, webAPIHealthPath)
+	}
+}
+
+func TestWebAPILivenessWithoutMutualTLSIsAnHTTPGet(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		tls    simplyblockv1alpha2.ControlPlaneTLS
+		scheme corev1.URIScheme
+	}{
+		{"tls", simplyblockv1alpha2.ControlPlaneTLS{EnableMutualTLS: ptr.To(false)}, corev1.URISchemeHTTPS},
+		{"plaintext", simplyblockv1alpha2.ControlPlaneTLS{EnableTLS: ptr.To(false)}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			probe := webAPILivenessProbeOf(t, tc.tls)
+			get := probe.HTTPGet
+			if get == nil {
+				t.Fatalf("the probe is %+v, not an HTTP GET", probe.ProbeHandler)
+			}
 			if get.Path != webAPIHealthPath || get.Port.IntValue() != webAPIPort || get.Scheme != tc.scheme {
 				t.Errorf("the probe asks %s %s:%d, want %s %s:%d",
 					get.Scheme, get.Path, get.Port.IntValue(), tc.scheme, webAPIHealthPath, webAPIPort)
@@ -83,7 +136,7 @@ func TestWebAPIReadinessToleratesABriefDatabaseStall(t *testing.T) {
 }
 
 // A stopping pod keeps serving until its endpoint is gone everywhere, and has
-// time left afterwards to finish.
+// time left afterward to finish.
 func TestWebAPIKeepsServingWhileItIsRemovedFromTheService(t *testing.T) {
 	spec := webAPIDeployment(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{})).Spec.Template.Spec
 	hook := spec.Containers[0].Lifecycle

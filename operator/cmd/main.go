@@ -711,6 +711,17 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlaneOps")
 		os.Exit(1)
 	}
+	// A contingency for a wedge seen in practice: a management API pod whose
+	// process answers its liveness probe while its readiness probe never
+	// recovers. It should not happen; this is the operator refusing to leave
+	// it unnoticed and unrestarted (webapiwatchdog.go).
+	if err := mgr.Add(&controlplanecontroller.WebAPIReadinessWatchdog{
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorder("webapi-readiness-watchdog"),
+	}); err != nil {
+		setupLog.Error(err, "unable to add the management API readiness watchdog")
+		os.Exit(1)
+	}
 	// The site link is the elected replica's, so it runs as a leader-election
 	// runnable and the StorageCluster controller probes through it.
 	var siteLinkProber clustercontroller.SiteLinkProber

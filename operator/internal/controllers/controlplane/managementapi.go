@@ -312,6 +312,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 			Env:             env,
 			VolumeMounts:    append([]corev1.VolumeMount{clusterFileMount()}, tlsMount(managed)...),
 			Resources:       webAPIResources(managed),
+			LivenessProbe:   webAPILivenessProbe(managed),
 			ReadinessProbe:  webAPIReadinessProbe(managed),
 			// Removing a pod from the Service and stopping it start together, and
 			// the endpoint update takes a moment to reach every node. The pod keeps
@@ -355,21 +356,27 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 	}
 }
 
-// webAPIHealthPath is the v1 API's /health/fdb under its /api/v1 mount. It answers
-// without credentials and reads one key from FoundationDB, so a pod passes only
-// once it listens and reaches the database.
-const webAPIHealthPath = "/api/v1/health/fdb"
+// webAPIHealthPath answers whether the process itself is up, with no database
+// involved. webAPIReadyPath is the one that also reads FoundationDB, so a pod
+// passes it only once it can do something meaningful. Both are the v2 API's
+// /_meta mount; the v1 API had one endpoint conflating the two questions.
+const (
+	webAPIHealthPath = "/api/v2/_meta/health"
+	webAPIReadyPath  = "/api/v2/_meta/ready"
+)
+
+// webAPILivenessProbe asks only whether the process answers. It must not depend
+// on FoundationDB: a stall there is the readiness probe's job to act on, and a
+// liveness probe that also failed on it would restart every replica into the
+// same outage instead of just taking them out of the Service.
+func webAPILivenessProbe(managed *simplyblockv1alpha2.LocalControlPlane) *corev1.Probe {
+	return webAPIProbe(managed, webAPIHealthPath)
+}
 
 // webAPIReadinessProbe keeps the Service from routing to a pod that does not
 // answer yet. Without it a replacement pod receives connections the moment its
 // container starts, before the API listens, and callers see connection refused
 // for the seconds that takes; a rollout or a drain does this to every pod.
-//
-// The kubelet cannot present a client certificate, so under mutual TLS the
-// probe runs curl in the container with the pod's own certificate. The server
-// is not verified: the probe connects to its own pod over loopback, and the
-// serving certificate does not name 127.0.0.1. Without mutual TLS the kubelet
-// probes directly, over HTTPS when the API serves TLS.
 //
 // Six failures five seconds apart take a pod out: a FoundationDB recovery or a
 // replacement moving roles pauses the database for seconds, and a probe that
@@ -377,6 +384,18 @@ const webAPIHealthPath = "/api/v1/health/fdb"
 // into a refused connection. A pod that never comes up, the case the probe is
 // for, still stays out of the Service until it answers.
 func webAPIReadinessProbe(managed *simplyblockv1alpha2.LocalControlPlane) *corev1.Probe {
+	return webAPIProbe(managed, webAPIReadyPath)
+}
+
+// webAPIProbe is the transport the liveness and readiness probes share, aimed
+// at whichever of the two endpoints the caller asks for.
+//
+// The kubelet cannot present a client certificate, so under mutual TLS the
+// probe runs curl in the container with the pod's own certificate. The server
+// is not verified: the probe connects to its own pod over loopback, and the
+// serving certificate does not name 127.0.0.1. Without mutual TLS the kubelet
+// probes directly, over HTTPS when the API serves TLS.
+func webAPIProbe(managed *simplyblockv1alpha2.LocalControlPlane, path string) *corev1.Probe {
 	probe := &corev1.Probe{
 		PeriodSeconds:    5,
 		TimeoutSeconds:   4,
@@ -389,14 +408,14 @@ func webAPIReadinessProbe(managed *simplyblockv1alpha2.LocalControlPlane) *corev
 			"curl", "--fail", "--silent", "--show-error", "--insecure", "--max-time", "3",
 			"--output", "/dev/null",
 			"--cert", tlsMountPath + "/tls.crt", "--key", tlsMountPath + "/tls.key",
-			"https://127.0.0.1:" + strconv.Itoa(webAPIPort) + webAPIHealthPath,
+			"https://127.0.0.1:" + strconv.Itoa(webAPIPort) + path,
 		}}
 	case managed.ServesTLS():
 		probe.HTTPGet = &corev1.HTTPGetAction{
-			Path: webAPIHealthPath, Port: intstr.FromInt32(webAPIPort), Scheme: corev1.URISchemeHTTPS,
+			Path: path, Port: intstr.FromInt32(webAPIPort), Scheme: corev1.URISchemeHTTPS,
 		}
 	default:
-		probe.HTTPGet = &corev1.HTTPGetAction{Path: webAPIHealthPath, Port: intstr.FromInt32(webAPIPort)}
+		probe.HTTPGet = &corev1.HTTPGetAction{Path: path, Port: intstr.FromInt32(webAPIPort)}
 	}
 	return probe
 }
