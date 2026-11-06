@@ -128,7 +128,7 @@ data:
           "rejections": [
             {
               "reason": "Stacked",
-              "detail": "as the probe found it"
+              "detail": "held by [dm-0]"
             }
           ]
         },
@@ -145,7 +145,7 @@ data:
           "rejections": [
             {
               "reason": "Stacked",
-              "detail": "as the probe found it"
+              "detail": "held by [dm-0]"
             }
           ]
         },
@@ -162,7 +162,7 @@ data:
           "rejections": [
             {
               "reason": "Stacked",
-              "detail": "as the probe found it"
+              "detail": "held by [dm-0]"
             }
           ]
         },
@@ -179,7 +179,7 @@ data:
           "rejections": [
             {
               "reason": "Stacked",
-              "detail": "as the probe found it"
+              "detail": "held by [dm-0]"
             }
           ]
         }

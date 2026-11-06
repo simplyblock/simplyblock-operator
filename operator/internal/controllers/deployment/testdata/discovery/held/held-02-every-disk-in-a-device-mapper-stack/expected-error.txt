@@ -1,1 +1,1 @@
-no worker has a device this run would use: 4 device(s) across 1 worker(s), none usable: 4 declined by available: the probe refused it: Stacked
+no worker has a device this run would use: 4 device(s) across 1 worker(s), none usable: 4 declined by available: the probe refused it: Stacked (held by [dm-0])
