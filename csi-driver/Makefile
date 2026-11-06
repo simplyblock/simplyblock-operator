@@ -145,13 +145,21 @@ unit-test:
 # e2e test
 .PHONY: e2e-test
 # Pass extra arguments to e2e tests.
-# Use E2E_PROCS=N to run specs in parallel (requires the ginkgo CLI).
-# Use E2E_TEST_ARGS to pass additional ginkgo flags.
+# Use E2E_PROCS=N to run specs in parallel (only the ginkgo CLI path below
+# supports that). E2E_TEST_ARGS carries ginkgo flags either way; the default
+# E2E_PROCS=1 always runs through the ginkgo CLI, so '--focus'/'--skip' below
+# work as shown. Set E2E_PROCS= (empty) to fall back to plain 'go test', which
+# needs the '--ginkgo.'-prefixed flag spelling instead.
 # Examples:
 #   make e2e-test E2E_PROCS=4
 #   make e2e-test E2E_PROCS=4 E2E_TEST_ARGS='--skip="SPDKCSI-MULTICLUSTER|XFS"'
 #   make e2e-test E2E_TEST_ARGS='--focus="SPDKCSI-NVMEOF"'
-E2E_PROCS=
+#
+# Running against a live, operator-managed cluster (e.g. the S3 specs) also
+# needs OPERATOR_MODE=true, CSI_NAMESPACE=<namespace>, GATEWAY_IMAGE=<image>,
+# and POOL_NAME=<pool>; see TESTING.md at the repo root. deploy.sh prints the
+# exact invocation, with those filled in, once it finishes.
+E2E_PROCS=1
 E2E_TEST_ARGS=
 e2e-test:
 	@echo === running e2e test
