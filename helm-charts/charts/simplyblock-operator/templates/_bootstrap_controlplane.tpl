@@ -114,6 +114,16 @@ spec:
         {{- end }}
       {{- end }}
       {{- end }}
+      {{- with .Values.controlplane.local.prerequisites }}
+      # Which missing cluster add-ons the operator installs. Stated explicitly,
+      # for the same reason as tls above: the release's values decide, not the
+      # CR's defaults.
+      prerequisites:
+        installFoundationDBCRDs: {{ ne .installFoundationDBCRDs false }}
+        installCertManager: {{ ne .installCertManager false }}
+        installLocalPathProvisioner: {{ ne .installLocalPathProvisioner false }}
+        installSnapshotController: {{ ne .installSnapshotController false }}
+      {{- end }}
       {{- if .Values.controlplane.local.adminTokenSecretRef }}
       adminTokenSecretRef:
         name: {{ .Values.controlplane.local.adminTokenSecretRef | quote }}
