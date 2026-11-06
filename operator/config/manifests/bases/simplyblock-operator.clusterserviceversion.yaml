@@ -6,6 +6,7 @@ metadata:
     capabilities: Basic Install
     operatorframework.io/initialization-resource: '{"apiVersion":"storage.simplyblock.io/v1alpha2","kind":"ControlPlane","metadata":{"name":"simplyblock","namespace":"simplyblock"},"spec":{"source":{"local":{"image":"quay.io/simplyblock-io/simplyblock:26.4.0-beta4"}}}}'
     operatorframework.io/suggested-namespace: simplyblock
+    operators.operatorframework.io/internal-objects: '["backupimports.storage.simplyblock.io", "backuppolicies.storage.simplyblock.io", "backuprestores.storage.simplyblock.io", "clusterdeploymentconfigs.storage.simplyblock.io", "controlplaneops.storage.simplyblock.io", "nfsexports.storage.simplyblock.io", "persistentvolumeops.storage.simplyblock.io", "replicationops.storage.simplyblock.io", "replicationpairs.storage.simplyblock.io", "replicationpolicies.storage.simplyblock.io", "replicationslots.storage.simplyblock.io", "storagebackupops.storage.simplyblock.io", "storagebackuppolicies.storage.simplyblock.io", "storagebackups.storage.simplyblock.io", "storageclusterops.storage.simplyblock.io", "storageclusters.storage.simplyblock.io", "storagedeviceops.storage.simplyblock.io", "storagedevices.storage.simplyblock.io", "storagefenceremediations.storage.simplyblock.io", "storagefenceremediationtemplates.storage.simplyblock.io", "storagegroupbackups.storage.simplyblock.io", "storagenodeops.storage.simplyblock.io", "storagenodes.storage.simplyblock.io", "storagenodesets.storage.simplyblock.io", "storagepoolops.storage.simplyblock.io", "storagepools.storage.simplyblock.io", "storagesitedeployments.storage.simplyblock.io", "stretchedclusters.storage.simplyblock.io", "tasks.storage.simplyblock.io", "testfailovers.storage.simplyblock.io", "volumegroupsnapshotops.storage.simplyblock.io", "volumemigrations.storage.simplyblock.io"]'
     categories: Storage
     com.redhat.openshift.versions: v4.19
     containerImage: quay.io/simplyblock-io/simplyblock-operator@sha256:b7db1d324fa1d6d272f40d696a46c11147de541ca54eb95e67760bc821dec4d8
@@ -815,8 +816,10 @@ spec:
     1. **Control Plane**, named `simplyblock`. Wait until its phase is *Ready*.
     2. **Simplyblock Driver**, named `simplyblock`. It stays *Unavailable* until a storage cluster exists.
     3. **Operator Ops** with action *Discover*. It writes a draft **Cluster Deployment Config** named `discovered-<name>`.
-    4. Open the draft **Cluster Deployment Config**, review its workers and devices in the YAML tab (listed devices are formatted), and set `spec.approved: true`.
-    5. Watch the **Storage Cluster**, **Storage Node**, and **Storage Pool** tabs until they report *Online*.
+    4. Review the draft in the YAML of the ClusterDeploymentConfig named `discovered-<name>` (**Home → Search**, resource *ClusterDeploymentConfig*). Listed devices are formatted. Set `spec.approved: true` and save to deploy.
+    5. The storage cluster, nodes, and pool are managed by the operator and come up within several minutes. **Home → Search** shows their state.
+
+    Only the three resources above are meant to be created by hand. The operator owns every other simplyblock resource, and they are hidden from this page.
 
     The full guide, including air-gapped installation, is at https://docs.simplyblock.io/latest/kubernetes/installation/openshift/.
   displayName: Simplyblock Operator
