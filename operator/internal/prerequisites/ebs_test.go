@@ -184,7 +184,7 @@ func TestTolerationsReachEveryDeploymentOnce(t *testing.T) {
 	}
 	deployments := 0
 	for _, o := range objs {
-		if o.GetKind() != "Deployment" {
+		if o.GetKind() != kindDeployment {
 			continue
 		}
 		deployments++
@@ -211,7 +211,7 @@ func TestNoTolerationsLeaveTheTemplatesAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, o := range with {
-		if o.GetKind() != "Deployment" {
+		if o.GetKind() != kindDeployment {
 			continue
 		}
 		if raw, found, _ := unstructured.NestedSlice(o.Object, "spec", "template", "spec", "tolerations"); found && len(raw) > 0 {

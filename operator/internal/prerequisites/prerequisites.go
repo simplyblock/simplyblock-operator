@@ -35,8 +35,9 @@ const (
 
 	fieldOwner = client.FieldOwner("simplyblock-operator-prerequisites")
 
-	kindNamespace = "Namespace"
-	kindCRD       = "CustomResourceDefinition"
+	kindNamespace  = "Namespace"
+	kindCRD        = "CustomResourceDefinition"
+	kindDeployment = "Deployment"
 
 	localPathProvisionerName = "rancher.io/local-path"
 	defaultClassAnnotation   = "storageclass.kubernetes.io/is-default-class"

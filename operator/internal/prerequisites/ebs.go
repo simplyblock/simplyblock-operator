@@ -80,7 +80,7 @@ func GP3StorageClassName(ctx context.Context, c client.Reader) (string, error) {
 // nodes are all tainted. A toleration the template has already is not repeated.
 // DaemonSets are left alone: the ones the add-ons ship tolerate what they need.
 func addTolerations(u *unstructured.Unstructured, tolerations []corev1.Toleration) error {
-	if len(tolerations) == 0 || (u.GetKind() != "Deployment" && u.GetKind() != "Job") {
+	if len(tolerations) == 0 || (u.GetKind() != kindDeployment && u.GetKind() != "Job") {
 		return nil
 	}
 	path := []string{"spec", "template", "spec", "tolerations"}

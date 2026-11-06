@@ -33,8 +33,9 @@ func plainNode(name string) *corev1.Node {
 }
 
 func wantedNames(cp *simplyblockv1alpha2.ControlPlane, chooseEBSClass bool) []string {
-	var names []string
-	for _, w := range wantedPrerequisites(cp, chooseEBSClass) {
+	wanted := wantedPrerequisites(cp, chooseEBSClass)
+	names := make([]string, 0, len(wanted))
+	for _, w := range wanted {
 		names = append(names, w.Name)
 	}
 	return names
