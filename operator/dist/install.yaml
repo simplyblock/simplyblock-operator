@@ -20580,6 +20580,29 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: simplyblock-operator-system
+      path: /validate-v1-pod-eviction-foundationdb
+  failurePolicy: Ignore
+  matchConditions:
+  - expression: request.name.startsWith('simplyblock-fdb-cluster-')
+    name: is-foundationdb-pod
+  name: foundationdb-eviction.simplyblock.io
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - pods/eviction
+  sideEffects: NoneOnDryRun
+  timeoutSeconds: 5
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
       path: /validate-storage-simplyblock-io-v1alpha2-clusterdeploymentconfig
   failurePolicy: Fail
   name: vclusterdeploymentconfig.simplyblock.io

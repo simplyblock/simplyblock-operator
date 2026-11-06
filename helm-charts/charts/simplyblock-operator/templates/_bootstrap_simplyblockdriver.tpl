@@ -1,23 +1,28 @@
+{{/*
+The CSI driver, as the one object the operator builds it from.
+
+The chart used to render the node DaemonSet, the controller StatefulSet, their
+RBAC, and the CSIDriver registration directly. It renders this instead, and the
+operator applies all of them (design-simplyblockdriver.md §8). Nothing else
+creates it: without this template a fresh install comes up with an operator, a
+control plane, and no way to provision a volume.
+
+Named simplyblock, beside the ControlPlane of that name, because the object's
+name is what every child's name derives from: simplyblock-csi-node,
+simplyblock-csi-controller, and the ten more in §4.3's table. On a cluster
+upgraded from a chart that rendered those objects, that derivation lands on the
+ones already running and the reconcile adopts them in place rather than
+building a second deployment beside them.
+
+Authored at v1alpha2 for the same reason the ControlPlane is: an object written
+at the storage version needs no conversion, so nothing on a fresh install's path
+calls the conversion webhook.
+
+Rendered into the simplyblock-bootstrap-objects ConfigMap rather than as a
+release resource, for the reason _bootstrap_controlplane.tpl gives.
+*/}}
+{{- define "simplyblock.bootstrap.simplyblockDriver" -}}
 {{- if eq (include "simplyblock.rendersCSIDriver" .) "true" }}
----
-# The CSI driver, as the one object the operator builds it from.
-#
-# The chart used to render the node DaemonSet, the controller StatefulSet, their
-# RBAC, and the CSIDriver registration directly. It renders this instead, and the
-# operator applies all of them (design-simplyblockdriver.md §8). Nothing else
-# creates it: without this template a fresh install comes up with an operator, a
-# control plane, and no way to provision a volume.
-#
-# Named simplyblock, beside the ControlPlane of that name, because the object's
-# name is what every child's name derives from: simplyblock-csi-node,
-# simplyblock-csi-controller, and the ten more in §4.3's table. On a cluster
-# upgraded from a chart that rendered those objects, that derivation lands on the
-# ones already running and the reconcile adopts them in place rather than
-# building a second deployment beside them.
-#
-# Authored at v1alpha2 for the same reason the ControlPlane is: an object written
-# at the storage version needs no conversion, so nothing on a fresh install's path
-# calls the conversion webhook.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: SimplyblockDriver
 metadata:
@@ -26,15 +31,17 @@ metadata:
   annotations:
     # Helm must not delete this object, because deleting it deletes the CSI
     # driver, and the volumes attached through it stay attached with nothing left
-    # to detach them. `helm uninstall` removes the operator and leaves the driver
-    # running; removing the driver is a deliberate
+    # to detach them. Removing the driver is a deliberate
     # `kubectl delete simplyblockdriver` performed while the operator is up, so
     # its finalizer can take the plugins down in order (§8).
     #
-    # It also breaks the same deadlock the ControlPlane annotation does: with the
-    # operator deleted first, nothing is left to release the finalizer, and the
-    # release sits in `uninstalling` forever.
+    # The operator applies this object, so it is not part of the release and
+    # Helm does not delete it. The annotation is what keeps it on an upgrade
+    # from a chart release that rendered it directly, which Helm would otherwise
+    # prune as dropped from the manifest.
     helm.sh/resource-policy: keep
+    # Read by validate-controlplane.yaml, as on the ControlPlane.
+    storage.simplyblock.io/chart-release: {{ .Release.Name | quote }}
 spec:
   # Immutable, and the one field an upgraded cluster cannot repair by editing.
   driverName: {{ .Values.driver.driverName | quote }}
@@ -123,3 +130,4 @@ spec:
     # to match.
     provider: {{ if eq .Values.tls.provider "openshift" }}OpenShift{{ else }}cert-manager{{ end }}
 {{- end }}
+{{- end -}}

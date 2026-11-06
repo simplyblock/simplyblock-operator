@@ -40,6 +40,19 @@ const (
 	// CPU beyond the count.
 	SystemReservedCPUs = 2
 
+	// DefaultVCPUSharePercent is the share of a socket's logical CPUs a draft
+	// gives SPDK when the installation states no vcpuCount. Storage shares its
+	// workers with the kubelet, the platform, and, hyper-converged, with the
+	// applications; handing SPDK the whole socket starves all of them, and on a
+	// large socket asks for more allocatable CPU than any worker has left, so
+	// the SPDK pod never schedules.
+	DefaultVCPUSharePercent = 10
+
+	// DefaultMinimumVCPUCount is the smallest vcpuCount a draft proposes on its
+	// own. Ten percent of a small socket is too little for a storage node to
+	// carry its pollers.
+	DefaultMinimumVCPUCount = 5
+
 	// DefaultMaxSubsystemCount is what a draft proposes for the number of
 	// NVMe-oF subsystems each storage node serves.
 	//
@@ -130,13 +143,17 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 				"alone.")
 	}
 
-	// Not seeded, and deliberately: the count is taken from the smallest worker
-	// the run found, because the control plane assumes it uniform across a
-	// cluster's nodes, and the probes know the fleet better than an installation
-	// decided before it had seen one.
-	vcpus, note := vcpuCountFor(plan)
-	out.Template.VCPUCount = ptr.To(vcpus)
-	out.Notes = append(out.Notes, note)
+	// A stated count is taken as stated. Otherwise the count is a share of the
+	// smallest worker's socket, because the control plane assumes it uniform
+	// across a cluster's nodes.
+	if seed.VCPUCount != nil {
+		out.Template.VCPUCount = seed.VCPUCount
+		out.Notes = append(out.Notes, statedNote("vcpuCount", fmt.Sprintf("%d", *seed.VCPUCount)))
+	} else {
+		vcpus, note := vcpuCountFor(plan, ptr.IntFrom(seed.NodesPerSocket, 1))
+		out.Template.VCPUCount = ptr.To(vcpus)
+		out.Notes = append(out.Notes, note)
+	}
 
 	if seed.MaxSubsystemCount != nil {
 		out.Template.MaxSubsystemCount = seed.MaxSubsystemCount
@@ -523,40 +540,52 @@ func fleetSize(plan Plan) int {
 	return len(workers)
 }
 
-// vcpuCountFor is the smallest chosen memory node's logical CPU count across the
-// fleet less the system reserve, floored at the API's minimum. The control plane
-// counts logical CPUs, refuses a node without one CPU beyond the cluster's vCPU
-// count, and schedules the SPDK pod only within the node's allocatable CPU.
-func vcpuCountFor(plan Plan) (int32, string) {
+// vcpuCountFor proposes the vCPUs of each storage node: DefaultVCPUSharePercent
+// of the logical CPUs of the smallest chosen memory node (socket) across the
+// fleet, divided among the storage nodes that socket runs, and at least
+// DefaultMinimumVCPUCount. It never asks for more than the socket has beyond
+// the system reserve, and never less than the API's minimum.
+//
+// The control plane counts logical CPUs, refuses a node without one CPU beyond
+// the cluster's vCPU count, and schedules the SPDK pod only within the node's
+// allocatable CPU.
+func vcpuCountFor(plan Plan, nodesPerSocket int) (int32, string) {
+	if nodesPerSocket < 1 {
+		nodesPerSocket = 1
+	}
 	smallest, smallestWorker := 0, ""
 	for _, worker := range plan.Workers {
 		cpus := chosenNodeCPUs(worker)
 		if cpus == 0 {
 			continue
 		}
-		// A worker too small for the reserve still counts: it is the smallest
-		// placement, and the note names it rather than claiming no report.
-		cores := cpus - SystemReservedCPUs
-		if smallestWorker == "" || cores < smallest {
-			smallest, smallestWorker = cores, worker.Name
+		if smallestWorker == "" || cpus < smallest {
+			smallest, smallestWorker = cpus, worker.Name
 		}
 	}
 
 	if smallestWorker == "" {
-		return MinimumVCPUCount, fmt.Sprintf(
-			"vcpuCount is the API's minimum of %d, because no worker reported the cores of "+
-				"the memory node it was placed on", MinimumVCPUCount)
+		return DefaultMinimumVCPUCount, fmt.Sprintf(
+			"vcpuCount is the default minimum of %d, because no worker reported the cores of "+
+				"the memory node it was placed on", DefaultMinimumVCPUCount)
 	}
-	if int32(smallest) < MinimumVCPUCount {
+
+	spare := smallest - SystemReservedCPUs
+	if int32(spare) < MinimumVCPUCount {
 		return MinimumVCPUCount, fmt.Sprintf(
 			"vcpuCount is the API's minimum of %d, and the smallest placement (%s) has only "+
 				"%d CPUs to spare for SPDK, so this cluster asks for more than that worker has",
-			MinimumVCPUCount, smallestWorker, max(smallest, 0))
+			MinimumVCPUCount, smallestWorker, max(spare, 0))
 	}
-	return int32(smallest), fmt.Sprintf(
-		"vcpuCount is %d, the logical CPUs of the memory node chosen on %s less the %d the kubelet "+
-			"keeps for the system, the smallest of the fleet: the control plane assumes this uniform across a cluster's nodes",
-		smallest, smallestWorker, SystemReservedCPUs)
+
+	vcpus := max(smallest*DefaultVCPUSharePercent/100/nodesPerSocket, DefaultMinimumVCPUCount)
+	vcpus = min(vcpus, spare/nodesPerSocket)
+	vcpus = max(vcpus, int(MinimumVCPUCount))
+	return int32(vcpus), fmt.Sprintf(
+		"vcpuCount is %d, %d%% of the %d logical CPUs of the memory node chosen on %s (the smallest of the "+
+			"fleet) per storage node, at least %d: the control plane assumes this uniform across a cluster's "+
+			"nodes. Raise it for a dedicated storage node or an I/O-heavy workload",
+		vcpus, DefaultVCPUSharePercent, smallest, smallestWorker, DefaultMinimumVCPUCount)
 }
 
 // chosenNodeCPUs is the logical CPUs of the memory node a worker's chosen

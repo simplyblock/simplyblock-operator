@@ -1,8 +1,21 @@
-# The one discovery run a fresh standalone install performs.
-#
-# This chart is the only thing that creates it: the operator raises no run of its
-# own. A managed or empty install, and `discovery.enabled=false`, render none. The
-# `draft` values are accepted and unused.
+{{/*
+The one discovery run a fresh standalone install performs.
+
+This chart is the only thing that creates it: the operator raises no run of its
+own. A managed or empty install, and `discovery.enabled=false`, render none. The
+`draft` values are accepted and unused.
+
+Rendered into the simplyblock-bootstrap-objects ConfigMap rather than as a
+release resource, for the reason _bootstrap_controlplane.tpl gives. The
+operator applies it once and does not create it again while its key is
+unchanged, so a finished run is not repeated on an upgrade. In the release
+namespace it is owned by that ConfigMap, so `helm uninstall` still removes it;
+one written to discovery.namespace is left for the cleanup script.
+
+Authored at v1alpha2, the storage version, so nothing on a fresh install's path
+calls the conversion webhook.
+*/}}
+{{- define "simplyblock.bootstrap.initialDiscovery" -}}
 {{- $d := .Values.discovery }}
 {{- if and (eq .Values.deployment.profile "standalone") $d.enabled }}
 {{- $name := $d.name | default "initial-discovery" }}
@@ -10,7 +23,6 @@
 {{- if gt (len (printf "discovered-%s-cluster" $name)) 37 }}
 {{- fail (printf "discovery.name %q would make the draft's StorageCluster %d characters, and the control plane accepts at most 37. Use a name of at most 18 characters." $name (len (printf "discovered-%s-cluster" $name))) }}
 {{- end }}
----
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: OperatorOps
 metadata:
@@ -59,3 +71,4 @@ spec:
       {{- toYaml . | nindent 6 }}
     {{- end }}
 {{- end }}
+{{- end -}}

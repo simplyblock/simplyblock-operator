@@ -131,7 +131,7 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 			pluginPod, pluginContainer := nodePluginPodOnNode(f.ClientSet, workerNode)
 			unauthorizedNQN := "nqn.2014-08.io.simplyblock:uuid:00000000-0000-0000-0000-000000000000"
 			status, body := connectAsHost(f, pluginPod, pluginContainer, clusterID, poolID, lvolID, unauthorizedNQN)
-			gomega.Expect(status).To(gomega.Equal(404),
+			gomega.Expect(status).To(gomega.Equal(403),
 				"connect with an unauthorized host NQN should be rejected, got %d: %s", status, body)
 			gomega.Expect(body).To(gomega.ContainSubstring("not found in allowed hosts"),
 				"rejection reason should name the allowed-hosts gate, got: %s", body)

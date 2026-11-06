@@ -83,7 +83,7 @@ func TestCloningFromAWorkerWithNoEntryIsRefused(t *testing.T) {
 	r, _ := anOpsWorld(t, aControlPlane(), aPerNodeConfig(aRenderedEntry))
 
 	err := r.Workload.CloneWorkerConfig(context.Background(), opsNamespace, opsCluster,
-		"worker-9", opsTarget, nil)
+		opsElsewhere, opsTarget, nil)
 
 	if err == nil {
 		t.Error("cloning from a worker that has no configuration was accepted")

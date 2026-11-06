@@ -224,14 +224,14 @@ func TestAHeldNodeKeepsItsClaim(t *testing.T) {
 func TestASiblingWaitsWhileAnotherWorkerIsHeld(t *testing.T) {
 	held := aProvisioningNode(stepAwaitingWorker, time.Hour)
 	held.Name = "a-cluster-worker-9-0"
-	held.Spec.WorkerNode = "worker-9"
+	held.Spec.WorkerNode = opsElsewhere
 
 	waiting := aProvisioningNode(stepAwaitingSlot, time.Hour)
 	scheme := testsupport.NewScheme(t, corev1.AddToScheme)
 	cluster := aClusterWithTasks()
 	apiClient := fake.NewClientBuilder().WithScheme(scheme).
 		WithObjects(aWorkerIn(true, false), &corev1.Node{
-			ObjectMeta: metav1.ObjectMeta{Name: "worker-9"},
+			ObjectMeta: metav1.ObjectMeta{Name: opsElsewhere},
 		}, cluster, held, waiting).
 		WithStatusSubresource(&simplyblockv1alpha2.StorageNode{}).
 		Build()

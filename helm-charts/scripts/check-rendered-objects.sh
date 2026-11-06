@@ -28,6 +28,7 @@ OPERATOR=(
   "ValidatingWebhookConfiguration/simplyblock-operator-validating-webhook-configuration"
   "ServiceAccount/simplyblock-operator"
   "Service/simplyblock-csi-link"
+  "ConfigMap/simplyblock-bootstrap-objects"
 )
 
 # Objects the standalone and managed profiles render on top of OPERATOR.
@@ -39,6 +40,59 @@ COMMON=(
   # rendering the plugins when the operator took them over.
   "SimplyblockDriver/simplyblock"
 )
+
+# The kinds the chart hands the operator in the simplyblock-bootstrap-objects
+# ConfigMap instead of rendering them. Rendered as release resources they fail a
+# fresh install: Helm maps them before the API server lists the CRDs the same
+# release creates.
+BOOTSTRAP_KINDS=(ControlPlane SimplyblockDriver OperatorOps)
+
+# unwrapBootstrap passes a rendered manifest through and appends each object of
+# the simplyblock-bootstrap-objects ConfigMap as a document of its own, so the
+# checks below read those objects as they read any other.
+unwrapBootstrap() {
+  awk '
+    { print }
+    /^---/                                            { cm = 0; data = 0; key = 0; next }
+    /^kind: ConfigMap$/                               { cm = 1; next }
+    cm == 1 && /^  name: simplyblock-bootstrap-objects$/ { cm = 2; next }
+    cm == 2 && /^data:/                               { data = 1; next }
+    data && /^  [^ ].*: [|]-?$/                       { key = 1; extra = extra "---\n"; next }
+    data && key && /^    /                            { extra = extra substr($0, 5) "\n"; next }
+    data && /^[^ ]/                                   { data = 0; key = 0 }
+    END { printf "%s", extra }
+  '
+}
+
+# chart_template renders the chart with the bootstrap objects unwrapped. Its exit
+# status is the render's.
+chart_template() {
+  helm template sb "$CHART" "$@" | unwrapBootstrap
+  return "${PIPESTATUS[0]}"
+}
+
+# checkBootstrapNotRendered asserts that no profile renders a bootstrap kind as a
+# release resource, and that the ConfigMap carries them instead.
+checkBootstrapNotRendered() {
+  local profile out kind ok=1
+  for profile in standalone managed empty; do
+    if ! out="$(helm template sb "$CHART" --namespace simplyblock "${CAPABILITIES[@]}" \
+      --set deployment.profile="$profile" \
+      --set controlplane.managed.endpoint=https://cp.example.com 2>/dev/null)"; then
+      echo "  bootstrap: ${profile}: RENDER FAILED"
+      fail=1
+      return
+    fi
+    for kind in "${BOOTSTRAP_KINDS[@]}"; do
+      if grep -qx "kind: ${kind}" <<<"$out"; then
+        echo "  bootstrap: ${profile} renders a ${kind} as a release resource"
+        ok=0
+        fail=1
+      fi
+    done
+  done
+  [ "$ok" -eq 1 ] && echo "  bootstrap: no profile renders a ControlPlane, SimplyblockDriver, or OperatorOps directly"
+}
 
 # objects prints `Kind/name` for every document in a rendered manifest. The name
 # is taken from the first `  name:` under a top-level `metadata:`, so a name
@@ -59,7 +113,7 @@ check() {
   local -a required=("$@")
   local out present missing=0
 
-  out="$(helm template sb "$CHART" --namespace simplyblock \
+  out="$(chart_template --namespace simplyblock \
     "${CAPABILITIES[@]}" \
     --set deployment.profile="$profile" \
     --set controlplane.managed.endpoint=https://cp.example.com 2>/dev/null)"
@@ -90,7 +144,7 @@ check() {
 render() {
   local profile="$1"
   shift
-  helm template sb "$CHART" --namespace simplyblock \
+  chart_template --namespace simplyblock \
     "${CAPABILITIES[@]}" \
     --set deployment.profile="$profile" \
     --set controlplane.managed.endpoint=https://cp.example.com \
@@ -217,7 +271,7 @@ checkLogCollector() {
   # pipeline with only pipefail set, a failed step leaves the list empty, and an
   # empty list is exactly what a fully marked chart produces.
   local rendered
-  if ! rendered="$(helm template sb "$CHART" --namespace simplyblock \
+  if ! rendered="$(chart_template --namespace simplyblock \
     "${CAPABILITIES[@]}" \
     --set deployment.profile=standalone \
     --set controlplane.observability.enabled=true \
@@ -250,7 +304,7 @@ checkLogCollector() {
 
 # driverDocument prints the rendered SimplyblockDriver, with the extra settings given.
 driverDocument() {
-  helm template sb "$CHART" --namespace simplyblock \
+  chart_template --namespace simplyblock \
     "${CAPABILITIES[@]}" \
     --set deployment.profile=standalone \
     "$@" 2>/dev/null |
@@ -314,7 +368,7 @@ checkClusterStorageClasses() {
       .metadata.name + " " + .provisioner + " " + .parameters.cluster_id + " " + .parameters.pool_name' <<<"$1"
   }
 
-  if ! rendered="$(helm template sb "$CHART" --namespace simplyblock \
+  if ! rendered="$(chart_template --namespace simplyblock \
     "${CAPABILITIES[@]}" \
     --set deployment.profile=managed \
     --set controlplane.managed.endpoint=https://cp.example.com \
@@ -333,7 +387,7 @@ checkClusterStorageClasses() {
     ok=0
   fi
 
-  if ! rendered="$(helm template sb "$CHART" --namespace simplyblock \
+  if ! rendered="$(chart_template --namespace simplyblock \
     "${CAPABILITIES[@]}" \
     --set deployment.profile=managed \
     --set controlplane.managed.endpoint=https://cp.example.com \
@@ -359,7 +413,7 @@ checkClusterStorageClasses() {
   fi
 
   # No pool is no class: a class without pool_name provisions into no pool.
-  if ! rendered="$(helm template sb "$CHART" --namespace simplyblock \
+  if ! rendered="$(chart_template --namespace simplyblock \
     "${CAPABILITIES[@]}" \
     --set deployment.profile=managed \
     --set controlplane.managed.endpoint=https://cp.example.com \
@@ -377,7 +431,7 @@ checkClusterStorageClasses() {
 
   # A Secret supplied outside the chart is still a cluster the driver reaches,
   # so who writes the Secret does not decide whether the class is rendered.
-  if ! rendered="$(helm template sb "$CHART" --namespace simplyblock \
+  if ! rendered="$(chart_template --namespace simplyblock \
     "${CAPABILITIES[@]}" \
     --set deployment.profile=managed \
     --set controlplane.managed.endpoint=https://cp.example.com \
@@ -396,7 +450,7 @@ checkClusterStorageClasses() {
   fi
 
   # A name YAML would read as another type stays a string.
-  if ! rendered="$(helm template sb "$CHART" --namespace simplyblock \
+  if ! rendered="$(chart_template --namespace simplyblock \
     "${CAPABILITIES[@]}" \
     --set deployment.profile=managed \
     --set controlplane.managed.endpoint=https://cp.example.com \
@@ -420,7 +474,7 @@ checkClusterStorageClasses() {
     local label="$1" message="$2"
     shift 2
     local out
-    if out="$(helm template sb "$CHART" --namespace simplyblock \
+    if out="$(chart_template --namespace simplyblock \
       "${CAPABILITIES[@]}" \
       --set deployment.profile=managed \
       --set controlplane.managed.endpoint=https://cp.example.com \
@@ -466,7 +520,7 @@ checkDiscovery() {
   operatorOps() {
     local profile="$1"
     shift
-    helm template sb "$CHART" --namespace simplyblock \
+    chart_template --namespace simplyblock \
       "${CAPABILITIES[@]}" \
       --set deployment.profile="$profile" \
       --set controlplane.managed.endpoint=https://cp.example.com \
@@ -554,7 +608,7 @@ checkOperatorOpsWebhook() {
   local yq="${YQ:-yq}"
   local got
 
-  got="$(helm template sb "$CHART" --namespace simplyblock "${CAPABILITIES[@]}" \
+  got="$(chart_template --namespace simplyblock "${CAPABILITIES[@]}" \
     --set deployment.profile=standalone 2>/dev/null |
     "$yq" -N 'select(.kind == "ValidatingWebhookConfiguration") | .webhooks[] |
       select(.name == "voperatorops.simplyblock.io") | .failurePolicy')"
@@ -581,6 +635,7 @@ checkNUMAPlugin() {
   fi
 }
 
+checkBootstrapNotRendered
 check standalone "${COMMON[@]}"
 check managed "${COMMON[@]}"
 check empty "${OPERATOR[@]}"

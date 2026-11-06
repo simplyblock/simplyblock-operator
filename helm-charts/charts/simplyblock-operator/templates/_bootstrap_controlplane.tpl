@@ -1,17 +1,25 @@
----
-# Authored at v1alpha2, which is the storage version a fresh install gets.
-#
-# That is what keeps the conversion webhook out of a new deployment: an object
-# written at the storage version needs no conversion, so nothing on this path
-# ever calls the webhook and it is not deployed. Writing this at v1alpha1 would
-# make the chart itself the one client that forces conversion, on a cluster where
-# nothing is serving it.
-#
-# This object is the whole of what the chart renders for the control plane. Which
-# member of spec.source it names is what deployment.profile selects, and the
-# operator does the rest: it installs the control plane for the standalone
-# profile, and resolves and probes a remote one for the managed profile. The empty
-# profile renders none: its administrator writes the ControlPlane.
+{{/*
+Authored at v1alpha2, which is the storage version a fresh install gets.
+
+That is what keeps the conversion webhook out of a new deployment: an object
+written at the storage version needs no conversion, so nothing on this path
+ever calls the webhook and it is not deployed. Writing this at v1alpha1 would
+make the chart itself the one client that forces conversion, on a cluster where
+nothing is serving it.
+
+This object is the whole of what the chart renders for the control plane. Which
+member of spec.source it names is what deployment.profile selects, and the
+operator does the rest: it installs the control plane for the standalone
+profile, and resolves and probes a remote one for the managed profile. The empty
+profile renders none: its administrator writes the ControlPlane.
+
+The object is not rendered as a release resource. It goes into the
+simplyblock-bootstrap-objects ConfigMap (bootstrap-objects.yaml), and the
+operator applies it from there: a release that renders an object of a CRD it
+creates in the same install is refused while the API server has not yet listed
+the new kind.
+*/}}
+{{- define "simplyblock.bootstrap.controlPlane" -}}
 {{- if has .Values.deployment.profile (list "standalone" "managed") }}
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ControlPlane
@@ -26,11 +34,16 @@ metadata:
     # control plane stays a deliberate `kubectl delete controlplane`, performed
     # while the operator is running so its finalizer can be honored.
     #
-    # It also breaks a deadlock. Helm deletes the operator and this object in one
-    # uninstall, and with the operator gone first nothing is left to release the
-    # finalizer: the object cannot go, the uninstall cannot finish, and the
-    # release sits in `uninstalling` forever.
+    # The operator applies this object, so it is not part of the release and
+    # Helm deletes it neither on uninstall nor when a values change drops it.
+    # The annotation is still what keeps it on an upgrade from a chart release
+    # that rendered it directly: Helm prunes what the old manifest held and the
+    # new one does not, unless the live object says keep.
     helm.sh/resource-policy: keep
+    # Which release's chart wrote it. The operator applies it, so it carries no
+    # Helm release annotation of its own, and validate-controlplane.yaml reads
+    # this to refuse the switch to the empty profile while it exists.
+    storage.simplyblock.io/chart-release: {{ .Release.Name | quote }}
 spec:
   source:
 {{- if eq .Values.deployment.profile "standalone" }}
@@ -70,7 +83,7 @@ spec:
         enableMutualTLS: {{ and .Values.tls.enabled .Values.tls.mutual_enabled }}
         # The chart spells the providers in lower case and this API spells
         # OpenShift as the product does, the same translation
-        # simplyblockdriver_cr.yaml performs.
+        # _bootstrap_simplyblockdriver.tpl performs.
         provider: {{ if eq .Values.tls.provider "openshift" }}OpenShift{{ else }}cert-manager{{ end }}
       {{- if .Values.controlplane.observability.enabled }}
       # The monitoring stack this chart installs beside the control plane. The
@@ -126,3 +139,4 @@ spec:
       {{- end }}
 {{- end }}
 {{- end }}
+{{- end -}}

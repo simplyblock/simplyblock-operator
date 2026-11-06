@@ -72,6 +72,7 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
 	backupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/backup"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/bootstrap"
 	clustercontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/cluster"
 	consistencygroupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/consistencygroup"
 	controlplanecontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
@@ -1033,6 +1034,18 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "OperatorOps")
 		os.Exit(1)
 	}
+	// The ControlPlane, SimplyblockDriver, and discovery run the chart hands over
+	// in a ConfigMap. The chart cannot render them itself: on a fresh install the
+	// API server has not yet listed the CRDs the same release creates, and Helm
+	// refuses the release (internal/controllers/bootstrap).
+	if err := (&bootstrap.Reconciler{
+		Client:    mgr.GetClient(),
+		Recorder:  mgr.GetEventRecorder("bootstrap-objects"),
+		Namespace: operatorNamespace,
+	}).SetupWithManager(ctrlMgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "BootstrapObjects")
+		os.Exit(1)
+	}
 	// Whether the cluster serves the snapshot API decides both whether a
 	// VolumeSnapshotClass is applied and what status.snapshotSupport records
 	// (design-simplyblockdriver.md §4.1). The discovery client is the same one
@@ -1340,6 +1353,10 @@ func main() {
 	// exists. failurePolicy=Ignore keeps pod creation unblocked during the gap.
 	go func() {
 		<-webhookReady
+		mgr.GetWebhookServer().Register("/validate-v1-pod-eviction-foundationdb",
+			&webhook.Admission{Handler: &internalwebhook.FoundationDBEvictionHandler{Client: mgr.GetClient()}})
+		setupLog.Info("registered FoundationDB eviction webhook")
+
 		mgr.GetWebhookServer().Register("/mutate-v1-pod-simplyblock-rebalancer",
 			&webhook.Admission{Handler: &internalwebhook.SimplyblockRebalancerInjector{Client: mgr.GetClient()}})
 		setupLog.Info("registered simplyblock-rebalancer mutating webhook")

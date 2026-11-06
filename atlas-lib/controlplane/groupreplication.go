@@ -79,7 +79,7 @@ func (c *Client) PromoteGroup(ctx context.Context, gh lvol.GroupHandle) error {
 		return err
 	}
 	resp, err := c.api.ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostWithResponse(
-		ctx, cluster, group)
+		ctx, cluster, group, nil)
 	if err != nil {
 		return fmt.Errorf("promote group %s: %w", gh.Handle(), err)
 	}
@@ -98,7 +98,7 @@ func (c *Client) DemoteGroup(ctx context.Context, gh lvol.GroupHandle) (bool, er
 		return false, err
 	}
 	resp, err := c.api.ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostWithResponse(
-		ctx, cluster, group)
+		ctx, cluster, group, nil)
 	if err != nil {
 		return false, fmt.Errorf("demote group %s: %w", gh.Handle(), err)
 	}
@@ -148,7 +148,7 @@ func (c *Client) GetGroupReplicationInfo(ctx context.Context, gh lvol.GroupHandl
 		return ReplicationStatus{}, err
 	}
 	resp, err := c.api.ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetWithResponse(
-		ctx, cluster, group)
+		ctx, cluster, group, nil)
 	if err != nil {
 		return ReplicationStatus{}, fmt.Errorf("group replication status %s: %w", gh.Handle(), err)
 	}
