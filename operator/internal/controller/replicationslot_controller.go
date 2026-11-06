@@ -656,35 +656,8 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		}
 	}
 	if status == nil || status.State != backendStateCutoverPending {
-		// The backend did not complete the cutover: the final step failed, the
-		// attempt budget ran out, the task or the migration plan was canceled.
-		// It then puts the relationship back to replicating (or there is none,
-		// replication having been stopped), and the slot must follow instead
-		// of waiting for a cutover that will not come (bf12 2026-11-04: slots
-		// cutover_pending for 16 h, a new migration round blocked behind them).
-		isFailback := proceedClusterID != clusterID
-		if !isFailback && (status == nil || status.State == utils.ReplicationBackendStateReplicating) {
-			return r.releaseAbandonedCutover(ctx, slot, apiClient, status, clusterID, poolID, volumeID)
-		}
-		// During failback the target cluster always has the stale failed_over record
-		// from the original failover. That record exists from the moment the slot is
-		// placed in cutover_pending K8s state — spanning the entire shrink phase —
-		// until _prepare_cutover creates the new cutover_pending record. Treating
-		// failed_over as "ANA flip done" here would transition the slot to
-		// replicating/source while IO is still on the target cluster and shrink rounds
-		// are still running. Return and wait until cutover_pending or cutover_done
-		// actually appears.
-		if proceedClusterID != clusterID && status != nil && status.State == backendStateFailedOver {
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-		}
-		// Backend advanced past cutover_pending before the preconnect Job could be
-		// created (safety timer fired, or we missed the window entirely). Attempt a
-		// late preconnect so the CSI node gets source-cluster NVMe paths even after
-		// the ANA flip — limits IO downtime to ctrl_loss_tmo instead of indefinite.
-		if status != nil && status.State == backendStateCutoverDone {
-			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, volumeID, clusterID, poolID, volumeID)
-		}
-		return r.applyAdvancedBackendStateForFailback(ctx, slot, status, proceedClusterID != clusterID)
+		return r.followBackendOutOfCutoverPending(ctx, slot, apiClient, status,
+			clusterID, poolID, volumeID, proceedClusterID != clusterID)
 	}
 
 	// Fetch connection strings. During cutover_pending the backend returns both
@@ -788,6 +761,47 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		"Connecting target NVMe paths on node %s before cutover of volume %s", node, volumeID)
 
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+}
+
+// followBackendOutOfCutoverPending moves a cutover_pending slot along when the
+// backend no longer reports cutover_pending for it: isFailback says whether
+// the cutover ran on the target cluster.
+func (r *ReplicationSlotReconciler) followBackendOutOfCutoverPending(
+	ctx context.Context,
+	slot *simplyblockv1alpha1.ReplicationSlot,
+	apiClient *webapi.Client,
+	status *replVolumeReplicationStatus,
+	clusterID, poolID, volumeID string,
+	isFailback bool,
+) (ctrl.Result, error) {
+	// The backend did not complete the cutover: the final step failed, the
+	// attempt budget ran out, the task or the migration plan was canceled.
+	// It then puts the relationship back to replicating (or there is none,
+	// replication having been stopped), and the slot must follow instead
+	// of waiting for a cutover that will not come (bf12 2026-11-04: slots
+	// cutover_pending for 16 h, a new migration round blocked behind them).
+	if !isFailback && (status == nil || status.State == utils.ReplicationBackendStateReplicating) {
+		return r.releaseAbandonedCutover(ctx, slot, apiClient, status, clusterID, poolID, volumeID)
+	}
+	// During failback the target cluster always has the stale failed_over record
+	// from the original failover. That record exists from the moment the slot is
+	// placed in cutover_pending K8s state — spanning the entire shrink phase —
+	// until _prepare_cutover creates the new cutover_pending record. Treating
+	// failed_over as "ANA flip done" here would transition the slot to
+	// replicating/source while IO is still on the target cluster and shrink rounds
+	// are still running. Return and wait until cutover_pending or cutover_done
+	// actually appears.
+	if isFailback && status != nil && status.State == backendStateFailedOver {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+	// Backend advanced past cutover_pending before the preconnect Job could be
+	// created (safety timer fired, or we missed the window entirely). Attempt a
+	// late preconnect so the CSI node gets source-cluster NVMe paths even after
+	// the ANA flip — limits IO downtime to ctrl_loss_tmo instead of indefinite.
+	if status != nil && status.State == backendStateCutoverDone {
+		r.reconcilePreconnect(ctx, slot, apiClient, clusterID, volumeID, clusterID, poolID, volumeID)
+	}
+	return r.applyAdvancedBackendStateForFailback(ctx, slot, status, isFailback)
 }
 
 // handleExistingPreconnectJob inspects a preconnect Job that already exists and
