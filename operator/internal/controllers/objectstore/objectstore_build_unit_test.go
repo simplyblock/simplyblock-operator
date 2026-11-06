@@ -233,6 +233,24 @@ func TestBuildDeploymentPassesTheBucketSettingsToTheGateway(t *testing.T) {
 	}
 }
 
+// issues/13: the gateway rejected every client that did not sign for
+// us-east-1, with no field anywhere to configure another region, because
+// GATEWAY_REGION did not exist. spec.region is that field.
+func TestBuildDeploymentPassesTheRegionToTheGateway(t *testing.T) {
+	store := testObjectStoreSpec(func(s *simplyblockv1alpha2.ObjectStore) {
+		s.Spec.Region = "eu-central-1"
+	})
+	container := buildDeployment(store).Spec.Template.Spec.Containers[0]
+
+	env := map[string]string{}
+	for _, e := range container.Env {
+		env[e.Name] = e.Value
+	}
+	if got, ok := env[gatewayRegionEnv]; !ok || got != "eu-central-1" {
+		t.Errorf("%s = %q (set: %v), want eu-central-1", gatewayRegionEnv, got, ok)
+	}
+}
+
 // The gateway serves the certificate mounted from the TLS Secret, for either
 // provider: cert-manager and OpenShift's service CA both write tls.crt and
 // tls.key, so the paths are the same.

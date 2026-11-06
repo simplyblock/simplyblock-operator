@@ -146,11 +146,18 @@ func gatewayConfig(cfg config.Config) *embedgw.Config {
 	return &embedgw.Config{
 		RootUserAccess:    cfg.RootAccessKeyID,
 		RootUserSecret:    cfg.RootSecretAccessKey,
+		Region:            cfg.Region,
 		Ports:             []string{cfg.Port},
 		HealthPath:        healthPath,
 		MaxConnections:    maxConnections,
 		MaxRequests:       maxRequests,
 		MultipartMaxParts: multipartMaxParts,
+		// embedgw.Config.KeepAlive is opt-in (server.go: DisableKeepalive:
+		// !server.keepAlive), so an embedder that leaves it unset gets a
+		// fresh TCP connection and a fresh TLS handshake for every single
+		// request -- including every individual UploadPart call within one
+		// multipart upload. Always wanted here; never a reason to turn it off.
+		KeepAlive: true,
 
 		VaultEndpointURL:            cfg.Vault.EndpointURL,
 		VaultNamespace:              cfg.Vault.Namespace,
