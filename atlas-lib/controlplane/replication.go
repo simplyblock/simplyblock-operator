@@ -137,7 +137,7 @@ func (c *Client) GetVolumeReplicationInfo(ctx context.Context, h lvol.VolumeHand
 		return ReplicationStatus{}, err
 	}
 	resp, err := c.api.ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGetWithResponse(
-		ctx, cluster, pool, volume)
+		ctx, cluster, pool, volume, nil)
 	if err != nil {
 		return ReplicationStatus{}, fmt.Errorf("replication status of volume %s: %w", h, err)
 	}
@@ -190,7 +190,7 @@ func (c *Client) DemoteVolume(ctx context.Context, h lvol.VolumeHandle) (bool, e
 		return false, err
 	}
 	resp, err := c.api.ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostWithResponse(
-		ctx, cluster, pool, volume)
+		ctx, cluster, pool, volume, nil)
 	if err != nil {
 		return false, fmt.Errorf("demote volume %s: %w", h, err)
 	}
