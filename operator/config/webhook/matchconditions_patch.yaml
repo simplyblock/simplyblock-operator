@@ -13,11 +13,3 @@ webhooks:
   matchConditions:
   - name: has-pinned-volume-annotation
     expression: "has(object.metadata.annotations) && ('simplyblock.io/selected-storage-node' in object.metadata.annotations || 'storage.simplyblock.io/selected-storage-node' in object.metadata.annotations || 'storage.simplyblock.io/host-id' in object.metadata.annotations || 'simplyblock.io/host-id' in object.metadata.annotations || 'simplybk/host-id' in object.metadata.annotations)"
-# The FoundationDB eviction handler only acts on the FoundationDB operator's
-# pods, which are all named after their cluster. The object of a pods/eviction
-# request is the Eviction, which carries no labels to select on, so the pod name
-# is what scopes it.
-- name: foundationdb-eviction.simplyblock.io
-  matchConditions:
-  - name: is-foundationdb-pod
-    expression: "request.name.startsWith('simplyblock-fdb-cluster-')"
