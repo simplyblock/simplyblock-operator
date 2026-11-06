@@ -182,9 +182,15 @@ func (b *Backend) provision(
 }
 
 // waitReady polls the S3Bucket until it is Ready, failing if it degrades,
-// disappears, or Settings.Timeout passes first.
+// disappears, or Settings.Timeout passes first. Like rollback, detached from
+// ctx's own cancellation (context.WithoutCancel): provisioning a bucket
+// should run to its own timeout rather than being cut short by the request's
+// client disconnecting, and -- found live, under -race -- deriving a
+// watcher goroutine from a fasthttp-backed request context survives past
+// the request's own return and can then race the server's Shutdown touching
+// the same pooled RequestCtx.
 func (b *Backend) waitReady(ctx context.Context, key client.ObjectKey) error {
-	err := wait.PollUntilContextTimeout(ctx, b.settings.PollInterval, b.settings.Timeout, true,
+	err := wait.PollUntilContextTimeout(context.WithoutCancel(ctx), b.settings.PollInterval, b.settings.Timeout, true,
 		func(ctx context.Context) (bool, error) {
 			var obj simplyblockv1alpha2.S3Bucket
 			if err := b.client.Get(ctx, key, &obj); err != nil {
@@ -269,7 +275,11 @@ func (b *Backend) DeleteBucket(ctx context.Context, bucket string) error {
 		}
 	}
 
-	err := wait.PollUntilContextTimeout(ctx, b.settings.PollInterval, b.settings.Timeout, true,
+	// Detached from ctx's own cancellation, same reasoning as waitReady:
+	// the operator releasing the volume shouldn't be cut short by the
+	// client disconnecting, and doing so avoids the same fasthttp
+	// RequestCtx race.
+	err := wait.PollUntilContextTimeout(context.WithoutCancel(ctx), b.settings.PollInterval, b.settings.Timeout, true,
 		func(ctx context.Context) (bool, error) {
 			err := b.client.Get(ctx, key, &simplyblockv1alpha2.S3Bucket{})
 			if apierrors.IsNotFound(err) {
