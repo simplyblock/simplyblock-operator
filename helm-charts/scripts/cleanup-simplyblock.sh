@@ -8,6 +8,12 @@ Usage: $(basename "$0") [OPTIONS] [NAMESPACE]
 
 Remove all simplyblock resources from a Kubernetes cluster.
 
+Removes a Helm install or an OLM install (operator-sdk run bundle, or a
+catalog Subscription) of the operator, and what either leaves behind: the
+generated certificates and secrets, the cert-manager CA, ClusterRoles,
+ClusterIssuers, webhooks, and the CRDs. Cluster-scoped objects stay while a
+simplyblock operator runs in another namespace.
+
 Arguments:
   NAMESPACE                Target namespace (default: simplyblock)
 
@@ -247,6 +253,50 @@ for c in json.load(open(sys.argv[1]))["items"]:
 ' "$classes"
 }
 
+# ---------------------------------------------------------------------------
+# OLM. An operator installed with `operator-sdk run bundle` or from a catalog
+# is owned by a Subscription and a ClusterServiceVersion, not a Helm release.
+# ---------------------------------------------------------------------------
+OLM_GROUP="operators.coreos.com"
+OLM_PACKAGE="simplyblock-operator"
+
+# OLM's CRDs are present, so an OLM install of the operator is possible.
+olm_installed() {
+    $KUBECTL get crd "clusterserviceversions.$OLM_GROUP" >/dev/null 2>&1
+}
+
+# The operator's CSVs in this namespace. Copied CSVs, which OLM mirrors into
+# every namespace an AllNamespaces OperatorGroup targets, carry the
+# olm.copiedFrom label and go with the original.
+olm_csvs_here() {
+    local all
+    all=$($KUBECTL get "clusterserviceversions.$OLM_GROUP" -n "$NAMESPACE" \
+        -l '!olm.copiedFrom' -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' \
+        2>/dev/null) || return 1
+    awk -v pkg="${OLM_PACKAGE}." 'index($0, pkg) == 1' <<< "$all"
+}
+
+# The Subscriptions in this namespace for the operator's package.
+olm_subscriptions_here() {
+    $KUBECTL get "subscriptions.$OLM_GROUP" -n "$NAMESPACE" \
+        -o jsonpath="{range .items[?(@.spec.name==\"${OLM_PACKAGE}\")]}{.metadata.name}{\"\\n\"}{end}" \
+        2>/dev/null
+}
+
+# Another simplyblock operator, Helm or OLM, still running outside this
+# namespace. Cluster-scoped objects are shared by name, so while one runs they
+# are not this namespace's to remove.
+other_operator_running() {
+    local selector
+    for selector in app=simplyblock-operator app.kubernetes.io/name=simplyblock-operator; do
+        if $KUBECTL get deployment -A -l "$selector" --no-headers 2>/dev/null \
+            | awk -v ns="$NAMESPACE" '$1 != ns {found=1} END {exit !found}'; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Read now, while the StorageClusters exist: step 2 deletes them, and step 4
 # finds the clusters' StorageClasses by these UUIDs.
 CLUSTER_UUIDS=$($KUBECTL get "storageclusters.$CRD_GROUP" -n "$NAMESPACE" \
@@ -326,6 +376,29 @@ section "Releasing simplyblock volumes mounted in namespace '$NAMESPACE'"
 
 # The operator recreates what it manages (the pNFS metadata server's
 # StatefulSet among it), so it stops first, and nothing goes on while it runs.
+#
+# An operator installed through OLM is stopped by removing its Subscription and
+# CSV. Scaling its Deployment does not hold, because OLM scales it back, and the
+# Deployment does not carry the chart's app=simplyblock-operator label either.
+if olm_installed; then
+    olm_csvs=$(olm_csvs_here) || \
+        abort_before_uninstall "Could not list the ClusterServiceVersions in '$NAMESPACE'."
+    olm_subs=$(olm_subscriptions_here) || \
+        abort_before_uninstall "Could not list the Subscriptions in '$NAMESPACE'."
+    for sub in $olm_subs; do
+        info "Deleting OLM Subscription $sub..."
+        $KUBECTL delete subscriptions.operators.coreos.com "$sub" -n "$NAMESPACE" \
+            --ignore-not-found >/dev/null 2>&1 || \
+            abort_before_uninstall "Could not delete the OLM Subscription $sub."
+    done
+    for csv in $olm_csvs; do
+        info "Deleting OLM ClusterServiceVersion $csv, which removes the operator Deployment..."
+        $KUBECTL delete clusterserviceversions.operators.coreos.com "$csv" -n "$NAMESPACE" \
+            --ignore-not-found >/dev/null 2>&1 || \
+            abort_before_uninstall "Could not delete the OLM ClusterServiceVersion $csv."
+    done
+fi
+
 operator_deploys=$($KUBECTL get deployment -n "$NAMESPACE" -l app=simplyblock-operator \
     -o jsonpath='{.items[*].metadata.name}' 2>/dev/null) || \
     abort_before_uninstall "Could not list the operator's Deployments."
@@ -334,13 +407,13 @@ for deploy in $operator_deploys; do
     $KUBECTL scale deployment "$deploy" -n "$NAMESPACE" --replicas=0 >/dev/null 2>&1 || \
         abort_before_uninstall "Could not scale the operator Deployment $deploy to 0."
 done
-if [[ -n "$operator_deploys" ]]; then
-    $KUBECTL wait pod -n "$NAMESPACE" -l app=simplyblock-operator \
+for selector in app=simplyblock-operator app.kubernetes.io/name=simplyblock-operator; do
+    $KUBECTL wait pod -n "$NAMESPACE" -l "$selector" \
         --for=delete --timeout=60s >/dev/null 2>&1 || true
-    running=$($KUBECTL get pods -n "$NAMESPACE" -l app=simplyblock-operator -o name 2>/dev/null) || \
+    running=$($KUBECTL get pods -n "$NAMESPACE" -l "$selector" -o name 2>/dev/null) || \
         abort_before_uninstall "Could not check that the operator stopped."
     [[ -z "$running" ]] || abort_before_uninstall "The operator is still running: $running"
-fi
+done
 
 csi_pods=$(pods_on_csi_volumes) || \
     abort_before_uninstall "Could not list the pods, claims, and volumes in '$NAMESPACE'."
@@ -390,11 +463,62 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 1b. Remove what is left of an OLM install
+# ---------------------------------------------------------------------------
+section "Removing OLM objects of '$OLM_PACKAGE' in '$NAMESPACE'"
+
+# Step 0 removed the Subscription and the CSV. What `operator-sdk run bundle`
+# leaves besides is its CatalogSource, its OperatorGroup, and InstallPlans. The
+# OperatorGroup is shared by every OLM operator in the namespace, so it goes only
+# when no other CSV is left there.
+if ! olm_installed; then
+    info "OLM is not installed."
+else
+    for csv in $(olm_csvs_here || true); do
+        warn "  ClusterServiceVersion $csv is still present; deleting it."
+        $KUBECTL delete "clusterserviceversions.$OLM_GROUP" "$csv" -n "$NAMESPACE" \
+            --ignore-not-found >/dev/null 2>&1 || warn "  Could not delete CSV $csv"
+    done
+    plans=$($KUBECTL get "installplans.$OLM_GROUP" -n "$NAMESPACE" \
+        -o jsonpath='{range .items[*]}{.metadata.name} {.spec.clusterServiceVersionNames[*]}{"\n"}{end}' \
+        2>/dev/null || true)
+    while read -r plan csvs; do
+        [[ -z "$plan" || " $csvs" != *" ${OLM_PACKAGE}."* ]] && continue
+        info "Deleting InstallPlan $plan..."
+        $KUBECTL delete "installplans.$OLM_GROUP" "$plan" -n "$NAMESPACE" \
+            --ignore-not-found >/dev/null 2>&1 || warn "  Could not delete InstallPlan $plan"
+    done <<< "$plans"
+    catalogs=$($KUBECTL get "catalogsources.$OLM_GROUP" -n "$NAMESPACE" \
+        -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+    for catalog in $catalogs; do
+        [[ "$catalog" == "${OLM_PACKAGE}"* ]] || continue
+        info "Deleting CatalogSource $catalog..."
+        $KUBECTL delete "catalogsources.$OLM_GROUP" "$catalog" -n "$NAMESPACE" \
+            --ignore-not-found >/dev/null 2>&1 || warn "  Could not delete CatalogSource $catalog"
+    done
+    others=$($KUBECTL get "clusterserviceversions.$OLM_GROUP" -n "$NAMESPACE" \
+        -o name 2>/dev/null || echo unknown)
+    if [[ -n "$others" ]]; then
+        info "Other ClusterServiceVersions remain in '$NAMESPACE'; leaving its OperatorGroup."
+    else
+        for og in $($KUBECTL get "operatorgroups.$OLM_GROUP" -n "$NAMESPACE" \
+            -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true); do
+            info "Deleting OperatorGroup $og..."
+            $KUBECTL delete "operatorgroups.$OLM_GROUP" "$og" -n "$NAMESPACE" \
+                --ignore-not-found >/dev/null 2>&1 || warn "  Could not delete OperatorGroup $og"
+        done
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # 2. Remove CR finalizers and delete CRs
 # ---------------------------------------------------------------------------
 section "Removing CRs and finalizers"
 
-CRDS=$($KUBECTL get crd -o name 2>/dev/null | grep "$CRD_GROUP" | sed 's|customresourcedefinition.apiextensions.k8s.io/||')
+# No match is not an error: an OLM install, or a second run, has no CRDs of the
+# group, and under pipefail grep's exit 1 would end the script here.
+CRDS=$($KUBECTL get crd -o name 2>/dev/null | { grep "$CRD_GROUP" || true; } \
+    | sed 's|customresourcedefinition.apiextensions.k8s.io/||')
 
 for crd in $CRDS; do
     resources=$($KUBECTL get "$crd" -n "$NAMESPACE" --ignore-not-found -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)
@@ -651,6 +775,125 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 4a. Remove what the operator generated in the namespace
+# ---------------------------------------------------------------------------
+section "Removing generated certificates, secrets, and RBAC in '$NAMESPACE'"
+
+# The operator and cert-manager create these at runtime, so neither `helm
+# uninstall` nor an OLM CSV removal takes them. Left behind, they block the next
+# install: Helm refuses to adopt an object it did not create, and a Secret signed
+# by a CA that is later replaced splits the cluster into two trust domains.
+# Certificates and Issuers go first, or cert-manager reissues the Secrets.
+CERT_GROUP="cert-manager.io"
+if $KUBECTL get crd "certificates.$CERT_GROUP" >/dev/null 2>&1; then
+    for kind in "certificates.$CERT_GROUP" "issuers.$CERT_GROUP"; do
+        for name in $($KUBECTL get "$kind" -n "$NAMESPACE" \
+            -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true); do
+            info "Deleting $kind $name..."
+            $KUBECTL delete "$kind" "$name" -n "$NAMESPACE" --ignore-not-found \
+                --timeout=30s >/dev/null 2>&1 || warn "  Could not delete $kind $name"
+        done
+    done
+fi
+
+# Everything in the namespace is simplyblock's, except what Kubernetes and
+# OpenShift put into every namespace.
+delete_all_but() {
+    local kind="$1" keep="$2" name
+    for name in $($KUBECTL get "$kind" -n "$NAMESPACE" \
+        -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true); do
+        [[ "$name" =~ $keep ]] && continue
+        info "Deleting $kind $name..."
+        $KUBECTL delete "$kind" "$name" -n "$NAMESPACE" --ignore-not-found \
+            --timeout=30s >/dev/null 2>&1 || warn "  Could not delete $kind $name"
+    done
+}
+delete_all_but secret '^(default|builder|deployer|pipeline)-(token|dockercfg)-'
+delete_all_but configmap '^(kube-root-ca\.crt|openshift-service-ca\.crt)$'
+delete_all_but service '^$'
+delete_all_but rolebinding '^system:'
+delete_all_but role '^system:'
+delete_all_but serviceaccount '^(default|builder|deployer|pipeline)$'
+
+# ---------------------------------------------------------------------------
+# 4c. Remove cluster-scoped leftovers
+# ---------------------------------------------------------------------------
+section "Removing cluster-scoped simplyblock objects"
+
+# ClusterRoles, webhooks, the CA, and ClusterIssuers are named, not namespaced.
+# An earlier install, a Helm release that failed half-way, or an OLM install
+# leaves them, and the next `helm install` refuses to adopt them. They are shared
+# by every simplyblock install on the cluster, so another running operator keeps
+# them.
+if other_operator_running; then
+    warn "A simplyblock operator runs in another namespace; leaving cluster-scoped objects."
+else
+    for kind in clusterrolebinding clusterrole \
+        validatingwebhookconfiguration mutatingwebhookconfiguration; do
+        for name in $($KUBECTL get "$kind" -o jsonpath='{.items[*].metadata.name}' \
+            2>/dev/null || true); do
+            [[ "$name" == *simplyblock* && "$name" != system:* ]] || continue
+            info "Deleting $kind $name..."
+            $KUBECTL delete "$kind" "$name" --ignore-not-found --timeout=30s \
+                >/dev/null 2>&1 || warn "  Could not delete $kind $name"
+        done
+    done
+
+    if $KUBECTL get crd "certificates.$CERT_GROUP" >/dev/null 2>&1; then
+        # The CA lives in cert-manager's namespace. Its Secret outlives the
+        # Certificate, and a next install that finds it signs with the old key
+        # until the Certificate is reissued.
+        cas=$($KUBECTL get "certificates.$CERT_GROUP" -A \
+            -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name} {.spec.secretName}{"\n"}{end}' \
+            2>/dev/null || true)
+        while read -r ns name secret; do
+            [[ -z "$name" || "$ns" == "$NAMESPACE" || "$name" != simplyblock-* ]] && continue
+            info "Deleting Certificate $ns/$name and its Secret $secret..."
+            $KUBECTL delete "certificates.$CERT_GROUP" "$name" -n "$ns" --ignore-not-found \
+                --timeout=30s >/dev/null 2>&1 || warn "  Could not delete Certificate $ns/$name"
+            [[ -n "$secret" ]] && { $KUBECTL delete secret "$secret" -n "$ns" --ignore-not-found \
+                --timeout=30s >/dev/null 2>&1 || warn "  Could not delete Secret $ns/$secret"; }
+        done <<< "$cas"
+
+        # `helm uninstall` removes the CA Certificate but not its Secret, which
+        # cert-manager leaves on purpose. Found by the annotation cert-manager
+        # writes on every Secret it issues.
+        orphans=$($KUBECTL get secret -A \
+            -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name} {.metadata.annotations.cert-manager\.io/certificate-name}{"\n"}{end}' \
+            2>/dev/null || true)
+        while read -r ns name cert; do
+            [[ -z "$cert" || "$ns" == "$NAMESPACE" || "$cert" != simplyblock-* ]] && continue
+            info "Deleting Secret $ns/$name, issued for the removed Certificate $cert..."
+            $KUBECTL delete secret "$name" -n "$ns" --ignore-not-found --timeout=30s \
+                >/dev/null 2>&1 || warn "  Could not delete Secret $ns/$name"
+        done <<< "$orphans"
+
+        # By name, or by this release for the chart's generically named
+        # `selfsigned` issuer.
+        issuers=$($KUBECTL get "clusterissuers.$CERT_GROUP" \
+            -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.annotations.meta\.helm\.sh/release-name}{"\n"}{end}' \
+            2>/dev/null || true)
+        while read -r name release; do
+            [[ -z "$name" ]] && continue
+            [[ "$name" == *simplyblock* || "$release" == "$HELM_RELEASE" ]] || continue
+            info "Deleting ClusterIssuer $name..."
+            $KUBECTL delete "clusterissuers.$CERT_GROUP" "$name" --ignore-not-found \
+                --timeout=30s >/dev/null 2>&1 || warn "  Could not delete ClusterIssuer $name"
+        done <<< "$issuers"
+    fi
+
+    if ! $KUBECTL get csidriver "$CSI_DRIVER" >/dev/null 2>&1; then
+        info "No CSIDriver $CSI_DRIVER."
+    elif [[ -z "$($KUBECTL get pv -o jsonpath="{.items[?(@.spec.csi.driver==\"${CSI_DRIVER}\")].metadata.name}" 2>/dev/null || echo unknown)" ]]; then
+        info "Deleting CSIDriver $CSI_DRIVER..."
+        $KUBECTL delete csidriver "$CSI_DRIVER" --ignore-not-found --timeout=30s >/dev/null 2>&1 || \
+            warn "  Could not delete CSIDriver $CSI_DRIVER"
+    else
+        info "PVs of $CSI_DRIVER remain in other namespaces; leaving the CSIDriver."
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # 4b. Remove Deployments in kube-system owned by this Helm release
 # ---------------------------------------------------------------------------
 section "Removing kube-system Deployments owned by '$HELM_RELEASE'"
@@ -692,9 +935,38 @@ for crd in $CRDS; do
     $KUBECTL delete crd "$crd" --ignore-not-found --timeout=30s 2>/dev/null || true
 done
 
+# The chart also installs the CRDs of the operators it bundles. Those are other
+# projects' kinds, so they go only when no instance of them exists anywhere and
+# no other Helm release owns them.
+BUNDLED_CRDS="foundationdbclusters.apps.foundationdb.org foundationdbbackups.apps.foundationdb.org foundationdbrestores.apps.foundationdb.org mongodbcommunity.mongodbcommunity.mongodb.com"
+if other_operator_running; then
+    info "A simplyblock operator runs in another namespace; leaving the bundled CRDs."
+else
+    for crd in $BUNDLED_CRDS; do
+        $KUBECTL get crd "$crd" >/dev/null 2>&1 || continue
+        release=$($KUBECTL get crd "$crd" \
+            -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null || true)
+        if [[ -n "$release" && "$release" != "$HELM_RELEASE" ]]; then
+            info "CRD $crd belongs to Helm release '$release'; leaving it."
+            continue
+        fi
+        if ! count=$($KUBECTL get "$crd" -A --no-headers 2>/dev/null | wc -l | tr -d ' '); then
+            warn "Could not count the instances of $crd; leaving it."
+            continue
+        fi
+        if [[ "$count" -gt 0 ]]; then
+            warn "CRD $crd still has $count instance(s); leaving it."
+            continue
+        fi
+        info "Deleting bundled CRD $crd..."
+        $KUBECTL delete crd "$crd" --ignore-not-found --timeout=30s >/dev/null 2>&1 || \
+            warn "  Could not delete CRD $crd"
+    done
+fi
+
 # Confirm CRDs removed
 section "Confirming CRD removal"
-remaining_crds=$($KUBECTL get crd -o name 2>/dev/null | grep "$CRD_GROUP" | wc -l | tr -d ' ')
+remaining_crds=$($KUBECTL get crd -o name 2>/dev/null | grep -c "$CRD_GROUP" || true)
 if [[ "$remaining_crds" -eq 0 ]]; then
     info "All CRDs removed successfully."
 elif [[ "${#blocked_crds[@]}" -gt 0 ]]; then
