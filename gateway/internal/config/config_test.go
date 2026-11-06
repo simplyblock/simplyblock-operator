@@ -20,6 +20,7 @@ func clearGatewayEnv(t *testing.T) {
 		envBucketStorageClass, envBucketCapacityBytes, envBucketTimeout,
 		envIAMCacheTTL, envIAMCachePrune,
 		envTLSCertFile, envTLSKeyFile,
+		envRegion,
 	}
 	for key := range vaultEnv(&Vault{}) {
 		keys = append(keys, key)
@@ -315,6 +316,33 @@ func TestFromEnvLeavesTLSOffWhenNeitherPathIsSet(t *testing.T) {
 	}
 	if got.TLSCertFile != "" || got.TLSKeyFile != "" {
 		t.Errorf("TLSCertFile/TLSKeyFile = %q/%q, want both empty", got.TLSCertFile, got.TLSKeyFile)
+	}
+}
+
+func TestFromEnvDefaultsRegionToUsEast1(t *testing.T) {
+	clearGatewayEnv(t)
+	setRequiredEnv(t)
+
+	got, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if got.Region != defaultRegion {
+		t.Errorf("Region = %q, want the default %q", got.Region, defaultRegion)
+	}
+}
+
+func TestFromEnvHonorsAnExplicitRegion(t *testing.T) {
+	clearGatewayEnv(t)
+	setRequiredEnv(t)
+	t.Setenv(envRegion, "eu-central-1")
+
+	got, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if got.Region != "eu-central-1" {
+		t.Errorf("Region = %q, want eu-central-1", got.Region)
 	}
 }
 
