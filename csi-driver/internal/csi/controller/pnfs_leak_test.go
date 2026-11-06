@@ -106,7 +106,9 @@ func TestDegradedPNFSExportRollsBackItsVolume(t *testing.T) {
 func TestDeletingPNFSExportRollsBackItsVolume(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()
-	cs := newPNFSTestServer(t, mock, &fakeRegistry{record: ExportRecord{Phase: "Pending", Deleting: true}, stillGone: true})
+	cs := newPNFSTestServer(t, mock, &fakeRegistry{
+		record: ExportRecord{Phase: "Pending", Deleting: true}, stillGone: true,
+	})
 
 	_, err := cs.CreateVolume(context.Background(), pnfsCreateVolumeRequest("pvc-deleting"))
 	if status.Code(err) != codes.FailedPrecondition {

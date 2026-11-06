@@ -38,6 +38,9 @@ const (
 	// fsTypeParameter is the StorageClass parameter that carries it, named
 	// only so a refusal can tell the user where to set it.
 	fsTypeParameter = "csi.storage.k8s.io/fstype"
+
+	// phaseDegraded is the export phase in which the operator has given up.
+	phaseDegraded = "Degraded"
 )
 
 // isPNFSRequest reports whether the StorageClass asked for an export. The
@@ -202,7 +205,7 @@ func checkExportReady(name string, record ExportRecord) error {
 	switch record.Phase {
 	case "Ready":
 		return nil
-	case "Degraded":
+	case phaseDegraded:
 		return errExportDegraded(name, record.Message)
 	default:
 		return errExportNotReady(name, phaseOrPending(record.Phase), record.Message)
@@ -275,7 +278,7 @@ func (cs *Server) createPNFSVolume(
 	if err != nil {
 		return nil, err
 	}
-	if record.Phase == "Degraded" || record.Deleting {
+	if record.Phase == phaseDegraded || record.Deleting {
 		// The export will never serve this volume. Returning a final error
 		// with the backing volume still allocated leaks it: no PV is ever
 		// created, so DeleteVolume is never called (SFAM-2845).
@@ -305,8 +308,8 @@ func (cs *Server) createPNFSVolume(
 // FailedPrecondition is final, and correct: nothing was created. The
 // provisioner still retries the claim with backoff, so it binds once
 // spec.pnfs.mds is set.
-func (cs *Server) refuseWithoutMetadataServer(ctx context.Context) error {
-	if cs.exports == nil {
+func (cs *Server) refuseWithoutMetadataServer(ctx context.Context, pnfs bool) error {
+	if !pnfs || cs.exports == nil {
 		// ensureExportRecord refuses this case with its own message.
 		return nil
 	}
@@ -348,7 +351,7 @@ func (cs *Server) rollBackPNFSVolume(
 			"export %s cannot be served (%s); rolling back volume %s: %v",
 			name, why, volumeID, err)
 	}
-	if record.Phase == "Degraded" {
+	if record.Phase == phaseDegraded {
 		return errExportDegraded(name, why)
 	}
 	return status.Errorf(codes.FailedPrecondition,

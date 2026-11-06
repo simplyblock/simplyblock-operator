@@ -53,10 +53,8 @@ func (cs *Server) CreateVolume(
 		}
 	}
 
-	if pnfs {
-		if err := cs.refuseWithoutMetadataServer(ctx); err != nil {
-			return nil, err
-		}
+	if err := cs.refuseWithoutMetadataServer(ctx, pnfs); err != nil {
+		return nil, err
 	}
 
 	selection, err := cs.resolveClusterSelection(ctx, req)
