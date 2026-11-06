@@ -31,11 +31,11 @@ package controlplane
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -43,6 +43,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/ptr"
@@ -106,14 +107,36 @@ func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 		fdbPodRoleBindingObject(ns),
 		fdbOperatorDeployment(cp),
 		foundationDBCluster(cp),
+		fdbDisruptionBudget(ns, "log"),
+		fdbDisruptionBudget(ns, "storage"),
 	}
 	return append(objects, fdbPeerCertificate(cp)...)
 }
 
-// fdbMinimumRecoveryTimeForExclusion is the uptime, in seconds, the
-// FoundationDB operator waits for after a recovery before it excludes a process.
-// It still keeps an exclusion from following a recovery straight away.
-const fdbMinimumRecoveryTimeForExclusion = 30
+// fdbDisruptionBudget lets a drain take one FoundationDB process of a class at
+// a time. Each node runs one log and one storage process (the fault domain is
+// the node), and the redundancy mode survives losing one node. Without a
+// budget, a drain of a second node while the first one's processes are still
+// down -- an OpenShift MachineConfigPool update, an EKS node group update --
+// takes a second copy and stops the database. The budget is per class so a
+// drain can still evict both processes of the node it is draining.
+//
+// The evicted process comes back where its volume is, which on node-local
+// storage is after the node returns: commits pause until then. Moving processes
+// off a node before it is drained needs a spare node, which a hyperconverged
+// cluster does not have.
+func fdbDisruptionBudget(namespace, class string) *policyv1.PodDisruptionBudget {
+	return &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{Name: ComponentFDBCluster + "-" + class, Namespace: namespace},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			MaxUnavailable: ptr.To(intstr.FromInt32(1)),
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{
+				"foundationdb.org/fdb-cluster-name":  ComponentFDBCluster,
+				"foundationdb.org/fdb-process-class": class,
+			}},
+		},
+	}
+}
 
 // foundationDBClusterScoped is the half of that set the garbage collector will
 // not remove with the ControlPlane, and which the finalizer therefore deletes.
@@ -287,12 +310,6 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 			Command: []string{"/manager"},
 			Args: []string{
 				"--health-probe-bind-address=:9443",
-				// The operator excludes a process only once the database has been up
-				// this long since its last recovery. A replacement joining causes a
-				// recovery, so the default 120 s is spent on every process a drain
-				// replaces (internal/webhook/foundationdb_eviction.go) before the old
-				// one can go, and an EKS node group update gives a drain 15 minutes.
-				"--minimum-recovery-time-for-exclusion=" + strconv.Itoa(fdbMinimumRecoveryTimeForExclusion),
 			},
 			// The operator reconciles the database, so it reaches it the way its
 			// processes reach each other and needs the same material.
