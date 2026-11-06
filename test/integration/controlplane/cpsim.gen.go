@@ -1668,10 +1668,22 @@ type DeviceDTO struct {
 
 // DeviceGrowthDTO defines model for DeviceGrowthDTO.
 type DeviceGrowthDTO struct {
-	Devices   []map[string]interface{} `json:"devices"`
-	Errors    map[string]string        `json:"errors"`
-	Rebalance *DeviceRebalanceDTO      `json:"rebalance,omitempty"`
-	Uniform   bool                     `json:"uniform"`
+	Devices []DeviceGrowthEntryDTO `json:"devices"`
+	Errors  map[string]string      `json:"errors"`
+	Factor  float32                `json:"factor"`
+	Grown   bool                   `json:"grown"`
+	Reason  string                 `json:"reason"`
+	Shrunk  *[]string              `json:"shrunk,omitempty"`
+}
+
+// DeviceGrowthEntryDTO defines model for DeviceGrowthEntryDTO.
+type DeviceGrowthEntryDTO struct {
+	BackendSize   int    `json:"backend_size"`
+	DeviceId      string `json:"device_id"`
+	NewSize       int    `json:"new_size"`
+	OldSize       int    `json:"old_size"`
+	PlacementSize int    `json:"placement_size"`
+	UnusedSize    int    `json:"unused_size"`
 }
 
 // DeviceHealthAssessmentDTO A device health verdict computed outside the control plane.
@@ -1740,13 +1752,6 @@ type DevicePerformanceAssessmentDTO struct {
 
 // DevicePerformanceAssessmentDTOVerdict defines model for DevicePerformanceAssessmentDTO.Verdict.
 type DevicePerformanceAssessmentDTOVerdict string
-
-// DeviceRebalanceDTO defines model for DeviceRebalanceDTO.
-type DeviceRebalanceDTO struct {
-	Reason         string `json:"reason"`
-	Started        bool   `json:"started"`
-	WeightsUpdated bool   `json:"weights_updated"`
-}
 
 // DeviceResizeDTO defines model for DeviceResizeDTO.
 type DeviceResizeDTO struct {
@@ -3072,11 +3077,6 @@ type ClustersConsistencyGroupsReplicationSyncStatusApiV2ClustersClusterIdConsist
 // ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody defines parameters for ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost.
 type ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody = UnderscoreGenerationTakeParams
 
-// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams defines parameters for ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost.
-type ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams struct {
-	Rebalance *bool `form:"rebalance,omitempty" json:"rebalance,omitempty"`
-}
-
 // ClustersIostatsApiV2ClustersClusterIdIostatsGetParams defines parameters for ClustersIostatsApiV2ClustersClusterIdIostatsGet.
 type ClustersIostatsApiV2ClustersClusterIdIostatsGetParams struct {
 	History *string `form:"history,omitempty" json:"history,omitempty"`
@@ -4143,7 +4143,7 @@ type ServerInterface interface {
 	ClustersExpandApiV2ClustersClusterIdExpandPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
 	// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost Clusters:Grow Devices
 	// (POST /api/v2/clusters/{cluster_id}/grow-devices)
-	ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams)
+	ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
 	// ClustersIostatsApiV2ClustersClusterIdIostatsGet Clusters:Iostats
 	// (GET /api/v2/clusters/{cluster_id}/iostats)
 	ClustersIostatsApiV2ClustersClusterIdIostatsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersIostatsApiV2ClustersClusterIdIostatsGetParams)
@@ -6802,24 +6802,8 @@ func (siw *ServerInterfaceWrapper) ClustersGrowDevicesApiV2ClustersClusterIdGrow
 		return
 	}
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams
-
-	// ------------- Optional query parameter "rebalance" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "rebalance", r.URL.Query(), &params.Rebalance, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
-	if err != nil {
-		var requiredError *runtime.RequiredParameterError
-		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "rebalance"})
-		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "rebalance", Err: err})
-		}
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(w, r, clusterId, params)
+		siw.Handler.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(w, r, clusterId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {

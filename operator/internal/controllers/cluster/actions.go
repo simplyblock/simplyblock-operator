@@ -19,7 +19,10 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -149,6 +152,9 @@ func (r *StorageClusterOpsReconciler) request(
 	case simplyblockv1alpha2.StorageClusterOpsActionCancelTask:
 		return r.requestCancel(ctx, ops, clusterID)
 
+	case simplyblockv1alpha2.StorageClusterOpsActionGrowDevices:
+		return r.requestGrowDevices(ctx, ops, clusterID)
+
 	default:
 		return false, fatalf("action %s does not issue a request", ops.Spec.Action)
 	}
@@ -159,6 +165,69 @@ func (r *StorageClusterOpsReconciler) request(
 	}
 	log.Info("the action was accepted by the control plane",
 		"operation", ops.Name, "action", ops.Spec.Action, "cluster", ops.Spec.ClusterRef)
+	return true, nil
+}
+
+// requestGrowDevices grows every lblk data device of the cluster by the same
+// factor and records the outcome.
+//
+// It is not issued under a claim: the call is synchronous and idempotent, so a
+// pass that died after it and before its record repeats it and finds nothing
+// left to grow. A refusal (a cluster that is not in lblk device mode), a
+// shrunk block device, and a device that stopped the growth are final; any
+// other failure is retried.
+func (r *StorageClusterOpsReconciler) requestGrowDevices(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps, clusterID string,
+) (bool, error) {
+	growth, err := r.API.GrowDevices(ctx, clusterID)
+	if err != nil {
+		var refusal *ControlPlaneError
+		if errors.As(err, &refusal) && refusal.Status == http.StatusConflict {
+			return false, fatalf("the control plane refused to grow the devices of cluster %s: %s",
+				ops.Spec.ClusterRef, refusal.Body)
+		}
+		return false, fmt.Errorf("grow the devices of cluster %s: %w", ops.Spec.ClusterRef, err)
+	}
+
+	record := &simplyblockv1alpha2.ClusterDeviceGrowthStatus{
+		Grown:  growth.Grown,
+		Factor: strconv.FormatFloat(growth.Factor, 'f', -1, 64),
+		Reason: growth.Reason,
+		Errors: growth.Errors,
+		Shrunk: growth.Shrunk,
+	}
+	if !growth.Grown {
+		record.Factor = "1"
+	}
+	for _, d := range growth.Devices {
+		record.Devices = append(record.Devices, simplyblockv1alpha2.DeviceGrowthStatus{
+			DeviceID: d.DeviceID, Size: d.NewSize, UnusedBytes: d.UnusedSize,
+		})
+		record.UnusedBytes += d.UnusedSize
+	}
+	if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageClusterOpsStatus) {
+		status.DeviceGrowth = record
+	}); err != nil {
+		return false, err
+	}
+
+	for _, id := range growth.Shrunk {
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, DeviceShrunk, DeviceShrunk,
+			"the block device of device %s of cluster %s is smaller than the device; shrinking is "+
+				"not supported, restore the LUN to at least its previous size", id, ops.Spec.ClusterRef)
+	}
+	switch {
+	case growth.Grown:
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, DevicesGrown, DevicesGrown,
+			"%d devices of cluster %s grew by factor %s, %d bytes of the grown LUNs stay unused",
+			len(record.Devices), ops.Spec.ClusterRef, record.Factor, record.UnusedBytes)
+	case len(growth.Shrunk) > 0 || len(growth.Errors) > 0:
+		return false, fatalf("the devices of cluster %s were not grown: %s",
+			ops.Spec.ClusterRef, growth.Reason)
+	default:
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, DevicesNotGrown, DevicesNotGrown,
+			"the devices of cluster %s were not grown: %s", ops.Spec.ClusterRef, growth.Reason)
+	}
 	return true, nil
 }
 

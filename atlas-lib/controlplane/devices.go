@@ -200,7 +200,94 @@ func (c *Client) FailDevice(ctx context.Context, clusterID, nodeID, deviceID str
 	return nil
 }
 
-// parseNodeIDs parses a cluster and storage-node identifier.
+// DeviceGrowth is what a cluster-wide growth did to one lblk data device.
+//
+// Devices grow uniformly: every data device of the cluster by the same factor,
+// the smallest growth of any of their block devices. Its placement weight keeps
+// the size it was placed with, so data placement never changes, and the part of
+// a block device that grew by more than the factor stays unused.
+type DeviceGrowth struct {
+	DeviceID string
+
+	// OldSize and NewSize are the device's size before and after, in bytes.
+	OldSize int64
+	NewSize int64
+
+	// BackendSize is the size of the device's block device (the LUN) found by
+	// the rescan, and UnusedSize the part of it beyond NewSize.
+	BackendSize int64
+	UnusedSize  int64
+
+	// PlacementSize is the size the device's placement weight is derived from.
+	PlacementSize int64
+}
+
+// ClusterDeviceGrowth is the outcome of growing the lblk data devices of a
+// cluster.
+type ClusterDeviceGrowth struct {
+	// Grown is false when nothing grew; Reason says why.
+	Grown bool
+
+	// Factor is the growth factor applied to every data device, 1 when nothing
+	// grew.
+	Factor float64
+
+	// Devices holds one entry per data device, set when the devices grew or
+	// when none of them could.
+	Devices []DeviceGrowth
+
+	// Errors maps the id of each device that stopped the growth to the reason.
+	Errors map[string]string
+
+	Reason string
+
+	// Shrunk lists the devices whose block device was found smaller than the
+	// device. The control plane refuses to grow anything then and raises the
+	// device_shrunk alert.
+	Shrunk []string
+}
+
+// GrowClusterDevices grows every lblk data device of a cluster online by the
+// same factor: the smallest growth of any of their block devices. If one block
+// device did not grow, or a device is not online, nothing grows. The call is
+// synchronous and idempotent: a repeat without new growth changes nothing. The
+// control plane refuses it with a 409 for a cluster not in lblk device mode.
+func (c *Client) GrowClusterDevices(ctx context.Context, clusterID string) (ClusterDeviceGrowth, error) {
+	cluster, err := parseUUID("cluster id", clusterID)
+	if err != nil {
+		return ClusterDeviceGrowth{}, err
+	}
+
+	resp, err := c.api.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse(ctx, cluster)
+	if err != nil {
+		return ClusterDeviceGrowth{}, fmt.Errorf("grow devices of cluster %s: %w", clusterID, err)
+	}
+	if code := resp.StatusCode(); code < 200 || code >= 300 || resp.JSON200 == nil {
+		return ClusterDeviceGrowth{}, respError("grow devices of cluster "+clusterID, code, resp.Body)
+	}
+	dto := resp.JSON200
+	out := ClusterDeviceGrowth{
+		Grown:  dto.Grown,
+		Factor: float64(dto.Factor),
+		Errors: dto.Errors,
+		Reason: dto.Reason,
+	}
+	if dto.Shrunk != nil {
+		out.Shrunk = *dto.Shrunk
+	}
+	for _, d := range dto.Devices {
+		out.Devices = append(out.Devices, DeviceGrowth{
+			DeviceID:      d.DeviceId,
+			OldSize:       int64(d.OldSize),
+			NewSize:       int64(d.NewSize),
+			BackendSize:   int64(d.BackendSize),
+			UnusedSize:    int64(d.UnusedSize),
+			PlacementSize: int64(d.PlacementSize),
+		})
+	}
+	return out, nil
+}
+
 func parseNodeIDs(clusterID, nodeID string) (cluster, node uuid.UUID, err error) {
 	if cluster, err = parseUUID("cluster id", clusterID); err != nil {
 		return cluster, node, err

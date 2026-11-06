@@ -108,6 +108,11 @@ type ControlPlane interface {
 	// is still used by a volume.
 	SetServiceClasses(ctx context.Context, clusterID string, config ServiceClassConfig) error
 
+	// GrowDevices grows every lblk data device of the cluster by the same
+	// factor, the smallest growth of their block devices. It is synchronous and
+	// safe to repeat: without new growth nothing changes.
+	GrowDevices(ctx context.Context, clusterID string) (atlascp.ClusterDeviceGrowth, error)
+
 	// Endpoint is the base URL this call would currently reach the control
 	// plane at, resolved the same way every other call resolves it (§3.3).
 	// upsertCSICredentials carries it into the CSI driver's aggregate Secret,
@@ -239,6 +244,45 @@ func (c *httpControlPlane) Activate(ctx context.Context, clusterID string) error
 
 func (c *httpControlPlane) Expand(ctx context.Context, clusterID string) error {
 	return c.post(ctx, fmt.Sprintf("/api/v2/clusters/%s/expand", clusterID), nil)
+}
+
+func (c *httpControlPlane) GrowDevices(
+	ctx context.Context, clusterID string,
+) (atlascp.ClusterDeviceGrowth, error) {
+	body, err := c.call(ctx, http.MethodPost,
+		fmt.Sprintf("/api/v2/clusters/%s/grow-devices", clusterID), nil)
+	if err != nil {
+		return atlascp.ClusterDeviceGrowth{}, err
+	}
+	var wire struct {
+		Grown   bool    `json:"grown"`
+		Factor  float64 `json:"factor"`
+		Devices []struct {
+			DeviceID      string `json:"device_id"`
+			OldSize       int64  `json:"old_size"`
+			NewSize       int64  `json:"new_size"`
+			BackendSize   int64  `json:"backend_size"`
+			UnusedSize    int64  `json:"unused_size"`
+			PlacementSize int64  `json:"placement_size"`
+		} `json:"devices"`
+		Errors map[string]string `json:"errors"`
+		Reason string            `json:"reason"`
+		Shrunk []string          `json:"shrunk"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		return atlascp.ClusterDeviceGrowth{}, fmt.Errorf("decode the device growth of cluster %s: %w",
+			clusterID, err)
+	}
+	out := atlascp.ClusterDeviceGrowth{
+		Grown: wire.Grown, Factor: wire.Factor, Errors: wire.Errors, Reason: wire.Reason, Shrunk: wire.Shrunk,
+	}
+	for _, d := range wire.Devices {
+		out.Devices = append(out.Devices, atlascp.DeviceGrowth{
+			DeviceID: d.DeviceID, OldSize: d.OldSize, NewSize: d.NewSize,
+			BackendSize: d.BackendSize, UnusedSize: d.UnusedSize, PlacementSize: d.PlacementSize,
+		})
+	}
+	return out, nil
 }
 
 func (c *httpControlPlane) Shutdown(ctx context.Context, clusterID string) error {

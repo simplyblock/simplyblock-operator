@@ -1670,10 +1670,22 @@ type DeviceDTO struct {
 
 // DeviceGrowthDTO defines model for DeviceGrowthDTO.
 type DeviceGrowthDTO struct {
-	Devices   []map[string]interface{} `json:"devices"`
-	Errors    map[string]string        `json:"errors"`
-	Rebalance *DeviceRebalanceDTO      `json:"rebalance,omitempty"`
-	Uniform   bool                     `json:"uniform"`
+	Devices []DeviceGrowthEntryDTO `json:"devices"`
+	Errors  map[string]string      `json:"errors"`
+	Factor  float32                `json:"factor"`
+	Grown   bool                   `json:"grown"`
+	Reason  string                 `json:"reason"`
+	Shrunk  *[]string              `json:"shrunk,omitempty"`
+}
+
+// DeviceGrowthEntryDTO defines model for DeviceGrowthEntryDTO.
+type DeviceGrowthEntryDTO struct {
+	BackendSize   int    `json:"backend_size"`
+	DeviceId      string `json:"device_id"`
+	NewSize       int    `json:"new_size"`
+	OldSize       int    `json:"old_size"`
+	PlacementSize int    `json:"placement_size"`
+	UnusedSize    int    `json:"unused_size"`
 }
 
 // DeviceHealthAssessmentDTO A device health verdict computed outside the control plane.
@@ -1742,13 +1754,6 @@ type DevicePerformanceAssessmentDTO struct {
 
 // DevicePerformanceAssessmentDTOVerdict defines model for DevicePerformanceAssessmentDTO.Verdict.
 type DevicePerformanceAssessmentDTOVerdict string
-
-// DeviceRebalanceDTO defines model for DeviceRebalanceDTO.
-type DeviceRebalanceDTO struct {
-	Reason         string `json:"reason"`
-	Started        bool   `json:"started"`
-	WeightsUpdated bool   `json:"weights_updated"`
-}
 
 // DeviceResizeDTO defines model for DeviceResizeDTO.
 type DeviceResizeDTO struct {
@@ -3073,11 +3078,6 @@ type ClustersConsistencyGroupsReplicationSyncStatusApiV2ClustersClusterIdConsist
 
 // ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody defines parameters for ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost.
 type ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody = UnderscoreGenerationTakeParams
-
-// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams defines parameters for ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost.
-type ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams struct {
-	Rebalance *bool `form:"rebalance,omitempty" json:"rebalance,omitempty"`
-}
 
 // ClustersIostatsApiV2ClustersClusterIdIostatsGetParams defines parameters for ClustersIostatsApiV2ClustersClusterIdIostatsGet.
 type ClustersIostatsApiV2ClustersClusterIdIostatsGetParams struct {
@@ -4859,14 +4859,18 @@ type ClientInterface interface {
 
 	// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost Clusters:Grow Devices
 	//
-	// Grow every online lblk data device of the cluster to the size of its
-	// block device, one device at a time. Used after the LUNs of the cluster
-	// were grown on the storage array. If they have grown unevenly, the device
-	// weights are set to the new sizes and the cluster is rebalanced, unless
-	// ``rebalance`` is false.
+	// Grow all lblk data devices of the cluster online by the same factor.
+	//
+	// Every block device is rescanned (for example, after its LUN was grown on
+	// the storage array), and every device grows by the smallest growth factor
+	// of all of them; the rest of a larger block device stays unused
+	// (`unused_size`). If one block device did not grow, nothing grows
+	// (`grown` false, `reason`). Device weights and data placement never change.
+	// A block device smaller than its device is refused, listed in `shrunk`
+	// and `errors`, and raises the device_shrunk alert.
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/grow-devices (the `ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost` operationId).
-	ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(ctx context.Context, clusterId openapi_types.UUID, params *ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersIostatsApiV2ClustersClusterIdIostatsGet Clusters:Iostats
 	//
@@ -7669,15 +7673,19 @@ func (c *Client) ClustersExpandApiV2ClustersClusterIdExpandPost(ctx context.Cont
 
 // ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost Clusters:Grow Devices
 //
-// Grow every online lblk data device of the cluster to the size of its
-// block device, one device at a time. Used after the LUNs of the cluster
-// were grown on the storage array. If they have grown unevenly, the device
-// weights are set to the new sizes and the cluster is rebalanced, unless
-// “rebalance“ is false.
+// Grow all lblk data devices of the cluster online by the same factor.
+//
+// Every block device is rescanned (for example, after its LUN was grown on
+// the storage array), and every device grows by the smallest growth factor
+// of all of them; the rest of a larger block device stays unused
+// (`unused_size`). If one block device did not grow, nothing grows
+// (`grown` false, `reason`). Device weights and data placement never change.
+// A block device smaller than its device is refused, listed in `shrunk`
+// and `errors`, and raises the device_shrunk alert.
 //
 // Corresponds with POST /api/v2/clusters/{cluster_id}/grow-devices (the `ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost` operationId).
-func (c *Client) ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(ctx context.Context, clusterId openapi_types.UUID, params *ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostRequest(c.Server, clusterId, params)
+func (c *Client) ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostRequest(c.Server, clusterId)
 	if err != nil {
 		return nil, err
 	}
@@ -13385,7 +13393,7 @@ func NewClustersExpandApiV2ClustersClusterIdExpandPostRequest(server string, clu
 }
 
 // NewClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostRequest constructs an http.Request for the ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost method
-func NewClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostRequest(server string, clusterId openapi_types.UUID, params *ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams) (*http.Request, error) {
+func NewClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostRequest(server string, clusterId openapi_types.UUID) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -13408,33 +13416,6 @@ func NewClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostRequest(server s
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
-	}
-
-	if params != nil {
-		// queryValues collects non-styled parameters (passthrough, JSON)
-		// that are safe to round-trip through url.Values.Encode().
-		queryValues := queryURL.Query()
-		// rawQueryFragments collects pre-encoded query fragments from
-		// styled parameters, preserving literal commas as delimiters
-		// per the OpenAPI spec (e.g. "color=blue,black,brown").
-		var rawQueryFragments []string
-
-		if params.Rebalance != nil {
-
-			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "rebalance", *params.Rebalance, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
-				return nil, err
-			} else {
-				for _, qp := range strings.Split(queryFrag, "&") {
-					rawQueryFragments = append(rawQueryFragments, qp)
-				}
-			}
-
-		}
-
-		if encoded := queryValues.Encode(); encoded != "" {
-			rawQueryFragments = append(rawQueryFragments, encoded)
-		}
-		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
@@ -20913,16 +20894,20 @@ type ClientWithResponsesInterface interface {
 
 	// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse Clusters:Grow Devices
 	//
-	// Grow every online lblk data device of the cluster to the size of its
-	// block device, one device at a time. Used after the LUNs of the cluster
-	// were grown on the storage array. If they have grown unevenly, the device
-	// weights are set to the new sizes and the cluster is rebalanced, unless
-	// ``rebalance`` is false.
+	// Grow all lblk data devices of the cluster online by the same factor.
+	//
+	// Every block device is rescanned (for example, after its LUN was grown on
+	// the storage array), and every device grows by the smallest growth factor
+	// of all of them; the rest of a larger block device stays unused
+	// (`unused_size`). If one block device did not grow, nothing grows
+	// (`grown` false, `reason`). Device weights and data placement never change.
+	// A block device smaller than its device is refused, listed in `shrunk`
+	// and `errors`, and raises the device_shrunk alert.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/grow-devices (the `ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost` operationId).
-	ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, params *ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams, reqEditors ...RequestEditorFn) (*ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse, error)
+	ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse, error)
 
 	// ClustersIostatsApiV2ClustersClusterIdIostatsGetWithResponse Clusters:Iostats
 	//
@@ -31778,17 +31763,21 @@ func (c *ClientWithResponses) ClustersExpandApiV2ClustersClusterIdExpandPostWith
 
 // ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse Clusters:Grow Devices
 //
-// Grow every online lblk data device of the cluster to the size of its
-// block device, one device at a time. Used after the LUNs of the cluster
-// were grown on the storage array. If they have grown unevenly, the device
-// weights are set to the new sizes and the cluster is rebalanced, unless
-// “rebalance“ is false.
+// Grow all lblk data devices of the cluster online by the same factor.
+//
+// Every block device is rescanned (for example, after its LUN was grown on
+// the storage array), and every device grows by the smallest growth factor
+// of all of them; the rest of a larger block device stays unused
+// (`unused_size`). If one block device did not grow, nothing grows
+// (`grown` false, `reason`). Device weights and data placement never change.
+// A block device smaller than its device is refused, listed in `shrunk`
+// and `errors`, and raises the device_shrunk alert.
 //
 // Returns a wrapper object for the known response body format(s).
 //
 // Corresponds with POST /api/v2/clusters/{cluster_id}/grow-devices (the `ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost` operationId).
-func (c *ClientWithResponses) ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, params *ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams, reqEditors ...RequestEditorFn) (*ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse, error) {
-	rsp, err := c.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(ctx, clusterId, params, reqEditors...)
+func (c *ClientWithResponses) ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostResponse, error) {
+	rsp, err := c.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(ctx, clusterId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}

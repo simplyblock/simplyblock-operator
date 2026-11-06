@@ -60,10 +60,14 @@ const (
 	requestingDeadline    = 2 * time.Minute
 	awaitingDeadline      = 30 * time.Minute
 	checkingPeersDeadline = 2 * time.Hour
-	nodeShutdownDeadline  = 30 * time.Minute
-	podRefreshDeadline    = 10 * time.Minute
-	nodeRestartDeadline   = 45 * time.Minute
-	rebalancingDeadline   = 4 * time.Hour
+
+	// growDevicesDeadline bounds GrowDevices, which grows the devices one at a
+	// time and answers when the last has drained, reopened, and resumed.
+	growDevicesDeadline  = 30 * time.Minute
+	nodeShutdownDeadline = 30 * time.Minute
+	podRefreshDeadline   = 10 * time.Minute
+	nodeRestartDeadline  = 45 * time.Minute
+	rebalancingDeadline  = 4 * time.Hour
 )
 
 // How long an Activate keeps asking again after the control plane gives up on
@@ -107,6 +111,10 @@ func graphs() statemachine.MultiConfig[step] {
 		action(simplyblockv1alpha2.StorageClusterOpsActionShutdown):   requestAndWait(),
 		action(simplyblockv1alpha2.StorageClusterOpsActionStart):      requestAndWait(),
 		action(simplyblockv1alpha2.StorageClusterOpsActionCancelTask): requestAndWait(),
+
+		// GrowDevices is one synchronous call, so its wait is for the cluster
+		// to be active again, which it never stopped being.
+		action(simplyblockv1alpha2.StorageClusterOpsActionGrowDevices): requestAndWait(),
 
 		// Restart sequences a shutdown and a start, because the control plane
 		// offers no restart of its own (§9). A server-side one would collapse
@@ -176,6 +184,7 @@ var initialDeadlines = map[statemachine.Action]time.Duration{
 	action(simplyblockv1alpha2.StorageClusterOpsActionShutdown):       requestingDeadline,
 	action(simplyblockv1alpha2.StorageClusterOpsActionStart):          requestingDeadline,
 	action(simplyblockv1alpha2.StorageClusterOpsActionCancelTask):     requestingDeadline,
+	action(simplyblockv1alpha2.StorageClusterOpsActionGrowDevices):    growDevicesDeadline,
 	action(simplyblockv1alpha2.StorageClusterOpsActionRestart):        awaitingDeadline,
 	action(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart): checkingPeersDeadline,
 }
