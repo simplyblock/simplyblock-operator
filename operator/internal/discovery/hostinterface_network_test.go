@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"testing"
 
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
@@ -83,5 +84,22 @@ func TestAFleetWithNoDataInterfaceIsDraftedOnThePodNetwork(t *testing.T) {
 	network := template.Template.Network
 	if network == nil || !network.PodNetwork {
 		t.Fatalf("the template's network is %+v, want the pod network", network)
+	}
+}
+
+// A run that states the host network keeps it even on a fleet with no data NIC,
+// where the planner alone would choose the pod network.
+func TestAStatedHostNetworkOverridesThePodNetwork(t *testing.T) {
+	plan := Planner{}.Plan(uniformFleet(3), nil)
+
+	template, err := ClusterTemplateFor("c", plan, TemplateOptions{
+		Network: &simplyblockv1alpha2.StorageNetworkSpec{SpdkOnHostNetwork: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	network := template.Template.Network
+	if network == nil || !network.SpdkOnHostNetwork || network.PodNetwork {
+		t.Fatalf("the template's network is %+v, want the stated host network", network)
 	}
 }
