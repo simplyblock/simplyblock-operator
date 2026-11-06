@@ -1,18 +1,10 @@
-## Append samples of your project ##
+## Samples that become the bundle's alm-examples ##
+# Only the resources a customer creates during installation are listed, so the
+# OpenShift console offers no examples for the kinds the operator manages
+# itself (those CRDs are internal-objects in the CSV). The other sample files
+# in this directory stay as references and can be applied one by one.
 resources:
 - storage_v1alpha2_controlplane.yaml
 - storage_v1alpha2_simplyblockdriver.yaml
-- storage_v1alpha2_storagecluster.yaml
-- storage_v1alpha2_storageclusterops.yaml
-- storage_v1alpha1_storagenodeset.yaml
-- storage_v1alpha2_storagepool.yaml
-- storage_v1alpha2_storagepoolops.yaml
-- storage_v1alpha1_task.yaml
-- storage_v1alpha1_snapshotreplication.yaml
-- storage_v1alpha2_storagebackuppolicy.yaml
-- storage_v1alpha2_storagebackupops.yaml
-- storage_v1alpha1_backuprestore.yaml
 - storage_v1alpha2_operatorops.yaml
-- storage_v1alpha2_persistentvolumeops.yaml
-- storage_v1alpha2_storagefenceremediationtemplate.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples
