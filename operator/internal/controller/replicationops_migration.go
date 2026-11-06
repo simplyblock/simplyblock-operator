@@ -634,6 +634,8 @@ type clusterClaim struct {
 	slot *simplyblockv1alpha1.ReplicationSlot
 	// finished is true when that slot completed a migration.
 	finished bool
+	// unstarted is true when that slot never attached: its status is empty.
+	unstarted bool
 	// originCluster is the cluster the PV's handle, or the slot, names.
 	originCluster string
 	// clusterID and volumeID locate the volume now.
@@ -685,7 +687,8 @@ func (r *ReplicationOpsReconciler) locateClusterClaim(
 	current := origin
 	finished := slot != nil &&
 		slot.Status.State == string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone)
-	if slot == nil || slot.Status.State == "" || finished {
+	unstarted := slot != nil && slot.Status.State == ""
+	if slot == nil || unstarted || finished {
 		var err error
 		if current, err = currentVolumeHandle(ctx, apiClient, origin); err != nil {
 			return nil, fmt.Errorf("locate the volume of claim %s/%s: %w", pvc.Namespace, pvc.Name, err)
@@ -697,6 +700,7 @@ func (r *ReplicationOpsReconciler) locateClusterClaim(
 		pvcRef:        utils.RefFrom(pvc.Namespace, pvc.Name, opsNamespace),
 		slot:          slot,
 		finished:      finished,
+		unstarted:     unstarted,
 		originCluster: originCluster,
 		clusterID:     clusterID,
 		volumeID:      volumeID,
@@ -712,8 +716,16 @@ func (s *migrationScope) skipClaim(pvcRef, detail string) {
 
 // scopeClusterClaim classifies one located claim: a volume that left the
 // source cluster is reported as moved, a live slot under another policy is
-// skipped, a live slot under spec.policyRef joins the scope as it is, and
-// any other claim is enrolled.
+// skipped, a slot under spec.policyRef that is live or still attaching joins
+// the scope as it is, and any other claim is enrolled.
+//
+// A slot that never attached under another policy is not live and does not
+// hold the claim: like a finished one it is superseded, and enrolling
+// re-points the annotation that created it, on which the PVC watcher
+// replaces it. (bf13 2026-11-05: a failed round's slots were cleaned up, the
+// policy annotation its enrollment had added stayed on the claims, the
+// watcher recreated the slots with an empty status, and the next round under
+// the opposite policy skipped every volume as following the old one.)
 func (r *ReplicationOpsReconciler) scopeClusterClaim(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.ReplicationOps,
@@ -728,15 +740,17 @@ func (r *ReplicationOpsReconciler) scopeClusterClaim(
 		return nil
 	}
 	if slot := claim.slot; slot != nil && !claim.finished {
-		if utils.CanonicalRef(slot.Spec.PolicyRef, slot.Namespace) != policy.Namespace+"/"+policy.Name {
+		if utils.CanonicalRef(slot.Spec.PolicyRef, slot.Namespace) == policy.Namespace+"/"+policy.Name {
+			scope.volumes = append(scope.volumes, migrationVolume{
+				slot: slot, pvcName: claim.pvcRef, volumeID: claim.volumeID,
+				slotRef: utils.RefFrom(slot.Namespace, slot.Name, ops.Namespace),
+			})
+			return nil
+		}
+		if !claim.unstarted {
 			scope.skipClaim(claim.pvcRef, fmt.Sprintf("follows replication policy %q", slot.Spec.PolicyRef))
 			return nil
 		}
-		scope.volumes = append(scope.volumes, migrationVolume{
-			slot: slot, pvcName: claim.pvcRef, volumeID: claim.volumeID,
-			slotRef: utils.RefFrom(slot.Namespace, slot.Name, ops.Namespace),
-		})
-		return nil
 	}
 	return r.enrollClusterClaim(ctx, ops, policy, scope, claim)
 }
@@ -759,8 +773,11 @@ func (r *ReplicationOpsReconciler) enrollClusterClaim(
 		return err
 	}
 	// The policy a finished migration left on the claim is spent: the volume
-	// has arrived, and that policy replicates from where it no longer is.
-	if assigned != "" && utils.CanonicalRef(assigned, pvc.Namespace) != policyRef && !claim.finished {
+	// has arrived, and that policy replicates from where it no longer is. The
+	// policy of a slot that never attached does not keep the claim either;
+	// the claim follows this plan, and the watcher replaces that slot.
+	if assigned != "" && utils.CanonicalRef(assigned, pvc.Namespace) != policyRef &&
+		!claim.finished && !claim.unstarted {
 		scope.skipClaim(claim.pvcRef, fmt.Sprintf("assigned replication policy %q", assigned))
 		return nil
 	}
