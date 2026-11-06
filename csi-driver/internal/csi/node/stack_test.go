@@ -116,14 +116,23 @@ func newStackedServer(t *testing.T, runner stackRunner) (*Server, string) {
 		mounter:     mount.NewWith(k8smount.NewFakeMounter(nil), nil),
 		stack:       s,
 		volumeLocks: csicommon.NewVolumeLocks(),
+		// The hosts these tests stand in for have device-mapper. A test about a
+		// host without it clears this.
+		deviceMapper: true,
 	}, recordDir
 }
 
 // newTestStack is the stack with its record directory in a temporary one, so a
 // test can write a record and see the teardown read it. The directory is
 // returned because a test that corrupts a record writes the file itself.
+//
+// The dm indirection is off here. These tests pin the direct shapes they were
+// written against, and the indirection is on by default, so without this every
+// fresh stage would run dmsetup, which the recording runner does not answer. A
+// test about the indirection sets SPDKCSI_DM_INDIRECTION itself after this.
 func newTestStack(t *testing.T, runner stackRunner) (*stack, string) {
 	t.Helper()
+	t.Setenv("SPDKCSI_DM_INDIRECTION", "false")
 	recordDir := t.TempDir()
 	s := newStack(mount.NewWith(k8smount.NewFakeMounter(nil), nil), recordDir)
 	s.runner = runner

@@ -148,3 +148,95 @@ func (m *Mapper) Remove(ctx context.Context, name string) error {
 	}
 	return nil
 }
+
+// Mapping is one device-mapper device as the startup scan sees it.
+type Mapping struct {
+	// Name is the mapping's name under /dev/mapper.
+	Name string
+	// Suspended reports that the mapping is holding its I/O.
+	Suspended bool
+}
+
+// Suspend holds name's I/O. In-flight requests complete on the current device
+// before it returns and new ones queue, so no request is outstanding on a
+// namespace that is about to leave its subsystem. --nolockfs skips the
+// filesystem freeze: the swap changes a path, it is not a consistency point,
+// and a freeze would flush dirty pages inside the window.
+func (m *Mapper) Suspend(ctx context.Context, name string) error {
+	if _, err := m.run(ctx, "dmsetup", "suspend", "--nolockfs", name); err != nil {
+		return fmt.Errorf("dmsetup suspend %s: %w", name, err)
+	}
+	return nil
+}
+
+// ReloadResume points a suspended name at device and releases its I/O. A
+// refused reload leaves the mapping suspended and returns the error: unlike
+// Swap, the old table may name a namespace that has already gone, and the
+// caller decides between retrying and resuming elsewhere.
+func (m *Mapper) ReloadResume(ctx context.Context, name, device string, sectors uint64) error {
+	if _, err := m.run(ctx, "dmsetup", "reload", name, "--table", table(sectors, device)); err != nil {
+		return fmt.Errorf("dmsetup reload %s: %w (still suspended)", name, err)
+	}
+	return m.Resume(ctx, name)
+}
+
+// Resume releases name's I/O on whatever table it holds.
+func (m *Mapper) Resume(ctx context.Context, name string) error {
+	if _, err := m.run(ctx, "dmsetup", "resume", name); err != nil {
+		return fmt.Errorf("dmsetup resume %s: %w", name, err)
+	}
+	return nil
+}
+
+// Suspended reports whether name is holding its I/O, or ErrNotFound.
+func (m *Mapper) Suspended(ctx context.Context, name string) (bool, error) {
+	out, err := m.run(ctx, "dmsetup", "info", "-c", "--noheadings", "-o", "name,suspended", name)
+	if err != nil {
+		if notFound(out, err) {
+			return false, ErrNotFound
+		}
+		return false, fmt.Errorf("dmsetup info %s: %w", name, err)
+	}
+	for _, mp := range parseInfo(out) {
+		if mp.Name == name {
+			return mp.Suspended, nil
+		}
+	}
+	return false, ErrNotFound
+}
+
+// List returns every mapping whose name starts with prefix.
+func (m *Mapper) List(ctx context.Context, prefix string) ([]Mapping, error) {
+	out, err := m.run(ctx, "dmsetup", "info", "-c", "--noheadings", "-o", "name,suspended")
+	if err != nil {
+		return nil, fmt.Errorf("dmsetup info: %w", err)
+	}
+	var found []Mapping
+	for _, mp := range parseInfo(out) {
+		if strings.HasPrefix(mp.Name, prefix) {
+			found = append(found, mp)
+		}
+	}
+	return found, nil
+}
+
+func parseInfo(out string) []Mapping {
+	var found []Mapping
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		name, state, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok || name == "" {
+			continue
+		}
+		found = append(found, Mapping{Name: name, Suspended: state == "Suspended"})
+	}
+	return found
+}
+
+func notFound(out string, err error) bool {
+	for _, s := range []string{out, err.Error()} {
+		if strings.Contains(s, "No such device") || strings.Contains(s, "not found") {
+			return true
+		}
+	}
+	return false
+}

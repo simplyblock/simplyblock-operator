@@ -1,7 +1,10 @@
 // The consistency-group membership watcher (design §4.5, Phase 4): a PVC
 // informer in the controller plugin that makes the membership label live for
 // the volume's whole life. A label added to an existing PVC joins its volume
-// to the named group, and a removed label detaches it. The CSI specification
+// to the named group, a removed label detaches it, and, with the join
+// operation on, a label changed to another group moves the volume there: the
+// operator's JoinConsistencyGroup operation leaves the old group as its first
+// part. The CSI specification
 // has no verb for a label change, so this lives beside the provisioner rather
 // than behind a CSI RPC. The watcher relays the label and the backend decides:
 // it holds no membership state of its own, and a refused join is surfaced as a
@@ -10,6 +13,8 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -56,6 +61,14 @@ type migrationRequester interface {
 	Ensure(ctx context.Context, name, pvName, targetNodeUUID string) (string, error)
 }
 
+// joinOperationRequester asks the operator to bring a PersistentVolume into a
+// consistency group, through a PersistentVolumeOps with action
+// JoinConsistencyGroup. Ensure creates the request once (by name), never
+// rewrites it, and reports its phase and whether this call created it.
+type joinOperationRequester interface {
+	Ensure(ctx context.Context, name, pvName, groupName string) (phase string, created bool, err error)
+}
+
 // cgMembershipWatcher reconciles PVC label state to backend group membership.
 type cgMembershipWatcher struct {
 	kube       kubernetes.Interface
@@ -78,6 +91,10 @@ type cgMembershipWatcher struct {
 	// clientSwapReady asserts every node stages volumes behind the
 	// device-mapper indirection and swaps paths itself (design §6).
 	clientSwapReady bool
+	// joinOps, when set, replaces the direct join: a labeled volume in no
+	// group gets one JoinConsistencyGroup operation, and the operator does
+	// the rest. nil keeps the direct join and the pre-join migration.
+	joinOps joinOperationRequester
 }
 
 // StartConsistencyGroupLabelWatcher runs the membership watcher until ctx is
@@ -110,6 +127,9 @@ func StartConsistencyGroupLabelWatcher(
 	}
 	watcher.colocate = colocate
 	watcher.clientSwapReady = swapReady
+	if joinOperationEnabled() && dyn != nil {
+		watcher.joinOps = newJoinOperations(dyn)
+	}
 
 	factory := informers.NewSharedInformerFactory(kube, membershipResync)
 	informer := factory.Core().V1().PersistentVolumeClaims().Informer()
@@ -178,14 +198,19 @@ func (w *cgMembershipWatcher) reconcile(ctx context.Context, pvc *corev1.Persist
 	case label == "" && groupID != "":
 		return w.detach(ctx, client, pvc, groupID, handle.VolumeID)
 	case label != "" && groupID != "":
-		// Both set: converged when the names agree; a conflict is surfaced,
-		// never acted on, because moving a volume between groups would be a
-		// detach plus a one-way-forbidden rejoin (design §4.3).
+		// Both set: converged when the names agree. A label naming another
+		// group is a move, which only the operator's join operation can make:
+		// it leaves the old group, closing that epoch for good, and joins the
+		// new one. Without the operation the mismatch is surfaced, never acted
+		// on.
 		group, err := client.GetConsistencyGroup(ctx, groupID)
 		if err != nil {
 			return fmt.Errorf("read consistency group %s: %w", groupID, err)
 		}
 		if group.Name != "" && group.Name != label {
+			if w.joinOps != nil {
+				return w.requestMove(ctx, pvc, pv.Name, group.Name, label, handle.VolumeID)
+			}
 			w.recorder.Eventf(pvc, corev1.EventTypeWarning, "ConsistencyGroupConflict",
 				"volume is a member of consistency group %q but the PVC is labeled %q; "+
 					"membership is one-way, so relabeling cannot move a volume between groups",
@@ -200,6 +225,16 @@ func (w *cgMembershipWatcher) reconcile(ctx context.Context, pvc *corev1.Persist
 // preJoinMigrationName is the VolumeMigration a late join requests for a
 // volume: one per volume, so a resync finds the request it already made.
 func preJoinMigrationName(lvolID string) string { return "cg-join-" + lvolID }
+
+// joinOperationName is the JoinConsistencyGroup operation for a volume and a
+// group: one per pair, so a resync finds the request it already made, and a
+// move to another group gets an operation of its own rather than finding the
+// first join's. The group is hashed because a label value may hold characters
+// an object name does not, and eight hex characters keep the name at 53.
+func joinOperationName(lvolID, group string) string {
+	sum := sha256.Sum256([]byte(group))
+	return "cg-join-" + lvolID + "-" + hex.EncodeToString(sum[:])[:8]
+}
 
 func (w *cgMembershipWatcher) join(
 	ctx context.Context, client membershipClient,
@@ -225,6 +260,9 @@ func (w *cgMembershipWatcher) join(
 			"consistency group %q does not exist yet; it is created by the first volume provisioned with the label", label)
 		return nil
 	}
+	if w.joinOps != nil {
+		return w.requestJoin(ctx, pvc, pvName, label, lvolID)
+	}
 	if err := client.JoinConsistencyGroupMember(ctx, group.ID, lvolID); err != nil {
 		if errors.Is(err, controlplane.ErrMembershipRefused) {
 			return w.joinRefused(ctx, client, pvc, pvName, label, group.ID, lvolID, err)
@@ -234,6 +272,71 @@ func (w *cgMembershipWatcher) join(
 	w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupJoined",
 		"volume joined consistency group %q; it is included from the next generation", label)
 	return w.colocateMember(ctx, client, pvc, group.ID, label, lvolID)
+}
+
+// requestJoin hands a labeled volume in no group to the operator as one
+// JoinConsistencyGroup operation and reports where it stands. The watcher is
+// reached here only for a volume in no group, so a volume provisioned with the
+// label (a member from birth) never gets one.
+func (w *cgMembershipWatcher) requestJoin(
+	ctx context.Context, pvc *corev1.PersistentVolumeClaim, pvName, label, lvolID string,
+) error {
+	name := joinOperationName(lvolID, label)
+	phase, created, err := w.joinOps.Ensure(ctx, name, pvName, label)
+	if err != nil {
+		return fmt.Errorf("request the join of %s to consistency group %q: %w", pvName, label, err)
+	}
+	switch {
+	case created:
+		w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupJoinStarted",
+			"joining consistency group %q through PersistentVolumeOps %s", label, name)
+	case phase == opsSucceeded:
+		w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupColocated",
+			"PersistentVolumeOps %s brought the volume into consistency group %q", name, label)
+	case phase == opsFailed || phase == opsAborted:
+		w.recorder.Eventf(pvc, corev1.EventTypeWarning, "ConsistencyGroupJoinFailed",
+			"PersistentVolumeOps %s joining consistency group %q ended %s; delete it to retry",
+			name, label, phase)
+	default:
+		w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupJoining",
+			"PersistentVolumeOps %s is joining the volume to consistency group %q (phase %q)",
+			name, label, phase)
+	}
+	return nil
+}
+
+// requestMove hands a member relabeled to another group to the operator as
+// the join operation into the new group, which leaves the old group first. An
+// operation that already Succeeded while the volume is still in another group
+// is a label pointing back at a group the volume left, and a volume never
+// rejoins a group it left (design §4.3).
+func (w *cgMembershipWatcher) requestMove(
+	ctx context.Context, pvc *corev1.PersistentVolumeClaim, pvName, from, to, lvolID string,
+) error {
+	name := joinOperationName(lvolID, to)
+	phase, created, err := w.joinOps.Ensure(ctx, name, pvName, to)
+	if err != nil {
+		return fmt.Errorf("request the move of %s from consistency group %q to %q: %w", pvName, from, to, err)
+	}
+	switch {
+	case created:
+		w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupMoveStarted",
+			"moving from consistency group %q to %q through PersistentVolumeOps %s", from, to, name)
+	case phase == opsSucceeded:
+		w.recorder.Eventf(pvc, corev1.EventTypeWarning, "ConsistencyGroupConflict",
+			"volume is a member of consistency group %q but the PVC is labeled %q, and "+
+				"PersistentVolumeOps %s already ended Succeeded; a volume never rejoins a group it left",
+			from, to, name)
+	case phase == opsFailed || phase == opsAborted:
+		w.recorder.Eventf(pvc, corev1.EventTypeWarning, "ConsistencyGroupJoinFailed",
+			"PersistentVolumeOps %s moving the volume from consistency group %q to %q ended %s; delete it to retry",
+			name, from, to, phase)
+	default:
+		w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupJoining",
+			"PersistentVolumeOps %s is moving the volume from consistency group %q to %q (phase %q)",
+			name, from, to, phase)
+	}
+	return nil
 }
 
 // clusterHolding is the cluster of the driver's secret, other than the

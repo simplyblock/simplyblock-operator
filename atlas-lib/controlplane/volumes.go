@@ -37,6 +37,7 @@ func (c *Client) Volume(ctx context.Context, h lvol.VolumeHandle) (lvol.Volume, 
 		NQN:           d.Nqn,
 		StorageNodeID: nodeID(d.StorageNodeId),
 		Status:        d.Status,
+		GroupID:       ptr.From(d.GroupId, ""),
 	}, nil
 }
 

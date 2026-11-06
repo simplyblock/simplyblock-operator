@@ -355,14 +355,15 @@ func (ns *Server) attachPlan(
 // attachShape decides whether a stage or heal builds the dmLinear indirection.
 // A volume's stack never gains or loses the layer under a staged consumer:
 // with a stack record the record decides (the layer is there or it is not),
-// and only a fresh stage, which has none, follows SPDKCSI_DM_INDIRECTION. A
+// and only a fresh stage, which has none, follows SPDKCSI_DM_INDIRECTION and
+// whether the host has device-mapper (dm_capability.go). A
 // record that cannot be read keeps the shape without the layer, which is what
 // every volume staged before the indirection existed is.
 func (ns *Server) attachShape(volumeID string, shape stackShape) stackShape {
 	record, err := ns.stack.store.Load(volumeID)
 	switch {
 	case errors.Is(err, volstack.ErrNoRecord):
-		if dmIndirectionEnabled() {
+		if ns.dmIndirectionEnabled() {
 			return indirect(shape)
 		}
 		return shape

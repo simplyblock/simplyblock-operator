@@ -13,6 +13,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -189,5 +190,43 @@ func TestHandleCannotEscapeTheDirectory(t *testing.T) {
 		if base := filepath.Base(p); base == "." || base == ".." || strings.ContainsRune(base, filepath.Separator) {
 			t.Errorf("handle %q produced the unusable filename %q", handle, base)
 		}
+	}
+}
+
+// List is how a node asks what it has staged without knowing the handles, which
+// is what deciding whether a subsystem is still in use needs.
+func TestListReturnsEveryRecordAndSkipsWhatIsNotOne(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	for _, handle := range []string{"c1:p1:a", "c1:p1:b"} {
+		if err := store.Write(Record{Version: RecordVersion, VolumeHandle: handle}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".tmp-123.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var handles []string
+	for _, r := range records {
+		handles = append(handles, r.VolumeHandle)
+	}
+	sort.Strings(handles)
+	if strings.Join(handles, ",") != "c1:p1:a,c1:p1:b" {
+		t.Fatalf("List = %v", handles)
+	}
+}
+
+func TestListOfAMissingDirectoryIsEmpty(t *testing.T) {
+	records, err := NewStore(filepath.Join(t.TempDir(), "absent")).List()
+	if err != nil || len(records) != 0 {
+		t.Fatalf("List = %v, %v", records, err)
 	}
 }

@@ -77,4 +77,8 @@ type Volume struct {
 	// only once it reports online, and a transfer that gave up reports
 	// restore_failed rather than disappearing.
 	Status string
+
+	// GroupID is the consistency group the volume is an open member of, and
+	// empty when it is in none.
+	GroupID string
 }

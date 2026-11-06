@@ -11336,6 +11336,428 @@
           }
         }
       }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves": {
+      "post": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Subsystem-Moves:Create",
+        "description": "Bring the group into one subsystem now that ``lvol_id`` joined it\n(design-cg-live-subsystem-flip \u00a75, \u00a79): picks the target and reserves it.\n\n409 ``SubsystemLimitReached`` (with ``node_id`` and ``limit``) when the\ngroup needs a fresh subsystem on a node at its limit, ``MoveConflict`` while\nanother move or a migration is active, ``ColocationRefused`` for a volume\nthat is not a member or a stretched cluster.",
+        "operationId": "clusters_consistency_groups_subsystem_moves_create_api_v2_clusters__cluster_id__consistency_groups__group_id__subsystem_moves_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsistencyGroupSubsystemMoveCreateDTO"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsistencyGroupSubsystemMoveDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}": {
+      "get": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Subsystem-Moves:Get",
+        "description": "The move, or its outcome once committed or rolled back.",
+        "operationId": "clusters_consistency_groups_subsystem_moves_get_api_v2_clusters__cluster_id__consistency_groups__group_id__subsystem_moves__move_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "move_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Move Id"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsistencyGroupSubsystemMoveDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/prepare": {
+      "post": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Subsystem-Moves:Prepare",
+        "description": "Create a fresh target on every HA node and assign the moving\nnamespaces their nsids there. Returns the target's connect entries for\n``host_nqn``. Idempotent.",
+        "operationId": "clusters_consistency_groups_subsystem_moves_prepare_api_v2_clusters__cluster_id__consistency_groups__group_id__subsystem_moves__move_id__prepare_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "move_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Move Id"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ConsistencyGroupSubsystemMovePrepareDTO"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsistencyGroupSubsystemMovePreparedDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/move": {
+      "post": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Subsystem-Moves:Move",
+        "description": "Move every namespace into the target while the hosts hold their I/O.\n\n409 ``DeadlinePassed`` before anything is touched once ``deadline`` has\npassed; 409 ``MoveFailed`` with ``namespaces_at`` when a namespace could\nnot be moved (the sources are restored first). A repeat after success\nanswers with ``namespaces_at: target``.",
+        "operationId": "clusters_consistency_groups_subsystem_moves_move_api_v2_clusters__cluster_id__consistency_groups__group_id__subsystem_moves__move_id__move_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "move_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Move Id"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsistencyGroupSubsystemMoveStartDTO"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsistencyGroupSubsystemMoveDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/commit": {
+      "post": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Subsystem-Moves:Commit",
+        "description": "Switch the moving volumes to the target and end the move. Idempotent;\n409 ``MoveConflict`` while the namespaces are not on the target.",
+        "operationId": "clusters_consistency_groups_subsystem_moves_commit_api_v2_clusters__cluster_id__consistency_groups__group_id__subsystem_moves__move_id__commit_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "move_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Move Id"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/rollback": {
+      "post": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Subsystem-Moves:Rollback",
+        "description": "Put every namespace back into its source and end the move. Idempotent;\n409 ``MoveFailed`` when a namespace could not be restored.",
+        "operationId": "clusters_consistency_groups_subsystem_moves_rollback_api_v2_clusters__cluster_id__consistency_groups__group_id__subsystem_moves__move_id__rollback_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "move_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Move Id"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -12868,6 +13290,16 @@
             "type": "string",
             "title": "Target Nqn",
             "default": ""
+          },
+          "colocation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConsistencyGroupColocationDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -12875,7 +13307,7 @@
           "steps"
         ],
         "title": "ConsistencyGroupJoinPlanDTO",
-        "description": "The steps a late join of an existing volume takes (co-location design\n\u00a75): ``migrate`` (live-migrate ``migrate_lvol_ids`` to ``target_node_id``\nfirst), ``join``, ``colocate`` (move into ``target_nqn``)."
+        "description": "The steps a late join of an existing volume takes (co-location design\n\u00a75): ``migrate`` (live-migrate ``migrate_lvol_ids`` to ``target_node_id``\nfirst), ``join``, ``colocate`` (move into ``target_nqn``). ``colocation``\nis absent when the group has no other member to share a subsystem with."
       },
       "ConsistencyGroupLineageMemberDTO": {
         "properties": {
@@ -18540,6 +18972,212 @@
           "spdk_image"
         ],
         "title": "_UpdateParams"
+      },
+      "ConsistencyGroupColocationDTO": {
+        "properties": {
+          "target_nqn": {
+            "type": "string",
+            "title": "Target Nqn",
+            "default": ""
+          },
+          "target_is_new": {
+            "type": "boolean",
+            "title": "Target Is New",
+            "default": false
+          },
+          "moving_lvol_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Moving Lvol Ids",
+            "default": []
+          },
+          "refusal": {
+            "type": "string",
+            "title": "Refusal",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "ConsistencyGroupColocationDTO",
+        "description": "The subsystem move a late join would end in, computed against the state\nthe pinned node has once the join's migration landed. Nothing is reserved.\n``target_nqn`` is empty for a fresh subsystem (``target_is_new``), and\n``refusal`` names why the group could not be brought into one subsystem\n(``SubsystemLimitReached: ...``) -- the join would be refused for it."
+      },
+      "ConsistencyGroupSubsystemMoveCreateDTO": {
+        "properties": {
+          "lvol_id": {
+            "type": "string",
+            "title": "Lvol Id"
+          },
+          "request_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "join",
+              "leave"
+            ],
+            "title": "Purpose",
+            "default": "join"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lvol_id",
+          "request_id"
+        ],
+        "title": "ConsistencyGroupSubsystemMoveCreateDTO",
+        "description": "Request body for a subsystem move: ``lvol_id`` is the member that just\njoined, or with ``purpose`` ``leave`` the member about to leave, which is\nsplit out of the subsystem it shares into a fresh one on its node. A retry\nwith the same ``request_id`` answers with the same move."
+      },
+      "ConsistencyGroupSubsystemMoveDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id",
+            "default": ""
+          },
+          "target_nqn": {
+            "type": "string",
+            "title": "Target Nqn",
+            "default": ""
+          },
+          "target_is_new": {
+            "type": "boolean",
+            "title": "Target Is New",
+            "default": false
+          },
+          "namespaces_at": {
+            "type": "string",
+            "title": "Namespaces At",
+            "default": "source"
+          },
+          "deadline": {
+            "type": "integer",
+            "title": "Deadline",
+            "default": 0
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": ""
+          },
+          "volumes": {
+            "items": {
+              "$ref": "#/components/schemas/ConsistencyGroupSubsystemMoveVolumeDTO"
+            },
+            "type": "array",
+            "title": "Volumes",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "ConsistencyGroupSubsystemMoveDTO",
+        "description": "A consistency group's subsystem move. ``id`` is empty, and ``volumes``\ntoo, when nothing had to move. ``namespaces_at`` is ``source`` or\n``target``; ``deadline`` is the hosts' suspend deadline in Unix seconds\nthe move was started under (0 before it started)."
+      },
+      "ConsistencyGroupSubsystemMovePrepareDTO": {
+        "properties": {
+          "host_nqn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host Nqn"
+          }
+        },
+        "type": "object",
+        "title": "ConsistencyGroupSubsystemMovePrepareDTO",
+        "description": "Request body for preparing a move: ``host_nqn`` asks for the target\nsubsystem's connect entries for that host."
+      },
+      "ConsistencyGroupSubsystemMovePreparedDTO": {
+        "properties": {
+          "move": {
+            "$ref": "#/components/schemas/ConsistencyGroupSubsystemMoveDTO"
+          },
+          "connect": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Connect",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "move"
+        ],
+        "title": "ConsistencyGroupSubsystemMovePreparedDTO",
+        "description": "A prepared move, and the connect entries of its target subsystem for\nthe requested host, shaped like the volume connect route's."
+      },
+      "ConsistencyGroupSubsystemMoveStartDTO": {
+        "properties": {
+          "deadline": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Deadline"
+          }
+        },
+        "type": "object",
+        "required": [
+          "deadline"
+        ],
+        "title": "ConsistencyGroupSubsystemMoveStartDTO",
+        "description": "Request body for moving the namespaces: the hosts' suspend deadline in\nUnix seconds. The move refuses to begin once it has passed."
+      },
+      "ConsistencyGroupSubsystemMoveVolumeDTO": {
+        "properties": {
+          "lvol_id": {
+            "type": "string",
+            "title": "Lvol Id"
+          },
+          "source_nqn": {
+            "type": "string",
+            "title": "Source Nqn",
+            "default": ""
+          },
+          "source_nsid": {
+            "type": "integer",
+            "title": "Source Nsid",
+            "default": 0
+          },
+          "ns_uuid": {
+            "type": "string",
+            "title": "Ns Uuid",
+            "default": ""
+          },
+          "nguid": {
+            "type": "string",
+            "title": "Nguid",
+            "default": ""
+          },
+          "target_nsid": {
+            "type": "integer",
+            "title": "Target Nsid",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "lvol_id"
+        ],
+        "title": "ConsistencyGroupSubsystemMoveVolumeDTO",
+        "description": "One volume whose namespace changes subsystem: where it is exported\nfrom and at which nsid, its wire identity, and its nsid in the target."
       }
     },
     "securitySchemes": {
