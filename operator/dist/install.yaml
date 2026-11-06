@@ -3735,6 +3735,14 @@ spec:
                 maximum: 65535
                 minimum: 1
                 type: integer
+              region:
+                default: us-east-1
+                description: |-
+                  Region is the AWS region string this gateway's S3 API answers to.
+                  Every client must sign its requests for exactly this region; the
+                  gateway rejects any other with AuthorizationHeaderMalformed. Also
+                  reported by GetBucketLocation.
+                type: string
               replicas:
                 default: 1
                 description: Replicas is the gateway Deployment's replica count.
@@ -21057,6 +21065,29 @@ webhooks:
     resources:
     - persistentvolumeclaims
   sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
+      path: /validate-v1-pod-eviction-foundationdb
+  failurePolicy: Ignore
+  matchConditions:
+  - expression: request.name.startsWith('simplyblock-fdb-cluster-')
+    name: is-foundationdb-pod
+  name: foundationdb-eviction.simplyblock.io
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - pods/eviction
+  sideEffects: NoneOnDryRun
+  timeoutSeconds: 5
 - admissionReviewVersions:
   - v1
   clientConfig:
