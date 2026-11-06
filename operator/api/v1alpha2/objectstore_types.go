@@ -53,6 +53,14 @@ type ObjectStoreSpec struct {
 	// +kubebuilder:validation:Maximum=65535
 	Port int32 `json:"port"`
 
+	// Region is the AWS region string this gateway's S3 API answers to.
+	// Every client must sign its requests for exactly this region; the
+	// gateway rejects any other with AuthorizationHeaderMalformed. Also
+	// reported by GetBucketLocation.
+	// +kubebuilder:default=us-east-1
+	// +optional
+	Region string `json:"region,omitempty"`
+
 	// Replicas is the gateway Deployment's replica count.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=1

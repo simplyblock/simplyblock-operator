@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscreds "github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -268,6 +269,51 @@ func TestRunAllowsCopyObject(t *testing.T) {
 	}
 	if !bytes.Equal(gotBytes, want) {
 		t.Errorf("copied object = %q, want %q", gotBytes, want)
+	}
+}
+
+// TestRunHonorsAConfiguredRegion proves cfg.Region actually reaches
+// versitygw's SigV4 check and GetBucketLocation, not just embedgw.Config's
+// struct literal.
+//
+// Regression: run built embedgw.Config without Region, so it kept Go's zero
+// value and versitygw's own default, "us-east-1", applied regardless of what
+// an ObjectStore configured. Every client signing for another region (every
+// AWS SDK does, by the region it is given) failed SigV4 verification with
+// "the region '<region>' is wrong; expecting 'us-east-1'," no matter the
+// gateway's own configuration.
+func TestRunHonorsAConfiguredRegion(t *testing.T) {
+	kube := newFakeKube(t)
+	cfg := testConfig(t)
+	cfg.Region = "eu-central-1"
+	startRun(t, cfg, kube)
+	waitForHealth(t, http.DefaultClient, "http://"+cfg.Port+healthPath)
+
+	client := s3.New(s3.Options{
+		Region:       "eu-central-1",
+		BaseEndpoint: aws.String("http://" + cfg.Port),
+		Credentials:  awscreds.NewStaticCredentialsProvider(testAccessKeyID, testSecretAccessKey, ""),
+		UsePathStyle: true,
+	})
+	ctx := context.Background()
+
+	const bucket = "region-bucket"
+	deliverWhenCreated(t, kube, cfg.RootDir, bucket)
+	if _, err := client.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+		CreateBucketConfiguration: &types.CreateBucketConfiguration{
+			LocationConstraint: types.BucketLocationConstraintEuCentral1,
+		},
+	}); err != nil {
+		t.Fatalf("CreateBucket signed for eu-central-1: %v", err)
+	}
+
+	loc, err := client.GetBucketLocation(ctx, &s3.GetBucketLocationInput{Bucket: aws.String(bucket)})
+	if err != nil {
+		t.Fatalf("GetBucketLocation: %v", err)
+	}
+	if got := string(loc.LocationConstraint); got != "eu-central-1" {
+		t.Errorf("GetBucketLocation = %q, want eu-central-1", got)
 	}
 }
 

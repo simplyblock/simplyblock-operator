@@ -87,6 +87,12 @@ type Config struct {
 	IAMCacheTTL   int
 	IAMCachePrune int
 
+	// Region is the AWS region string this gateway's S3 API answers to:
+	// every client must sign for exactly this region (versitygw's SigV4
+	// check rejects any other), and GetBucketLocation reports it. Defaults
+	// to us-east-1, versitygw's own default region.
+	Region string
+
 	// TLSCertFile and TLSKeyFile are the serving certificate and key the S3
 	// API, and with it the admin API on the same port, is served with. The
 	// operator points both at the certificate it mounts from the
@@ -140,7 +146,9 @@ const (
 	envVaultEndpointURL    = "VGW_IAM_VAULT_ENDPOINT_URL"
 	envTLSCertFile         = "GATEWAY_TLS_CERT_FILE"
 	envTLSKeyFile          = "GATEWAY_TLS_KEY_FILE"
+	envRegion              = "GATEWAY_REGION"
 	defaultPort            = ":9000"
+	defaultRegion          = "us-east-1"
 	defaultIAMCacheTTL     = 120
 	defaultIAMCachePrune   = 3600
 	defaultBucketLinks     = true
@@ -184,6 +192,7 @@ func FromEnv() (Config, error) {
 		BucketStorageClass:  os.Getenv(envBucketStorageClass),
 		TLSCertFile:         os.Getenv(envTLSCertFile),
 		TLSKeyFile:          os.Getenv(envTLSKeyFile),
+		Region:              getenvDefault(envRegion, defaultRegion),
 	}
 
 	var missing []string
