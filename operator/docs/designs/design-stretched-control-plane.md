@@ -118,6 +118,13 @@ the processes hold. The seed Secret is read at install only.
   sites chains to one CA. FoundationDB checks the chain only, not the
   hostname, so IP coordinators verify.
 
+- **One StorageCluster name.** The follower finds the backend cluster by
+  its StorageCluster's name, so both sites must use the same one. A
+  discovery derives a different name on each site (it is disambiguated by the
+  Kubernetes cluster's identity), so the follower's draft is given the
+  leader's name (`spec.cluster.name`) before it is approved; the hub-driven
+  flow writes one name to both sites anyway.
+
 ## 3. StorageCluster
 
 The existing leader/follower flow is reused unchanged in shape; the
