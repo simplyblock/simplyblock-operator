@@ -1153,6 +1153,7 @@ func (r *StorageClusterReconciler) creationParams(
 		Atomic4K:            ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
 		DeviceMode:          deviceMode(cluster.Spec.DeviceClass),
 		SingleNode:          cluster.Spec.ClusterMode == simplyblockv1alpha2.ClusterModeSingle,
+		RaidDevices:         ptr.BoolFromOrFalse(cluster.Spec.RaidDevices),
 		SyncReplication:     ptr.BoolFromOrFalse(cluster.Spec.EnableSyncReplication),
 		LeaderSite:          creatingLeaderSite(cluster),
 	}, nil

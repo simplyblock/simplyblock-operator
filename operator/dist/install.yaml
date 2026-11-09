@@ -1437,6 +1437,16 @@ spec:
                         minimum: 1024
                         type: integer
                     type: object
+                  raidDevices:
+                    description: |-
+                      RaidDevices declares that every data device of this deployment is
+                      protected below simplyblock (a hardware RAID LUN, or an md or dm RAID
+                      array), which lowers the cluster's data-device floor from
+                      dataChunks+2*parityChunks to dataChunks+parityChunks: a disk failure is
+                      absorbed under the device, so no spare device is kept for a rebuild. It
+                      is carried to the cluster's spec.raidDevices, which is immutable, and
+                      unstated it is false.
+                    type: boolean
                   socketsToUse:
                     description: |-
                       SocketsToUse restricts the deployment to selected NUMA sockets, and empty
@@ -8862,6 +8872,20 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              raidDevices:
+                default: false
+                description: |-
+                  RaidDevices declares that every data device of the cluster is protected
+                  below simplyblock: a hardware RAID LUN, or an md or dm RAID array, so
+                  that a disk failure is absorbed under the device and never costs a
+                  stripe a chunk. The cluster then needs dataChunks+parityChunks data
+                  devices rather than dataChunks+2*parityChunks, since the spare devices a
+                  rebuild would land on are not needed. It is sent to the control plane as
+                  raid_devices when the cluster is created and cannot change afterward.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               rpcBasePort:
                 default: 8080
                 description: |-
@@ -9702,6 +9726,8 @@ spec:
             x-kubernetes-validations:
             - message: field stripe is immutable once set
               rule: '!has(oldSelf.stripe) || has(self.stripe)'
+            - message: field raidDevices is immutable once set
+              rule: '!has(oldSelf.raidDevices) || has(self.raidDevices)'
             - message: field fabricType is immutable once set
               rule: '!has(oldSelf.fabricType) || has(self.fabricType)'
             - message: field nvmfBasePort is immutable once set
@@ -15791,6 +15817,16 @@ spec:
                             minimum: 1024
                             type: integer
                         type: object
+                      raidDevices:
+                        description: |-
+                          RaidDevices declares that every data device of this deployment is
+                          protected below simplyblock (a hardware RAID LUN, or an md or dm RAID
+                          array), which lowers the cluster's data-device floor from
+                          dataChunks+2*parityChunks to dataChunks+parityChunks: a disk failure is
+                          absorbed under the device, so no spare device is kept for a rebuild. It
+                          is carried to the cluster's spec.raidDevices, which is immutable, and
+                          unstated it is false.
+                        type: boolean
                       socketsToUse:
                         description: |-
                           SocketsToUse restricts the deployment to selected NUMA sockets, and empty
@@ -17474,6 +17510,16 @@ spec:
                                   minimum: 1024
                                   type: integer
                               type: object
+                            raidDevices:
+                              description: |-
+                                RaidDevices declares that every data device of this deployment is
+                                protected below simplyblock (a hardware RAID LUN, or an md or dm RAID
+                                array), which lowers the cluster's data-device floor from
+                                dataChunks+2*parityChunks to dataChunks+parityChunks: a disk failure is
+                                absorbed under the device, so no spare device is kept for a rebuild. It
+                                is carried to the cluster's spec.raidDevices, which is immutable, and
+                                unstated it is false.
+                              type: boolean
                             socketsToUse:
                               description: |-
                                 SocketsToUse restricts the deployment to selected NUMA sockets, and empty

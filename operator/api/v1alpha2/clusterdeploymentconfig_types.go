@@ -643,6 +643,16 @@ type ClusterTemplate struct {
 	// +optional
 	Stripe *StripeSpec `json:"stripe,omitempty"`
 
+	// RaidDevices declares that every data device of this deployment is
+	// protected below simplyblock (a hardware RAID LUN, or an md or dm RAID
+	// array), which lowers the cluster's data-device floor from
+	// dataChunks+2*parityChunks to dataChunks+parityChunks: a disk failure is
+	// absorbed under the device, so no spare device is kept for a rebuild. It
+	// is carried to the cluster's spec.raidDevices, which is immutable, and
+	// unstated it is false.
+	// +optional
+	RaidDevices *bool `json:"raidDevices,omitempty"`
+
 	// ClusterMode is how many storage nodes the cluster is built for: Single
 	// runs every erasure-coding scheme on exactly one storage node, each chunk of
 	// a stripe on its own device, so the node needs dataChunks+parityChunks

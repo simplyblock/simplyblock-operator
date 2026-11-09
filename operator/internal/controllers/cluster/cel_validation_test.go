@@ -550,3 +550,49 @@ func TestStorageClusterClusterModeRules(t *testing.T) {
 	}
 	_ = apiClient.Delete(context.Background(), same)
 }
+
+// raidDevices defaults to false and is fixed at creation: the control plane is
+// told once, on the create, that every device is RAID-protected below
+// simplyblock, and the device floor the operator applied at approval was the
+// lowered one, so neither direction of change can be honored afterward.
+func TestStorageClusterRaidDevicesIsImmutable(t *testing.T) {
+	apiClient := apiServer(t)
+	base := func(raid *bool) *simplyblockv1alpha2.StorageCluster {
+		return &simplyblockv1alpha2.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{GenerateName: "raid-", Namespace: "default"},
+			Spec: simplyblockv1alpha2.StorageClusterSpec{
+				MaxSubsystemCount: ptr.To(int32(10)),
+				VCPUCount:         ptr.To(int32(6)),
+				RaidDevices:       raid,
+			},
+		}
+	}
+
+	defaulted := base(nil)
+	if err := apiClient.Create(context.Background(), defaulted); err != nil {
+		t.Fatalf("creating a cluster without raidDevices: %v", err)
+	}
+	if defaulted.Spec.RaidDevices == nil || *defaulted.Spec.RaidDevices {
+		t.Errorf("an unstated raidDevices reads %v, want false", defaulted.Spec.RaidDevices)
+	}
+	defaulted.Spec.RaidDevices = ptr.To(true)
+	if err := apiClient.Update(context.Background(), defaulted); err == nil {
+		t.Errorf("raidDevices was turned on after creation")
+	}
+	_ = apiClient.Delete(context.Background(), defaulted)
+
+	declared := base(ptr.To(true))
+	if err := apiClient.Create(context.Background(), declared); err != nil {
+		t.Fatalf("creating a cluster with raidDevices: %v", err)
+	}
+	declared.Spec.RaidDevices = ptr.To(false)
+	if err := apiClient.Update(context.Background(), declared); err == nil {
+		t.Errorf("raidDevices was turned off after creation")
+	}
+	declared.Spec.RaidDevices = ptr.To(true)
+	declared.Spec.MaxSubsystemCount = ptr.To(int32(12))
+	if err := apiClient.Update(context.Background(), declared); err != nil {
+		t.Errorf("an unrelated update of a cluster with raidDevices was refused: %v", err)
+	}
+	_ = apiClient.Delete(context.Background(), declared)
+}
