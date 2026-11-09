@@ -73,9 +73,12 @@ per site.
 ### 2.2 Bringing the second site up
 
 1. Install the operator and the ControlPlane on site A with `role: Bootstrap`.
-   The database comes up single-region; the operator then applies the
-   two-region configuration, which FoundationDB accepts with the second region
-   empty.
+   Its database is rendered two-region from the start; the FoundationDB
+   operator walks FoundationDB's region-change rules itself (one of
+   `regions`/`usable_regions` per step, the remote region at a negative
+   priority until it holds data). With region B empty the database is
+   available but not fully replicated, so a stretched site's install waits
+   for availability only, and the Bootstrap site comes up alone.
 2. Copy the connection string: the `cluster-file` key of the
    `simplyblock-fdb-cluster-config` ConfigMap on site A, into a Secret on site
    B (`kubectl create secret generic fdb-seed --from-file=cluster-file=...`).

@@ -251,7 +251,7 @@ func TestAwaitingFoundationDBNamesWhatItIsWaitingOn(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tc.health.waitingOn()
+			got := tc.health.waitingOn(false)
 			switch {
 			case tc.want == "" && got != "":
 				t.Errorf("waitingOn = %q, want nothing: the step is finished", got)

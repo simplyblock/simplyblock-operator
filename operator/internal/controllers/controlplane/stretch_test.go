@@ -196,3 +196,19 @@ func TestAJoinSiteHoldsWithoutTheSeedConnectionString(t *testing.T) {
 		t.Fatalf("the Bootstrap site read a seed: %q, %v", seed, err)
 	}
 }
+
+// The Bootstrap site installs alone: its database is two-region from the
+// start and cannot be fully replicated until the Join site's region exists,
+// so a stretched site waits for availability only.
+func TestAStretchedSiteDoesNotWaitForTheSecondRegion(t *testing.T) {
+	h := fdbHealth{found: true, available: true, fullReplication: false, desired: 7, reconciled: 7}
+	if got := h.waitingOn(true); got != "" {
+		t.Errorf("a stretched site waits on %q; its own region is available", got)
+	}
+	if got := h.waitingOn(false); got == "" {
+		t.Error("a single-site control plane must still wait for full replication")
+	}
+	if got := (fdbHealth{found: true}).waitingOn(true); got == "" {
+		t.Error("an unavailable database is still waited for on a stretched site")
+	}
+}

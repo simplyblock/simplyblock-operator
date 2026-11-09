@@ -781,14 +781,19 @@ func readFoundationDB(ctx context.Context, c client.Reader, namespace string) (f
 // waitingOn is what a held AwaitingFoundationDB step reports, read from the
 // cluster's own status so a stalled install names the database rather than the
 // operator.
-func (h fdbHealth) waitingOn() string {
+//
+// A site of a stretched control plane does not wait for full replication: the
+// database is configured for two regions from the start, and the Bootstrap
+// site installs alone, before the Join site's region exists to replicate
+// into. It waits for availability, which its own region provides.
+func (h fdbHealth) waitingOn(stretched bool) string {
 	switch {
 	case !h.found:
 		return fmt.Sprintf("FoundationDBCluster %s has not been created yet", ComponentFDBCluster)
 	case !h.available:
 		return fmt.Sprintf("FoundationDBCluster %s has %d of %d process groups reconciled and is not available yet",
 			ComponentFDBCluster, h.reconciled, h.desired)
-	case !h.fullReplication:
+	case !h.fullReplication && !stretched:
 		return fmt.Sprintf("FoundationDBCluster %s is available and not yet fully replicated",
 			ComponentFDBCluster)
 	default:

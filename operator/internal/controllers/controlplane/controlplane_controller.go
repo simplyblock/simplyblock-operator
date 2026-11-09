@@ -318,7 +318,7 @@ func (r *ControlPlaneReconciler) performInstallStep(
 		if err != nil {
 			return false, "", err
 		}
-		if waiting := health.waitingOn(); waiting != "" {
+		if waiting := health.waitingOn(stretchOf(cp) != nil); waiting != "" {
 			return false, waiting, nil
 		}
 		return true, "", nil
