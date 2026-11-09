@@ -534,7 +534,7 @@ spec:
                             Stretch makes this control plane one site of a stretched control plane:
                             two Kubernetes clusters, one per site, whose control planes share one
                             FoundationDB laid out as two regions (one per site, three copies in
-                            each), one site leading at a time (docs/design-stretched-control-plane.md).
+                            each), one site leading at a time (docs/designs/design-stretched-control-plane.md).
                             Unset, the control plane is an ordinary single-site installation.
                             Immutable: a site is a property of the installation.
                           properties:

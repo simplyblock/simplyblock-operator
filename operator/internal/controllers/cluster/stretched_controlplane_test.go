@@ -19,10 +19,15 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
-func onStretchedControlPlane(site, peer string) func(context.Context) *simplyblockv1alpha2.StretchedControlPlaneSpec {
+// anotherSite is a site neither this control plane nor its peer is.
+const anotherSite = "elsewhere"
+
+// onStretchedControlPlane is the resolver of a control plane that is thisSite
+// of a stretched control plane whose peer is peerSite.
+func onStretchedControlPlane() func(context.Context) *simplyblockv1alpha2.StretchedControlPlaneSpec {
 	return func(context.Context) *simplyblockv1alpha2.StretchedControlPlaneSpec {
 		return &simplyblockv1alpha2.StretchedControlPlaneSpec{
-			Site: site, PeerSite: peer, APIEndpoint: "http://cp-" + site + ".example:5000",
+			Site: thisSite, PeerSite: peerSite, APIEndpoint: "http://cp-" + thisSite + ".example:5000",
 			Role: simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap,
 		}
 	}
@@ -43,7 +48,7 @@ func TestALeaderOnAStretchedControlPlaneCreatesWithItsSiteAndEndpoint(t *testing
 	}
 	r := newClusterReconciler(t, api, &recorder{},
 		newUncreatedCluster(asSite(simplyblockv1alpha2.StretchedRoleLeader)))
-	r.Stretch = onStretchedControlPlane(thisSite, peerSite)
+	r.Stretch = onStretchedControlPlane()
 
 	cluster := reconcileCluster(t, r, 6)
 	if api.createCalls != 1 {
@@ -68,14 +73,14 @@ func TestAStorageClusterMustNameTheControlPlanesSite(t *testing.T) {
 		"no stretched block": newUncreatedCluster(),
 		"another site": newUncreatedCluster(func(c *simplyblockv1alpha2.StorageCluster) {
 			asSite(simplyblockv1alpha2.StretchedRoleLeader)(c)
-			c.Spec.Stretched.Site = "elsewhere"
+			c.Spec.Stretched.Site = anotherSite
 		}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			api := &fakeControlPlane{ready: func() error { return nil }}
 			rec := &recorder{}
 			r := newClusterReconciler(t, api, rec, cluster)
-			r.Stretch = onStretchedControlPlane(thisSite, peerSite)
+			r.Stretch = onStretchedControlPlane()
 
 			got := reconcileCluster(t, r, 4)
 			if api.createCalls != 0 {
@@ -113,7 +118,7 @@ func TestAFollowerOnAStretchedControlPlaneAdoptsByNameAndRegistersItsSite(t *tes
 	}
 	rec := &recorder{}
 	r := newClusterReconciler(t, api, rec, follower)
-	r.Stretch = onStretchedControlPlane(thisSite, peerSite)
+	r.Stretch = onStretchedControlPlane()
 
 	cluster := reconcileCluster(t, r, 6)
 	if cluster.Status.UUID != testClusterUUID {
@@ -135,7 +140,7 @@ func TestAFollowerOnAStretchedControlPlaneAdoptsByNameAndRegistersItsSite(t *tes
 // A site already in the cluster's management-node list, or a 409 from the
 // control plane, is a registration an earlier pass made.
 func TestASiteIsRegisteredOnce(t *testing.T) {
-	spec := onStretchedControlPlane(thisSite, peerSite)(context.Background())
+	spec := onStretchedControlPlane()(context.Background())
 	found := adoption{UUID: testClusterUUID}
 
 	listed := &fakeControlPlane{managementNodes: func(string) ([]atlascp.ManagementNode, error) {

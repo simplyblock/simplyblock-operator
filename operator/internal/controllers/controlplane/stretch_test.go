@@ -41,7 +41,7 @@ func regionIDs(t *testing.T, cluster *unstructured.Unstructured) []string {
 	if err != nil || !found {
 		t.Fatalf("spec.databaseConfiguration.regions missing: %v", err)
 	}
-	var ids []string
+	ids := make([]string, 0, len(regions))
 	for _, region := range regions {
 		dcs := region.(map[string]any)["datacenters"].([]any)
 		ids = append(ids, dcs[0].(map[string]any)["id"].(string))
