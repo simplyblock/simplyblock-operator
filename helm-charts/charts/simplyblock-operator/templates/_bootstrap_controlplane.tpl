@@ -114,6 +114,23 @@ spec:
         {{- end }}
       {{- end }}
       {{- end }}
+      {{- with .Values.controlplane.local.stretch }}
+      {{- if .enabled }}
+      # One site of a stretched control plane: two Kubernetes clusters sharing
+      # one FoundationDB laid out as two regions, one site leading at a time
+      # (operator docs/designs/design-stretched-control-plane.md). The Join
+      # site reads the Bootstrap site's connection string from the Secret.
+      stretch:
+        site: {{ required "controlplane.local.stretch.site is required" .site | quote }}
+        peerSite: {{ required "controlplane.local.stretch.peerSite is required" .peerSite | quote }}
+        role: {{ .role | default "Bootstrap" | quote }}
+        apiEndpoint: {{ required "controlplane.local.stretch.apiEndpoint is required" .apiEndpoint | quote }}
+        {{- if .seedConnectionStringSecretRef }}
+        seedConnectionStringSecretRef:
+          name: {{ .seedConnectionStringSecretRef | quote }}
+        {{- end }}
+      {{- end }}
+      {{- end }}
       {{- with .Values.controlplane.local.prerequisites }}
       # Which missing cluster add-ons the operator installs. Stated explicitly,
       # for the same reason as tls above: the release's values decide, not the

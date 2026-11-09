@@ -662,6 +662,27 @@ controlplane:
     # S3 backup credentials through Amazon EKS's pod-identity webhook. Empty adds no annotation.
     eksRoleARN: ""
 
+    # One site of a stretched control plane: two Kubernetes clusters, one per
+    # site, whose control planes share one FoundationDB laid out as two
+    # regions (three copies in each), one site leading at a time. Both sites
+    # install this chart; the Bootstrap site first, the Join site with the
+    # Bootstrap site's FoundationDB connection string (the `cluster-file` key
+    # of its simplyblock-fdb-cluster-config ConfigMap) in a Secret here.
+    # Immutable once the control plane exists.
+    stretch:
+      # -- Makes this control plane one site of a stretched control plane.
+      enabled: false
+      # -- This site's name; nodes added from this cluster carry it.
+      site: ""
+      # -- The other site's name.
+      peerSite: ""
+      # -- `Bootstrap` creates the database, `Join` joins the one the Bootstrap site created.
+      role: Bootstrap
+      # -- URL of this site's management API as the other site reaches it (load balancer or node port).
+      apiEndpoint: ""
+      # -- Join only: Secret in this namespace whose `cluster-file` key is the Bootstrap site's connection string.
+      seedConnectionStringSecretRef: ""
+
   # Where the control plane is, for deployment.profile: managed.
   managed:
     # Base URL of the management API. Required for that profile. A loopback or
