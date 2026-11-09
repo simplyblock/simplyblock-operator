@@ -84,7 +84,7 @@ type Plan struct {
 	// DataNetworks is how many data interfaces most kept workers carry, which the
 	// template states as the cluster's host-interface data networks. The names are
 	// each group's own. It is zero for a fleet with no data interface, which the
-	// template puts on the pod network.
+	// template keeps on the host network, binding the primary NIC.
 	DataNetworks int
 
 	// Findings are what the draft leaves for a reviewer to correct: topology
