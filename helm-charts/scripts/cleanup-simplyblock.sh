@@ -35,6 +35,7 @@ FORCE=false
 NAMESPACE=""
 CSI_DRIVER_ARG=""
 KEEP_SNAPSHOT_CRDS=false
+snapshot_users=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -705,13 +706,20 @@ done
 for kind in $SWEEP_NAMESPACED_KINDS; do
     $KUBECTL get "$kind" -A -o json > "$sweep_dir/n.$kind.json" 2>/dev/null || rm -f "$sweep_dir/n.$kind.json"
 done
+# The names of the CSVs left in any namespace, or "unknown".
+csv_names=unknown
+if csv_json=$($KUBECTL get clusterserviceversions.operators.coreos.com -A -o json 2>/dev/null); then
+    csv_names=$(python3 -c 'import json, sys; print(" ".join({i["metadata"]["name"] for i in json.load(sys.stdin).get("items", [])}))' \
+        <<< "$csv_json") || csv_names=unknown
+fi
 
 # Prints `kind namespace-or-_ name` per object to delete. A Helm object counts
 # when its release is one of the simplyblock-operator chart's in this namespace,
 # so another chart's objects in a shared namespace stay.
-sweep=$(python3 - "$sweep_dir" "$NAMESPACE" "$releases" <<'PY'
+sweep=$(python3 - "$sweep_dir" "$NAMESPACE" "$releases" "$csv_names" <<'PY'
 import json, os, sys
 d, ns, given = sys.argv[1], sys.argv[2], set(sys.argv[3].split())
+csvs = None if sys.argv[4] == "unknown" else set(sys.argv[4].split())
 objs = []
 for f in sorted(os.listdir(d), key=lambda f: (not f.startswith("c.apiservices"), f)):
     kind = f.split(".", 1)[1][:-5]
@@ -738,7 +746,13 @@ for kind, o in objs:
                    and m["name"].startswith("simplyblock-operator")
                    and any(s.get("kind") == "ServiceAccount" and s.get("namespace") == ns
                            for s in o.get("subjects") or []))
-    if helm or olm or olm_binding:
+    # OLM can leave olm.owner.namespace off cluster RBAC; such an object is an
+    # orphan once no CSV of its owner's name is left in any namespace.
+    owner = l.get("olm.owner", "")
+    olm_orphan = (csvs is not None and kind in ("clusterroles", "clusterrolebindings")
+                  and l.get("olm.managed") == "true" and "olm.owner.namespace" not in l
+                  and owner.startswith("simplyblock-operator.") and owner not in csvs)
+    if helm or olm or olm_binding or olm_orphan:
         print(kind, m.get("namespace") or "_", m["name"])
         # cert-manager keeps a Certificate's Secret after the Certificate goes.
         secret = (o.get("spec") or {}).get("secretName") if kind == "certificates" else None
@@ -824,7 +838,6 @@ else
         $KUBECTL delete volumesnapshotclass -l "storage.simplyblock.io/managed-by" \
             --ignore-not-found --timeout=30s || warn "Could not delete the simplyblock VolumeSnapshotClass"
     fi
-    snapshot_users=""
     for kind in volumesnapshotclasses.snapshot.storage.k8s.io volumegroupsnapshotclasses.groupsnapshot.storage.k8s.io; do
         others=$($KUBECTL get "$kind" -o jsonpath='{range .items[?(@.driver!="'"$CSI_DRIVER"'")]}{.metadata.name} {end}' 2>/dev/null || true)
         [[ -n "$others" ]] && snapshot_users+=" ${kind%%.*}: $others"
@@ -843,6 +856,60 @@ for d in json.load(sys.stdin).get("items", []):
     else
         for crd in $SNAPSHOT_CRDS; do delete_chart_crd "$crd"; done
     fi
+fi
+
+# ---------------------------------------------------------------------------
+# 5b. Remove the prerequisites the ControlPlane installed
+# ---------------------------------------------------------------------------
+# The operator labels every object of a prerequisite with its name. One goes
+# whole unless an instance of one of its CRDs remains: then something else uses it.
+section "Removing the prerequisites the operator installed"
+
+PREREQ_LABEL="storage.simplyblock.io/installed-prerequisite"
+if [[ "${#blocked_crds[@]}" -gt 0 ]]; then
+    warn "Another namespace still uses simplyblock; leaving the prerequisites."
+else
+    # Our CA Certificate and issuers first, or they count as users of cert-manager,
+    # which keeps a Certificate's Secret.
+    $KUBECTL get certificates.cert-manager.io -A -l "$PREREQ_LABEL" \
+        -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name} {.spec.secretName}{"\n"}{end}' 2>/dev/null |
+    while read -r ns name secret; do
+        [[ -z "$ns" ]] && continue
+        info "  Deleting Certificate $name and Secret $secret in $ns..."
+        $KUBECTL delete certificates.cert-manager.io "$name" -n "$ns" --ignore-not-found --timeout=30s >/dev/null 2>&1
+        $KUBECTL delete secret "$secret" -n "$ns" --ignore-not-found --timeout=30s >/dev/null 2>&1
+    done
+    for kind in issuers.cert-manager.io clusterissuers.cert-manager.io; do
+        $KUBECTL delete "$kind" -A -l "$PREREQ_LABEL" --ignore-not-found --timeout=30s >/dev/null 2>&1 || true
+    done
+    prereqs=$($KUBECTL get crd,deployment -A -l "$PREREQ_LABEL" \
+        -o jsonpath='{range .items[*]}{.metadata.labels.storage\.simplyblock\.io/installed-prerequisite}{"\n"}{end}' 2>/dev/null | sort -u)
+    for prereq in $prereqs; do
+        sel="$PREREQ_LABEL=$prereq"
+        if [[ "$prereq" == snapshot-controller && ( "$KEEP_SNAPSHOT_CRDS" == true || -n "$snapshot_users" ) ]]; then
+            warn "Keeping prerequisite $prereq: the snapshot CRDs stay."
+            continue
+        fi
+        used=""
+        for crd in $($KUBECTL get crd -l "$sel" -o name 2>/dev/null | sed 's|.*/||'); do
+            [[ -n "$($KUBECTL get "$crd" -A --no-headers 2>/dev/null || true)" ]] && used="$crd"
+        done
+        if [[ -n "$used" ]]; then
+            warn "Keeping prerequisite $prereq: instances of $used remain."
+            continue
+        fi
+        info "Deleting prerequisite $prereq..."
+        $KUBECTL delete deployment,daemonset,service,serviceaccount,role,rolebinding,configmap,secret \
+            -A -l "$sel" --ignore-not-found --timeout=60s >/dev/null 2>&1 || warn "  Could not delete some of $prereq"
+        $KUBECTL delete apiservice,mutatingwebhookconfiguration,validatingwebhookconfiguration,clusterrole,clusterrolebinding,storageclass,csidriver,crd,namespace \
+            -l "$sel" --ignore-not-found --timeout=60s >/dev/null 2>&1 || warn "  Could not delete some of $prereq"
+        # The controller creates its leader-election Lease itself, unlabeled.
+        if [[ "$prereq" == snapshot-controller ]] && [[ "$($KUBECTL get lease snapshot-controller-leader -n kube-system \
+            -o jsonpath='{.spec.holderIdentity}' 2>/dev/null)" == simplyblock-snapshot-controller-* ]]; then
+            $KUBECTL delete lease snapshot-controller-leader -n kube-system --ignore-not-found >/dev/null 2>&1 || \
+                warn "  Could not delete the Lease kube-system/snapshot-controller-leader"
+        fi
+    done
 fi
 
 # Confirm CRDs removed
@@ -880,10 +947,6 @@ else
         validatingadmissionpolicy/simplyblock-pnfs-mds-state \
         apiservice/v1alpha2.metrics.simplyblock.io 2>/dev/null || \
         warn "Could not delete some unlabeled operator objects"
-    if $KUBECTL get crd clusterissuers.cert-manager.io >/dev/null 2>&1; then
-        $KUBECTL delete clusterissuer -l "storage.simplyblock.io/installed-prerequisite" \
-            --ignore-not-found --timeout=30s || warn "Could not delete the simplyblock ClusterIssuer"
-    fi
 
     info "Removing simplyblock labels and annotations from nodes..."
     # Prints `label|annotate node key- key- ...` per node with simplyblock keys.
