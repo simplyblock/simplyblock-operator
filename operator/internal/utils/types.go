@@ -80,6 +80,9 @@ type StorageNodeSetAddParams struct {
 	// cluster and rejected otherwise. Wire key must match the add-node endpoint
 	// (sbcli sync-replication branch).
 	Site string `json:"site,omitempty"`
+	// NodeIP is the worker's routable address, which a stretched control
+	// plane's other site connects to when it cannot resolve NodeAddress.
+	NodeIP string `json:"node_ip,omitempty"`
 	// Expand signals that this node is being added to expand an already-active cluster.
 	Expand bool `json:"expand,omitempty"`
 	// ForceFormat wipes partitioned lblk devices at add-node time; node_configure.py

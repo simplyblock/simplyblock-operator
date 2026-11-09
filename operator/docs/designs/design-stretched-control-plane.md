@@ -123,6 +123,13 @@ the processes hold. The seed Secret is read at install only.
   host to the management API's serving certificate. The other site's
   operator follows the standby's 307 there and verifies it against the shared
   CA; a plain `http://` endpoint ends in EOF against the TLS listener.
+- **Node agents across sites.** The leading control plane calls every node
+  agent directly, by the per-pod name of the node's own site's headless
+  Service, which the other site cannot resolve. A stretched site's add also
+  carries the worker's InternalIP (`node_ip`), and the control plane, when a
+  node name does not resolve, connects to the node's address (`node_ip` while
+  the add runs, `mgmt_ip` after) on the node agent's hostPort 5000. TLS is
+  still verified against the name (sbcli `utils/peer_address.py`).
 - **One StorageCluster name.** The follower finds the backend cluster by
   its StorageCluster's name, so both sites must use the same one. A
   discovery derives a different name on each site (it is disambiguated by the

@@ -126,6 +126,29 @@ func (w *Workload) workloadNames(ctx context.Context, namespace, cluster string)
 	return names
 }
 
+// StretchNodeIP is the worker's routable address when this operator's control
+// plane is one site of a stretched control plane, and "" otherwise. The node
+// is added under its per-pod DNS name, which the other site's control plane
+// cannot resolve; it connects to this address instead, on the hostPort 5000
+// the storage-node-api pod answers on (docs/designs/design-stretched-control-plane.md).
+func (w *Workload) StretchNodeIP(ctx context.Context, namespace, worker string) string {
+	var cp simplyblockv1alpha2.ControlPlane
+	key := client.ObjectKey{Namespace: namespace, Name: SingletonControlPlaneName}
+	if err := w.Get(ctx, key, &cp); err != nil || cp.Spec.Source.Local == nil || cp.Spec.Source.Local.Stretch == nil {
+		return ""
+	}
+	var node corev1.Node
+	if err := w.Get(ctx, client.ObjectKey{Name: worker}, &node); err != nil {
+		return ""
+	}
+	for _, addr := range node.Status.Addresses {
+		if addr.Type == corev1.NodeInternalIP && addr.Address != "" {
+			return addr.Address
+		}
+	}
+	return ""
+}
+
 // managedNodeAddress answers the worker's real address when the singleton
 // ControlPlane names a managed control plane, and false otherwise -- including
 // when the singleton or the worker Node cannot be read, since an operator that
