@@ -269,8 +269,11 @@ type fakeSwapNode struct {
 	instance string
 
 	notSwappable map[string]bool
-	suspendErr   error
-	resumeErrs   []error
+	// notStaged is a volume attached to the host whose stage has not run, or
+	// was refused while the move exists.
+	notStaged  map[string]bool
+	suspendErr error
+	resumeErrs []error
 
 	suspended map[string]bool
 	pointsAt  map[string]string
@@ -282,7 +285,7 @@ func (n *fakeSwapNode) Describe(_ context.Context, handles []string) ([]swaprpc.
 	out := make([]swaprpc.VolumeState, 0, len(handles))
 	for _, h := range handles {
 		out = append(out, swaprpc.VolumeState{
-			Handle: h, Staged: true, Swappable: !n.notSwappable[h],
+			Handle: h, Staged: !n.notStaged[h], Swappable: !n.notStaged[h] && !n.notSwappable[h],
 			Suspended: n.suspended[h], NQN: n.pointsAt[h],
 		})
 	}

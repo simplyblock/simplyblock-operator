@@ -404,3 +404,71 @@ func TestReleaseKeepsASubsystemAStagedVolumeStillPointsAt(t *testing.T) {
 		t.Fatalf("disconnected %v under a staged volume", r.connector.disconnected)
 	}
 }
+
+// lockLog is a node's per-volume lock as the tests see it: the order in which
+// the service took and released it, around what it did to the mapping.
+type lockLog struct {
+	mapper *fakeMapper
+	calls  []string
+}
+
+func (l *lockLog) lock(handle string) func() {
+	l.calls = append(l.calls, "lock "+handle)
+	return func() { l.calls = append(l.calls, "unlock "+handle) }
+}
+
+// The service's work on one volume runs under the node's lock on it, the lock
+// the stage, unstage, publish, and expand of that volume take, so none of them
+// interleaves with a suspend or a resume of the mapping they share. The lock
+// is released between the two calls: the window itself is not held under it.
+func TestSuspendAndResumeTakeTheNodesLockOnEachVolumeForTheCallOnly(t *testing.T) {
+	r := newRig(t)
+	locks := &lockLog{mapper: r.mapper}
+	r.swapper.cfg.Lock = locks.lock
+	r.stage(volA, "259:1", true)
+	r.stage(volB, "259:2", true)
+
+	if _, err := r.swapper.Suspend(ctx, []string{handle(volA), handle(volB)}, r.deadline(10*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"lock " + handle(volA), "unlock " + handle(volA), "lock " + handle(volB), "unlock " + handle(volB)}
+	if !slices.Equal(locks.calls, want) {
+		t.Fatalf("locks around Suspend = %v, want %v", locks.calls, want)
+	}
+	if !r.swapper.Held(handle(volA)) || !r.swapper.Held(handle(volB)) {
+		t.Fatal("the volumes are not reported held between the calls")
+	}
+
+	locks.calls = nil
+	r.moveNamespace(volA, "259:7", 3)
+	r.moveNamespace(volB, "259:8", 4)
+	if _, err := r.swapper.Resume(ctx, []string{handle(volA), handle(volB)}, targetNQN); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(locks.calls, want) {
+		t.Fatalf("locks around Resume = %v, want %v", locks.calls, want)
+	}
+	if r.swapper.Held(handle(volA)) || r.swapper.Held(handle(volB)) {
+		t.Fatal("the volumes are still reported held after the resume")
+	}
+}
+
+// A volume the service holds is one the node must not touch; one it does not
+// hold, including one it never saw, is free.
+func TestHeldIsTheSuspendWindowAndNothingElse(t *testing.T) {
+	r := newRig(t)
+	r.stage(volA, "259:1", true)
+	if r.swapper.Held(handle(volA)) || r.swapper.Held("never:seen") {
+		t.Fatal("a volume nothing suspended reads as held")
+	}
+	if _, err := r.swapper.Suspend(ctx, []string{handle(volA)}, r.deadline(10*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if !r.swapper.Held(handle(volA)) {
+		t.Fatal("a suspended volume does not read as held")
+	}
+	r.clock.advance(10*time.Second + 5*time.Second)
+	if r.swapper.Held(handle(volA)) {
+		t.Fatal("a volume the watchdog resolved still reads as held")
+	}
+}

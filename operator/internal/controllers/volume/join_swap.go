@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -66,6 +67,8 @@ type hostVolumes struct {
 	handles   []string
 	bySource  map[string][]string
 	claimOfPV map[string]string
+	// pvOfHandle is the PersistentVolume each handle was read from.
+	pvOfHandle map[string]string
 }
 
 // volumesOn reads what a host consumes from status and the volumes' objects.
@@ -76,7 +79,7 @@ func (r *PersistentVolumeOpsReconciler) volumesOn(
 	for _, v := range joinOf(ops).Volumes {
 		sources[v.PersistentVolumeName] = v.SourceNQN
 	}
-	out := hostVolumes{bySource: map[string][]string{}, claimOfPV: map[string]string{}}
+	out := hostVolumes{bySource: map[string][]string{}, claimOfPV: map[string]string{}, pvOfHandle: map[string]string{}}
 	for _, name := range host.PersistentVolumes {
 		var pv corev1.PersistentVolume
 		if err := r.Get(ctx, types.NamespacedName{Name: name}, &pv); err != nil {
@@ -89,8 +92,82 @@ func (r *PersistentVolumeOpsReconciler) volumesOn(
 		out.handles = append(out.handles, handle)
 		out.bySource[sources[name]] = append(out.bySource[sources[name]], handle)
 		out.claimOfPV[handle] = claimOf(&pv)
+		out.pvOfHandle[handle] = name
 	}
 	return out, nil
+}
+
+// unrecordedHosts is every host a moving volume is attached to now that
+// status.hosts does not name: one that attached after the hosts were
+// recorded at SelectingSubsystem. Attachment is a kubelet decision the
+// operation does not stop, so the list is read again where it matters.
+func (r *PersistentVolumeOpsReconciler) unrecordedHosts(
+	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps,
+) ([]simplyblockv1alpha2.SwapHost, error) {
+	fresh, err := r.consumingHosts(ctx, joinOf(ops).Volumes)
+	if err != nil {
+		return nil, err
+	}
+	var out []simplyblockv1alpha2.SwapHost
+	for _, host := range fresh {
+		if !slices.ContainsFunc(joinOf(ops).Hosts, func(h simplyblockv1alpha2.SwapHost) bool { return h.Node == host.Node }) {
+			out = append(out, host)
+		}
+	}
+	return out, nil
+}
+
+// stagedOn narrows a host's share of the move to the volumes it has staged,
+// as its swap service reports them. A volume attached to the host but not
+// staged there holds no path to swap: its stage is refused while the move
+// exists, and it attaches to the target after the commit.
+func (r *PersistentVolumeOpsReconciler) stagedOn(
+	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, node SwapNode, host simplyblockv1alpha2.SwapHost,
+) (simplyblockv1alpha2.SwapHost, error) {
+	volumes, err := r.volumesOn(ctx, ops, host)
+	if err != nil {
+		return simplyblockv1alpha2.SwapHost{}, err
+	}
+	states, err := node.Describe(ctx, volumes.handles)
+	if err != nil {
+		return simplyblockv1alpha2.SwapHost{}, fmt.Errorf("describe the volumes on %s: %w", host.Node, err)
+	}
+	staged := host
+	staged.PersistentVolumes = nil
+	for _, state := range states {
+		if state.Staged {
+			staged.PersistentVolumes = append(staged.PersistentVolumes, volumes.pvOfHandle[state.Handle])
+		}
+	}
+	sort.Strings(staged.PersistentVolumes)
+	return staged, nil
+}
+
+// unrecordedConsumer is a host that attached a moving volume after the hosts
+// were recorded and has it staged, or one that cannot say: the operation
+// cannot hold that host's I/O, so it must not move the namespaces under it.
+// Empty when every consumer is recorded.
+func (r *PersistentVolumeOpsReconciler) unrecordedConsumer(
+	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps,
+) (string, error) {
+	newcomers, err := r.unrecordedHosts(ctx, ops)
+	if err != nil {
+		return "", err
+	}
+	for _, host := range newcomers {
+		node, _, err := r.reach(host.Node)
+		if err != nil {
+			return host.Node, nil
+		}
+		staged, err := r.stagedOn(ctx, ops, node, host)
+		if err != nil {
+			return host.Node, nil //nolint:nilerr // a host that cannot answer is one the swap cannot hold
+		}
+		if len(staged.PersistentVolumes) > 0 {
+			return host.Node, nil
+		}
+	}
+	return "", nil
 }
 
 // swapNode is the swap service on a host, or the rollback a host that cannot
@@ -162,6 +239,41 @@ func (r *PersistentVolumeOpsReconciler) updateHost(
 func (r *PersistentVolumeOpsReconciler) joinAttach(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
 ) (step, bool, error) {
+	// A host that attached since the hosts were recorded and has a moving
+	// volume staged is one more to prepare and hold: recorded here, it is
+	// prepared by the pass that follows, like the others. One with nothing
+	// staged holds no path and is not recorded; it is looked at again on the
+	// next pass, in case it stages meanwhile.
+	newcomers, err := r.unrecordedHosts(ctx, ops)
+	if err != nil {
+		return "", false, err
+	}
+	var consumers []simplyblockv1alpha2.SwapHost
+	for _, host := range newcomers {
+		node, _, err := r.swapNode(ctx, ops, subject, host.Node)
+		if err != nil {
+			return "", false, err
+		}
+		staged, err := r.stagedOn(ctx, ops, node, host)
+		if err != nil {
+			return "", false, err
+		}
+		if len(staged.PersistentVolumes) > 0 {
+			consumers = append(consumers, staged)
+		}
+	}
+	if len(consumers) > 0 {
+		if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.PersistentVolumeOpsStatus) {
+			join := joinStatus(status)
+			join.Hosts = append(join.Hosts, consumers...)
+			sort.Slice(join.Hosts, func(i, j int) bool { return join.Hosts[i].Node < join.Hosts[j].Node })
+		}); err != nil {
+			return "", false, err
+		}
+		return "", false, waitingf("host %s attached a moving volume since the hosts were recorded; it is prepared next",
+			consumers[0].Node)
+	}
+
 	join := joinOf(ops)
 	for _, host := range join.Hosts {
 		if host.Prepared {
@@ -178,6 +290,23 @@ func (r *PersistentVolumeOpsReconciler) joinAttach(
 		states, err := node.Describe(ctx, volumes.handles)
 		if err != nil {
 			return "", false, fmt.Errorf("describe the volumes on %s: %w", host.Node, err)
+		}
+		// A volume attached to the host but not staged there holds no path to
+		// swap (see stagedOn). It is left out of this host's swap, and a host
+		// with nothing staged leaves the list; the newcomer check above looks
+		// at it again each pass, and records it if it stages after all.
+		var unstaged []string
+		for _, state := range states {
+			if !state.Staged {
+				unstaged = append(unstaged, volumes.pvOfHandle[state.Handle])
+			}
+		}
+		if len(unstaged) > 0 {
+			if err := r.leaveOut(ctx, ops, host.Node, unstaged); err != nil {
+				return "", false, err
+			}
+			return "", false, waitingf("claim %s is attached to host %s but not staged there; it is left out of the swap",
+				volumes.claimOfPV[handleOfPV(volumes, unstaged[0])], host.Node)
 		}
 		for _, state := range states {
 			if state.Swappable {
@@ -229,6 +358,37 @@ func (r *PersistentVolumeOpsReconciler) joinAttach(
 	return stepSuspending, true, nil
 }
 
+// leaveOut removes the named volumes from a host's share of the swap, and the
+// host itself once nothing of it is left.
+func (r *PersistentVolumeOpsReconciler) leaveOut(
+	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, node string, pvs []string,
+) error {
+	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.PersistentVolumeOpsStatus) {
+		join := joinStatus(status)
+		for i := range join.Hosts {
+			if join.Hosts[i].Node != node {
+				continue
+			}
+			join.Hosts[i].PersistentVolumes = slices.DeleteFunc(join.Hosts[i].PersistentVolumes,
+				func(pv string) bool { return slices.Contains(pvs, pv) })
+			if len(join.Hosts[i].PersistentVolumes) == 0 {
+				join.Hosts = slices.Delete(join.Hosts, i, i+1)
+			}
+			return
+		}
+	})
+}
+
+// handleOfPV is the handle volumesOn read from the named volume.
+func handleOfPV(volumes hostVolumes, pv string) string {
+	for handle, name := range volumes.pvOfHandle {
+		if name == pv {
+			return handle
+		}
+	}
+	return ""
+}
+
 // hostNQNOf is the NVMe host NQN a Kubernetes node connects with: the kernel
 // default its CSI node plugin publishes on the Node, or, before the plugin has
 // published one, the form derived from the Node's UID.
@@ -255,6 +415,19 @@ func (r *PersistentVolumeOpsReconciler) hostNQNOf(ctx context.Context, nodeName 
 func (r *PersistentVolumeOpsReconciler) joinSuspend(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps,
 ) (step, bool, error) {
+	// Before the first host is held, and so before the window opens: a host
+	// that attached and staged a moving volume since AttachingPaths holds a
+	// path this operation has not prepared and cannot hold, so the namespaces
+	// must not move under it.
+	if !slices.ContainsFunc(joinOf(ops).Hosts, func(h simplyblockv1alpha2.SwapHost) bool { return h.Suspended }) {
+		host, err := r.unrecordedConsumer(ctx, ops)
+		if err != nil {
+			return "", false, err
+		}
+		if host != "" {
+			return "", false, rollbackf("host %s attached a moving volume after the hosts were recorded and holds a path the swap cannot hold", host)
+		}
+	}
 	if err := r.ensureDeadline(ctx, ops); err != nil {
 		return "", false, err
 	}
@@ -310,6 +483,11 @@ func (r *PersistentVolumeOpsReconciler) joinMove(
 	}
 	join := joinOf(ops)
 	if join.NamespacesAt != simplyblockv1alpha2.SubsystemSideTarget {
+		if host, err := r.unrecordedConsumer(ctx, ops); err != nil {
+			return "", false, err
+		} else if host != "" {
+			return "", false, rollbackf("host %s attached a moving volume inside the window and holds a path the swap cannot hold", host)
+		}
 		for _, host := range join.Hosts {
 			node, instance, err := r.reach(host.Node)
 			if err != nil {

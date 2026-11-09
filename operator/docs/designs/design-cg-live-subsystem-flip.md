@@ -731,11 +731,23 @@ The action lives in `operator/internal/controllers/volume`, beside `Migrate` and
 `join.go`. It reaches CSI nodes through the csi-link hub's registry
 (`Registry.Conn(link.NodePeer(node))`), the way `operator/internal/csilink/flows.go`
 already calls each node's `FlowService`. The
-consuming hosts of a volume are the nodes of its `VolumeAttachment` objects.
+consuming hosts of a volume are the nodes of its `VolumeAttachment` objects,
+narrowed to the volumes each host has staged, as its swap service reports them.
 The design also cross-checks them against the host NQNs connected to the source
 subsystem, so that a host outside Kubernetes fails `AttachingPaths`. The control
 plane does not report those NQNs yet (P0-11), so the cross-check is not built,
 and such a host is not detected.
+
+Attachment is a kubelet decision the operation does not stop, so the host list
+recorded at `SelectingSubsystem` is not final. `AttachingPaths` re-reads the
+attachments on every pass: a host that attached since and has a moving volume
+staged is recorded, prepared, and held like the others. A host whose attached
+volume is not staged holds no path and is left out: the control plane refuses
+its connect while the move exists (§9), and it attaches to the target after the
+commit. `Suspending`, before the first host is held, and `MovingNamespaces`,
+last before the move, look once more: a consumer that appeared since, or a
+host that cannot say, is a path the operation cannot hold, and the operation
+rolls back rather than move the namespaces under it.
 
 The prepare call is made once per consuming host and names that host's NQN,
 because the control plane returns connect entries, a DHCHAP secret among them,
@@ -756,8 +768,20 @@ a PV held by another operation leaves this one `Running` with `deferredSince`
 set and a `SubsystemSwapDeferred` event. During `Migrating` the parent holds no lock, and the child takes its own.
 
 The control plane enforces the same exclusion for actors outside Kubernetes
-(P0-3): a group snapshot, a group migration, a second move, and a slot claim into
-the source or target subsystems are refused while the move record exists.
+(P0-3): a group snapshot, a group migration, a second move, a slot claim into
+the source or target subsystems, and a host's connect to any of them are
+refused while the move record exists.
+
+On the host, the swap service shares a volume's mapping and stack record with
+the node's own stage, unstage, publish, and expand of it. Each of its calls on a
+volume runs under the node's per-volume lock, the one those RPCs take, so a
+suspend never interleaves with a stage and a resume never with a heal or a
+grow. The lock is held for a call, never across the window; for the window the
+node asks the service whether it holds the volume, and refuses those four RPCs
+with `Unavailable` while it does (§6.3). An expand or a publish inside the
+window would otherwise reload and resume the mapping under the swap, letting
+I/O through to a namespace that is leaving, and an unstage would remove it or
+block on it. Kubelet retries the refused RPC after the window.
 
 ### 8.4 RBAC
 
@@ -827,7 +851,7 @@ the connect row, which is under `/api/v2/clusters/{cluster}`.
 | `POST`   | `/subsystem-moves/{id}/rollback`             | New. Puts every namespace back in its source when it is not there, deletes an empty fresh target, releases the reservation, and clears the move. Idempotent                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `GET`    | `/subsystem-moves/{id}`                      | New. The move with `namespaces_at`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `DELETE` | `/members/{lvol}`                            | Exists. Closes the volume's membership. The operator treats a 404 as already detached                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `GET`    | `/storage-pools/{pool}/volumes/{id}/connect` | Exists (cluster path). Returns the source NQN until commit and the target after it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `GET`    | `/storage-pools/{pool}/volumes/{id}/connect` | Exists (cluster path). Returns the source NQN until commit and the target after it. Refuses with 409 while a move holds the volume's subsystem, the same guard the attach has: a host that connected then would hold a path the move never suspends. The CSI node reads the 409 as transient, attaches from nothing older, and kubelet retries the stage after the window                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 ---
 
@@ -856,6 +880,8 @@ host's capability instead of an assertion about all of them.
 | The namespace never appears on the target          | `Resume` times out                    | Rollback to the source, and the operation fails with `SubsystemSwapRolledBack`                                                            |
 | The kernel refuses the reload                      | `Resume` error                        | The mapping stays suspended, the reconciler rolls back, and the reload onto the source device is retried                                  |
 | A connected host outside Kubernetes                | Not detected until P0-11              | The host is never suspended, and its I/O to a moving namespace fails during the window                                                    |
+| A host attaches a moving volume during the operation | Attachments re-read at `AttachingPaths`, `Suspending`, and before the move | Before the window it is recorded and held like the others. At `Suspending` or inside the window it is a rollback. Its connect is refused by the control plane while the move exists, so a host that has not staged yet holds nothing and is left out |
+| A stage, unstage, publish, or expand lands inside the window | The node's gate (§8.3)               | Refused `Unavailable` and retried by kubelet after the window; the mapping is never reloaded, resumed, or removed under the swap           |
 | A member staged without `dmLinear` is attached     | `Describe` reports not swappable      | `Failed` at `AttachingPaths`, the event names the PVC whose pod needs a restart                                                           |
 | The pinned node at its subsystem limit             | Preflight or selection 409            | `Failed`, `SubsystemLimitReached`, before the migration when caught by the preflight                                                      |
 | CSI node restarts while suspended                  | Changed instance UID, or startup scan | The node resolves alone. The reconciler rolls back if it had not moved yet                                                                |

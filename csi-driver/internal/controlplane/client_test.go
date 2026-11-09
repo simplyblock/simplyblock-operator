@@ -302,6 +302,32 @@ func TestGetLvolConnectionsKeepsTheReasonOnA404(t *testing.T) {
 	}
 }
 
+// A 409 on connect is the control plane holding the volume's subsystem for a
+// consistency-group move. It is its own sentinel, so the node retries it and
+// never falls back to the subsystem it stashed, which the move is replacing.
+func TestGetLvolConnectionsReadsA409AsASubsystemMoveHoldingTheVolume(t *testing.T) {
+	client := newTestClient(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusConflict,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"detail":"volume v is in subsystem nqn.src, which a consistency-group subsystem move holds"}`)),
+		}, nil
+	})
+
+	_, err := client.getLvolConnections(context.Background(), testPool1UUID, testVolUUID, "w4")
+
+	if !errors.Is(err, ErrVolumeHeldByMove) {
+		t.Fatalf("err = %v, want it to satisfy ErrVolumeHeldByMove", err)
+	}
+	if errors.Is(err, ErrVolumeNotFound) {
+		t.Fatalf("err = %v, must not read as a deleted volume", err)
+	}
+	if !strings.Contains(err.Error(), "subsystem move holds") {
+		t.Fatalf("err = %q, want the control plane's reason kept", err)
+	}
+}
+
 // A refusal that is not a 404 is never read as a deleted volume: it is passed
 // through with the control plane's reason.
 func TestGetLvolConnectionsPassesA403ThroughAsARefusal(t *testing.T) {

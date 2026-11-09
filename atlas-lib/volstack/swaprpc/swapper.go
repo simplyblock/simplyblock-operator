@@ -124,6 +124,14 @@ type Config struct {
 	Events  Events
 	Metrics Metrics
 
+	// Lock serializes this service's work on one volume with the node's own
+	// operations on it (stage, unstage, publish, expand), which share the
+	// mapping and the record a swap rewrites. It takes the volume's handle and
+	// returns the release. It is held for one call's work on the volume, never
+	// across the suspend window; the window is guarded by Held. Nil locks
+	// nothing.
+	Lock func(handle string) func()
+
 	// HostNQN and HostID are this node's identity, presented on every connect.
 	HostNQN string
 	HostID  string
@@ -217,6 +225,26 @@ func (s *Swapper) load(handle string) (volume, error) {
 }
 
 func (v volume) swappable() bool { return v.mapping != "" && v.fabricI >= 0 }
+
+// lock takes the node's lock on handle, when the service was given one.
+func (s *Swapper) lock(handle string) func() {
+	if s.cfg.Lock == nil {
+		return func() {}
+	}
+	return s.cfg.Lock(handle)
+}
+
+// Held reports whether this process is holding handle's I/O: suspended by a
+// Suspend and not yet resumed by a Resume or the watchdog. The node refuses
+// its own operations on such a volume, because they would resume or remove the
+// mapping under the swap (a grow reloads it, a heal re-points it, an unstage
+// removes it), and because they would block on it.
+func (s *Swapper) Held(handle string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, held := s.held[handle]
+	return held
+}
 
 // state describes v as the kernel has it now.
 func (s *Swapper) state(ctx context.Context, v volume) (VolumeState, error) {
@@ -342,7 +370,10 @@ func (s *Swapper) Suspend(ctx context.Context, handles []string, deadline time.T
 		}
 	}
 	for _, v := range vols {
-		if err := s.hold(ctx, v, deadline); err != nil {
+		unlock := s.lock(v.handle)
+		err := s.hold(ctx, v, deadline)
+		unlock()
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -416,16 +447,28 @@ func (s *Swapper) Resume(ctx context.Context, handles []string, nqn string) ([]V
 		}
 	}
 	for _, v := range vols {
-		dev, err := s.await(ctx, v, nqn)
-		if err != nil {
+		if err := s.resumeOne(ctx, v, nqn); err != nil {
 			return nil, err
 		}
-		if err := s.repoint(ctx, v, dev); err != nil {
-			return nil, err
-		}
-		s.release(v.handle)
 	}
 	return s.Describe(ctx, handles)
+}
+
+// resumeOne resumes one volume under the node's lock on it, so the reload and
+// the record rewrite never interleave with a stage, heal, or grow of the same
+// volume.
+func (s *Swapper) resumeOne(ctx context.Context, v volume, nqn string) error {
+	unlock := s.lock(v.handle)
+	defer unlock()
+	dev, err := s.await(ctx, v, nqn)
+	if err != nil {
+		return err
+	}
+	if err := s.repoint(ctx, v, dev); err != nil {
+		return err
+	}
+	s.release(v.handle)
+	return nil
 }
 
 // await finds v's namespace under `nqn`, rescanning once and polling until the

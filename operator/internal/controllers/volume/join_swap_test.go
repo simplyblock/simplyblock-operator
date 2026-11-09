@@ -15,6 +15,7 @@ import (
 	"github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/volstack/swaprpc"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -441,5 +442,127 @@ func TestAWholeGroupMoveIntoAFreshSubsystemCountsEveryNamespace(t *testing.T) {
 	want := "2 namespace(s) moved into the group's new subsystem " + joinTargetNQN
 	if ops.Status.Message != want {
 		t.Errorf("message = %q, want %q", ops.Status.Message, want)
+	}
+}
+
+// lateHost is a third node that attaches the joining volume while the
+// operation runs, as a pod rescheduled onto it would.
+const lateHost = "worker-7"
+
+func (w *joinWorld) attachLate(pv, node string, staged bool) {
+	w.t.Helper()
+	n := &fakeSwapNode{
+		name: node, log: w.log, instance: "instance-" + node,
+		notSwappable: map[string]bool{}, notStaged: map[string]bool{}, suspended: map[string]bool{}, pointsAt: map[string]string{},
+	}
+	if !staged {
+		n.notStaged[handleOf(testVolumeID)] = true
+	}
+	w.peers.nodes[node] = n
+	va := attachment(pv, node)
+	va.Name += "-" + node
+	for _, obj := range []client.Object{hostNode(node), va} {
+		if err := w.r.Create(context.Background(), obj); err != nil {
+			w.t.Fatal(err)
+		}
+	}
+}
+
+// Review finding on #835 (frozen host list): a host that attaches the volume
+// after the hosts were recorded, while the target is still being prepared, is
+// recorded too, prepared, and held through the window like the others, so its
+// I/O is never left on a namespace that is leaving.
+func TestAHostThatAttachesBeforeTheWindowIsPreparedAndHeldToo(t *testing.T) {
+	w := newJoinWorld(t)
+	w.runUntil(stepJoinAttachingPaths, 25)
+	w.attachLate(testPVName, lateHost, true)
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
+	}
+	move := w.log.index("move")
+	if p := w.log.index("prepare " + lateHost + " " + joinTargetNQN + " 2"); p < 0 || p > move {
+		t.Errorf("%s was prepared at %d, the move ran at %d; calls %v", lateHost, p, move, w.log.calls)
+	}
+	if s := w.log.index("suspend " + lateHost); s < 0 || s > move {
+		t.Errorf("%s was held at %d, the move ran at %d", lateHost, s, move)
+	}
+	if r := w.log.index("resume " + lateHost + " " + joinTargetNQN); r < move {
+		t.Errorf("%s was resumed on the target at %d, before the move at %d", lateHost, r, move)
+	}
+	if w.node(lateHost).pointsAt[handleOf(testVolumeID)] != joinTargetNQN {
+		t.Error("the late host does not point at the target")
+	}
+}
+
+// A host that attaches after the hosts were prepared, and has the volume
+// staged, holds a path the operation cannot hold: it rolls back before the
+// window opens, and nothing moves.
+func TestAHostThatAttachesAtSuspendingRollsBackBeforeAnythingIsHeld(t *testing.T) {
+	w := newJoinWorld(t)
+	w.runUntil(stepSuspending, 25)
+	w.attachLate(testPVName, lateHost, true)
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed {
+		t.Fatalf("phase = %q (%s), want Failed", ops.Status.Phase, ops.Status.Message)
+	}
+	if !strings.Contains(ops.Status.Message, lateHost) {
+		t.Errorf("message %q does not name the host that attached late", ops.Status.Message)
+	}
+	if w.log.index("move") >= 0 || w.log.index("suspend ") >= 0 {
+		t.Errorf("the operation held or moved something after a late consumer appeared: %v", w.log.calls)
+	}
+	if !hasEvent(w.events(), ReasonSubsystemSwapRolledBack) {
+		t.Errorf("events = %v, want SubsystemSwapRolledBack", w.events())
+	}
+}
+
+// A host whose attachment exists but whose stage has not run (or was refused
+// while the move exists) holds no path: it is left out of the swap rather than
+// failing the operation with a request to restart its pod.
+func TestAHostWithTheVolumeAttachedButNotStagedIsLeftOutOfTheSwap(t *testing.T) {
+	w := newJoinWorld(t)
+	w.node(joinHost).notStaged = map[string]bool{handleOf(testVolumeID): true}
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
+	}
+	if w.log.index("suspend "+joinHost) >= 0 || w.log.index("prepare "+joinHost+" ") >= 0 {
+		t.Errorf("%s was prepared or held with nothing staged: %v", joinHost, w.log.calls)
+	}
+	if w.log.index("suspend "+memberHost) < 0 {
+		t.Errorf("%s, which has its volume staged, was not held", memberHost)
+	}
+	for _, h := range ops.Status.JoinConsistencyGroup.Hosts {
+		if h.Node == joinHost {
+			t.Errorf("%s is still listed with %v", joinHost, h.PersistentVolumes)
+		}
+	}
+	if hasEvent(w.events(), ReasonSubsystemSwapUnavailable) {
+		t.Errorf("events = %v: an unstaged volume was reported as staged without the indirection", w.events())
+	}
+}
+
+// Inside the window the same check runs once more, last before the move: a
+// consumer that appeared since Suspending sends the operation back.
+func TestAHostThatAttachesInsideTheWindowRollsBackBeforeTheMove(t *testing.T) {
+	w := newJoinWorld(t)
+	w.runUntil(stepMovingNamespaces, 25)
+	w.attachLate(testPVName, lateHost, true)
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed {
+		t.Fatalf("phase = %q (%s), want Failed", ops.Status.Phase, ops.Status.Message)
+	}
+	if w.log.index("move") >= 0 {
+		t.Errorf("the namespaces moved under an unheld consumer: %v", w.log.calls)
+	}
+	for _, name := range []string{joinHost, memberHost} {
+		if w.log.index("resume "+name+" ") < 0 {
+			t.Errorf("%s was left suspended by the rollback", name)
+		}
 	}
 }

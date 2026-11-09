@@ -24,6 +24,9 @@ func (ns *Server) NodeExpandVolume(
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
 
+	if err := ns.refuseWhileHeld(volumeID); err != nil {
+		return nil, err
+	}
 	stagingParentPath := req.GetStagingTargetPath()
 	volumeContext, err := lookupVolumeContext(stagingParentPath)
 	if err != nil {
@@ -79,7 +82,7 @@ func (ns *Server) NodeExpandVolume(
 
 	plan, err := ns.attachPlan(ctx, volumeID, getStagingTargetPath(req), volumeContext, req.GetVolumeCapability())
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to build the stack plan for volume %s: %v", volumeID, err)
+		return nil, stackError(err, "failed to build the stack plan for volume %s", volumeID)
 	}
 
 	// Bottom to top, skipping the layers that cannot grow. A raw block volume's
