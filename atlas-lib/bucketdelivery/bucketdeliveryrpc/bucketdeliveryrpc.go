@@ -53,6 +53,12 @@ type Bucket struct {
 	// VolumeContext mirrors CSI's own VolumeContext field for field, so a
 	// Deliverer can pass it straight into NodeStageVolume/NodePublishVolume.
 	VolumeContext map[string]string
+	// MountPrefix is an opaque path segment the caller places between the
+	// node's shared gateway mount root and Name. This package assigns it no
+	// meaning beyond keeping two callers' deliveries apart on disk. The
+	// caller owns what it means (issues/19-mc-smoke-test-bucket-not-
+	// found.md, tasks.md D4).
+	MountPrefix string
 }
 
 // Deliverer is the node-side work. A CSI node plugin's NodeServer satisfies
@@ -97,7 +103,11 @@ func (s *Server) DeliverBucket(
 func (s *Server) WithdrawBucket(
 	ctx context.Context, req *bucketdeliveryv1.WithdrawBucketRequest,
 ) (*bucketdeliveryv1.WithdrawBucketResponse, error) {
-	bucket := Bucket{Name: req.GetBucketName(), VolumeHandle: req.GetVolumeHandle()}
+	bucket := Bucket{
+		Name:         req.GetBucketName(),
+		VolumeHandle: req.GetVolumeHandle(),
+		MountPrefix:  req.GetMountPrefix(),
+	}
 	if err := s.deliverer.Withdraw(ctx, bucket); err != nil {
 		return nil, class.Status(err)
 	}
@@ -120,6 +130,7 @@ func (c *Client) Deliver(ctx context.Context, bucket Bucket) error {
 		BucketName:    bucket.Name,
 		VolumeHandle:  bucket.VolumeHandle,
 		VolumeContext: bucket.VolumeContext,
+		MountPrefix:   bucket.MountPrefix,
 	})
 	if err != nil {
 		return fmt.Errorf("node: deliver bucket %s: %w", bucket.Name, class.FromStatus(err))
@@ -132,6 +143,7 @@ func (c *Client) Withdraw(ctx context.Context, bucket Bucket) error {
 	_, err := c.client.WithdrawBucket(ctx, &bucketdeliveryv1.WithdrawBucketRequest{
 		BucketName:   bucket.Name,
 		VolumeHandle: bucket.VolumeHandle,
+		MountPrefix:  bucket.MountPrefix,
 	})
 	if err != nil {
 		return fmt.Errorf("node: withdraw bucket %s: %w", bucket.Name, class.FromStatus(err))
@@ -144,5 +156,6 @@ func bucketFromDeliverProto(req *bucketdeliveryv1.DeliverBucketRequest) Bucket {
 		Name:          req.GetBucketName(),
 		VolumeHandle:  req.GetVolumeHandle(),
 		VolumeContext: req.GetVolumeContext(),
+		MountPrefix:   req.GetMountPrefix(),
 	}
 }

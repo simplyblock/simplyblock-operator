@@ -49,6 +49,17 @@ message DeliverBucketRequest {
   // calling its own NodeStageVolume then NodePublishVolume with this map, no
   // translation in between.
   map<string, string> volume_context = 3;
+
+  // mount_prefix is an opaque path segment the caller places between the
+  // node's shared gateway mount root and bucket_name, so two callers'
+  // deliveries never land at the same path even when they choose the same
+  // bucket_name. This service assigns it no meaning beyond that: the caller
+  // (the operator, scoping by ObjectStore) owns what it means and how it is
+  // derived. Added for the gap tracked as issues/19-mc-smoke-test-bucket-
+  // not-found.md and tasks.md's D4: without it, every delivery on a node
+  // shares one flat directory, and a bucket's own backend lists every
+  // subdirectory it finds there as its own, regardless of who delivered it.
+  string mount_prefix = 4;
 }
 
 message DeliverBucketResponse {}
@@ -60,6 +71,10 @@ message WithdrawBucketRequest {
 
   // volume_handle is the CSI volume handle, as in DeliverBucketRequest.
   string volume_handle = 2;
+
+  // mount_prefix must match the value DeliverBucket was called with for this
+  // bucket: it is part of the path being torn down, not merely advisory.
+  string mount_prefix = 3;
 }
 
 message WithdrawBucketResponse {}

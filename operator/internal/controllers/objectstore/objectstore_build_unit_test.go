@@ -40,14 +40,27 @@ func testObjectStoreSpec(mutate ...func(*simplyblockv1alpha2.ObjectStore)) *simp
 	return store
 }
 
-// Every gateway pod carries the shared hostPath volume DeliverBucket's own
-// bind mounts need to reach it (design-bucket-provisioning.md §5.1, §5.4):
+// Every gateway pod carries a hostPath volume DeliverBucket's own bind
+// mounts need to reach it (design-bucket-provisioning.md §5.1, §5.4):
 // without this, a bucket delivered after the pod started would never
 // become visible inside it, since propagation has nothing to propagate
-// into.
-func TestBuildDeploymentMountsTheSharedBucketHostPathWithPropagation(t *testing.T) {
+// into. The volume's path, its mount path, and GATEWAY_ROOT_DIR must all be
+// the identical ObjectStore-scoped subdirectory (gatewayMountPrefix), not
+// just the GATEWAY_ROOT_DIR env var alone.
+//
+// Regression: 2026-11-09-gateway-root-dir-not-created — live on cluster91,
+// the gateway crashed on every start with "chdir .../simplyblock/
+// simplyblock-s3: no such file or directory." GATEWAY_ROOT_DIR had been
+// scoped to the per-ObjectStore subdirectory (tasks.md D4's MountPrefix
+// fix), but the hostPath volume's own Path and the container's MountPath
+// were left at the bare shared root, which DirectoryOrCreate does create —
+// the deeper, scoped subdirectory it does not, since nothing else creates
+// it either. The three paths have to agree, or the directory the gateway is
+// told to chdir into may never exist.
+func TestBuildDeploymentMountsTheBucketHostPathAtItsOwnObjectStoreScopedPath(t *testing.T) {
 	store := testObjectStoreSpec()
 	deployment := buildDeployment(store)
+	wantPath := bucketdelivery.GatewayMountRoot + "/" + testObjectStoreNamespace + "/" + testObjectStoreOnlyName
 
 	container := deployment.Spec.Template.Spec.Containers[0]
 	var mount *corev1.VolumeMount
@@ -59,9 +72,8 @@ func TestBuildDeploymentMountsTheSharedBucketHostPathWithPropagation(t *testing.
 	if mount == nil {
 		t.Fatalf("no volume mount named %q, want the gateway container to carry it", bucketMountVolumeName)
 	}
-	if mount.MountPath != bucketdelivery.GatewayMountRoot {
-		t.Errorf("mount path = %q, want %q (the same path DeliverBucket bind-mounts under)",
-			mount.MountPath, bucketdelivery.GatewayMountRoot)
+	if mount.MountPath != wantPath {
+		t.Errorf("mount path = %q, want %q (this ObjectStore's own scoped subdirectory)", mount.MountPath, wantPath)
 	}
 	if mount.MountPropagation == nil || *mount.MountPropagation != corev1.MountPropagationHostToContainer {
 		t.Errorf("mountPropagation = %v, want HostToContainer", mount.MountPropagation)
@@ -73,8 +85,12 @@ func TestBuildDeploymentMountsTheSharedBucketHostPathWithPropagation(t *testing.
 			volume = &deployment.Spec.Template.Spec.Volumes[i]
 		}
 	}
-	if volume == nil || volume.HostPath == nil || volume.HostPath.Path != bucketdelivery.GatewayMountRoot {
-		t.Fatalf("volume %q = %+v, want a hostPath volume at %q", bucketMountVolumeName, volume, bucketdelivery.GatewayMountRoot)
+	if volume == nil || volume.HostPath == nil || volume.HostPath.Path != wantPath {
+		t.Fatalf("volume %q = %+v, want a hostPath volume at %q (DirectoryOrCreate, so it exists before the gateway chdirs into it)",
+			bucketMountVolumeName, volume, wantPath)
+	}
+	if volume.HostPath.Type == nil || *volume.HostPath.Type != corev1.HostPathDirectoryOrCreate {
+		t.Errorf("hostPath.type = %v, want DirectoryOrCreate: the scoped subdirectory does not pre-exist on a fresh node", volume.HostPath.Type)
 	}
 
 	var rootDir string
@@ -83,9 +99,38 @@ func TestBuildDeploymentMountsTheSharedBucketHostPathWithPropagation(t *testing.
 			rootDir = env.Value
 		}
 	}
-	if rootDir != bucketdelivery.GatewayMountRoot {
-		t.Errorf("%s = %q, want %q (the gateway's own backend root has to be the same path the volume is mounted at)",
-			gatewayRootDirEnv, rootDir, bucketdelivery.GatewayMountRoot)
+	if rootDir != wantPath {
+		t.Errorf("%s = %q, want %q, identical to the volume's own path and mount path", gatewayRootDirEnv, rootDir, wantPath)
+	}
+}
+
+// Regression: issues/19-mc-smoke-test-bucket-not-found.md, tasks.md D4 — two
+// ObjectStores whose gateway pods land on the same node shared one flat
+// GATEWAY_ROOT_DIR, so each gateway's posix backend (BucketLinks mode)
+// listed every bucket delivered to that node for every ObjectStore, not only
+// its own. Reproduced twice on independently fresh cluster91 deployments
+// (mc test_rb against a fresh same-named bucket in a different ObjectStore).
+func TestBuildDeploymentScopesGatewayRootDirPerObjectStore(t *testing.T) {
+	storeA := testObjectStoreSpec(func(s *simplyblockv1alpha2.ObjectStore) { s.Namespace = "team-a"; s.Name = "store" })
+	storeB := testObjectStoreSpec(func(s *simplyblockv1alpha2.ObjectStore) { s.Namespace = "team-b"; s.Name = "store" })
+
+	rootDirOf := func(store *simplyblockv1alpha2.ObjectStore) string {
+		deployment := buildDeployment(store)
+		for _, env := range deployment.Spec.Template.Spec.Containers[0].Env {
+			if env.Name == gatewayRootDirEnv {
+				return env.Value
+			}
+		}
+		return ""
+	}
+
+	rootDirA, rootDirB := rootDirOf(storeA), rootDirOf(storeB)
+	if rootDirA == "" || rootDirB == "" {
+		t.Fatalf("missing %s: storeA=%q storeB=%q", gatewayRootDirEnv, rootDirA, rootDirB)
+	}
+	if rootDirA == rootDirB {
+		t.Fatalf("two ObjectStores in different namespaces, same name, both got %s=%q; "+
+			"storeB's gateway would list storeA's buckets as its own", gatewayRootDirEnv, rootDirA)
 	}
 }
 

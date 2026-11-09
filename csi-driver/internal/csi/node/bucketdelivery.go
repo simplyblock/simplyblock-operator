@@ -74,16 +74,39 @@ func bucketName(name string) (string, error) {
 	return name, nil
 }
 
+// sanitizeMountPrefix validates a delivery's MountPrefix: unlike bucketName,
+// it may contain "/" to carry more than one segment (the operator joins a
+// namespace and an ObjectStore name), but it is held to the same bar
+// otherwise, and it may not be empty. An empty prefix would put every caller
+// back in the one shared, unscoped directory this field exists to avoid
+// (issues/19-mc-smoke-test-bucket-not-found.md, tasks.md D4). This plugin
+// trusts no caller's validation but its own before turning the value into a
+// filesystem path, the same reasoning bucketName already applies.
+func sanitizeMountPrefix(prefix string) (string, error) {
+	if prefix == "" || strings.Contains(prefix, "\\") || strings.Contains(prefix, "..") ||
+		strings.HasPrefix(prefix, "/") || filepath.Clean(prefix) != prefix {
+		return "", fmt.Errorf("bucketdelivery: refusing mount prefix %q", prefix)
+	}
+	return prefix, nil
+}
+
 // bucketTargetPath is the deterministic, published mount path for a bucket:
-// the same relative path under bucketdelivery.GatewayMountRoot regardless of which node
-// or when it was delivered, which is what lets every gateway pod on a node
-// see the same bucket at the same path (design §5.2).
-func bucketTargetPath(name string) (string, error) {
+// the same relative path under bucketdelivery.GatewayMountRoot regardless of
+// which node or when it was delivered, which is what lets every gateway pod
+// of the same mountPrefix on a node see the same bucket at the same path
+// (design §5.2). mountPrefix is what keeps two different callers' buckets
+// from landing under the same directory in the first place, so a different
+// caller's gateway pod never lists this one.
+func bucketTargetPath(mountPrefix, name string) (string, error) {
+	safePrefix, err := sanitizeMountPrefix(mountPrefix)
+	if err != nil {
+		return "", err
+	}
 	safe, err := bucketName(name)
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(bucketdelivery.GatewayMountRoot, safe)
+	path := filepath.Join(bucketdelivery.GatewayMountRoot, safePrefix, safe)
 	if err := validateDeliveryPath(path); err != nil {
 		return "", err
 	}
@@ -123,7 +146,7 @@ func (ns *Server) Deliver(ctx context.Context, bucket bucketdeliveryrpc.Bucket) 
 		return fmt.Errorf("bucketdelivery: bucket %s carries access_protocol %q, want %q",
 			bucket.Name, proto, csicommon.AccessProtocolNFS)
 	}
-	targetPath, err := bucketTargetPath(bucket.Name)
+	targetPath, err := bucketTargetPath(bucket.MountPrefix, bucket.Name)
 	if err != nil {
 		return err
 	}
@@ -163,7 +186,7 @@ func (ns *Server) Deliver(ctx context.Context, bucket bucketdeliveryrpc.Bucket) 
 // checks the staging mount directly first, which is what lets a repeated
 // Withdraw converge instead of erroring on the mismatch.
 func (ns *Server) Withdraw(ctx context.Context, bucket bucketdeliveryrpc.Bucket) error {
-	targetPath, err := bucketTargetPath(bucket.Name)
+	targetPath, err := bucketTargetPath(bucket.MountPrefix, bucket.Name)
 	if err != nil {
 		return err
 	}

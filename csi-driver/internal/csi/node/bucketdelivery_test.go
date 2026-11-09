@@ -15,15 +15,19 @@ import (
 	"github.com/simplyblock/atlas/bucketdelivery"
 )
 
+// testMountPrefix is an arbitrary, valid prefix for tests that only need
+// *a* prefix, not a particular one.
+const testMountPrefix = "s3-system/team-a-store"
+
 func TestBucketTargetPathIsDeterministicAndUnderTheGatewayRoot(t *testing.T) {
-	path, err := bucketTargetPath("team-a-reports")
+	path, err := bucketTargetPath(testMountPrefix, "team-a-reports")
 	if err != nil {
 		t.Fatalf("bucketTargetPath: %v", err)
 	}
 	if !strings.HasPrefix(path, bucketdelivery.GatewayMountRoot+"/") {
 		t.Errorf("path = %q, want it under %q", path, bucketdelivery.GatewayMountRoot)
 	}
-	again, err := bucketTargetPath("team-a-reports")
+	again, err := bucketTargetPath(testMountPrefix, "team-a-reports")
 	if err != nil {
 		t.Fatalf("bucketTargetPath (second call): %v", err)
 	}
@@ -34,9 +38,39 @@ func TestBucketTargetPathIsDeterministicAndUnderTheGatewayRoot(t *testing.T) {
 
 func TestBucketTargetPathRefusesAPathTraversingName(t *testing.T) {
 	for _, name := range []string{"", "../etc", "a/b", `a\b`, "a..b/../../etc"} {
-		if _, err := bucketTargetPath(name); err == nil {
-			t.Errorf("bucketTargetPath(%q) succeeded, want a refusal", name)
+		if _, err := bucketTargetPath(testMountPrefix, name); err == nil {
+			t.Errorf("bucketTargetPath(%q, %q) succeeded, want a refusal", testMountPrefix, name)
 		}
+	}
+}
+
+func TestBucketTargetPathRefusesAPathTraversingMountPrefix(t *testing.T) {
+	for _, prefix := range []string{"", "/s3-system/store", "../etc", `a\b`, "a/../../etc"} {
+		if _, err := bucketTargetPath(prefix, "team-a-reports"); err == nil {
+			t.Errorf("bucketTargetPath(%q, ...) succeeded, want a refusal", prefix)
+		}
+	}
+}
+
+// Regression: issues/19-mc-smoke-test-bucket-not-found.md, tasks.md D4 — two
+// ObjectStores whose gateway pods land on the same node shared one flat
+// directory, so one's posix backend (BucketLinks mode) listed every
+// subdirectory under it, including buckets delivered for the other
+// ObjectStore entirely. mc test_rb against a fresh "smoke-test" bucket in
+// one ObjectStore failed against the other's pre-existing bucket of the same
+// name, reproduced twice on independently fresh cluster91 deployments.
+func TestBucketTargetPathScopesDifferentMountPrefixesToDifferentPaths(t *testing.T) {
+	a, err := bucketTargetPath("s3-system/store-a", "smoke-test")
+	if err != nil {
+		t.Fatalf("bucketTargetPath for store-a: %v", err)
+	}
+	b, err := bucketTargetPath("s3-system/store-b", "smoke-test")
+	if err != nil {
+		t.Fatalf("bucketTargetPath for store-b: %v", err)
+	}
+	if a == b {
+		t.Fatalf("two different ObjectStores' same-named bucket both resolved to %q; "+
+			"store-b's gateway would list store-a's bucket as its own", a)
 	}
 }
 
@@ -45,7 +79,7 @@ func TestBucketStagingPathDoesNotCollideWithTheGatewayRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bucketStagingPath: %v", err)
 	}
-	target, err := bucketTargetPath("team-a-reports")
+	target, err := bucketTargetPath(testMountPrefix, "team-a-reports")
 	if err != nil {
 		t.Fatalf("bucketTargetPath: %v", err)
 	}
