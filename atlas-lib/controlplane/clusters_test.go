@@ -225,6 +225,35 @@ func TestASingleNodeClusterIsCreatedWithoutHA(t *testing.T) {
 	}
 }
 
+// A cluster whose devices are declared RAID-protected below simplyblock says so
+// on the create, as raid_devices, which lowers the control plane's device floor
+// for the stripe. Any other cluster sends no key and leaves the default.
+func TestARaidProtectedClusterIsCreatedWithRaidDevices(t *testing.T) {
+	for _, tc := range []struct {
+		raid bool
+		want any
+	}{{true, true}, {false, nil}} {
+		var body map[string]any
+		c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			raw, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(raw, &body)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(clusterDTO))
+		})
+
+		if _, err := c.CreateCluster(context.Background(), CreateClusterParams{
+			Name: "prod", MaxSubsys: 20, SpdkVCPUCount: 8, RaidDevices: tc.raid,
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		if body["raid_devices"] != tc.want {
+			t.Errorf("raid=%v: raid_devices = %v, want %v", tc.raid, body["raid_devices"], tc.want)
+		}
+	}
+}
+
 // A stretched cluster is created with sync replication and names its creating
 // site the leader; the backend accepts both at create only. Any other cluster
 // sends neither key.

@@ -1484,6 +1484,7 @@ type ClusterParams struct {
 	ProvCapCrit            *int                     `json:"prov_cap_crit,omitempty"`
 	ProvCapWarn            *int                     `json:"prov_cap_warn,omitempty"`
 	QpairCount             *int                     `json:"qpair_count,omitempty"`
+	RaidDevices            *bool                    `json:"raid_devices,omitempty"`
 	RpcBasePort            *int                     `json:"rpc_base_port,omitempty"`
 	SnodeApiPort           *int                     `json:"snode_api_port,omitempty"`
 	SnodeApiService        *string                  `json:"snode_api_service,omitempty"`

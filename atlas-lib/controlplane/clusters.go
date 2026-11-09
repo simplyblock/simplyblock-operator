@@ -93,7 +93,11 @@ type CreateClusterParams struct {
 	DeviceMode          string
 	// SingleNode creates a cluster of one storage node, which is also created
 	// without HA.
-	SingleNode    bool
+	SingleNode bool
+	// RaidDevices declares that every data device is protected below
+	// simplyblock (a hardware RAID LUN, md, or dm RAID), which lowers the
+	// control plane's device floor for the stripe to ndcs+npcs.
+	RaidDevices   bool
 	WorkloadNames ClusterWorkloadNames
 	// SyncReplication creates a cluster whose writes land on both of its
 	// sites before they are acknowledged. The backend accepts it at create
@@ -245,6 +249,7 @@ func clusterParamsOf(p CreateClusterParams) cpapi.ClusterParams {
 		InlineChecksum:         isTrue(p.InlineChecksum),
 		Atomic4k:               isTrue(p.Atomic4K),
 		IsSingleNode:           isTrue(p.SingleNode),
+		RaidDevices:            isTrue(p.RaidDevices),
 		SyncReplication:        isTrue(p.SyncReplication),
 		LeaderSite:             nonEmpty(p.LeaderSite),
 		SnodeApiService:        nonEmpty(p.WorkloadNames.NodeAPIService),
