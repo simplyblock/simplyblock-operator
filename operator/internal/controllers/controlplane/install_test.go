@@ -174,7 +174,7 @@ func TestOwnershipFollowsTheObjectsScope(t *testing.T) {
 	cp := localControlPlane()
 	scheme := testScheme(t)
 
-	for _, obj := range append(foundationDBObjects(cp, ""), managementAPIObjects(cp)...) {
+	for _, obj := range append(foundationDBObjects(cp, "", false), managementAPIObjects(cp)...) {
 		if err := setOwnership(cp, obj, scheme); err != nil {
 			t.Fatalf("set ownership on %s: %v", obj.GetName(), err)
 		}
@@ -547,7 +547,7 @@ func TestTheCoordinatorCountAndTheRedundancyModeAgree(t *testing.T) {
 			Replicas: &tc.replicas,
 		}
 
-		cluster := foundationDBCluster(cp, "")
+		cluster := foundationDBCluster(cp, "", false)
 		mode, _, _ := unstructured.NestedString(cluster.Object,
 			"spec", "databaseConfiguration", "redundancy_mode")
 		logs, _, _ := unstructured.NestedInt64(cluster.Object, "spec", "processCounts", "log")
@@ -591,7 +591,7 @@ func TestSchedulingReachesEveryPodTheInstallCreates(t *testing.T) {
 		Key: "simplyblock.io/dedicated", Operator: corev1.TolerationOpExists,
 	}}
 
-	for _, obj := range append(foundationDBObjects(cp, ""), append(datastoreObjects(cp), managementAPIObjects(cp)...)...) {
+	for _, obj := range append(foundationDBObjects(cp, "", false), append(datastoreObjects(cp), managementAPIObjects(cp)...)...) {
 		var spec *corev1.PodSpec
 		switch typed := obj.(type) {
 		case *appsv1.Deployment:
@@ -629,7 +629,7 @@ func TestPinningTheDatabasePinsTheDatabaseAlone(t *testing.T) {
 	// Every process class, because the FoundationDB operator replaces
 	// general.podTemplate wholesale for a class that overrides it.
 	want := map[string]any{"storage.simplyblock.io/foundationdb": ""}
-	cluster := foundationDBCluster(cp, "")
+	cluster := foundationDBCluster(cp, "", false)
 	for _, class := range []string{"general", "storage", "log"} {
 		got := nestedAny(t, cluster.Object,
 			"spec", "processes", class, "podTemplate", "spec", "nodeSelector")
@@ -658,7 +658,7 @@ func TestAnUnpinnedDatabaseStaysWithTheControlPlane(t *testing.T) {
 	cp.Spec.Source.Local.NodeSelector = map[string]string{"simplyblock.io/control-plane": "true"}
 
 	want := map[string]any{"simplyblock.io/control-plane": "true"}
-	cluster := foundationDBCluster(cp, "")
+	cluster := foundationDBCluster(cp, "", false)
 	for _, class := range []string{"general", "storage", "log"} {
 		got := nestedAny(t, cluster.Object,
 			"spec", "processes", class, "podTemplate", "spec", "nodeSelector")
@@ -682,7 +682,7 @@ func TestAnUntoleratedDatabaseTakesTheControlPlanesTolerations(t *testing.T) {
 	want := []any{map[string]any{
 		"key": "simplyblock.io/dedicated", "operator": "Exists", "effect": "NoSchedule",
 	}}
-	cluster := foundationDBCluster(cp, "")
+	cluster := foundationDBCluster(cp, "", false)
 	for _, class := range []string{"general", "storage", "log"} {
 		got := nestedAny(t, cluster.Object,
 			"spec", "processes", class, "podTemplate", "spec", "tolerations")
@@ -711,7 +711,7 @@ func TestTheDatabasesOwnTolerationsWinForTheDatabaseAlone(t *testing.T) {
 		"key": "storage.simplyblock.io/foundationdb", "operator": "Equal",
 		"value": "true", "effect": "NoSchedule",
 	}}
-	cluster := foundationDBCluster(cp, "")
+	cluster := foundationDBCluster(cp, "", false)
 	for _, class := range []string{"general", "storage", "log"} {
 		got := nestedAny(t, cluster.Object,
 			"spec", "processes", class, "podTemplate", "spec", "tolerations")
@@ -734,7 +734,7 @@ func TestTheDatabasesOwnTolerationsWinForTheDatabaseAlone(t *testing.T) {
 
 // With no tolerations anywhere, the process templates carry none.
 func TestADatabaseWithNoTolerationsAnywhereCarriesNone(t *testing.T) {
-	cluster := foundationDBCluster(localControlPlane(), "")
+	cluster := foundationDBCluster(localControlPlane(), "", false)
 	for _, class := range []string{"general", "storage", "log"} {
 		if got := nestedAny(t, cluster.Object,
 			"spec", "processes", class, "podTemplate", "spec", "tolerations"); got != nil {

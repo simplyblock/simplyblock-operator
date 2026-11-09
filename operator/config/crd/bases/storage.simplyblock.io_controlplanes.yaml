@@ -895,6 +895,25 @@ spec:
                     database is first applied, and never changed afterwards, because the
                     volumes cannot move to another class.
                   type: string
+                stretch:
+                  description: |-
+                    Stretch is the state of this site of a stretched control plane; unset on
+                    an ordinary one.
+                  properties:
+                    peerJoined:
+                      description: |-
+                        PeerJoined is whether the other site's FoundationDB processes have been
+                        seen in the database. Until then the database is configured with this
+                        site's region alone (the other at a negative priority, so processes
+                        that join take no data); from then on with both regions usable. It is
+                        never unset: a peer that disappears later is a region outage, which the
+                        database rides out, not a reason to drop the region.
+                      type: boolean
+                    peerJoinedAt:
+                      description: PeerJoinedAt is when PeerJoined was first observed.
+                      format: date-time
+                      type: string
+                  type: object
                 version:
                   description: Version is the version the management API reports.
                   type: string

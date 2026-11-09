@@ -693,6 +693,28 @@ type ControlPlaneStatus struct {
 	// from, so a stale status can be told from a current one.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Stretch is the state of this site of a stretched control plane; unset on
+	// an ordinary one.
+	// +optional
+	Stretch *StretchedControlPlaneStatus `json:"stretch,omitempty"`
+}
+
+// StretchedControlPlaneStatus is what one site of a stretched control plane
+// has learned about the other.
+type StretchedControlPlaneStatus struct {
+	// PeerJoined is whether the other site's FoundationDB processes have been
+	// seen in the database. Until then the database is configured with this
+	// site's region alone (the other at a negative priority, so processes
+	// that join take no data); from then on with both regions usable. It is
+	// never unset: a peer that disappears later is a region outage, which the
+	// database rides out, not a reason to drop the region.
+	// +optional
+	PeerJoined bool `json:"peerJoined,omitempty"`
+
+	// PeerJoinedAt is when PeerJoined was first observed.
+	// +optional
+	PeerJoinedAt *metav1.Time `json:"peerJoinedAt,omitempty"`
 }
 
 // v1alpha2 is the storage version in the manifests this repository ships, which

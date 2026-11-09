@@ -73,12 +73,17 @@ per site.
 ### 2.2 Bringing the second site up
 
 1. Install the operator and the ControlPlane on site A with `role: Bootstrap`.
-   Its database is rendered two-region from the start; the FoundationDB
-   operator walks FoundationDB's region-change rules itself (one of
-   `regions`/`usable_regions` per step, the remote region at a negative
-   priority until it holds data). With region B empty the database is
-   available but not fully replicated, so a stretched site's install waits
-   for availability only, and the Bootstrap site comes up alone.
+   Until the other site's processes are seen, a site renders the database
+   with one usable region and the other at priority -1 (FoundationDB's rule
+   for adding a region: processes that join under it take no data), which
+   wants five coordinators on five hosts of that site. The operator reads
+   the data centers present from its own management API
+   (`GET /api/v2/_meta/fdb-datacenters`) every steady-state pass and records
+   `status.stretch.peerJoined` once the peer's `dcid` appears; from then on
+   both sites render both regions usable (B at priority 0, nine coordinators,
+   five on one site and four on the other), and the FoundationDB operator
+   walks the change in the steps FoundationDB allows. The record is never
+   taken back: a peer that vanishes later is a region outage.
 2. Copy the connection string: the `cluster-file` key of the
    `simplyblock-fdb-cluster-config` ConfigMap on site A, into a Secret on site
    B (`kubectl create secret generic fdb-seed --from-file=cluster-file=...`).

@@ -51,7 +51,7 @@ func TestTheFoundationDBAccountsCarryNoEKSRole(t *testing.T) {
 	cp.Spec.Source.Local.EKSRoleARN = testEKSRoleARN
 
 	for _, name := range []string{fdbOperatorServiceAccount, fdbPodServiceAccount} {
-		sa := findServiceAccount(t, foundationDBObjects(cp, ""), name)
+		sa := findServiceAccount(t, foundationDBObjects(cp, "", false), name)
 		if _, ok := sa.Annotations[utils.EKSRoleARNAnnotation]; ok {
 			t.Errorf("%s annotations = %v, want no EKS role annotation", name, sa.Annotations)
 		}

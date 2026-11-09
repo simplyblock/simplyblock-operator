@@ -18,6 +18,7 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -311,7 +312,9 @@ func (r *ControlPlaneReconciler) performInstallStep(
 		if err != nil {
 			return false, err.Error(), nil
 		}
-		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, foundationDBObjects(cp, seed))
+		// The management API is not up during the install, so the peer cannot
+		// be observed yet: a site installs with its own region alone.
+		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, foundationDBObjects(cp, seed, r.peerJoined(cp)))
 
 	case stepAwaitingFoundationDB:
 		health, err := readFoundationDB(ctx, r.Client, cp.Namespace)
@@ -357,6 +360,49 @@ func (r *ControlPlaneReconciler) performInstallStep(
 	}
 }
 
+// peerJoined is whether this site of a stretched control plane has seen the
+// other site's region in the database (status.stretch.peerJoined). False on an
+// ordinary control plane, where it decides nothing.
+func (r *ControlPlaneReconciler) peerJoined(cp *simplyblockv1alpha2.ControlPlane) bool {
+	return stretchOf(cp) != nil && cp.Status.Stretch != nil && cp.Status.Stretch.PeerJoined
+}
+
+// observePeerRegion asks the management API which FoundationDB data centers
+// have processes in the database and records, once and for good, that the
+// peer site's region has joined. A read that fails is not an error: the API
+// may be rolling, and the next pass asks again. Recorded on the object so the
+// render that follows in the same pass sees it.
+func (r *ControlPlaneReconciler) observePeerRegion(
+	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane, access managedAccess,
+) error {
+	stretch := stretchOf(cp)
+	if stretch == nil || r.peerJoined(cp) {
+		return nil
+	}
+	prober := r.Prober
+	if prober == nil {
+		prober = &HTTPProber{Token: access.token, Client: access.client}
+	}
+	datacenters, err := prober.Datacenters(ctx, access.endpoint)
+	if err != nil {
+		logf.FromContext(ctx).V(1).Info("the FoundationDB data centers could not be read", "error", err.Error())
+		return nil
+	}
+	if !slices.Contains(datacenters, stretch.PeerSite) {
+		return nil
+	}
+	now := metav1.Now()
+	if err := r.writeStatus(ctx, cp, func(status *simplyblockv1alpha2.ControlPlaneStatus) {
+		status.Stretch = &simplyblockv1alpha2.StretchedControlPlaneStatus{PeerJoined: true, PeerJoinedAt: &now}
+	}); err != nil {
+		return err
+	}
+	r.emit(cp, corev1.EventTypeNormal, PeerRegionJoined, fmt.Sprintf(
+		"The FoundationDB processes of site %s have joined the database; configuring both regions as usable",
+		stretch.PeerSite))
+	return nil
+}
+
 // steadyState re-applies what the install created, probes readiness, and
 // republishes the endpoint, the version, and the component counts.
 //
@@ -365,10 +411,6 @@ func (r *ControlPlaneReconciler) performInstallStep(
 func (r *ControlPlaneReconciler) steadyState(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) (ctrl.Result, error) {
-	if err := r.applyEverything(ctx, cp); err != nil {
-		return ctrl.Result{}, err
-	}
-
 	// An installed control plane is reached on the Service this install created,
 	// so there is no token to present -- and, where it serves TLS, the CA this
 	// deployment minted, which no system trust store holds.
@@ -376,6 +418,14 @@ func (r *ControlPlaneReconciler) steadyState(
 	if err != nil {
 		r.announce(cp, simplyblockv1alpha2.ControlPlanePhaseDegraded, err.Error())
 		return ctrl.Result{RequeueAfter: steadyStateInterval}, nil
+	}
+	// Before the re-apply, so that the pass that sees the peer's region
+	// renders the database with it.
+	if err := r.observePeerRegion(ctx, cp, access); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.applyEverything(ctx, cp); err != nil {
+		return ctrl.Result{}, err
 	}
 	ok, message := r.probe(ctx, cp.Namespace, access)
 
@@ -415,7 +465,7 @@ func (r *ControlPlaneReconciler) applyEverything(
 	}
 	for _, set := range [][]client.Object{
 		datastoreObjects(cp),
-		foundationDBObjects(cp, seed),
+		foundationDBObjects(cp, seed, r.peerJoined(cp)),
 		api,
 	} {
 		if err := applyAll(ctx, r.Client, cp, r.Scheme, set); err != nil {

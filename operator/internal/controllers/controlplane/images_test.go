@@ -50,7 +50,7 @@ func TestControlPlaneImagesFollowTheMirrorRegistry(t *testing.T) {
 			t.Errorf("object store init container %s image = %s", c.Name, c.Image)
 		}
 	}
-	configs, _, _ := unstructured.NestedSlice(foundationDBCluster(cp, "").Object, "spec", "mainContainer", "imageConfigs")
+	configs, _, _ := unstructured.NestedSlice(foundationDBCluster(cp, "", false).Object, "spec", "mainContainer", "imageConfigs")
 	if len(configs) == 0 || !strings.HasPrefix(configs[0].(map[string]any)["baseImage"].(string), want) {
 		t.Errorf("FoundationDB baseImage = %v", configs)
 	}

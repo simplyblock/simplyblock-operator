@@ -91,7 +91,7 @@ const fdbCoordinatorDisk = "10G"
 // foundationDBObjects is everything the ApplyingFoundationDB step writes, in the
 // order it depends on itself: the accounts, then the roles that name them, then
 // the controller, then the cluster the controller reconciles.
-func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane, seed string) []client.Object {
+func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane, seed string, peerJoined bool) []client.Object {
 	ns := cp.Namespace
 	//nolint:prealloc // the literal is the declaration; the append below is the conditional set
 	objects := []client.Object{
@@ -104,7 +104,7 @@ func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane, seed string) []cl
 		fdbPodRoleObject(ns),
 		fdbPodRoleBindingObject(ns),
 		fdbOperatorDeployment(cp),
-		foundationDBCluster(cp, seed),
+		foundationDBCluster(cp, seed, peerJoined),
 	}
 	return append(objects, fdbPeerCertificate(cp)...)
 }
@@ -372,7 +372,7 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 // addresses, DNS locality, and a per-class pod template that names the pods'
 // account. What varies with the spec is the coordinator count, the storage
 // class, and the resources.
-func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane, seed string) *unstructured.Unstructured {
+func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane, seed string, peerJoined bool) *unstructured.Unstructured {
 	fdb := foundationDBSpecOf(cp)
 	processes := coordinatorCount(fdb)
 	stretch := stretchOf(cp)
@@ -475,7 +475,7 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane, seed string) *uns
 				"processClassLabels":   []any{"foundationdb.org/fdb-process-class"},
 				"processGroupIDLabels": []any{"foundationdb.org/fdb-process-group-id"},
 			},
-			"databaseConfiguration": databaseConfiguration(stretch, processes),
+			"databaseConfiguration": databaseConfiguration(stretch, processes, peerJoined),
 			"processCounts": map[string]any{
 				"cluster_controller": int64(1),
 				"log":                processes,
@@ -521,12 +521,22 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane, seed string) *uns
 // databaseConfiguration is the database's replication. A single site keeps as
 // many copies as its coordinator count supports. A stretched control plane
 // keeps three copies in each of two regions, one region per site: triple is
-// the design's floor per site (docs/designs/design-stretched-control-plane.md), and
-// the Bootstrap site's region has the priority, so the database runs its
-// transaction system there while that site is up. Both sites render the same
-// block, which is what the FoundationDB operator requires of the clusters
-// that share a database.
-func databaseConfiguration(stretch *simplyblockv1alpha2.StretchedControlPlaneSpec, processes int64) map[string]any {
+// the design's floor per site (docs/designs/design-stretched-control-plane.md),
+// and the Bootstrap site's region has the priority, so the database runs its
+// transaction system there while that site is up.
+//
+// The regions follow FoundationDB's own rules for adding one. Until the other
+// site's processes have joined (peerJoined), the configuration has one usable
+// region and names the other at a negative priority, so that processes
+// joining under it take no data and the database runs, with its five
+// coordinators, on the first site alone. Once they have joined, both regions
+// are usable and the second has priority 0; the FoundationDB operator walks
+// the change in the steps FoundationDB allows (usable_regions first, the
+// priority after). Both sites render the same block for the same state, which
+// is what the FoundationDB operator requires of clusters sharing a database.
+func databaseConfiguration(
+	stretch *simplyblockv1alpha2.StretchedControlPlaneSpec, processes int64, peerJoined bool,
+) map[string]any {
 	if stretch == nil {
 		return map[string]any{"redundancy_mode": redundancyMode(processes)}
 	}
@@ -535,15 +545,19 @@ func databaseConfiguration(stretch *simplyblockv1alpha2.StretchedControlPlaneSpe
 	if stretch.IsJoin() {
 		join = stretch.Site
 	}
+	usable, joinPriority := int64(1), int64(-1)
+	if peerJoined {
+		usable, joinPriority = 2, 0
+	}
 	return map[string]any{
 		"redundancy_mode": "triple",
-		"usable_regions":  int64(2),
+		"usable_regions":  usable,
 		"regions": []any{
 			map[string]any{"datacenters": []any{
 				map[string]any{"id": bootstrap, "priority": int64(1)},
 			}},
 			map[string]any{"datacenters": []any{
-				map[string]any{"id": join, "priority": int64(0)},
+				map[string]any{"id": join, "priority": joinPriority},
 			}},
 		},
 	}

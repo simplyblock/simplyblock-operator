@@ -40,6 +40,9 @@ const (
 	// backfill Job has used up its attempts. The install stops rather than
 	// retrying on an interval, and this is the event that says so.
 	InstallationFailed = "InstallationFailed"
+	// PeerRegionJoined says the other site's FoundationDB processes were seen
+	// and the database is now configured with both regions.
+	PeerRegionJoined = "PeerRegionJoined"
 
 	// ClustersStillPresent holds a deletion. It is a hold rather than a failure:
 	// removing the clusters resolves it, and nothing else can.

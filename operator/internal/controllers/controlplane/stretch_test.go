@@ -53,8 +53,8 @@ func regionIDs(t *testing.T, cluster *unstructured.Unstructured) []string {
 // first and with the priority, three copies in each; and each site's own
 // processes carry its name as their data center and process-group prefix.
 func TestBothSitesRenderTheSameTwoRegionDatabase(t *testing.T) {
-	bootstrap := foundationDBCluster(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap), "")
-	join := foundationDBCluster(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleJoin), "sb:x@10.0.0.1:4500")
+	bootstrap := foundationDBCluster(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap), "", true)
+	join := foundationDBCluster(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleJoin), "sb:x@10.0.0.1:4500", true)
 
 	for name, cluster := range map[string]*unstructured.Unstructured{"bootstrap": bootstrap, "join": join} {
 		if got := regionIDs(t, cluster); strings.Join(got, ",") != "a,b" {
@@ -97,7 +97,7 @@ func TestBothSitesRenderTheSameTwoRegionDatabase(t *testing.T) {
 // An ordinary control plane renders exactly what it did before: one region,
 // no data center, no prefix.
 func TestAnOrdinaryControlPlaneRendersNoRegions(t *testing.T) {
-	cluster := foundationDBCluster(localControlPlane(), "")
+	cluster := foundationDBCluster(localControlPlane(), "", false)
 	if _, found, _ := unstructured.NestedSlice(cluster.Object, "spec", "databaseConfiguration", "regions"); found {
 		t.Error("a single-site control plane renders a regions block")
 	}
@@ -210,5 +210,67 @@ func TestAStretchedSiteDoesNotWaitForTheSecondRegion(t *testing.T) {
 	}
 	if got := (fdbHealth{found: true}).waitingOn(true); got == "" {
 		t.Error("an unavailable database is still waited for on a stretched site")
+	}
+}
+
+// Until the peer's processes have joined, a site runs the database on its own
+// region: one usable region, the other named at a negative priority so that
+// processes joining under it take no data. FoundationDB then wants five
+// coordinators, which one site provides; nine, once both regions are usable.
+func TestASiteAloneConfiguresOneUsableRegion(t *testing.T) {
+	alone := foundationDBCluster(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap), "", false)
+	usable, _, _ := unstructured.NestedInt64(alone.Object, "spec", "databaseConfiguration", "usable_regions")
+	if usable != 1 {
+		t.Errorf("usable_regions = %d before the peer joined, want 1", usable)
+	}
+	regions, _, _ := unstructured.NestedSlice(alone.Object, "spec", "databaseConfiguration", "regions")
+	second := regions[1].(map[string]any)["datacenters"].([]any)[0].(map[string]any)
+	if second["id"] != "b" || second["priority"] != int64(-1) {
+		t.Errorf("the peer's region = %v, want b at priority -1", second)
+	}
+	joined := foundationDBCluster(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap), "", true)
+	regions, _, _ = unstructured.NestedSlice(joined.Object, "spec", "databaseConfiguration", "regions")
+	second = regions[1].(map[string]any)["datacenters"].([]any)[0].(map[string]any)
+	if second["priority"] != int64(0) {
+		t.Errorf("the peer's region after joining = %v, want priority 0", second)
+	}
+}
+
+// The peer's joining is read from the management API's datacenter listing and
+// recorded once: a later listing without the peer (a region outage) does not
+// take it back.
+func TestThePeerRegionIsRecordedOnceSeen(t *testing.T) {
+	cp := stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap)
+	prober := &stubProber{datacenters: []string{"a"}}
+	r := &ControlPlaneReconciler{Client: newClient(t, cp), Scheme: testScheme(t), Prober: prober}
+	access := managedAccess{endpoint: "http://cp.example:5000"}
+
+	if err := r.observePeerRegion(context.Background(), cp, access); err != nil {
+		t.Fatal(err)
+	}
+	if r.peerJoined(cp) {
+		t.Fatal("the peer was recorded joined while only this site's data center is present")
+	}
+
+	prober.datacenters = []string{"a", "b"}
+	if err := r.observePeerRegion(context.Background(), cp, access); err != nil {
+		t.Fatal(err)
+	}
+	if !r.peerJoined(cp) || cp.Status.Stretch.PeerJoinedAt == nil {
+		t.Fatalf("the peer's region was not recorded: %+v", cp.Status.Stretch)
+	}
+
+	prober.datacenters = []string{"a"}
+	prober.dcErr = nil
+	if err := r.observePeerRegion(context.Background(), cp, access); err != nil {
+		t.Fatal(err)
+	}
+	if !r.peerJoined(cp) {
+		t.Fatal("a listing without the peer took the record back")
+	}
+
+	plain := localControlPlane()
+	if (&ControlPlaneReconciler{Prober: prober}).peerJoined(plain) {
+		t.Fatal("an ordinary control plane reports a joined peer")
 	}
 }

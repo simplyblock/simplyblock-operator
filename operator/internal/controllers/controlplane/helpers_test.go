@@ -91,6 +91,8 @@ type stubProber struct {
 	readyMessage string
 	version      string
 	versionErr   error
+	datacenters  []string
+	dcErr        error
 
 	// readyCalls and versionCalls count what the reconciler asked for, which is
 	// how a test asserts that a held step did not probe.
@@ -106,6 +108,10 @@ func (p *stubProber) Ready(context.Context, string) (bool, string) {
 func (p *stubProber) Version(context.Context, string) (string, error) {
 	p.versionCalls++
 	return p.version, p.versionErr
+}
+
+func (p *stubProber) Datacenters(context.Context, string) ([]string, error) {
+	return p.datacenters, p.dcErr
 }
 
 // newClient builds a fake client holding the given objects, with the status
