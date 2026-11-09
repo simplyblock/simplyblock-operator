@@ -78,13 +78,13 @@ func TestBothSitesRenderTheSameTwoRegionDatabase(t *testing.T) {
 
 	dc, _, _ := unstructured.NestedString(bootstrap.Object, "spec", "dataCenter")
 	prefix, _, _ := unstructured.NestedString(bootstrap.Object, "spec", "processGroupIDPrefix")
-	if dc != "a" || prefix != "a" {
-		t.Errorf("bootstrap site: dataCenter=%q processGroupIDPrefix=%q, want both a", dc, prefix)
+	if dc != "a" || prefix != "sb-a" {
+		t.Errorf("bootstrap site: dataCenter=%q processGroupIDPrefix=%q, want a and sb-a", dc, prefix)
 	}
 	dc, _, _ = unstructured.NestedString(join.Object, "spec", "dataCenter")
 	prefix, _, _ = unstructured.NestedString(join.Object, "spec", "processGroupIDPrefix")
-	if dc != "b" || prefix != "b" {
-		t.Errorf("join site: dataCenter=%q processGroupIDPrefix=%q, want both b", dc, prefix)
+	if dc != "b" || prefix != "sb-b" {
+		t.Errorf("join site: dataCenter=%q processGroupIDPrefix=%q, want b and sb-b", dc, prefix)
 	}
 	if _, found, _ := unstructured.NestedString(bootstrap.Object, "spec", "seedConnectionString"); found {
 		t.Error("the Bootstrap site creates the database; it must not carry a seed connection string")

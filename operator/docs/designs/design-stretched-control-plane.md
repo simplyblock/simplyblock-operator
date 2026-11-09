@@ -59,7 +59,8 @@ regions:
 ```
 
 and each site's own cluster sets `dataCenter: <site>` and
-`processGroupIDPrefix: <site>`; the Join site adds
+`processGroupIDPrefix: sb-<site>` (the FoundationDB operator wants at least
+two characters there); the Join site adds
 `seedConnectionString`. Each site runs at least three storage and three log
 processes (more where `foundationDB.replicas` asks for more), because triple
 needs three zones per region. The fault domain inside a site stays the

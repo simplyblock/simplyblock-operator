@@ -507,7 +507,7 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane, seed string, peer
 		// site's, and the Join site starts from the Bootstrap site's
 		// connection string rather than creating a database of its own.
 		spec["dataCenter"] = stretch.Site
-		spec["processGroupIDPrefix"] = stretch.Site
+		spec["processGroupIDPrefix"] = processGroupIDPrefix(stretch.Site)
 		if seed != "" {
 			spec["seedConnectionString"] = seed
 		}
@@ -516,6 +516,13 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane, seed string, peer
 	obj.SetName(ComponentFDBCluster)
 	obj.SetNamespace(cp.Namespace)
 	return obj
+}
+
+// processGroupIDPrefix is what keeps one site's process group IDs apart from
+// the other's. The FoundationDB operator requires at least two characters of
+// it, which a one-letter site name does not give, so it carries a fixed prefix.
+func processGroupIDPrefix(site string) string {
+	return "sb-" + site
 }
 
 // databaseConfiguration is the database's replication. A single site keeps as
