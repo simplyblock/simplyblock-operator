@@ -86,6 +86,12 @@ func TestBothSitesRenderTheSameTwoRegionDatabase(t *testing.T) {
 	if dc != "b" || prefix != "sb-b" {
 		t.Errorf("join site: dataCenter=%q processGroupIDPrefix=%q, want b and sb-b", dc, prefix)
 	}
+	for name, cluster := range map[string]*unstructured.Unstructured{"bootstrap": bootstrap, "join": join} {
+		dns, found, _ := unstructured.NestedBool(cluster.Object, "spec", "routing", "useDNSInClusterFile")
+		if !found || dns {
+			t.Errorf("%s site: routing.useDNSInClusterFile = %v (set %v), want false: the other site cannot resolve this one's Services", name, dns, found)
+		}
+	}
 	if _, found, _ := unstructured.NestedString(bootstrap.Object, "spec", "seedConnectionString"); found {
 		t.Error("the Bootstrap site creates the database; it must not carry a seed connection string")
 	}
@@ -100,6 +106,9 @@ func TestAnOrdinaryControlPlaneRendersNoRegions(t *testing.T) {
 	cluster := foundationDBCluster(localControlPlane(), "", false)
 	if _, found, _ := unstructured.NestedSlice(cluster.Object, "spec", "databaseConfiguration", "regions"); found {
 		t.Error("a single-site control plane renders a regions block")
+	}
+	if _, found, _ := unstructured.NestedBool(cluster.Object, "spec", "routing", "useDNSInClusterFile"); found {
+		t.Error("a single-site control plane overrides the cluster file's DNS setting")
 	}
 	for _, key := range []string{"dataCenter", "processGroupIDPrefix", "seedConnectionString"} {
 		if _, found, _ := unstructured.NestedString(cluster.Object, "spec", key); found {

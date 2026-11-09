@@ -103,6 +103,21 @@ the processes of both sites; a change of coordinators on one side is written
 into both sides' cluster files by FoundationDB itself, through the connection
 the processes hold. The seed Secret is read at install only.
 
+### 2.3 Cross-site prerequisites the bed found
+
+- **Coordinators by IP.** Each Kubernetes cluster resolves only its own
+  Services, so a stretched site renders `routing.useDNSInClusterFile: false`:
+  the cluster file names pod IPs, which the shared VPC routes. With DNS names
+  the Join site's libfdb_c cannot reach a coordinator and the FoundationDB
+  operator crashes in `fdb_run_network` ("Error determining public address").
+- **One CA for both sites.** FoundationDB's processes verify each other's
+  peer certificates against the CA the chart mints, one per site by default.
+  The Join site copies the Bootstrap site's `simplyblock-certificate-authority-tls`
+  (cert-manager namespace) under another name and installs with
+  `tls.cert-manager.caSecretName` naming it, so every certificate of both
+  sites chains to one CA. FoundationDB checks the chain only, not the
+  hostname, so IP coordinators verify.
+
 ## 3. StorageCluster
 
 The existing leader/follower flow is reused unchanged in shape; the

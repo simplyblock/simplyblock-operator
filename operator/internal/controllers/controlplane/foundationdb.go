@@ -508,6 +508,12 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane, seed string, peer
 		// connection string rather than creating a database of its own.
 		spec["dataCenter"] = stretch.Site
 		spec["processGroupIDPrefix"] = processGroupIDPrefix(stretch.Site)
+		// Coordinators by pod IP, not by name: each Kubernetes cluster
+		// resolves only its own Services, so a cluster file naming the other
+		// site's pods by DNS leaves libfdb_c unable to reach a coordinator
+		// (the FoundationDB operator then crashes in fdb_run_network). The
+		// sites share one VPC, where pod IPs route.
+		spec["routing"].(map[string]any)["useDNSInClusterFile"] = false
 		if seed != "" {
 			spec["seedConnectionString"] = seed
 		}

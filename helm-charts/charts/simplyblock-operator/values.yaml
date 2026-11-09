@@ -1720,6 +1720,12 @@ tls:
     # -- Namespace cert-manager runs in. The chart places its CA Secret there so the ClusterIssuer can
     # read it.
     namespace: cert-manager
+    # A CA Secret (tls.crt, tls.key) that already exists in that namespace, to
+    # sign with instead of minting a CA. The Join site of a stretched control
+    # plane names a copy of the Bootstrap site's simplyblock-certificate-authority-tls
+    # here, so FoundationDB's processes of both sites trust each other.
+    # -- Existing CA Secret in `namespace` to sign with instead of minting one. Empty mints a CA.
+    caSecretName: ""
 
   # Mutual TLS (clients present and verify certificates). Only allowed when
   # provider == cert-manager. On by default, with tls.enabled: the chart issues a
