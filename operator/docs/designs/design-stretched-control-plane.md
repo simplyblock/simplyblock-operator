@@ -118,6 +118,11 @@ the processes hold. The seed Secret is read at install only.
   sites chains to one CA. FoundationDB checks the chain only, not the
   hostname, so IP coordinators verify.
 
+- **An https endpoint the certificate names.** With TLS on (the chart's
+  default), each site's `apiEndpoint` is `https://` and the operator adds its
+  host to the management API's serving certificate. The other site's
+  operator follows the standby's 307 there and verifies it against the shared
+  CA; a plain `http://` endpoint ends in EOF against the TLS listener.
 - **One StorageCluster name.** The follower finds the backend cluster by
   its StorageCluster's name, so both sites must use the same one. A
   discovery derives a different name on each site (it is disambiguated by the

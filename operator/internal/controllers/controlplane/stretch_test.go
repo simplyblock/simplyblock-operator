@@ -7,6 +7,7 @@ package controlplane
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -281,5 +282,26 @@ func TestThePeerRegionIsRecordedOnceSeen(t *testing.T) {
 	plain := localControlPlane()
 	if (&ControlPlaneReconciler{Prober: prober}).peerJoined(plain) {
 		t.Fatal("an ordinary control plane reports a joined peer")
+	}
+}
+
+// The other site and every redirected client dial the site's apiEndpoint, so
+// the management API's certificate names its host.
+func TestTheAPICertificateNamesTheSiteEndpoint(t *testing.T) {
+	cp := stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap)
+	cp.Spec.Source.Local.Stretch.APIEndpoint = "https://cp-a.elb.example:5000"
+	objs := servingCertificateObjects(cp)
+	if len(objs) != 1 {
+		t.Fatalf("got %d serving certificate objects", len(objs))
+	}
+	names, _, _ := unstructured.NestedStringSlice(objs[0].(*unstructured.Unstructured).Object, "spec", "dnsNames")
+	if !slices.Contains(names, "cp-a.elb.example") {
+		t.Errorf("dnsNames %v lack the site endpoint's host", names)
+	}
+
+	cp.Spec.Source.Local.Stretch.APIEndpoint = "https://10.0.0.5:5000"
+	ips, _, _ := unstructured.NestedStringSlice(servingCertificateObjects(cp)[0].(*unstructured.Unstructured).Object, "spec", "ipAddresses")
+	if !slices.Contains(ips, "10.0.0.5") {
+		t.Errorf("ipAddresses %v lack the site endpoint's address", ips)
 	}
 }
