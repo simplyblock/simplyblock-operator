@@ -125,6 +125,25 @@ func tlsSecretName(name string) string {
 	return name
 }
 
+// gatewayAntiAffinity keeps an ObjectStore's gateway replicas off the same
+// node as each other: required rather than preferred, matching
+// spreadAcrossHosts's own reasoning (internal/controllers/controlplane/
+// podspec.go) — two instances on one machine survive a process crash and
+// not the machine, which is the whole point of running more than one
+// (tasks.md D1).
+func gatewayAntiAffinity(store *simplyblockv1alpha2.ObjectStore) *corev1.Affinity {
+	return &corev1.Affinity{
+		PodAntiAffinity: &corev1.PodAntiAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+				LabelSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{gatewayInstanceLabel: store.Name},
+				},
+				TopologyKey: "kubernetes.io/hostname",
+			}},
+		},
+	}
+}
+
 // buildDeployment is the gateway workload: one container, the image and port
 // design §4.1 require, spec's passthrough fields applied verbatim, and the
 // label (U-09) design-bucket-provisioning.md's S3BucketReconciler finds
@@ -148,6 +167,7 @@ func buildDeployment(store *simplyblockv1alpha2.ObjectStore) *appsv1.Deployment 
 					ServiceAccountName: gatewayServiceAccountName(store.Name),
 					NodeSelector:       store.Spec.NodeSelector,
 					Tolerations:        store.Spec.Tolerations,
+					Affinity:           gatewayAntiAffinity(store),
 					Containers: []corev1.Container{
 						{
 							Name:            gatewayContainerName,

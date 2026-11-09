@@ -134,6 +134,37 @@ func TestBuildDeploymentScopesGatewayRootDirPerObjectStore(t *testing.T) {
 	}
 }
 
+// D1 (tasks.md): a second gateway replica only buys availability if it can
+// never land on the same node as the first — otherwise one node failure
+// takes out every replica at once and the extra pod bought nothing. Required
+// rather than preferred, matching spreadAcrossHosts's own reasoning in
+// internal/controllers/controlplane/podspec.go: two instances on one
+// machine survive a process crash and not the machine.
+func TestBuildDeploymentRequiresGatewayReplicasOnDifferentNodes(t *testing.T) {
+	store := testObjectStoreSpec()
+	deployment := buildDeployment(store)
+
+	affinity := deployment.Spec.Template.Spec.Affinity
+	if affinity == nil || affinity.PodAntiAffinity == nil {
+		t.Fatalf("pod template carries no PodAntiAffinity, want one keeping replicas off the same node")
+	}
+	required := affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	if len(required) != 1 {
+		t.Fatalf("RequiredDuringSchedulingIgnoredDuringExecution has %d terms, want exactly 1", len(required))
+	}
+	term := required[0]
+	if term.TopologyKey != "kubernetes.io/hostname" {
+		t.Errorf("topologyKey = %q, want kubernetes.io/hostname", term.TopologyKey)
+	}
+	if term.LabelSelector == nil || term.LabelSelector.MatchLabels[gatewayInstanceLabel] != store.Name {
+		t.Errorf("labelSelector = %+v, want it to match this ObjectStore's own gateway pods (%s=%s)",
+			term.LabelSelector, gatewayInstanceLabel, store.Name)
+	}
+	if len(affinity.PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution) != 0 {
+		t.Errorf("also carries a Preferred rule; want only the Required one, so this is never silently soft")
+	}
+}
+
 // U-09: the pod template carries the label
 // design-bucket-provisioning.md's S3BucketReconciler finds gateway pods by.
 func TestBuildDeploymentCarriesTheGatewayInstanceLabel(t *testing.T) {
