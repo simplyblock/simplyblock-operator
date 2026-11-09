@@ -344,8 +344,8 @@ The probe lists every block device in `/sys/class/block`. Hidden NVMe multipath 
 #grid((1fr, 3fr, 2.2fr), ([Kind], [How it is recognized], [Treatment]),
   [`Disk`], [Everything not listed below.], [The only kind a cluster is built from.],
   [`Partition`], [The device has a `partition` attribute.], [Refused in NVMe mode. In logical block device mode taken when empty.],
-  [`DeviceMapper`], [A `dm` directory, or the name starts with `dm-`: LVM volume, dm-crypt, multipath.], [Refused (`NotAWholeDisk`).],
-  [`MDRaid`], [An `md` directory, or the name starts with `md`.], [Refused (`NotAWholeDisk`).],
+  [`DeviceMapper`], [A `dm` directory, or the name starts with `dm-`: LVM volume, dm-crypt, multipath. The dm uuid says which.], [A multipath map is inspected like a disk and offered in logical block device mode. Anything else is refused (`NotAWholeDisk`).],
+  [`MDRaid`], [An `md` directory, or the name starts with `md`.], [Inspected like a disk and offered in logical block device mode, in place of its members.],
   [`Loop`], [A `loop` directory, or the name starts with `loop`.], [Refused (`NotAWholeDisk`).],
   [`Memory`], [The name starts with `ram` or `zram`.], [Refused (`NotAWholeDisk`).],
   [`Network`], [The name starts with `nbd`, `rbd` (Ceph), or `drbd`.], [Refused (`NotAWholeDisk`).],
@@ -363,7 +363,7 @@ The bus is read from the directories the device's sysfs path passes through. The
   [`USB`], [`usb<n>`.], [Logical block device mode. Usually also `Removable`.],
   [`SATA`], [`ata<n>`.], [Logical block device mode.],
   [`SAS`], [`end_device-`, `sas_`, or `expander-`.], [Logical block device mode.],
-  [`iSCSI`], [`session<n>`.], [Logical block device mode, and only when named in `blockAllowList`.],
+  [`iSCSI`], [`session<n>`.], [Logical block device mode. Declined where the worker also has bare local disks, unless `preferLocalDisks` is false.],
   [`SCSI`], [`host<n>` and none of the above.], [Logical block device mode.],
   [(unknown)], [None of the above.], [Refused (`UnknownTransport`).],
 )
@@ -373,7 +373,7 @@ The bus is read from the directories the device's sysfs path passes through. The
 #grid(cols, head,
   [Mounts], [`/proc/self/mountinfo` (host)], [The device or any of its partitions mounted anywhere.], [`Mounted`.],
   [Swap], [`/proc/swaps`], [The device or a partition is active swap.], [`SwapArea`.],
-  [Holders], [`/sys/class/block/<dev>/holders`], [Device-mapper, RAID, or multipath devices built on top.], [`Stacked`.],
+  [Holders], [`/sys/class/block/<dev>/holders`], [Device-mapper, RAID, or multipath devices built on top.], [`Stacked`, or `RAIDMember` for an md array. The holder itself is inspected in turn.],
   [Exclusive open], [Opening the device with `O_EXCL`], [The kernel refuses with nothing above to explain it.], [`Busy`.],
 )
 
@@ -576,7 +576,7 @@ rejections document.
   [Leave a worker out], [`spec.discover.workers` lists the workers to inspect, or `nodeSelector` selects them by label. Use one or the other.], [Remove it from its group's `workers`. A group needs at least one worker, so delete a group whose last worker goes.],
   [Include a worker that was declined], [Resolve the reason first (rejections, section 3). Cordoned: `kubectl uncordon`. Control-plane node: `enableControlPlaneNodes: true`. A taint: a matching entry in `tolerations`, which the draft carries to the storage nodes.], [Add it to the `workers` of a group whose devices and interfaces it has. The draft check refuses a name that is not a node (`WorkerNotFound`).],
   [Leave a disk out], [NVMe mode: `deviceFilter.pcieDenyList` (PCI addresses), `pcieAllowList`, or `pcieModel`. Logical block device mode: `blockDenyList` or `blockAllowList` (`/dev/...` paths). Either mode: `driveSizeRange`, for example `500G-4T`.], [Remove it from the group's `devices.nvme` (PCI addresses) or `devices.block` (paths). The list holds for every worker of the group, so a disk only some workers should leave out needs a group of its own for those workers.],
-  [Take a disk that was refused], [Resolve its reason (rejections, section 4). A leftover partition table alone: `enablePartitionedDevices: true`. An iSCSI disk: name it in `blockAllowList`.], [Add it to the group's devices. `enableDriveFormat` is on in every draft, so the disk is formatted when the cluster takes it, whatever the probe found on it. Add one only when its data is known to be disposable.],
+  [Take a disk that was refused], [Resolve its reason (rejections, section 4). A leftover partition table alone: `enablePartitionedDevices: true`. An array, a map, or an iSCSI disk declined beside local disks: `preferLocalDisks: false`.], [Add it to the group's devices. `enableDriveFormat` is on in every draft, so the disk is formatted when the cluster takes it, whatever the probe found on it. Add one only when its data is known to be disposable.],
   [Take the disks of the other NUMA node], [Nothing: the run takes the disks of the NUMA node with the most.], [Add their addresses to the group's devices.],
   [Use logical block devices instead of NVMe], [`enableLogicalBlockDevices: true`. Disks are then named by `/dev/disk/by-id` path, and partitions can be taken.], [Not by an edit: the device names, the journal, and the checks differ. Run discovery again.],
 )

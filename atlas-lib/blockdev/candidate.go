@@ -30,9 +30,16 @@ import (
 type Reason string
 
 const (
-	// ReasonNotAWholeDisk is a partition, a device-mapper node, a software-RAID
-	// array, a loop device, or a RAM disk. A cluster is built out of whole
-	// disks, and each of these is either a slice of one or not one at all.
+	// ReasonNotAWholeDisk is a partition, a logical volume, an encrypted
+	// volume, a loop device, a RAM disk, or a network block device. A cluster
+	// is built out of whole devices, and each of these is either a slice of
+	// one or not one at all.
+	//
+	// A software-RAID array and a multipath map are not refused on this
+	// ground. Both are built on disks, and both are the device an
+	// administrator means when they built one: the array in place of its
+	// members, the map in place of the paths it joins. Each is read like a
+	// disk, and refused like one when something uses it.
 	//
 	// A logical block device run waives it for a partition, which the backend
 	// takes through the kernel. A partition is therefore read like a disk when
@@ -277,8 +284,8 @@ func (in Inspector) Candidates(ctx context.Context) ([]Candidate, error) {
 func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage, byName map[string]Disk) Candidate {
 	c := Candidate{Disk: disk, Usage: usage}
 
-	if disk.Kind != KindDisk {
-		c.reject(ReasonNotAWholeDisk, fmt.Sprintf("the device is a %s", disk.Kind))
+	if detail := notAWholeDisk(disk); detail != "" {
+		c.reject(ReasonNotAWholeDisk, detail)
 	}
 	if disk.Transport == TransportNVMeFabric {
 		c.reject(ReasonFabricNamespace,
@@ -424,6 +431,35 @@ func busyDetail(usage Usage) string {
 		return refused + ": it is an active swap area"
 	}
 	return refused + ", and gives no reason"
+}
+
+// notAWholeDisk is the detail a device is refused with for what it is, and
+// empty for a device a cluster can be built on: a disk, a software-RAID array,
+// or a multipath map.
+//
+// A device-mapper node is told apart by what built it, because the kernel
+// presents a multipath map and a logical volume alike. The UUID says, and a
+// node whose UUID says nothing is refused rather than guessed at: a map
+// multipathd made is the one device-mapper node this hands over, and it always
+// says so.
+func notAWholeDisk(disk Disk) string {
+	switch disk.Kind {
+	case KindDisk, KindMDRaid:
+		return ""
+	case KindDeviceMapper:
+		switch disk.DMSubsystem {
+		case DMSubsystemMultipath:
+			return ""
+		case DMSubsystemLVM:
+			return "the device is an LVM logical volume"
+		case DMSubsystemCrypt:
+			return "the device is an encrypted volume"
+		case DMSubsystemPartition:
+			return "the device is a partition of a device-mapper map"
+		}
+		return "the device is a device-mapper node nothing this scan recognizes built"
+	}
+	return fmt.Sprintf("the device is a %s", disk.Kind)
 }
 
 // reject records a ground.

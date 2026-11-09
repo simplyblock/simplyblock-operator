@@ -290,6 +290,11 @@ spec:
         path: discover.enablePartitionedDevices
         x-descriptors:
         - 'urn:alm:descriptor:com.tectonic.ui:booleanSwitch'
+      - description: On a logical block device run, take a worker's local disks ahead of its RAID arrays, multipath maps, and iSCSI LUNs. On by default.
+        displayName: Prefer Local Disks
+        path: discover.preferLocalDisks
+        x-descriptors:
+        - 'urn:alm:descriptor:com.tectonic.ui:booleanSwitch'
       statusDescriptors:
       - description: Lifecycle phase of the operation.
         displayName: Phase

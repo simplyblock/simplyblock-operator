@@ -223,3 +223,29 @@ func TestACandidateCarriesItsPersistentName(t *testing.T) {
 		t.Errorf("vda carries the persistent name %q, and udev made it none", got)
 	}
 }
+
+func TestTheArraysAndMapsOwnIdentifiersArePreferred(t *testing.T) {
+	// An md array publishes its UUID and its name, and a multipath map its
+	// WWID and its name. The UUID and the WWID are the device's own, where the
+	// names are what an administrator typed, and a name is renamed.
+	dev := devTree(t, map[string]string{
+		"disk/by-id/md-uuid-8c2b6f4a:1d3e5f70:9a8b7c6d:5e4f3a2b":     "md0",
+		"disk/by-id/md-name-worker-01:0":                             "md0",
+		"disk/by-id/dm-uuid-mpath-3600a098038303f6e5d5a4a4d31774a63": "dm-0",
+		"disk/by-id/dm-name-mpatha":                                  "dm-0",
+	})
+
+	set, err := ReadStableLinks(ScanConfig{DevRoot: dev})
+	if err != nil {
+		t.Fatalf("read the stable links: %v", err)
+	}
+
+	for device, want := range map[string]string{
+		"md0":  "disk/by-id/md-uuid-8c2b6f4a:1d3e5f70:9a8b7c6d:5e4f3a2b",
+		"dm-0": "disk/by-id/dm-uuid-mpath-3600a098038303f6e5d5a4a4d31774a63",
+	} {
+		if got := set.Preferred(filepath.Join(dev, device)); got != filepath.Join(dev, want) {
+			t.Errorf("%s: preferred %q, want %q", device, got, filepath.Join(dev, want))
+		}
+	}
+}

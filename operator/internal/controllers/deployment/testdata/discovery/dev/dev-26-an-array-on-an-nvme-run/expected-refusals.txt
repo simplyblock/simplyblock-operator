@@ -1,0 +1,4 @@
+worker-01/md127: declined by whole disk because it is a MDRaid rather than a whole disk
+worker-01/nvme0n1: declined by available because the probe refused it: Stacked (held by [md127]), Busy (the kernel refused an exclusive open: md127 holds it)
+worker-01/nvme1n1: declined by available because the probe refused it: Stacked (held by [md127]), Busy (the kernel refused an exclusive open: md127 holds it)
+worker-01: declined by has devices because no device of it survived the device rules

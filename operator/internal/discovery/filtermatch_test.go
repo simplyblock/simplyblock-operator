@@ -94,18 +94,3 @@ func TestAnNVMeAllowListStillMatchesTheSlot(t *testing.T) {
 		t.Errorf("an NVMe allow list stopped matching the slot: %s", reason)
 	}
 }
-
-// The iSCSI rule reads the same allow list, and a LUN named by its kernel path
-// has to be takeable the way it always was: it is the one rule whose default is
-// to refuse, so a list that stopped matching would make a named LUN unusable.
-func TestTheISCSIRuleMatchesEitherSpelling(t *testing.T) {
-	lun := namedBlockDisk("/dev/disk/by-id/scsi-360014051234567890abcdef")
-	lun.Transport = string(blockdev.TransportISCSI)
-
-	for _, allow := range [][]string{{"/dev/sdb"}, {lun.StablePath}} {
-		rule := ISCSIRule{Class: ClassBlock, Allow: allow}
-		if admitted, reason := rule.Admit(nodeprobe.Report{}, lun); !admitted {
-			t.Errorf("the allow list %v did not take the LUN it names: %s", allow, reason)
-		}
-	}
-}

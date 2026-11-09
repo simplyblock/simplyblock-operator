@@ -601,6 +601,9 @@
         "enablePartitionedDevices": {
           "type": "boolean"
         },
+        "preferLocalDisks": {
+          "type": "boolean"
+        },
         "forceJournalDevice": {
           "type": "boolean"
         },

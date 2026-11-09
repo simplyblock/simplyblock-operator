@@ -548,3 +548,113 @@ func TestPlanAdvisesAGKEFleetWhoseDisksAreRAIDMembers(t *testing.T) {
 		t.Errorf("advised %q about GKE on a fleet that is not GKE", got)
 	}
 }
+
+// stackedOver is a device built on others, as the probe reports one that is
+// idle: an array or a map, with the members named and nothing refusing it.
+func stackedOver(name string, kind blockdev.Kind, size uint64, members ...string) nodeprobe.Device {
+	d := blockDisk(name, size)
+	d.Kind = string(kind)
+	d.Transport = ""
+	d.Members = members
+	if kind == blockdev.KindDeviceMapper {
+		d.DMSubsystem = blockdev.DMSubsystemMultipath
+	}
+	return d
+}
+
+// memberOf is a disk an array or a map took, which the probe refuses as held.
+func memberOf(name string, size uint64, holder string, transport blockdev.Transport) nodeprobe.Device {
+	d := refused(blockDisk(name, size), blockdev.ReasonStacked, blockdev.ReasonBusy)
+	d.Transport = string(transport)
+	d.Rejections[0].Detail = "held by [" + holder + "]"
+	return d
+}
+
+func TestPlanBuildsABlockClusterOnAnArrayOrAMultipathMap(t *testing.T) {
+	// A worker whose storage is a RAID array over its disks, and another whose
+	// storage is a LUN reached over two iSCSI paths. Each offers one device
+	// and it is the one the administrator built, so the draft takes it.
+	fleet := []nodeprobe.Report{
+		report("worker-1",
+			stackedOver("md0", blockdev.KindMDRaid, 4*tb, "sdb", "sdc"),
+			memberOf("sdb", 2*tb, "md0", blockdev.TransportSATA),
+			memberOf("sdc", 2*tb, "md0", blockdev.TransportSATA),
+		),
+		report("worker-2",
+			stackedOver("dm-0", blockdev.KindDeviceMapper, 8*tb, "sdb", "sdc"),
+			memberOf("sdb", 8*tb, "dm-0", blockdev.TransportISCSI),
+			memberOf("sdc", 8*tb, "dm-0", blockdev.TransportISCSI),
+		),
+	}
+	run := &simplyblockv1alpha2.DiscoverSpec{
+		EnableLogicalBlockDevices: ptr.To(true),
+	}
+
+	plan := Planner{}.Plan(fleet, run)
+
+	var drafted []string
+	for _, set := range plan.NodeSets {
+		for _, group := range set.Groups {
+			drafted = append(drafted, group.Devices.Block...)
+		}
+	}
+	slices.Sort(drafted)
+	if !slices.Equal(drafted, []string{"/dev/dm-0", "/dev/md0"}) {
+		t.Errorf("the draft names %v, want the array and the map; refusals %v", drafted, plan.Refusals)
+	}
+}
+
+func TestPlanTakesLocalDisksAheadOfArraysMapsAndLUNsUnlessToldOtherwise(t *testing.T) {
+	// A worker that has bare local disks and also an array, a multipath map,
+	// and a plain iSCSI LUN. The local disks are what the run takes, and the
+	// rest are declined with a reason that names the switch; with the switch
+	// off, every device is taken.
+	fleet := func() []nodeprobe.Report {
+		return []nodeprobe.Report{report("worker-1",
+			blockDisk("vdb", 2*tb),
+			blockDisk("vdc", 2*tb),
+			stackedOver("md0", blockdev.KindMDRaid, 4*tb, "sdb", "sdc"),
+			memberOf("sdb", 2*tb, "md0", blockdev.TransportSATA),
+			memberOf("sdc", 2*tb, "md0", blockdev.TransportSATA),
+			stackedOver("dm-0", blockdev.KindDeviceMapper, 4*tb, "sdd", "sde"),
+			memberOf("sdd", 4*tb, "dm-0", blockdev.TransportISCSI),
+			memberOf("sde", 4*tb, "dm-0", blockdev.TransportISCSI),
+			attachedLUN("sdf", 8*tb),
+		)}
+	}
+	block := func(prefer *bool) *simplyblockv1alpha2.DiscoverSpec {
+		return &simplyblockv1alpha2.DiscoverSpec{
+			EnableLogicalBlockDevices: ptr.To(true),
+			PreferLocalDisks:          prefer,
+		}
+	}
+
+	plan := Planner{}.Plan(fleet(), block(nil))
+	if len(plan.NodeSets) != 1 || len(plan.NodeSets[0].Groups) != 1 {
+		t.Fatalf("built %+v, refusals %+v", plan.NodeSets, plan.Refusals)
+	}
+	if got := plan.NodeSets[0].Groups[0].Devices.Block; !slices.Equal(got, []string{"/dev/vdb", "/dev/vdc"}) {
+		t.Errorf("the group names %v, want the two local disks alone", got)
+	}
+	for _, name := range []string{"md0", "dm-0", "sdf"} {
+		i := slices.IndexFunc(plan.Refusals, func(r Refusal) bool { return r.Device == name })
+		if i < 0 {
+			t.Errorf("%s was neither drafted nor declined", name)
+			continue
+		}
+		if r := plan.Refusals[i]; r.Rule != "local disks first" || !strings.Contains(r.Reason, "preferLocalDisks") {
+			t.Errorf("%s declined by %q because %q, want the local-disks rule naming the switch", name, r.Rule, r.Reason)
+		}
+	}
+
+	plan = Planner{}.Plan(fleet(), block(ptr.To(false)))
+	var drafted []string
+	for _, group := range plan.NodeSets[0].Groups {
+		drafted = append(drafted, group.Devices.Block...)
+	}
+	slices.Sort(drafted)
+	want := []string{"/dev/dm-0", "/dev/md0", "/dev/sdf", "/dev/vdb", "/dev/vdc"}
+	if !slices.Equal(drafted, want) {
+		t.Errorf("with preferLocalDisks false the draft names %v, want %v; refusals %v", drafted, want, plan.Refusals)
+	}
+}

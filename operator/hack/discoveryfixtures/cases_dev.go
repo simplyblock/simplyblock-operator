@@ -188,16 +188,94 @@ func devCases() map[string]Case {
 			))},
 		},
 		"DEV-18": {
-			Family: "dev", Slug: "an-iscsi-lun-the-allow-list-names",
+			Family: "dev", Slug: "an-iscsi-lun-beside-local-disks-taken-as-well",
 			Discover: &simplyblockv1alpha2.DiscoverSpec{
 				EnableLogicalBlockDevices: ptr.To(true),
-				DeviceFilter: &simplyblockv1alpha2.DeviceFilter{
-					BlockAllowList: []string{"/dev/sdb", "/dev/vdb"},
-				},
-				ForceJournalDevice: ptr.To(true),
+				PreferLocalDisks:          ptr.To(false),
+				ForceJournalDevice:        ptr.To(true),
 			},
 			Reports: []nodeprobe.Report{host("worker-01", single, disks(
 				iscsiLUN("sdb", 2*tb),
+				blk("vdb", 2*tb),
+			))},
+		},
+		"DEV-22": {
+			Family: "dev", Slug: "a-raid-array-over-the-local-disks",
+			// Undecided about the journal, because a worker whose storage is
+			// one array has nothing to dedicate: the journal is carved from
+			// the array, as it is from a single disk.
+			Discover: blockClassUndecided(),
+			Reports: []nodeprobe.Report{host("worker-01", single, disks(
+				mdArray("md0", "raid1", 2*tb, "sdb", "sdc"),
+				blk("sdb", 2*tb, transported(blockdev.TransportSATA), heldBy("md0")),
+				blk("sdc", 2*tb, transported(blockdev.TransportSATA), heldBy("md0")),
+			))},
+		},
+		"DEV-23": {
+			Family: "dev", Slug: "a-multipath-lun-over-two-iscsi-paths",
+			Discover: blockClass(),
+			Reports: []nodeprobe.Report{host("worker-01", single, disks(
+				multipathMap("dm-0", 4*tb, "sdb", "sdc"),
+				blk("sdb", 4*tb, transported(blockdev.TransportISCSI), heldBy("dm-0")),
+				blk("sdc", 4*tb, transported(blockdev.TransportISCSI), heldBy("dm-0")),
+				multipathMap("dm-1", 2*tb, "sdd", "sde"),
+				blk("sdd", 2*tb, transported(blockdev.TransportISCSI), heldBy("dm-1")),
+				blk("sde", 2*tb, transported(blockdev.TransportISCSI), heldBy("dm-1")),
+			))},
+		},
+		"DEV-24": {
+			Family: "dev", Slug: "an-array-and-a-map-beside-local-disks",
+			Discover: blockClass(),
+			Reports: []nodeprobe.Report{host("worker-01", single, disks(
+				blk("vdb", 2*tb),
+				blk("vdc", 2*tb),
+				blk("vdd", 1*tb),
+				mdArray("md0", "raid0", 4*tb, "sdb", "sdc"),
+				blk("sdb", 2*tb, transported(blockdev.TransportSATA), heldBy("md0")),
+				blk("sdc", 2*tb, transported(blockdev.TransportSATA), heldBy("md0")),
+				multipathMap("dm-0", 4*tb, "sdd", "sde"),
+				blk("sdd", 4*tb, transported(blockdev.TransportISCSI), heldBy("dm-0")),
+				blk("sde", 4*tb, transported(blockdev.TransportISCSI), heldBy("dm-0")),
+			))},
+		},
+		"DEV-25": {
+			Family: "dev", Slug: "the-same-worker-with-local-disks-not-preferred",
+			Discover: &simplyblockv1alpha2.DiscoverSpec{
+				EnableLogicalBlockDevices: ptr.To(true),
+				PreferLocalDisks:          ptr.To(false),
+				ForceJournalDevice:        ptr.To(true),
+			},
+			Reports: []nodeprobe.Report{host("worker-01", single, disks(
+				blk("vdb", 2*tb),
+				blk("vdc", 2*tb),
+				blk("vdd", 1*tb),
+				mdArray("md0", "raid0", 4*tb, "sdb", "sdc"),
+				blk("sdb", 2*tb, transported(blockdev.TransportSATA), heldBy("md0")),
+				blk("sdc", 2*tb, transported(blockdev.TransportSATA), heldBy("md0")),
+				multipathMap("dm-0", 4*tb, "sdd", "sde"),
+				blk("sdd", 4*tb, transported(blockdev.TransportISCSI), heldBy("dm-0")),
+				blk("sde", 4*tb, transported(blockdev.TransportISCSI), heldBy("dm-0")),
+			))},
+		},
+		"DEV-26": {
+			Family: "dev", Slug: "an-array-on-an-nvme-run",
+			Reports: []nodeprobe.Report{host("worker-01", single, disks(
+				// md127 is the number the kernel hands an array it assembled
+				// itself from the superblocks, as it does at boot.
+				mdArray("md127", "raid1", 2*tb, "nvme0n1", "nvme1n1"),
+				nvme("nvme0n1", "0000:5e:00.0", 0, 2*tb, heldBy("md127")),
+				nvme("nvme1n1", "0000:5f:00.0", 0, 2*tb, heldBy("md127")),
+			))},
+		},
+		"DEV-27": {
+			Family: "dev", Slug: "a-logical-volume-beside-a-multipath-map",
+			Discover: blockClass(),
+			Reports: []nodeprobe.Report{host("worker-01", single, disks(
+				multipathMap("dm-0", 4*tb, "sdb", "sdc"),
+				blk("sdb", 4*tb, transported(blockdev.TransportISCSI), heldBy("dm-0")),
+				blk("sdc", 4*tb, transported(blockdev.TransportISCSI), heldBy("dm-0")),
+				logicalVolume("dm-1", 2*tb, "sdd"),
+				blk("sdd", 2*tb, transported(blockdev.TransportSATA), heldBy("dm-1")),
 				blk("vdb", 2*tb),
 			))},
 		},
@@ -268,6 +346,14 @@ func attachedVolume(name, volumeID string) nodeprobe.Device {
 func iscsiLUN(name string, size uint64) nodeprobe.Device {
 	device := blk(name, size)
 	device.Transport = string(blockdev.TransportISCSI)
+	return device
+}
+
+// logicalVolume is the device-mapper node of an LVM logical volume, which
+// looks like a multipath map in class/block and is told apart by what built it.
+func logicalVolume(name string, size uint64, members ...string) nodeprobe.Device {
+	device := multipathMap(name, size, members...)
+	device.DMSubsystem = blockdev.DMSubsystemLVM
 	return device
 }
 

@@ -2,6 +2,6 @@
 
 **Mutation.** An iSCSI LUN on an NVMe run
 
-**Expected.** Refused for being the other class, before the iSCSI rule is reached
+**Expected.** Refused for being the other class, before the preference is reached
 
 **Harness.** `CM`

@@ -1337,6 +1337,11 @@ func (in *DiscoverSpec) DeepCopyInto(out *DiscoverSpec) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.PreferLocalDisks != nil {
+		in, out := &in.PreferLocalDisks, &out.PreferLocalDisks
+		*out = new(bool)
+		**out = **in
+	}
 	if in.ForceJournalDevice != nil {
 		in, out := &in.ForceJournalDevice, &out.ForceJournalDevice
 		*out = new(bool)

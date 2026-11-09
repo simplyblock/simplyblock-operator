@@ -120,7 +120,7 @@ func (c ScanConfig) mountinfo() string {
 type Kind string
 
 const (
-	// KindDisk is a whole disk: the only kind a cluster is built out of, and
+	// KindDisk is a whole disk: what a cluster is ordinarily built out of, and
 	// what an entry carrying none of the markers below is taken to be.
 	//
 	// There is deliberately no "something else" kind. An entry nothing here
@@ -136,10 +136,12 @@ const (
 	KindPartition Kind = "Partition"
 
 	// KindDeviceMapper is a device-mapper node: an LVM logical volume, a
-	// multipath map, a crypt target.
+	// multipath map, a crypt target. Disk.DMSubsystem says which, and a
+	// multipath map is the one of them a cluster is built on.
 	KindDeviceMapper Kind = "DeviceMapper"
 
-	// KindMDRaid is a software-RAID array.
+	// KindMDRaid is a software-RAID array, which a cluster is built on in
+	// place of its members.
 	KindMDRaid Kind = "MDRaid"
 
 	// KindLoop is a file presented as a block device, which is what backs a
@@ -284,7 +286,47 @@ type Disk struct {
 	// of array took it: a RAID-0 is striped and every member is unrecoverable
 	// data, which is a different finding from a mirror a member could leave.
 	RAIDLevel string
+
+	// Members is the kernel names of the devices a software-RAID array or a
+	// device-mapper node is built on, ascending, and is empty for anything
+	// else. It is the slaves directory read the other way from Holders: a
+	// member's Holders names the array, and the array's Members name it back.
+	//
+	// It is read because an array or a map that is handed over is handed over
+	// in place of its members, and a caller deciding whether to take it needs
+	// to know what it is made of: a map over two iSCSI paths is storage on the
+	// other side of a network however local the map looks.
+	Members []string
+
+	// DMSubsystem is what built a device-mapper node, as the first field of
+	// the UUID the device-mapper driver publishes for it: multipathd writes
+	// mpath, LVM writes LVM, cryptsetup writes CRYPT, and kpartx writes part
+	// for a partition of a map. It is empty for anything that is not a
+	// device-mapper node, and for one whose UUID names no subsystem.
+	//
+	// It is what separates the one device-mapper node a cluster may be built
+	// on from the ones it may not. A multipath map is a disk reached over
+	// several cables, and the map is the device. A logical volume is a slice
+	// of a volume group, and an encrypted volume is somebody's data behind a
+	// key; both are things built on disks, not disks.
+	DMSubsystem string
 }
+
+// The subsystems a device-mapper UUID names, as written by each tool.
+const (
+	// DMSubsystemMultipath is a map multipathd made of a LUN's paths.
+	DMSubsystemMultipath = "mpath"
+
+	// DMSubsystemLVM is a logical volume.
+	DMSubsystemLVM = "LVM"
+
+	// DMSubsystemCrypt is a dm-crypt or LUKS volume.
+	DMSubsystemCrypt = "CRYPT"
+
+	// DMSubsystemPartition is a partition kpartx mapped out of a map, whose
+	// UUID is partN- followed by the map's own.
+	DMSubsystemPartition = "part"
+)
 
 // Scan reports every block device the host presents, ordered by kernel name so
 // that two scans of one host are comparable.
@@ -354,8 +396,13 @@ func scanOne(cfg ScanConfig, dir, name string) (Disk, error) {
 		Partitions: partitionsOf(dir, name),
 		Holders:    childNames(filepath.Join(dir, "holders")),
 	}
-	if disk.Kind == KindMDRaid {
+	switch disk.Kind {
+	case KindMDRaid:
 		disk.RAIDLevel = strings.TrimSpace(sysfs.String(dir, "md", "level"))
+		disk.Members = childNames(filepath.Join(dir, "slaves"))
+	case KindDeviceMapper:
+		disk.DMSubsystem = dmSubsystemOf(sysfs.String(dir, "dm", "uuid"))
+		disk.Members = childNames(filepath.Join(dir, "slaves"))
 	}
 
 	resolved, err := filepath.EvalSymlinks(dir)
@@ -384,6 +431,18 @@ func scanOne(cfg ScanConfig, dir, name string) (Disk, error) {
 	disk.Model = strings.TrimSpace(sysfs.String(device, "model"))
 	disk.Serial = strings.TrimSpace(sysfs.String(device, "serial"))
 	return disk, nil
+}
+
+// dmSubsystemOf reads the subsystem out of a device-mapper UUID, which every
+// tool writes as the subsystem, a hyphen, and its own identifier. A partition
+// kpartx mapped out of a map is numbered in that first field, part1, and is
+// reported as a partition whatever its number.
+func dmSubsystemOf(uuid string) string {
+	subsystem, _, _ := strings.Cut(strings.TrimSpace(uuid), "-")
+	if strings.HasPrefix(subsystem, DMSubsystemPartition) {
+		return DMSubsystemPartition
+	}
+	return subsystem
 }
 
 // hidden reports whether the kernel marked this gendisk as one it presents to

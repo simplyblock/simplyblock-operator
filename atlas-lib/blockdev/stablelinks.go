@@ -59,6 +59,14 @@ var selfReportedPrefixes = []string{
 	// reports for itself.
 	"nvme-eui.",
 	"nvme-uuid.",
+
+	// The UUID in a software-RAID array's superblock, and the UUID the
+	// device-mapper driver publishes for a map, which for a multipath map is
+	// the LUN's WWID. Beside each sits a link built from the name an
+	// administrator gave the array or the map, which is renamed the way a
+	// label is.
+	"md-uuid-",
+	"dm-uuid-",
 }
 
 // stableLinkDirs are the /dev/disk directories a persistent name is taken from.
