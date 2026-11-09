@@ -621,11 +621,10 @@ type ClusterTemplate struct {
 	EnableAtomicity4K *bool `json:"enableAtomicity4K,omitempty"`
 
 	// EnableCpuTopology turns on topology-aware CPU assignment on the storage
-	// nodes. It is valid only when spec.environment is Vanilla, whose workers
-	// the environment does not describe, or OpenShift, whose fleets differ in
-	// who owns the kubelet configuration (see EnableKubeletConfiguration).
-	// Every other environment decides it and leaves it off. Unset, a Vanilla
-	// document leaves it off and an OpenShift document turns it on.
+	// nodes. Unset leaves it to spec.environment: OpenShift turns it on, and
+	// every other environment leaves it off. Stated, it replaces what the
+	// environment decides, for a fleet whose workers the environment does not
+	// describe.
 	// +optional
 	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`
 
@@ -634,16 +633,15 @@ type ClusterTemplate struct {
 	// is the KubeletConfig a storage node creates for its machine-config pool,
 	// and the rolling reboot of that pool which applying it takes.
 	//
-	// It is valid only when spec.environment is Vanilla, for a fleet whose
-	// workers keep the configuration where the storage node cannot write it, or
-	// OpenShift, for a fleet that manages the pool's KubeletConfig itself.
-	// Stating it false there leaves the kubelet as the fleet configured it: a
-	// storage node then neither creates a KubeletConfig nor waits for the pool
-	// to roll, so CPU pinning holds only if that kubelet already runs the static
-	// CPU manager. Every other environment decides it: on for Rancher and K3s,
-	// and off for Talos, EKS, GKE, AKS, and OKE, whose kubelet configuration is
-	// not writable or is rebuilt with every node. Unset, a Vanilla or OpenShift
-	// document turns it on.
+	// Unset leaves it to spec.environment: on for Vanilla, OpenShift, Rancher,
+	// and K3s, and off for Talos, EKS, GKE, AKS, and OKE, whose kubelet
+	// configuration is not writable or is rebuilt with every node. Stated, it
+	// replaces what the environment decides. A fleet that manages its kubelet
+	// configuration itself states it false: a storage node then neither
+	// rewrites the kubelet nor, on OpenShift, creates a KubeletConfig or waits
+	// for the pool to roll, so CPU pinning holds only if that kubelet already
+	// runs the static CPU manager. Stating it true on an environment whose
+	// kubelet is not writable makes the storage nodes fail to configure it.
 	// +optional
 	EnableKubeletConfiguration *bool `json:"enableKubeletConfiguration,omitempty"`
 
@@ -841,7 +839,6 @@ type DeploymentImages struct {
 // +kubebuilder:validation:XValidation:rule="size(self.nodeSets) > 1 || has(self.clusterRef) || self.nodeSets.all(s, !has(s.cluster))",message="a node set overrides the cluster template only when the document has more than one node set or names a cluster in clusterRef"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.network) || (has(self.cluster.network.spdkOnHostNetwork) && self.cluster.network.spdkOnHostNetwork) || self.nodeSets.all(s, s.groups.all(g, !has(g.dataInterfaces)))",message="group dataInterfaces are allowed only with cluster.network.spdkOnHostNetwork"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
-// +kubebuilder:validation:XValidation:rule="!has(self.cluster) || (!has(self.cluster.enableCpuTopology) && !has(self.cluster.enableKubeletConfiguration)) || (has(self.environment) && (self.environment == 'Vanilla' || self.environment == 'OpenShift'))",message="spec.cluster.enableCpuTopology and spec.cluster.enableKubeletConfiguration are stated only when spec.environment is Vanilla or OpenShift: every other environment decides both"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
 	// and is validated but otherwise inert before that, which is what makes
