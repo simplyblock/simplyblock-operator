@@ -50,6 +50,16 @@ type DeliverBucketRequest struct {
 	// calling its own NodeStageVolume then NodePublishVolume with this map, no
 	// translation in between.
 	VolumeContext map[string]string `protobuf:"bytes,3,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// mount_prefix is an opaque path segment the caller places between the
+	// node's shared gateway mount root and bucket_name, so two callers'
+	// deliveries never land at the same path even when they choose the same
+	// bucket_name. This service assigns it no meaning beyond that: the caller
+	// (the operator, scoping by ObjectStore) owns what it means and how it is
+	// derived. Added for the gap tracked as issues/19-mc-smoke-test-bucket-
+	// not-found.md and tasks.md's D4: without it, every delivery on a node
+	// shares one flat directory, and a bucket's own backend lists every
+	// subdirectory it finds there as its own, regardless of who delivered it.
+	MountPrefix   string `protobuf:"bytes,4,opt,name=mount_prefix,json=mountPrefix,proto3" json:"mount_prefix,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -105,6 +115,13 @@ func (x *DeliverBucketRequest) GetVolumeContext() map[string]string {
 	return nil
 }
 
+func (x *DeliverBucketRequest) GetMountPrefix() string {
+	if x != nil {
+		return x.MountPrefix
+	}
+	return ""
+}
+
 type DeliverBucketResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -147,7 +164,10 @@ type WithdrawBucketRequest struct {
 	// DeliverBucket derived its mount path from.
 	BucketName string `protobuf:"bytes,1,opt,name=bucket_name,json=bucketName,proto3" json:"bucket_name,omitempty"`
 	// volume_handle is the CSI volume handle, as in DeliverBucketRequest.
-	VolumeHandle  string `protobuf:"bytes,2,opt,name=volume_handle,json=volumeHandle,proto3" json:"volume_handle,omitempty"`
+	VolumeHandle string `protobuf:"bytes,2,opt,name=volume_handle,json=volumeHandle,proto3" json:"volume_handle,omitempty"`
+	// mount_prefix must match the value DeliverBucket was called with for this
+	// bucket: it is part of the path being torn down, not merely advisory.
+	MountPrefix   string `protobuf:"bytes,3,opt,name=mount_prefix,json=mountPrefix,proto3" json:"mount_prefix,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -196,6 +216,13 @@ func (x *WithdrawBucketRequest) GetVolumeHandle() string {
 	return ""
 }
 
+func (x *WithdrawBucketRequest) GetMountPrefix() string {
+	if x != nil {
+		return x.MountPrefix
+	}
+	return ""
+}
+
 type WithdrawBucketResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -236,20 +263,22 @@ var File_bucketdelivery_proto protoreflect.FileDescriptor
 
 const file_bucketdelivery_proto_rawDesc = "" +
 	"\n" +
-	"\x14bucketdelivery.proto\x12\x17atlas.bucketdelivery.v1\"\x87\x02\n" +
+	"\x14bucketdelivery.proto\x12\x17atlas.bucketdelivery.v1\"\xaa\x02\n" +
 	"\x14DeliverBucketRequest\x12\x1f\n" +
 	"\vbucket_name\x18\x01 \x01(\tR\n" +
 	"bucketName\x12#\n" +
 	"\rvolume_handle\x18\x02 \x01(\tR\fvolumeHandle\x12g\n" +
-	"\x0evolume_context\x18\x03 \x03(\v2@.atlas.bucketdelivery.v1.DeliverBucketRequest.VolumeContextEntryR\rvolumeContext\x1a@\n" +
+	"\x0evolume_context\x18\x03 \x03(\v2@.atlas.bucketdelivery.v1.DeliverBucketRequest.VolumeContextEntryR\rvolumeContext\x12!\n" +
+	"\fmount_prefix\x18\x04 \x01(\tR\vmountPrefix\x1a@\n" +
 	"\x12VolumeContextEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x17\n" +
-	"\x15DeliverBucketResponse\"]\n" +
+	"\x15DeliverBucketResponse\"\x80\x01\n" +
 	"\x15WithdrawBucketRequest\x12\x1f\n" +
 	"\vbucket_name\x18\x01 \x01(\tR\n" +
 	"bucketName\x12#\n" +
-	"\rvolume_handle\x18\x02 \x01(\tR\fvolumeHandle\"\x18\n" +
+	"\rvolume_handle\x18\x02 \x01(\tR\fvolumeHandle\x12!\n" +
+	"\fmount_prefix\x18\x03 \x01(\tR\vmountPrefix\"\x18\n" +
 	"\x16WithdrawBucketResponse2\xfa\x01\n" +
 	"\x15BucketDeliveryService\x12n\n" +
 	"\rDeliverBucket\x12-.atlas.bucketdelivery.v1.DeliverBucketRequest\x1a..atlas.bucketdelivery.v1.DeliverBucketResponse\x12q\n" +

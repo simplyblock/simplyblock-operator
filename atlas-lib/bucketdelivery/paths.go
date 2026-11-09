@@ -16,6 +16,15 @@ package bucketdelivery
 // that mount then propagates into every already-running gateway pod on the
 // same node without restarting any of them.
 //
+// A bucket's actual target path is this root plus the delivery's own
+// MountPrefix (bucketdeliveryrpc.Bucket.MountPrefix) plus the bucket name:
+// every gateway pod still mounts the same root, but each ObjectStore's
+// gateway is only ever given GATEWAY_ROOT_DIR set to its own prefixed
+// subdirectory of it, so one ObjectStore's buckets are invisible to
+// another's gateway process sharing the same node
+// (issues/19-mc-smoke-test-bucket-not-found.md, tasks.md D4). The root
+// itself carries no isolation. The prefix is what supplies it.
+//
 // It is a subdirectory of /var/lib/kubelet/plugins, one of the three
 // hostPath roots the CSI node plugin's own DaemonSet pod template mounts
 // Bidirectional (0004-direct-csi-mount-spike-result.md): a path outside

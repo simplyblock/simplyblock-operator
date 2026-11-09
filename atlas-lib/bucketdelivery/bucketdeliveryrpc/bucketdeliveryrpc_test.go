@@ -81,6 +81,7 @@ var fullBucket = Bucket{
 		"export_path":     "/mnt/team-a-reports-3c81",
 		"fsid":            "3c81a0f4-1d2b-4e77-9a01-5f6c8b2d0e13",
 	},
+	MountPrefix: "s3-system/team-a-store",
 }
 
 // Regression-shaped: every VolumeContext key crosses. A bucket that loses
@@ -103,7 +104,9 @@ func TestDeliverRoundTripsTheWholeBucket(t *testing.T) {
 }
 
 // Withdraw carries no VolumeContext: the node already knows what it staged,
-// so a round trip to the client's own fields is all it needs.
+// so a round trip to the client's own fields is all it needs. MountPrefix
+// does cross, though: it is part of the path Withdraw has to tear down, not
+// merely advisory context (issues/19-mc-smoke-test-bucket-not-found.md).
 func TestWithdrawRoundTripsNameAndHandle(t *testing.T) {
 	deliverer := &recordingDeliverer{}
 	client := serve(t, deliverer)
@@ -118,6 +121,9 @@ func TestWithdrawRoundTripsNameAndHandle(t *testing.T) {
 	got := deliverer.withdrawn[0]
 	if got.Name != fullBucket.Name || got.VolumeHandle != fullBucket.VolumeHandle {
 		t.Errorf("withdrawn = %+v, want name %q and handle %q", got, fullBucket.Name, fullBucket.VolumeHandle)
+	}
+	if got.MountPrefix != fullBucket.MountPrefix {
+		t.Errorf("withdrawn.MountPrefix = %q, want %q", got.MountPrefix, fullBucket.MountPrefix)
 	}
 	if got.VolumeContext != nil {
 		t.Errorf("withdrawn.VolumeContext = %v, want none: Withdraw carries no context", got.VolumeContext)

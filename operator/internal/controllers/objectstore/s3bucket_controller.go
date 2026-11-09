@@ -526,6 +526,7 @@ func (r *S3BucketReconciler) withdrawFromNode(
 	return bucketdeliveryrpc.Remote(conn).Withdraw(ctx, bucketdeliveryrpc.Bucket{
 		Name:         bucket.Spec.BucketName,
 		VolumeHandle: handle,
+		MountPrefix:  gatewayMountPrefix(bucket.Namespace, bucket.Spec.ObjectStoreRef),
 	})
 }
 

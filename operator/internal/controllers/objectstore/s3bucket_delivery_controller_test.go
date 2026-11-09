@@ -97,8 +97,16 @@ func readyBucketWithGatewayPod(
 func TestMountDeliveryFollowsAGatewayPodRescheduleWhileReady(t *testing.T) {
 	r, key, cli, registry := readyBucketWithGatewayPod(t, "i07-store", "i07-bucket", "node-a", "node-b")
 
-	if got := registry.Delivered("node-a"); len(got) != 1 {
-		t.Fatalf("node-a delivered = %v before the reschedule, want exactly one", got)
+	delivered := registry.Delivered("node-a")
+	if len(delivered) != 1 {
+		t.Fatalf("node-a delivered = %v before the reschedule, want exactly one", delivered)
+	}
+	// D4 (tasks.md, issues/19-mc-smoke-test-bucket-not-found.md): the
+	// delivery must carry this bucket's own ObjectStore scope, not an empty
+	// or shared one, or the node has nothing to keep a second ObjectStore's
+	// same-named bucket out of its gateway's listing.
+	if want := gatewayMountPrefix("default", "i07-store"); delivered[0].MountPrefix != want {
+		t.Errorf("delivered MountPrefix = %q, want %q", delivered[0].MountPrefix, want)
 	}
 
 	ctx := context.Background()

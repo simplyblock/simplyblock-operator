@@ -240,6 +240,7 @@ func (r *S3BucketReconciler) deliverToNode(
 			"export_service":  export.Status.ServiceAddress,
 			"export_path":     export.Spec.ExportPath,
 		},
+		MountPrefix: gatewayMountPrefix(bucket.Namespace, bucket.Spec.ObjectStoreRef),
 	})
 }
 
