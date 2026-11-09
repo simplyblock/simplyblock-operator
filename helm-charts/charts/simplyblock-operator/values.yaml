@@ -265,6 +265,17 @@ discovery:
   # stay excluded.
   enablePartitionedDevices: true
 
+  # Take a worker's bare local disks ahead of the storage built on or reached
+  # through others: a software RAID array, a multipath map, or a LUN attached
+  # over iSCSI. On, because a worker that offers both was set up for something
+  # the run cannot read, and the local disks are the pick that touches nothing
+  # another system may also be using. A worker that offers only arrays, maps, or
+  # LUNs has them taken either way. Only a logical block device run reaches the
+  # choice: NVMe mode binds controllers, and an array or a map has none.
+  # -- Takes local disks ahead of RAID arrays, multipath maps, and iSCSI LUNs on a worker that offers
+  # both, in logical block device mode. `false` puts every device on an equal footing.
+  preferLocalDisks: true
+
   # Dedicate a journal device on a fleet whose disks do not say which one.
   #
   # The run proposes a dedicated journal device when every worker hands over one

@@ -49,6 +49,10 @@ spec:
     {{ $field }}: true
     {{- end }}
     {{- end }}
+    {{- /* On unless stated, like the partition waiver, so only the off position is written. */}}
+    {{- if and (hasKey $d "preferLocalDisks") (not $d.preferLocalDisks) }}
+    preferLocalDisks: false
+    {{- end }}
     {{- /* Host networking unless management names an attachment; data alone describes nothing deployable. */}}
     {{- with $d.networkAttachment }}
     {{- if and .data (not .management) }}

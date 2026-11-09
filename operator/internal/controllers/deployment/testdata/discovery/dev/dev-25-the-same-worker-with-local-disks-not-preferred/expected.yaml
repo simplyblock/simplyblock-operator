@@ -1,0 +1,45 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+    storage.simplyblock.io/nodeprobe-run: discover-dev-25
+  name: discovered-discover-dev-25
+  namespace: simplyblock
+spec:
+  approved: false
+  cluster:
+    clusterMode: Single
+    enableDriveFormat: true
+    enableJournalDevice: true
+    maxSubsystemCount: 30
+    minHugePagesSize: 16G
+    name: discovered-discover-dev-25-cluster
+    network:
+      spdkOnHostNetwork: true
+    stripe:
+      dataChunks: 2
+      parityChunks: 1
+    vcpuCount: 5
+  environment: K3s
+  hostOS:
+    distro: ubuntu
+    family: Debian
+  nodeSets:
+  - groups:
+    - dataInterfaces:
+      - eth1
+      devices:
+        block:
+        - /dev/dm-0
+        - /dev/md0
+        - /dev/vdb
+        - /dev/vdc
+        - /dev/vdd
+      mgmtInterface: eth0
+      name: group-1-block-5x2.59T
+      workers:
+      - worker-01
+    name: discovered
+status:
+  step: {}

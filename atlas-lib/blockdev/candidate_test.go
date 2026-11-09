@@ -12,6 +12,7 @@ package blockdev
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -561,5 +562,88 @@ func TestCandidatesExplainsAKernelRefusalItCanAccountFor(t *testing.T) {
 	// is for arrays.
 	if sda := found(t, cands, "sda"); sda.RejectedFor(ReasonRAIDMember) {
 		t.Errorf("sda, held by a device-mapper node, was rejected as a RAID member: %v", sda.Rejections)
+	}
+}
+
+func TestCandidatesHandsOverAnIdleMDArray(t *testing.T) {
+	// An administrator who built a RAID array out of a worker's local disks
+	// means the array to be the device. Nothing is mounted from it and nothing
+	// holds it, so it is read like a disk and handed over; its members are
+	// not, because they are the array's.
+	root := idleRaidHost().write(t)
+	in := Inspector{
+		Config:    ScanConfig{SysfsRoot: root, ProcRoot: root},
+		Prober:    NewProberWithOpener(contentOpener(map[string]sparse{"md0": blank(1572335616 * 512)}), WithRegionSize(MinRegionSize)),
+		Exclusive: heldBy("/dev/nvme0n1", "/dev/nvme0n2"),
+	}
+
+	cands, err := in.Candidates(context.Background())
+	if err != nil {
+		t.Fatalf("collect the candidates: %v", err)
+	}
+
+	array := found(t, cands, "md0")
+	if !array.Available() {
+		t.Fatalf("an idle RAID array was refused: %v", array.Rejections)
+	}
+	if array.Reading.Content != ContentBlank {
+		t.Errorf("the array was handed over without being read: content %s", array.Reading.Content)
+	}
+	if got := array.Members; !slices.Equal(got, []string{"nvme0n1", "nvme0n2"}) {
+		t.Errorf("the array's members are %v, want its two namespaces", got)
+	}
+	for _, name := range []string{"nvme0n1", "nvme0n2"} {
+		if member := found(t, cands, name); member.Available() || !member.RejectedFor(ReasonRAIDMember) {
+			t.Errorf("%s, a member of the array that was handed over, was not refused as its member: %v",
+				name, member.Rejections)
+		}
+	}
+}
+
+func TestCandidatesHandsOverAnIdleMultipathMapAndRefusesItsPaths(t *testing.T) {
+	// A LUN of a storage array arrives over several paths, and multipathd joins
+	// them into one device-mapper map. The map is the device: the paths are
+	// held by it, and the map itself is idle.
+	root := lunHost().write(t)
+	in := Inspector{
+		Config: ScanConfig{SysfsRoot: root, ProcRoot: root},
+		Prober: NewProberWithOpener(contentOpener(map[string]sparse{"dm-0": blank(4294967296 * 512)}),
+			WithRegionSize(MinRegionSize)),
+		Exclusive: heldBy("/dev/sda", "/dev/sdb", "/dev/sdc", "/dev/dm-1"),
+	}
+
+	cands, err := in.Candidates(context.Background())
+	if err != nil {
+		t.Fatalf("collect the candidates: %v", err)
+	}
+
+	lun := found(t, cands, "dm-0")
+	if !lun.Available() {
+		t.Fatalf("an idle multipath map was refused: %v", lun.Rejections)
+	}
+	if lun.DMSubsystem != DMSubsystemMultipath {
+		t.Errorf("the map's subsystem is %q, want %q", lun.DMSubsystem, DMSubsystemMultipath)
+	}
+	if got := lun.Members; !slices.Equal(got, []string{"sda", "sdb"}) {
+		t.Errorf("the map's members are %v, want its two paths", got)
+	}
+	for _, name := range []string{"sda", "sdb"} {
+		path := found(t, cands, name)
+		if path.Available() {
+			t.Errorf("%s, a path of the map, was handed over beside it", name)
+		}
+		if got := rejection(t, path, ReasonStacked); !strings.Contains(got.Detail, "dm-0") {
+			t.Errorf("%s: the Stacked detail %q does not name the map", name, got.Detail)
+		}
+	}
+
+	// The logical volume is a device-mapper node too, and is not a device
+	// anybody hands to a cluster: the volume group is what owns the bytes.
+	volume := found(t, cands, "dm-1")
+	if volume.Available() {
+		t.Fatal("an LVM logical volume was handed over")
+	}
+	if got := rejection(t, volume, ReasonNotAWholeDisk); !strings.Contains(got.Detail, "LVM") {
+		t.Errorf("the logical volume's detail %q does not say it is LVM's", got.Detail)
 	}
 }

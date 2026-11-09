@@ -208,3 +208,60 @@ func raidHost() tree {
 	t2.files["swaps"] = "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority"
 	return t2
 }
+
+// idleRaidHost is raidHost with the array left alone: nothing mounted from it
+// and nothing holding it, which is how an administrator who built a RAID array
+// out of a worker's local disks hands it over.
+func idleRaidHost() tree {
+	t2 := raidHost()
+	t2.files["self/mountinfo"] = `25 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw`
+	return t2
+}
+
+// lunHost is a worker attached to a storage array: a LUN reached over two
+// iSCSI sessions that multipathd has joined into one device-mapper map, and
+// beside it a local SATA disk an LVM volume group has taken, whose logical
+// volume is a device-mapper node too. The two nodes look alike in class/block
+// and the dm UUID is what tells them apart.
+func lunHost() tree {
+	const (
+		pathA  = "devices/platform/host3/session1/target3:0:0/3:0:0:1/block/sda"
+		pathB  = "devices/platform/host4/session2/target4:0:0/4:0:0:1/block/sdb"
+		sata   = "devices/pci0000:00/0000:00:1f.2/ata1/host0/target0:0:0/0:0:0:0/block/sdc"
+		mpath  = "devices/virtual/block/dm-0"
+		volume = "devices/virtual/block/dm-1"
+	)
+	t2 := tree{files: map[string]string{}, links: map[string]string{}}
+
+	for name, dir := range map[string]string{"sda": pathA, "sdb": pathB} {
+		t2.blockAttrs(dir, "8:"+map[string]string{"sda": "0", "sdb": "16"}[name], 4294967296, false, false, false)
+		t2.files[filepath.Dir(filepath.Dir(dir))+"/vendor"] = "NETAPP  "
+		t2.files[filepath.Dir(filepath.Dir(dir))+"/model"] = "LUN C-Mode      "
+		t2.links["class/block/"+name] = "../../" + dir
+		t2.links[dir+"/device"] = "../.."
+		t2.dirs = append(t2.dirs, dir+"/holders/dm-0")
+	}
+
+	t2.blockAttrs(mpath, "252:0", 4294967296, false, false, false)
+	t2.files[mpath+"/dm/name"] = "mpatha"
+	t2.files[mpath+"/dm/uuid"] = "mpath-3600a098038303f6e5d5a4a4d31774a63"
+	t2.links["class/block/dm-0"] = "../../" + mpath
+	t2.dirs = append(t2.dirs, mpath+"/slaves/sda", mpath+"/slaves/sdb")
+
+	t2.blockAttrs(sata, "8:32", 3907029168, true, false, false)
+	t2.files["devices/pci0000:00/0000:00:1f.2/ata1/host0/target0:0:0/0:0:0:0/vendor"] = "ATA     "
+	t2.files["devices/pci0000:00/0000:00:1f.2/ata1/host0/target0:0:0/0:0:0:0/model"] = "ST2000DM008-2FR1"
+	t2.links["class/block/sdc"] = "../../" + sata
+	t2.links[sata+"/device"] = "../.."
+	t2.dirs = append(t2.dirs, sata+"/holders/dm-1")
+
+	t2.blockAttrs(volume, "252:1", 3907022848, false, false, false)
+	t2.files[volume+"/dm/name"] = "vg0-data"
+	t2.files[volume+"/dm/uuid"] = "LVM-Y2xL0kpNz9sQ3e1R5tU7vW9xA1cB3dE5fG7hJ9kL1mN3oP5qR7sT9uV1wX3yZ5"
+	t2.links["class/block/dm-1"] = "../../" + volume
+	t2.dirs = append(t2.dirs, volume+"/slaves/sdc")
+
+	t2.files["self/mountinfo"] = `25 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw`
+	t2.files["swaps"] = "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority"
+	return t2
+}

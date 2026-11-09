@@ -481,16 +481,17 @@ func BasicDeviceRules(run *simplyblockv1alpha2.DiscoverSpec) []DeviceRule {
 		AllowPartitions:  class == ClassBlock,
 	})
 
-	if filter == nil {
-		// A run with no filter names nothing, so every LUN is refused and every
-		// other device is taken on its own terms.
-		return append(rules, ISCSIRule{Class: class})
+	// The preference sits after the availability rule and before the filters,
+	// because it is a choice among the devices the worker can offer: a local
+	// disk that is mounted is not one, and a LUN the deny list strikes is
+	// declined by the list, which is the more specific answer.
+	if class == ClassBlock && PrefersLocalDisks(run) {
+		rules = append(rules, LocalDisksFirstRule{AllowPartitioned: allowPartitioned})
 	}
 
-	// An iSCSI LUN is refused unless the run's allow list names it, and that
-	// holds for a run carrying no filter too, which is why the rule is added
-	// before the filter's own lists and not beside them.
-	rules = append(rules, ISCSIRule{Class: class, Allow: allowListFor(class, filter)})
+	if filter == nil {
+		return rules
+	}
 
 	// Each class reads its own lists. A PCI filter on a run stating
 	// enableLogicalBlockDevices describes devices the run will never look at,
@@ -524,18 +525,6 @@ func BasicDeviceRules(run *simplyblockv1alpha2.DiscoverSpec) []DeviceRule {
 		}
 	}
 	return rules
-}
-
-// allowListFor is the run's allow list in the vocabulary of the class it scans,
-// which is the list an iSCSI LUN has to be named in.
-func allowListFor(class DeviceClass, filter *simplyblockv1alpha2.DeviceFilter) []string {
-	if filter == nil {
-		return nil
-	}
-	if class == ClassBlock {
-		return filter.BlockAllowList
-	}
-	return filter.PcieAllowList
 }
 
 // Plan runs the pipeline over a fleet's reports.

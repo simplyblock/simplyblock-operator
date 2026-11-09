@@ -1,0 +1,5 @@
+worker-01/dm-0: declined by local disks first because it is a multipath map over iSCSI paths and the worker also offers 1 local disk(s) ([vdb]), which a run takes first; set spec.discover.preferLocalDisks to false to take it as well
+worker-01/sdb: declined by available because the probe refused it: Stacked (held by [dm-0]), Busy (the kernel refused an exclusive open: dm-0 holds it)
+worker-01/sdc: declined by available because the probe refused it: Stacked (held by [dm-0]), Busy (the kernel refused an exclusive open: dm-0 holds it)
+worker-01/dm-1: declined by whole disk because it is an LVM logical volume rather than a whole disk or a multipath map
+worker-01/sdd: declined by available because the probe refused it: Stacked (held by [dm-1]), Busy (the kernel refused an exclusive open: dm-1 holds it)

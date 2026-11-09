@@ -1,0 +1,4 @@
+worker-01/sdb: declined by available because the probe refused it: Stacked (held by [md0]), Busy (the kernel refused an exclusive open: md0 holds it)
+worker-01/sdc: declined by available because the probe refused it: Stacked (held by [md0]), Busy (the kernel refused an exclusive open: md0 holds it)
+worker-01/sdd: declined by available because the probe refused it: Stacked (held by [dm-0]), Busy (the kernel refused an exclusive open: dm-0 holds it)
+worker-01/sde: declined by available because the probe refused it: Stacked (held by [dm-0]), Busy (the kernel refused an exclusive open: dm-0 holds it)

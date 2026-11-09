@@ -566,6 +566,42 @@ func raidMember() devOpt {
 	}
 }
 
+// mdArray is a software-RAID array built out of the worker's disks, as the
+// probe reports one nothing uses: idle, read blank, and naming its members.
+func mdArray(name, level string, size uint64, members ...string) nodeprobe.Device {
+	d := blk(name, size)
+	d.Transport = ""
+	d.Kind = string(blockdev.KindMDRaid)
+	d.RAIDLevel = level
+	d.Members = members
+	return d
+}
+
+// multipathMap is a LUN of a storage array as multipathd presents it: one
+// device-mapper map over the paths it joins, idle and read blank.
+func multipathMap(name string, size uint64, members ...string) nodeprobe.Device {
+	d := blk(name, size)
+	d.Transport = ""
+	d.Kind = string(blockdev.KindDeviceMapper)
+	d.DMSubsystem = blockdev.DMSubsystemMultipath
+	d.Members = members
+	return d
+}
+
+// heldBy is a disk an array or a map took, which the probe refuses as held by
+// it and as busy for that reason.
+func heldBy(holder string) devOpt {
+	return func(d *nodeprobe.Device) {
+		d.Available = false
+		d.Content = ""
+		d.Rejections = append(d.Rejections,
+			nodeprobe.Rejection{Reason: string(blockdev.ReasonStacked), Detail: "held by [" + holder + "]"},
+			nodeprobe.Rejection{Reason: string(blockdev.ReasonBusy),
+				Detail: "the kernel refused an exclusive open: " + holder + " holds it"},
+		)
+	}
+}
+
 // modeled overrides the device's model string.
 func modeled(model string) devOpt {
 	return func(d *nodeprobe.Device) { d.Model = model }

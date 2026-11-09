@@ -156,9 +156,10 @@ therefore carries all the reasons it is unusable and is refused for one of them.
 | 1   | Whole disk           | always                                        | **yes**    | `GROUNDED` |
 | 2   | Device class         | always                                        | **yes**    | `GROUNDED` |
 | 3   | Available            | always                                        | no         | `GROUNDED` |
-| 4   | Allow and deny lists | the scanned class's allow or deny list is set | no         | `ASSERTED` |
-| 5   | Model                | NVMe run and `pcieModel` is set               | no         | `GROUNDED` |
-| 6   | Size range           | `driveSizeRange` is set **and parses**        | no         | `ASSERTED` |
+| 4   | Local disks first    | block run and `preferLocalDisks` is not false | no         | `GROUNDED` |
+| 5   | Allow and deny lists | the scanned class's allow or deny list is set | no         | `ASSERTED` |
+| 6   | Model                | NVMe run and `pcieModel` is set               | no         | `GROUNDED` |
+| 7   | Size range           | `driveSizeRange` is set **and parses**        | no         | `ASSERTED` |
 
 The order is stated and justified: what the device is, then whether it is free,
 then whether this run wants it. "A partition refused as 'not in the allow list'
@@ -170,10 +171,16 @@ the per-worker explanation the run's status carries. Only rules 1 and 2 set it.
 
 ### 4.2 Each rule's exact condition
 
-**1. Whole disk**: refuses unless `kind == "Disk"`, exact and case-sensitive.
-An empty kind refuses. `GROUNDED`: it is redundant against the probe, and it is
-the one rule whose absence would be silent, because a partition admitted by a
-waiver would be handed to a cluster as a disk.
+**1. Whole disk**: admits `kind == "Disk"` in either class, exact and
+case-sensitive, and on a block run also `Partition`, `MDRaid`, and a
+`DeviceMapper` node whose `dmSubsystem` is `mpath`. Everything else refuses,
+and an empty kind refuses. `GROUNDED`: SPDK binds a controller, so an NVMe run
+can take nothing a controller does not present; the block class reaches a
+device through the kernel, where an array or a multipath map is a block device
+like a disk and is the device its administrator built. A device-mapper node
+that is not a multipath map is refused naming what built it (a logical volume,
+an encrypted volume, a partition of a map), because the two look alike in
+`class/block` and only the probe's reading of the dm UUID tells them apart.
 
 **2. Device class**: symmetric, and it has to be, because a cluster is built out
 of one class.
@@ -215,38 +222,32 @@ device marked unavailable with no grounds at all, which is inconsistent data the
 probe does not write, reads "the probe did not report it as available and gave no
 reason."
 
-**5. iSCSI**: refuses an iSCSI LUN the run's allow list does not name.
-`GROUNDED`: every other bus a run scans is a cable inside the chassis, and a LUN
-is a disk on the other side of a network, so a cluster built on one runs every
-write of its data path over that network. Whether that is wanted is a question
-about the deployment rather than about the hardware.
+**4. Local disks first**: on a block run, declines a software-RAID array, a
+multipath map, or a LUN on the iSCSI transport when the same worker offers a
+bare local disk the run could take: a `Disk` on a bus inside the chassis that
+is available, or refused only for a partition table the run waives. A map is
+read through its members, so a map over iSCSI paths is named as one. The
+reason names what the device is, counts the local disks, and names
+`spec.discover.preferLocalDisks`, which turns the rule off. `GROUNDED`: a
+worker that offers both was set up for something the run cannot read, and the
+local disks are the pick that touches nothing another system may be using.
 
-The default is refusal rather than proposal-and-review, because a draft
-proposing a LUN is one a reviewer has to notice and strike, and a fifty-worker
-document is not one anybody reads that closely. Naming it in the allow list is
-the decision.
+It is absent on an NVMe run, where the whole-disk rule has already refused
+every array and map, and it is not a pre-filter: a declined LUN is an answer to
+why a worker proposed less than it has.
 
-It reads the allow list itself rather than leaving it to the rule below, because
-that rule is only built when a list was given: with no filter there would be
-nothing to refuse a LUN, and with a list given for another reason a LUN would be
-admitted by being named alongside everything else.
-
-It also sits ahead of that rule so that an unnamed LUN says it is a LUN rather
-than that it is not in the allow list, which is the same true-but-wrong-answer
-the whole-disk ordering exists to avoid.
-
-**6. Allow and deny lists**: deny is evaluated first and wins, and an **empty allow
+**5. Allow and deny lists**: deny is evaluated first and wins, and an **empty allow
 list means allow everything** rather than allow nothing. Matching is case-folded.
 
 Two things asserted and not justified: deny-before-allow, and the case folding.
 The folding is defensible for a PCI address and is **wrong for a block path**:
 `/dev/SDB` matches `/dev/sdb`, and Linux paths are case-sensitive.
 
-**7. Model**: case-folded **substring** match. `GROUNDED`: a model string is
+**6. Model**: case-folded **substring** match. `GROUNDED`: a model string is
 padded, versioned, and vendor-formatted, so `MZQL2` is what an administrator
 writes. A device with an empty model is refused by any non-empty filter.
 
-**8. Size range**: both bounds are **inclusive**, and a zero maximum means **no upper
+**7. Size range**: both bounds are **inclusive**, and a zero maximum means **no upper
 bound**. Applies to whichever class is scanned.
 
 ### 4.3 The worker rules

@@ -277,24 +277,35 @@ func addressKind(class DeviceClass) string {
 	return "PCI address"
 }
 
-// WholeDiskRule admits a whole disk, and a partition where the class can take
-// one.
+// WholeDiskRule admits a device a cluster can be built on: a whole disk in
+// either class, and in the logical block device class also a partition, a
+// software-RAID array, or a multipath map.
 //
-// Which class can take one follows from how the device is reached. SPDK binds an
-// NVMe controller through vfio-pci and is handed the whole device, so a
-// partition of one was never something a run could propose: admitting it would
-// hand a cluster a partition as though it were a disk, which is the silent
-// failure this rule exists for. A logical block device is reached through the
-// kernel, where a partition is an ordinary block device and the backend takes
-// one — the journal share is documented for the case where the smallest device
-// selected is a partition.
+// Which class can take what follows from how the device is reached. SPDK binds
+// an NVMe controller through vfio-pci and is handed the whole device, so a
+// partition of one was never something a run could propose, and an array or a
+// map has no controller to bind at all. A logical block device is reached
+// through the kernel, where each of these is an ordinary block device: the
+// backend takes a partition (the journal share is documented for the case where
+// the smallest device selected is one), and it takes an array or a map the way
+// it takes a disk, by path.
 //
-// Nothing else is admitted in either class. A loopback device and a
-// device-mapper node are no more candidates for the block class than for NVMe,
-// so the relaxation is the partition and not the rule.
+// The array and the map are admitted because they are what an administrator who
+// built one means by the storage. A RAID array over a worker's local disks is
+// the device in place of its members, and a LUN of a storage array arrives over
+// several paths that multipathd joins into one map, which is the device in place
+// of the paths. The probe has already refused the members and the paths as held
+// by it, so admitting the array or the map is what makes the worker usable at
+// all.
+//
+// Nothing else is admitted in either class. A loopback device, a logical
+// volume, and an encrypted volume are no more candidates for the block class
+// than for NVMe. The device-mapper node of a logical volume looks exactly like
+// a multipath map in class/block, and the probe's reading of what built it is
+// what separates the two here.
 type WholeDiskRule struct {
-	// Class is what the run is scanning, which decides whether a partition is a
-	// device this deployment could be handed at all.
+	// Class is what the run is scanning, which decides whether a partition,
+	// an array, or a map is a device this deployment could be handed at all.
 	Class DeviceClass
 }
 
@@ -308,10 +319,31 @@ func (r WholeDiskRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool,
 	if device.Kind == string(blockdev.KindDisk) {
 		return true, ""
 	}
-	if r.Class == ClassBlock && device.Kind == string(blockdev.KindPartition) {
-		return true, ""
+	if r.Class == ClassBlock {
+		switch device.Kind {
+		case string(blockdev.KindPartition), string(blockdev.KindMDRaid):
+			return true, ""
+		case string(blockdev.KindDeviceMapper):
+			if device.DMSubsystem == blockdev.DMSubsystemMultipath {
+				return true, ""
+			}
+			return false, fmt.Sprintf("it is %s rather than a whole disk or a multipath map", describeDMNode(device))
+		}
 	}
 	return false, fmt.Sprintf("it is a %s rather than a whole disk", device.Kind)
+}
+
+// describeDMNode names a device-mapper node by what built it, for a refusal.
+func describeDMNode(device nodeprobe.Device) string {
+	switch device.DMSubsystem {
+	case blockdev.DMSubsystemLVM:
+		return "an LVM logical volume"
+	case blockdev.DMSubsystemCrypt:
+		return "an encrypted volume"
+	case blockdev.DMSubsystemPartition:
+		return "a partition of a device-mapper map"
+	}
+	return "a device-mapper node nothing the probe recognizes built"
 }
 
 // AllowDenyRule admits a device whose address is in the allow list, when there

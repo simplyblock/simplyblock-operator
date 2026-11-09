@@ -496,3 +496,39 @@ func TestAvailableRuleSaysWhatHoldsADevice(t *testing.T) {
 		t.Errorf("the reason %q quotes the mount detail", why)
 	}
 }
+
+func TestWholeDiskRuleTakesAnArrayOrAMapOnABlockRun(t *testing.T) {
+	// An administrator who built a RAID array out of a worker's disks, or
+	// attached a LUN that multipathd joined into one map, means that device
+	// to be the storage. The block class reaches it through the kernel like
+	// any other block device; the NVMe class binds controllers and cannot.
+	array := blockDisk("md0", 2*tb)
+	array.Kind = string(blockdev.KindMDRaid)
+	array.Transport = ""
+	array.RAIDLevel = "raid1"
+	array.Members = []string{"sdb", "sdc"}
+	lun := blockDisk("dm-0", 4*tb)
+	lun.Kind = string(blockdev.KindDeviceMapper)
+	lun.Transport = ""
+	lun.DMSubsystem = blockdev.DMSubsystemMultipath
+	lun.Members = []string{"sdd", "sde"}
+
+	for _, device := range []nodeprobe.Device{array, lun} {
+		if ok, why := admit(WholeDiskRule{Class: ClassBlock}, device); !ok {
+			t.Errorf("a block run refused %s: %s", device.Name, why)
+		}
+		if ok, _ := admit(WholeDiskRule{Class: ClassNVMe}, device); ok {
+			t.Errorf("an NVMe run admitted %s, which has no controller to bind", device.Name)
+		}
+	}
+
+	// A device-mapper node that is not a multipath map is still refused: a
+	// logical volume is a slice of a volume group, not a device.
+	volume := lun
+	volume.DMSubsystem = blockdev.DMSubsystemLVM
+	if ok, why := admit(WholeDiskRule{Class: ClassBlock}, volume); ok {
+		t.Error("a block run admitted an LVM logical volume")
+	} else if !strings.Contains(why, "logical volume") {
+		t.Errorf("the reason %q does not say what the node is", why)
+	}
+}

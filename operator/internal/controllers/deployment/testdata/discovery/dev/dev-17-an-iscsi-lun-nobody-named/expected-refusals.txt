@@ -1,1 +1,1 @@
-worker-01/sdb: declined by iSCSI because it is an iSCSI LUN, which is storage on the other side of a network, so a run takes one only where the allow list names it and this one names nothing
+worker-01/sdb: declined by local disks first because it is a LUN attached over iSCSI and the worker also offers 2 local disk(s) ([vdb vdc]), which a run takes first; set spec.discover.preferLocalDisks to false to take it as well

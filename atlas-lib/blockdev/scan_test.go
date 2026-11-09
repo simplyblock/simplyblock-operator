@@ -10,6 +10,7 @@ package blockdev
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -379,4 +380,45 @@ func TestScanReadsTheLevelOfAnMDArray(t *testing.T) {
 	if len(member.Holders) != 1 || member.Holders[0] != "md0" {
 		t.Errorf("read holders %v for a member of md0, want [md0]", member.Holders)
 	}
+}
+
+func TestScanReadsTheMembersAndSubsystemOfAStackedDevice(t *testing.T) {
+	root := lunHost().write(t)
+
+	disks, err := Scan(ScanConfig{SysfsRoot: root, DevRoot: "/dev"})
+	if err != nil {
+		t.Fatalf("scan the block devices: %v", err)
+	}
+
+	lun := scanned(t, disks, "dm-0")
+	if lun.Kind != KindDeviceMapper {
+		t.Errorf("classified dm-0 as %s, want %s", lun.Kind, KindDeviceMapper)
+	}
+	if lun.DMSubsystem != DMSubsystemMultipath {
+		t.Errorf("read the subsystem %q for a multipath map, want %q", lun.DMSubsystem, DMSubsystemMultipath)
+	}
+	if got := lun.Members; !slices.Equal(got, []string{"sda", "sdb"}) {
+		t.Errorf("read the members %v for dm-0, want its two paths", got)
+	}
+	if volume := scanned(t, disks, "dm-1"); volume.DMSubsystem != DMSubsystemLVM {
+		t.Errorf("read the subsystem %q for a logical volume, want %q", volume.DMSubsystem, DMSubsystemLVM)
+	}
+	if path := scanned(t, disks, "sda"); len(path.Members) != 0 || path.DMSubsystem != "" {
+		t.Errorf("read members %v and subsystem %q for a path, which has neither", path.Members, path.DMSubsystem)
+	}
+
+	array := scanned(t, Scan2(t, idleRaidHost()), "md0")
+	if got := array.Members; !slices.Equal(got, []string{"nvme0n1", "nvme0n2"}) {
+		t.Errorf("read the members %v for md0, want its two namespaces", got)
+	}
+}
+
+// Scan2 scans a fixture tree.
+func Scan2(t *testing.T, fixture tree) []Disk {
+	t.Helper()
+	disks, err := Scan(ScanConfig{SysfsRoot: fixture.write(t), DevRoot: "/dev"})
+	if err != nil {
+		t.Fatalf("scan the block devices: %v", err)
+	}
+	return disks
 }

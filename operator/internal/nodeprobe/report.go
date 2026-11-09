@@ -496,6 +496,20 @@ type Device struct {
 	Kind      string `json:"kind"`
 	Transport string `json:"transport,omitempty"`
 
+	// Members is the kernel names of the devices a software-RAID array or a
+	// device-mapper map is built on, RAIDLevel the level of an array, and
+	// DMSubsystem what built a device-mapper node, all as atlas/blockdev read
+	// them. Each is empty for a device that is none of those.
+	//
+	// They are additive within version 11 rather than a bump, because a
+	// reader acts on them only for an array or a map, and a version-11 probe
+	// that did not write them refused every array and every map as not a
+	// whole disk: such a report carries no device these could mislead a
+	// reader about.
+	Members     []string `json:"members,omitempty"`
+	RAIDLevel   string   `json:"raidLevel,omitempty"`
+	DMSubsystem string   `json:"dmSubsystem,omitempty"`
+
 	Vendor     string `json:"vendor,omitempty"`
 	Model      string `json:"model,omitempty"`
 	Serial     string `json:"serial,omitempty"`

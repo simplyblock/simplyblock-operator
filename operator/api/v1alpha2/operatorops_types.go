@@ -239,6 +239,27 @@ type DiscoverSpec struct {
 	// +optional
 	EnablePartitionedDevices *bool `json:"enablePartitionedDevices,omitempty"`
 
+	// PreferLocalDisks makes a logical block-device run take a worker's bare
+	// local disks ahead of the storage built on or reached through others: a
+	// software-RAID array, a multipath map, or a LUN attached over iSCSI. On a
+	// worker that offers both, only the local disks reach the draft and the
+	// rest are reported as declined for that reason; on a worker that offers
+	// only arrays, maps, or LUNs, they are taken. Unset is true.
+	//
+	// A fleet rarely has both. One that does was built with a purpose the run
+	// cannot read, and taking the local disks is the choice that costs the
+	// least to undo: a cluster built on them touches nothing another system
+	// may also be using. Setting this to false puts every device on an equal
+	// footing, for the fleet whose LUNs or arrays are what it means to use.
+	//
+	// It is a statement about the run rather than a member of DeviceFilter
+	// for the reason EnablePartitionedDevices is: it does not narrow the
+	// devices reported, it decides which of two sets a worker's draft is
+	// built from. An NVMe run never reaches a choice, since SPDK binds
+	// controllers and an array or a map has none.
+	// +optional
+	PreferLocalDisks *bool `json:"preferLocalDisks,omitempty"`
+
 	// ForceJournalDevice makes the run dedicate a journal device even where the
 	// fleet's disks do not say which one.
 	//

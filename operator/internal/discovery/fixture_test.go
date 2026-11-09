@@ -126,3 +126,11 @@ func addresses(devices []nodeprobe.Device) []string {
 	}
 	return out
 }
+
+// attachedLUN is an iSCSI disk as the probe reports one: a plain SCSI disk
+// whose bytes are on the other side of a network.
+func attachedLUN(name string, size uint64) nodeprobe.Device {
+	device := blockDisk(name, size)
+	device.Transport = string(blockdev.TransportISCSI)
+	return device
+}
