@@ -157,6 +157,25 @@ func (p Plan) DeviceCount() int {
 	return devices
 }
 
+// Advice is what a run adds to its failure when the environment, not the
+// fleet, explains it: on GKE a disk that is a member of a software-RAID array
+// is one the node pool assembled, because that is what attaching local SSDs as
+// ephemeral storage does, and the fix is the pool's configuration rather than
+// anything on the node. Empty when nothing of the kind applies.
+func (p Plan) Advice(environment simplyblockv1alpha2.KubernetesEnvironment) string {
+	if environment != simplyblockv1alpha2.KubernetesEnvironmentGKE {
+		return ""
+	}
+	for _, refusal := range p.Refusals {
+		if refusal.Device != "" && strings.Contains(refusal.Reason, string(blockdev.ReasonRAIDMember)) {
+			return "GKE assembled the local SSDs into that array, which is what a node pool " +
+				"created with ephemeral-storage-local-ssd does; a pool created with " +
+				"local-nvme-ssd-block attaches them as raw devices instead"
+		}
+	}
+	return ""
+}
+
 // Explain says why the plan holds nothing, one line per worker.
 //
 // A worker is refused either as a whole, because its controllers are on a

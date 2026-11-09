@@ -106,6 +106,16 @@ func heldCases() map[string]Case {
 			unreadable("read the process table: permission denied"))),
 	}
 
+	// A GKE worker whose node pool attached its local SSDs as ephemeral
+	// storage, so the node assembled them into md0 and no disk is free. The
+	// environment is what turns the finding into advice about the pool.
+	gke := one(host("worker-01", cpu(1, 8, 2), disks(
+		nvme("nvme0n1", "0000:00:04.0", 0, 375*gb, raidMember()),
+		nvme("nvme0n2", "0000:00:04.0", 0, 375*gb, raidMember()),
+	)))
+	gke.Environment = simplyblockv1alpha2.KubernetesEnvironmentGKE
+	cases["HELD-12"] = gke
+
 	// The same idle controllers on a run that scans logical block devices,
 	// which names a device by a path a controller has none of.
 	cases["HELD-08"] = Case{
@@ -128,6 +138,7 @@ func heldCases() map[string]Case {
 		"HELD-09": "sixteen-loopbacks-beside-four-disks",
 		"HELD-10": "half-the-controllers-in-use",
 		"HELD-11": "controllers-nothing-could-check",
+		"HELD-12": "every-local-ssd-in-the-array-gke-assembled",
 	}
 	for id, slug := range slugs {
 		entry := cases[id]
