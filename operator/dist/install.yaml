@@ -3018,6 +3018,77 @@ spec:
                               More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                         type: object
+                      stretch:
+                        description: |-
+                          Stretch makes this control plane one site of a stretched control plane:
+                          two Kubernetes clusters, one per site, whose control planes share one
+                          FoundationDB laid out as two regions (one per site, three copies in
+                          each), one site leading at a time (docs/designs/design-stretched-control-plane.md).
+                          Unset, the control plane is an ordinary single-site installation.
+                          Immutable: a site is a property of the installation.
+                        properties:
+                          apiEndpoint:
+                            description: |-
+                              APIEndpoint is the URL of this site's management API as the other site
+                              and its clients reach it (a load balancer or node port, not the
+                              in-cluster Service). The other site's standby control plane redirects
+                              mutating calls to it while this site leads, and the operator records it
+                              on the cluster at creation (Bootstrap) or registration (Join).
+                            pattern: ^https?://.+
+                            type: string
+                          peerSite:
+                            description: PeerSite is the other site's name.
+                            maxLength: 63
+                            pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
+                            type: string
+                          role:
+                            description: |-
+                              Role is Bootstrap on the site that creates the database and Join on the
+                              one that joins it.
+                            enum:
+                            - Bootstrap
+                            - Join
+                            type: string
+                          seedConnectionStringSecretRef:
+                            description: |-
+                              SeedConnectionStringSecretRef names a Secret in the operator's namespace
+                              whose "cluster-file" key holds the connection string of the database the
+                              Bootstrap site created (its FoundationDB ConfigMap's cluster-file).
+                              Required on a Join site, ignored on the Bootstrap site.
+                            properties:
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          site:
+                            description: |-
+                              Site is the name of the site this control plane runs in. Every
+                              control-plane pod learns it, storage nodes added from this Kubernetes
+                              cluster carry it, and the StorageCluster of this site names the same
+                              site in spec.stretched.site.
+                            maxLength: 63
+                            pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
+                            type: string
+                        required:
+                        - apiEndpoint
+                        - peerSite
+                        - role
+                        - site
+                        type: object
+                        x-kubernetes-validations:
+                        - message: site and peerSite must differ
+                          rule: self.site != self.peerSite
+                        - message: 'a Join site needs seedConnectionStringSecretRef:
+                            the connection string of the database the Bootstrap site
+                            created'
+                          rule: self.role != 'Join' || has(self.seedConnectionStringSecretRef)
                       tls:
                         default: {}
                         description: |-
@@ -3102,6 +3173,11 @@ spec:
                     required:
                     - image
                     type: object
+                    x-kubernetes-validations:
+                    - message: 'stretch is immutable: a site is a property of the
+                        installation, and the database behind a stretched control
+                        plane is laid out for two sites'
+                      rule: has(self.stretch) == has(oldSelf.stretch)
                   managed:
                     description: Managed is a control plane that already exists.
                     properties:
