@@ -40,6 +40,27 @@ const endpointCacheTTL = time.Second
 // ControlPlane has published no endpoint, and the caller keeps its own default.
 type EndpointResolver func(ctx context.Context) string
 
+// StretchResolver answers which site of a stretched control plane this
+// operator's control plane is, nil when it is an ordinary one or cannot be
+// read. The StorageCluster controller asks it when creating or adopting a
+// backend cluster.
+type StretchResolver func(ctx context.Context) *simplyblockv1alpha2.StretchedControlPlaneSpec
+
+// NewStretchResolver returns a resolver reading the ControlPlane singleton in
+// the operator's namespace. Like NewEndpointResolver it never errs: an
+// unreadable singleton answers nil, which a caller treats as "not stretched
+// as far as is known" and retries on its next pass.
+func NewStretchResolver(reader client.Reader, namespace string) StretchResolver {
+	return func(ctx context.Context) *simplyblockv1alpha2.StretchedControlPlaneSpec {
+		var cp simplyblockv1alpha2.ControlPlane
+		key := client.ObjectKey{Namespace: namespace, Name: SingletonName}
+		if err := reader.Get(ctx, key, &cp); err != nil {
+			return nil
+		}
+		return stretchOf(&cp).DeepCopy()
+	}
+}
+
 // NewEndpointResolver returns a resolver reading the ControlPlane singleton in
 // the operator's namespace.
 //

@@ -233,7 +233,7 @@ func nestedAny(t *testing.T, obj map[string]any, path ...string) any {
 // with the mounts and without the field is the shape that looks configured and
 // is not.
 func TestTheDatabaseListensForTLSWhenItsPeersAreAuthenticated(t *testing.T) {
-	cluster := foundationDBCluster(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{}))
+	cluster := foundationDBCluster(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{}), "")
 
 	if got := nestedAny(t, cluster.Object, "spec", "mainContainer", "enableTls"); got != true {
 		t.Errorf("the database's own listeners carry enableTls = %v", got)
@@ -247,7 +247,7 @@ func TestTheDatabaseListensForTLSWhenItsPeersAreAuthenticated(t *testing.T) {
 // replaces general.podTemplate wholesale for a class that overrides it: a volume
 // stated once on general reaches neither storage nor log.
 func TestEveryProcessClassCarriesThePeerCertificate(t *testing.T) {
-	cluster := foundationDBCluster(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{}))
+	cluster := foundationDBCluster(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{}), "")
 
 	for _, class := range []string{"general", "storage", "log"} {
 		volumes := nestedAny(t, cluster.Object,
@@ -277,7 +277,7 @@ func TestEveryProcessClassCarriesThePeerCertificate(t *testing.T) {
 // none of them do.
 func TestAnAnonymousDeploymentLeavesTheDatabaseInTheClear(t *testing.T) {
 	cluster := foundationDBCluster(aLocalControlPlane(
-		simplyblockv1alpha2.ControlPlaneTLS{EnableMutualTLS: ptr.To(false)}))
+		simplyblockv1alpha2.ControlPlaneTLS{EnableMutualTLS: ptr.To(false)}), "")
 
 	if got := nestedAny(t, cluster.Object, "spec", "mainContainer", "enableTls"); got != nil {
 		t.Errorf("the database listens for TLS with no certificates issued for it (%v)", got)
@@ -320,7 +320,7 @@ func TestTheDatabaseOperatorCarriesThePeerCertificate(t *testing.T) {
 // writes, and the narrower one takes client auth away from a database whose
 // processes are each other's clients.
 func TestThePeerCertificateIsIssuedOnceAndForBothRoles(t *testing.T) {
-	objects := foundationDBObjects(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{}))
+	objects := foundationDBObjects(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{}), "")
 
 	var issued []*unstructured.Unstructured
 	for _, obj := range objects {
@@ -353,7 +353,7 @@ func TestThePeerCertificateIsIssuedOnceAndForBothRoles(t *testing.T) {
 // A deployment with no peer TLS issues nothing for it.
 func TestNoPeerCertificateWithoutPeerTLS(t *testing.T) {
 	objects := foundationDBObjects(aLocalControlPlane(
-		simplyblockv1alpha2.ControlPlaneTLS{EnableMutualTLS: ptr.To(false)}))
+		simplyblockv1alpha2.ControlPlaneTLS{EnableMutualTLS: ptr.To(false)}), "")
 
 	for _, obj := range objects {
 		if u, ok := obj.(*unstructured.Unstructured); ok && u.GetKind() == certificateKind {
@@ -378,7 +378,7 @@ func TestNoPeerCertificateWithoutPeerTLS(t *testing.T) {
 func TestEveryHolderOfTheClusterFileCanReachATLSDatabase(t *testing.T) {
 	cp := aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{})
 
-	objects := append(foundationDBObjects(cp), managementAPIObjects(cp)...)
+	objects := append(foundationDBObjects(cp, ""), managementAPIObjects(cp)...)
 	for _, obj := range objects {
 		spec := podSpecOf(obj)
 		if spec == nil {

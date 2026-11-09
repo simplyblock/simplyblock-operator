@@ -1161,6 +1161,27 @@ func (e ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMig
 	}
 }
 
+// Defines values for ManagementNodesCreateApiV2ManagementNodesPostParamsResponseFormat.
+const (
+	ManagementNodesCreateApiV2ManagementNodesPostParamsResponseFormatEmpty      ManagementNodesCreateApiV2ManagementNodesPostParamsResponseFormat = "empty"
+	ManagementNodesCreateApiV2ManagementNodesPostParamsResponseFormatFull       ManagementNodesCreateApiV2ManagementNodesPostParamsResponseFormat = "full"
+	ManagementNodesCreateApiV2ManagementNodesPostParamsResponseFormatIdentifier ManagementNodesCreateApiV2ManagementNodesPostParamsResponseFormat = "identifier"
+)
+
+// Valid indicates whether the value is a known member of the ManagementNodesCreateApiV2ManagementNodesPostParamsResponseFormat enum.
+func (e ManagementNodesCreateApiV2ManagementNodesPostParamsResponseFormat) Valid() bool {
+	switch e {
+	case ManagementNodesCreateApiV2ManagementNodesPostParamsResponseFormatEmpty:
+		return true
+	case ManagementNodesCreateApiV2ManagementNodesPostParamsResponseFormatFull:
+		return true
+	case ManagementNodesCreateApiV2ManagementNodesPostParamsResponseFormatIdentifier:
+		return true
+	default:
+		return false
+	}
+}
+
 // AlertDTO One condition that currently needs an operator.
 //
 // Deliberately NOT an EventObj. An event is a journal entry -- it happened,
@@ -1426,6 +1447,7 @@ type ClusterDTO struct {
 	SpdkProxyService            string             `json:"spdk_proxy_service"`
 	SpdkProxyTlsSecret          string             `json:"spdk_proxy_tls_secret"`
 	Status                      ClusterDTOStatus   `json:"status"`
+	StretchedControlPlane       *bool              `json:"stretched_control_plane,omitempty"`
 	SyncReplication             *bool              `json:"sync_replication,omitempty"`
 	TlsEnabled                  bool               `json:"tls_enabled"`
 	UtilizationCritical         int                `json:"utilization_critical"`
@@ -1487,11 +1509,14 @@ type ClusterParams struct {
 	ProvCapWarn            *int                     `json:"prov_cap_warn,omitempty"`
 	QpairCount             *int                     `json:"qpair_count,omitempty"`
 	RpcBasePort            *int                     `json:"rpc_base_port,omitempty"`
+	Site                   *string                  `json:"site,omitempty"`
+	SiteApiEndpoint        *string                  `json:"site_api_endpoint,omitempty"`
 	SnodeApiPort           *int                     `json:"snode_api_port,omitempty"`
 	SnodeApiService        *string                  `json:"snode_api_service,omitempty"`
 	SpdkProxyService       *string                  `json:"spdk_proxy_service,omitempty"`
 	SpdkProxyTlsSecret     *string                  `json:"spdk_proxy_tls_secret,omitempty"`
 	SpdkVcpuCount          int                      `json:"spdk_vcpu_count"`
+	StretchedControlPlane  *bool                    `json:"stretched_control_plane,omitempty"`
 	StrictNodeAntiAffinity *bool                    `json:"strict_node_anti_affinity,omitempty"`
 	SyncReplication        *bool                    `json:"sync_replication,omitempty"`
 }
@@ -1641,6 +1666,31 @@ type ConsistencyGroupResolutionDTO struct {
 	ClusterId       string                              `json:"cluster_id"`
 	GroupId         string                              `json:"group_id"`
 	Members         *[]ConsistencyGroupLineageMemberDTO `json:"members,omitempty"`
+}
+
+// ControlPlaneLeaseDTO defines model for ControlPlaneLeaseDTO.
+type ControlPlaneLeaseDTO struct {
+	Epoch      int    `json:"epoch"`
+	ExpiresAt  string `json:"expires_at"`
+	HolderHost string `json:"holder_host"`
+	HolderSite string `json:"holder_site"`
+	ReleasedBy string `json:"released_by"`
+	State      string `json:"state"`
+	StateSince string `json:"state_since"`
+}
+
+// ControlPlaneStatusDTO defines model for ControlPlaneStatusDTO.
+type ControlPlaneStatusDTO struct {
+	ClusterId             openapi_types.UUID    `json:"cluster_id"`
+	FdbDataState          string                `json:"fdb_data_state"`
+	FdbRegionLagSeconds   *float32              `json:"fdb_region_lag_seconds"`
+	LeaderSite            string                `json:"leader_site"`
+	Lease                 *ControlPlaneLeaseDTO `json:"lease"`
+	LocalSite             string                `json:"local_site"`
+	Mode                  string                `json:"mode"`
+	ModeReason            string                `json:"mode_reason"`
+	Sites                 []SiteReadinessDTO    `json:"sites"`
+	StretchedControlPlane bool                  `json:"stretched_control_plane"`
 }
 
 // DeviceDTO defines model for DeviceDTO.
@@ -1977,6 +2027,12 @@ type HashicorpVaultSettings struct {
 	TransitMount *string `json:"transit_mount,omitempty"`
 }
 
+// LeaderSiteParams defines model for LeaderSiteParams.
+type LeaderSiteParams struct {
+	Force *bool  `json:"force,omitempty"`
+	Site  string `json:"site"`
+}
+
 // LocatedManifestsInput Manifests that were read from one location, and that location.
 type LocatedManifestsInput struct {
 	// Location Where a backup's objects are, and how to interpret them. Never secret.
@@ -2004,7 +2060,18 @@ type ManagementNodeDTO struct {
 	Hostname string             `json:"hostname"`
 	Id       openapi_types.UUID `json:"id"`
 	Ip       string             `json:"ip"`
+	Site     *string            `json:"site,omitempty"`
 	Status   string             `json:"status"`
+}
+
+// ManagementNodeParams A control plane registering itself (docs/stretched-control-plane.md):
+// on Kubernetes the operator calls this from the joining site, where no
+// host exists to run “control-plane add“ on.
+type ManagementNodeParams struct {
+	ApiEndpoint *string `json:"api_endpoint,omitempty"`
+	MgmtIp      *string `json:"mgmt_ip,omitempty"`
+	Mode        *string `json:"mode,omitempty"`
+	Site        *string `json:"site,omitempty"`
 }
 
 // ManifestDataPlane How the objects are encoded, so a later format change is detectable.
@@ -2395,6 +2462,21 @@ type SiteNodeDTO struct {
 // SiteNodeDTOStatus defines model for SiteNodeDTO.Status.
 type SiteNodeDTOStatus string
 
+// SiteReadinessDTO defines model for SiteReadinessDTO.
+type SiteReadinessDTO struct {
+	FailbackReady      bool     `json:"failback_ready"`
+	FdbDataState       string   `json:"fdb_data_state"`
+	FdbLagSeconds      *float32 `json:"fdb_lag_seconds"`
+	HoldsLease         bool     `json:"holds_lease"`
+	MgmtNodesOnline    int      `json:"mgmt_nodes_online"`
+	MgmtNodesTotal     int      `json:"mgmt_nodes_total"`
+	Problems           []string `json:"problems"`
+	Role               string   `json:"role"`
+	Site               string   `json:"site"`
+	StorageNodesOnline int      `json:"storage_nodes_online"`
+	StorageNodesTotal  int      `json:"storage_nodes_total"`
+}
+
 // SiteRecordDTO What the control plane records about one site of a sync-replication
 // cluster (“GET /clusters/{id}/sites/{site}/status“, and the 200 answers
 // of “fence“ / “unfence“): “lost“ when the cluster records it as its
@@ -2555,6 +2637,13 @@ type SyncReplicationStatusDTORole string
 
 // SyncReplicationStatusDTOState defines model for SyncReplicationStatusDTO.State.
 type SyncReplicationStatusDTOState string
+
+// TakeoverParams defines model for TakeoverParams.
+type TakeoverParams struct {
+	ConfirmSiteDown string  `json:"confirm_site_down"`
+	Operator        *string `json:"operator,omitempty"`
+	Site            string  `json:"site"`
+}
 
 // TargetParams defines model for TargetParams.
 type TargetParams struct {
@@ -3357,6 +3446,15 @@ type ManagementNodesListApiV2ManagementNodesGetParams struct {
 	ClusterId openapi_types.UUID `form:"cluster_id" json:"cluster_id"`
 }
 
+// ManagementNodesCreateApiV2ManagementNodesPostParams defines parameters for ManagementNodesCreateApiV2ManagementNodesPost.
+type ManagementNodesCreateApiV2ManagementNodesPostParams struct {
+	ResponseFormat *ManagementNodesCreateApiV2ManagementNodesPostParamsResponseFormat `form:"response-format,omitempty" json:"response-format,omitempty"`
+	ClusterId      openapi_types.UUID                                                 `form:"cluster_id" json:"cluster_id"`
+}
+
+// ManagementNodesCreateApiV2ManagementNodesPostParamsResponseFormat defines parameters for ManagementNodesCreateApiV2ManagementNodesPost.
+type ManagementNodesCreateApiV2ManagementNodesPostParamsResponseFormat string
+
 // ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetParams defines parameters for ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGet.
 type ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetParams struct {
 	ClusterId openapi_types.UUID `form:"cluster_id" json:"cluster_id"`
@@ -3442,6 +3540,12 @@ type ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsisten
 // ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONRequestBody defines body for ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost for application/json ContentType.
 type ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONRequestBody = ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody
 
+// ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostJSONRequestBody defines body for ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePost for application/json ContentType.
+type ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostJSONRequestBody = LeaderSiteParams
+
+// ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostJSONRequestBody defines body for ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPost for application/json ContentType.
+type ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostJSONRequestBody = TakeoverParams
+
 // ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPostJSONRequestBody defines body for ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPost for application/json ContentType.
 type ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPostJSONRequestBody = PlanParams
 
@@ -3510,6 +3614,9 @@ type ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigr
 
 // ClustersUpgradeApiV2ClustersClusterIdUpdatePostJSONRequestBody defines body for ClustersUpgradeApiV2ClustersClusterIdUpdatePost for application/json ContentType.
 type ClustersUpgradeApiV2ClustersClusterIdUpdatePostJSONRequestBody = UnderscoreUpdateParams
+
+// ManagementNodesCreateApiV2ManagementNodesPostJSONRequestBody defines body for ManagementNodesCreateApiV2ManagementNodesPost for application/json ContentType.
+type ManagementNodesCreateApiV2ManagementNodesPostJSONRequestBody = ManagementNodeParams
 
 // AsUnderscoreCreateParams returns the union data inside the RootModelUnionCreateParamsCloneParams as a UnderscoreCreateParams
 func (t RootModelUnionCreateParamsCloneParams) AsUnderscoreCreateParams() (UnderscoreCreateParams, error) {
@@ -4852,6 +4959,59 @@ type ClientInterface interface {
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots/{seq} (the `ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet` operationId).
 	ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, seq int, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGet Clusters:Control-Plane:Status
+	//
+	// The control plane's mode on this site, the lease, and the readiness
+	// of every site (``failback_ready`` per site: what a planned move gates
+	// on).
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/control-plane/ (the `ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGet` operationId).
+	ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostWithBody Clusters:Control-Plane:Leader-Site
+	//
+	// The planned move: refused while a readiness gate of the site is red
+	// unless ``force``; the lease then drains on the holder and moves within
+	// a few seconds.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/control-plane/leader-site (the `ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePost` operationId).
+	ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePost Clusters:Control-Plane:Leader-Site
+	//
+	// The planned move: refused while a readiness gate of the site is red
+	// unless ``force``; the lease then drains on the holder and moves within
+	// a few seconds.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/control-plane/leader-site (the `ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePost` operationId).
+	ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePost(ctx context.Context, clusterId openapi_types.UUID, body ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostWithBody Clusters:Control-Plane:Takeover
+	//
+	// The unplanned move after the leading site is down. FoundationDB must
+	// answer on the surviving site: when the coordinator majority was lost
+	// with the leader, the FDB recovery comes first.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/control-plane/takeover (the `ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPost` operationId).
+	ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPost Clusters:Control-Plane:Takeover
+	//
+	// The unplanned move after the leading site is down. FoundationDB must
+	// answer on the surviving site: when the coordinator majority was lost
+	// with the leader, the FDB recovery comes first.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/control-plane/takeover (the `ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPost` operationId).
+	ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPost(ctx context.Context, clusterId openapi_types.UUID, body ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ClustersExpandApiV2ClustersClusterIdExpandPost Clusters:Expand
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/expand (the `ClustersExpandApiV2ClustersClusterIdExpandPost` operationId).
@@ -5925,6 +6085,28 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /api/v2/management-nodes/ (the `ManagementNodesListApiV2ManagementNodesGet` operationId).
 	ManagementNodesListApiV2ManagementNodesGet(ctx context.Context, params *ManagementNodesListApiV2ManagementNodesGetParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ManagementNodesCreateApiV2ManagementNodesPostWithBody Management Nodes:Create
+	//
+	// Register a management node of ``cluster``: the second site's control
+	// plane of a stretched cluster announces itself with its ``site`` and the
+	// API endpoint the other site redirects to.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/management-nodes/ (the `ManagementNodesCreateApiV2ManagementNodesPost` operationId).
+	ManagementNodesCreateApiV2ManagementNodesPostWithBody(ctx context.Context, params *ManagementNodesCreateApiV2ManagementNodesPostParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ManagementNodesCreateApiV2ManagementNodesPost Management Nodes:Create
+	//
+	// Register a management node of ``cluster``: the second site's control
+	// plane of a stretched cluster announces itself with its ``site`` and the
+	// API endpoint the other site redirects to.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/management-nodes/ (the `ManagementNodesCreateApiV2ManagementNodesPost` operationId).
+	ManagementNodesCreateApiV2ManagementNodesPost(ctx context.Context, params *ManagementNodesCreateApiV2ManagementNodesPostParams, body ManagementNodesCreateApiV2ManagementNodesPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGet Management Node:Detail
 	//
@@ -7642,6 +7824,109 @@ func (c *Client) ClustersConsistencyGroupsSnapshotsDeleteApiV2ClustersClusterIdC
 // Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots/{seq} (the `ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet` operationId).
 func (c *Client) ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, seq int, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGetRequest(c.Server, clusterId, groupId, seq)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGet Clusters:Control-Plane:Status
+//
+// The control plane's mode on this site, the lease, and the readiness
+// of every site (“failback_ready“ per site: what a planned move gates
+// on).
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/control-plane/ (the `ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGet` operationId).
+func (c *Client) ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetRequest(c.Server, clusterId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostWithBody Clusters:Control-Plane:Leader-Site
+//
+// The planned move: refused while a readiness gate of the site is red
+// unless “force“; the lease then drains on the holder and moves within
+// a few seconds.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/control-plane/leader-site (the `ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePost` operationId).
+func (c *Client) ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostRequestWithBody(c.Server, clusterId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePost Clusters:Control-Plane:Leader-Site
+//
+// The planned move: refused while a readiness gate of the site is red
+// unless “force“; the lease then drains on the holder and moves within
+// a few seconds.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/control-plane/leader-site (the `ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePost` operationId).
+func (c *Client) ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePost(ctx context.Context, clusterId openapi_types.UUID, body ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostRequest(c.Server, clusterId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostWithBody Clusters:Control-Plane:Takeover
+//
+// The unplanned move after the leading site is down. FoundationDB must
+// answer on the surviving site: when the coordinator majority was lost
+// with the leader, the FDB recovery comes first.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/control-plane/takeover (the `ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPost` operationId).
+func (c *Client) ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostRequestWithBody(c.Server, clusterId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPost Clusters:Control-Plane:Takeover
+//
+// The unplanned move after the leading site is down. FoundationDB must
+// answer on the surviving site: when the coordinator majority was lost
+// with the leader, the FDB recovery comes first.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/control-plane/takeover (the `ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPost` operationId).
+func (c *Client) ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPost(ctx context.Context, clusterId openapi_types.UUID, body ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostRequest(c.Server, clusterId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -10116,6 +10401,48 @@ func (c *Client) ClustersUpgradeApiV2ClustersClusterIdUpdatePost(ctx context.Con
 // Corresponds with GET /api/v2/management-nodes/ (the `ManagementNodesListApiV2ManagementNodesGet` operationId).
 func (c *Client) ManagementNodesListApiV2ManagementNodesGet(ctx context.Context, params *ManagementNodesListApiV2ManagementNodesGetParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewManagementNodesListApiV2ManagementNodesGetRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ManagementNodesCreateApiV2ManagementNodesPostWithBody Management Nodes:Create
+//
+// Register a management node of “cluster“: the second site's control
+// plane of a stretched cluster announces itself with its “site“ and the
+// API endpoint the other site redirects to.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/management-nodes/ (the `ManagementNodesCreateApiV2ManagementNodesPost` operationId).
+func (c *Client) ManagementNodesCreateApiV2ManagementNodesPostWithBody(ctx context.Context, params *ManagementNodesCreateApiV2ManagementNodesPostParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewManagementNodesCreateApiV2ManagementNodesPostRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ManagementNodesCreateApiV2ManagementNodesPost Management Nodes:Create
+//
+// Register a management node of “cluster“: the second site's control
+// plane of a stretched cluster announces itself with its “site“ and the
+// API endpoint the other site redirects to.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/management-nodes/ (the `ManagementNodesCreateApiV2ManagementNodesPost` operationId).
+func (c *Client) ManagementNodesCreateApiV2ManagementNodesPost(ctx context.Context, params *ManagementNodesCreateApiV2ManagementNodesPostParams, body ManagementNodesCreateApiV2ManagementNodesPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewManagementNodesCreateApiV2ManagementNodesPostRequest(c.Server, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -13346,6 +13673,134 @@ func NewClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistenc
 	if err != nil {
 		return nil, err
 	}
+
+	return req, nil
+}
+
+// NewClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetRequest constructs an http.Request for the ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGet method
+func NewClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetRequest(server string, clusterId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/control-plane/", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostRequest calls the generic ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePost builder with application/json body
+func NewClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostRequest(server string, clusterId openapi_types.UUID, body ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostRequestWithBody(server, clusterId, "application/json", bodyReader)
+}
+
+// NewClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostRequestWithBody constructs an http.Request for the ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePost method, with any body, and a specified content type
+func NewClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/control-plane/leader-site", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostRequest calls the generic ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPost builder with application/json body
+func NewClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostRequest(server string, clusterId openapi_types.UUID, body ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostRequestWithBody(server, clusterId, "application/json", bodyReader)
+}
+
+// NewClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostRequestWithBody constructs an http.Request for the ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPost method, with any body, and a specified content type
+func NewClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/control-plane/takeover", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -19896,6 +20351,81 @@ func NewManagementNodesListApiV2ManagementNodesGetRequest(server string, params 
 	return req, nil
 }
 
+// NewManagementNodesCreateApiV2ManagementNodesPostRequest calls the generic ManagementNodesCreateApiV2ManagementNodesPost builder with application/json body
+func NewManagementNodesCreateApiV2ManagementNodesPostRequest(server string, params *ManagementNodesCreateApiV2ManagementNodesPostParams, body ManagementNodesCreateApiV2ManagementNodesPostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewManagementNodesCreateApiV2ManagementNodesPostRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewManagementNodesCreateApiV2ManagementNodesPostRequestWithBody constructs an http.Request for the ManagementNodesCreateApiV2ManagementNodesPost method, with any body, and a specified content type
+func NewManagementNodesCreateApiV2ManagementNodesPostRequestWithBody(server string, params *ManagementNodesCreateApiV2ManagementNodesPostParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/management-nodes/")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.ResponseFormat != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "response-format", *params.ResponseFormat, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cluster_id", params.ClusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: "uuid"}); err != nil {
+			return nil, err
+		} else {
+			for _, qp := range strings.Split(queryFrag, "&") {
+				rawQueryFragments = append(rawQueryFragments, qp)
+			}
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetRequest constructs an http.Request for the ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGet method
 func NewManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetRequest(server string, managementNodeId openapi_types.UUID, params *ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetParams) (*http.Request, error) {
 	var err error
@@ -20903,6 +21433,61 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots/{seq} (the `ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet` operationId).
 	ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, seq int, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGetResponse, error)
+
+	// ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetWithResponse Clusters:Control-Plane:Status
+	//
+	// The control plane's mode on this site, the lease, and the readiness
+	// of every site (``failback_ready`` per site: what a planned move gates
+	// on).
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/control-plane/ (the `ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGet` operationId).
+	ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetResponse, error)
+
+	// ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostWithBodyWithResponse Clusters:Control-Plane:Leader-Site
+	//
+	// The planned move: refused while a readiness gate of the site is red
+	// unless ``force``; the lease then drains on the holder and moves within
+	// a few seconds.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/control-plane/leader-site (the `ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePost` operationId).
+	ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse, error)
+
+	// ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostWithResponse Clusters:Control-Plane:Leader-Site
+	//
+	// The planned move: refused while a readiness gate of the site is red
+	// unless ``force``; the lease then drains on the holder and moves within
+	// a few seconds.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/control-plane/leader-site (the `ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePost` operationId).
+	ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse, error)
+
+	// ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostWithBodyWithResponse Clusters:Control-Plane:Takeover
+	//
+	// The unplanned move after the leading site is down. FoundationDB must
+	// answer on the surviving site: when the coordinator majority was lost
+	// with the leader, the FDB recovery comes first.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/control-plane/takeover (the `ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPost` operationId).
+	ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse, error)
+
+	// ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostWithResponse Clusters:Control-Plane:Takeover
+	//
+	// The unplanned move after the leading site is down. FoundationDB must
+	// answer on the surviving site: when the coordinator majority was lost
+	// with the leader, the FDB recovery comes first.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/control-plane/takeover (the `ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPost` operationId).
+	ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse, error)
 
 	// ClustersExpandApiV2ClustersClusterIdExpandPostWithResponse Clusters:Expand
 	//
@@ -22165,6 +22750,28 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /api/v2/management-nodes/ (the `ManagementNodesListApiV2ManagementNodesGet` operationId).
 	ManagementNodesListApiV2ManagementNodesGetWithResponse(ctx context.Context, params *ManagementNodesListApiV2ManagementNodesGetParams, reqEditors ...RequestEditorFn) (*ManagementNodesListApiV2ManagementNodesGetResponse, error)
+
+	// ManagementNodesCreateApiV2ManagementNodesPostWithBodyWithResponse Management Nodes:Create
+	//
+	// Register a management node of ``cluster``: the second site's control
+	// plane of a stretched cluster announces itself with its ``site`` and the
+	// API endpoint the other site redirects to.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/management-nodes/ (the `ManagementNodesCreateApiV2ManagementNodesPost` operationId).
+	ManagementNodesCreateApiV2ManagementNodesPostWithBodyWithResponse(ctx context.Context, params *ManagementNodesCreateApiV2ManagementNodesPostParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ManagementNodesCreateApiV2ManagementNodesPostResponse, error)
+
+	// ManagementNodesCreateApiV2ManagementNodesPostWithResponse Management Nodes:Create
+	//
+	// Register a management node of ``cluster``: the second site's control
+	// plane of a stretched cluster announces itself with its ``site`` and the
+	// API endpoint the other site redirects to.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/management-nodes/ (the `ManagementNodesCreateApiV2ManagementNodesPost` operationId).
+	ManagementNodesCreateApiV2ManagementNodesPostWithResponse(ctx context.Context, params *ManagementNodesCreateApiV2ManagementNodesPostParams, body ManagementNodesCreateApiV2ManagementNodesPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ManagementNodesCreateApiV2ManagementNodesPostResponse, error)
 
 	// ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetWithResponse Management Node:Detail
 	//
@@ -25010,6 +25617,150 @@ func (r ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistenc
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ControlPlaneStatusDTO
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetResponse) GetJSON200() *ControlPlaneStatusDTO {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *SiteReadinessDTO
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse) GetJSON200() *SiteReadinessDTO {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ControlPlaneStatusDTO
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse) GetJSON200() *ControlPlaneStatusDTO {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -30275,6 +31026,54 @@ func (r ManagementNodesListApiV2ManagementNodesGetResponse) ContentType() string
 	return ""
 }
 
+type ManagementNodesCreateApiV2ManagementNodesPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *interface{}
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r ManagementNodesCreateApiV2ManagementNodesPostResponse) GetJSON201() *interface{} {
+	return r.JSON201
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ManagementNodesCreateApiV2ManagementNodesPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ManagementNodesCreateApiV2ManagementNodesPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ManagementNodesCreateApiV2ManagementNodesPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ManagementNodesCreateApiV2ManagementNodesPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ManagementNodesCreateApiV2ManagementNodesPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -31761,6 +32560,91 @@ func (c *ClientWithResponses) ClustersConsistencyGroupsSnapshotsDetailApiV2Clust
 		return nil, err
 	}
 	return ParseClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGetResponse(rsp)
+}
+
+// ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetWithResponse Clusters:Control-Plane:Status
+//
+// The control plane's mode on this site, the lease, and the readiness
+// of every site (“failback_ready“ per site: what a planned move gates
+// on).
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/control-plane/ (the `ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGet` operationId).
+func (c *ClientWithResponses) ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetResponse, error) {
+	rsp, err := c.ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGet(ctx, clusterId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetResponse(rsp)
+}
+
+// ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostWithBodyWithResponse Clusters:Control-Plane:Leader-Site
+//
+// The planned move: refused while a readiness gate of the site is red
+// unless “force“; the lease then drains on the holder and moves within
+// a few seconds.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/control-plane/leader-site (the `ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePost` operationId).
+func (c *ClientWithResponses) ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse, error) {
+	rsp, err := c.ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostWithBody(ctx, clusterId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse(rsp)
+}
+
+// ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostWithResponse Clusters:Control-Plane:Leader-Site
+//
+// The planned move: refused while a readiness gate of the site is red
+// unless “force“; the lease then drains on the holder and moves within
+// a few seconds.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/control-plane/leader-site (the `ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePost` operationId).
+func (c *ClientWithResponses) ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse, error) {
+	rsp, err := c.ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePost(ctx, clusterId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse(rsp)
+}
+
+// ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostWithBodyWithResponse Clusters:Control-Plane:Takeover
+//
+// The unplanned move after the leading site is down. FoundationDB must
+// answer on the surviving site: when the coordinator majority was lost
+// with the leader, the FDB recovery comes first.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/control-plane/takeover (the `ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPost` operationId).
+func (c *ClientWithResponses) ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse, error) {
+	rsp, err := c.ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostWithBody(ctx, clusterId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse(rsp)
+}
+
+// ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostWithResponse Clusters:Control-Plane:Takeover
+//
+// The unplanned move after the leading site is down. FoundationDB must
+// answer on the surviving site: when the coordinator majority was lost
+// with the leader, the FDB recovery comes first.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/control-plane/takeover (the `ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPost` operationId).
+func (c *ClientWithResponses) ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse, error) {
+	rsp, err := c.ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPost(ctx, clusterId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse(rsp)
 }
 
 // ClustersExpandApiV2ClustersClusterIdExpandPostWithResponse Clusters:Expand
@@ -33865,6 +34749,40 @@ func (c *ClientWithResponses) ManagementNodesListApiV2ManagementNodesGetWithResp
 	return ParseManagementNodesListApiV2ManagementNodesGetResponse(rsp)
 }
 
+// ManagementNodesCreateApiV2ManagementNodesPostWithBodyWithResponse Management Nodes:Create
+//
+// Register a management node of “cluster“: the second site's control
+// plane of a stretched cluster announces itself with its “site“ and the
+// API endpoint the other site redirects to.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/management-nodes/ (the `ManagementNodesCreateApiV2ManagementNodesPost` operationId).
+func (c *ClientWithResponses) ManagementNodesCreateApiV2ManagementNodesPostWithBodyWithResponse(ctx context.Context, params *ManagementNodesCreateApiV2ManagementNodesPostParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ManagementNodesCreateApiV2ManagementNodesPostResponse, error) {
+	rsp, err := c.ManagementNodesCreateApiV2ManagementNodesPostWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseManagementNodesCreateApiV2ManagementNodesPostResponse(rsp)
+}
+
+// ManagementNodesCreateApiV2ManagementNodesPostWithResponse Management Nodes:Create
+//
+// Register a management node of “cluster“: the second site's control
+// plane of a stretched cluster announces itself with its “site“ and the
+// API endpoint the other site redirects to.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/management-nodes/ (the `ManagementNodesCreateApiV2ManagementNodesPost` operationId).
+func (c *ClientWithResponses) ManagementNodesCreateApiV2ManagementNodesPostWithResponse(ctx context.Context, params *ManagementNodesCreateApiV2ManagementNodesPostParams, body ManagementNodesCreateApiV2ManagementNodesPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ManagementNodesCreateApiV2ManagementNodesPostResponse, error) {
+	rsp, err := c.ManagementNodesCreateApiV2ManagementNodesPost(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseManagementNodesCreateApiV2ManagementNodesPostResponse(rsp)
+}
+
 // ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetWithResponse Management Node:Detail
 //
 // Returns a wrapper object for the known response body format(s).
@@ -35843,6 +36761,117 @@ func ParseClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsiste
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetResponse parses an HTTP response from a ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetWithResponse call
+func ParseClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetResponse(rsp *http.Response) (*ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersControlPlaneStatusApiV2ClustersClusterIdControlPlaneGetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ControlPlaneStatusDTO
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse parses an HTTP response from a ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostWithResponse call
+func ParseClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse(rsp *http.Response) (*ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersControlPlaneLeaderSiteApiV2ClustersClusterIdControlPlaneLeaderSitePostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SiteReadinessDTO
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case rsp.StatusCode == 400:
+		break // No content-type
+
+	case rsp.StatusCode == 409:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse parses an HTTP response from a ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostWithResponse call
+func ParseClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse(rsp *http.Response) (*ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersControlPlaneTakeoverApiV2ClustersClusterIdControlPlaneTakeoverPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ControlPlaneStatusDTO
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case rsp.StatusCode == 400:
+		break // No content-type
+
+	case rsp.StatusCode == 409:
+		break // No content-type
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest HTTPValidationError
@@ -39584,6 +40613,45 @@ func ParseManagementNodesListApiV2ManagementNodesGetResponse(rsp *http.Response)
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseManagementNodesCreateApiV2ManagementNodesPostResponse parses an HTTP response from a ManagementNodesCreateApiV2ManagementNodesPostWithResponse call
+func ParseManagementNodesCreateApiV2ManagementNodesPostResponse(rsp *http.Response) (*ManagementNodesCreateApiV2ManagementNodesPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ManagementNodesCreateApiV2ManagementNodesPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest interface{}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case rsp.StatusCode == 400:
+		break // No content-type
+
+	case rsp.StatusCode == 409:
+		break // No content-type
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest HTTPValidationError

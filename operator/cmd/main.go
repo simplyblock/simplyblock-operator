@@ -760,6 +760,7 @@ func main() {
 
 	if err := (&clustercontroller.StorageClusterReconciler{
 		SiteLink:     siteLinkProber,
+		Stretch:      controlplanecontroller.NewStretchResolver(mgr.GetClient(), operatorNamespace),
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Recorder:     mgr.GetEventRecorder("storagecluster-controller"),

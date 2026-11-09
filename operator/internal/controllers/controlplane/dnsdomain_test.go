@@ -29,7 +29,7 @@ func useClusterDNSDomain(t *testing.T, domain string) {
 func TestTheDatabaseNamesItsCoordinatorsUnderTheClusterDNSDomain(t *testing.T) {
 	useClusterDNSDomain(t, "acme.local")
 
-	cluster := foundationDBCluster(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{}))
+	cluster := foundationDBCluster(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{}), "")
 
 	got, _, _ := unstructured.NestedString(cluster.Object, "spec", "routing", "dnsDomain")
 	if got != "acme.local" {

@@ -189,6 +189,7 @@ func (s service) container(
 	// it calls requires a certificate is a control plane that cannot run its own
 	// tasks.
 	env = append(env, tlsEnv(local)...)
+	env = append(env, siteEnv(local)...)
 
 	return corev1.Container{
 		Name:            s.name,

@@ -37,6 +37,9 @@ type Cluster struct {
 	// in, and LostSiteState how far its drain or fence got.
 	LostSite      string
 	LostSiteState string
+	// StretchedControlPlane is whether the cluster's control plane is split
+	// over two sites sharing one FoundationDB, one site leading at a time.
+	StretchedControlPlane bool
 }
 
 // ClusterWorkloadNames are the Services a cluster's storage nodes are reached
@@ -102,6 +105,14 @@ type CreateClusterParams struct {
 	// LeaderSite names the creating site the leader of a sync-replicated
 	// cluster; empty leaves it unset.
 	LeaderSite string
+	// StretchedControlPlane creates a cluster whose control plane is split
+	// over two sites sharing one FoundationDB (stretched-control-plane.md).
+	// Site is the creating control plane's site and SiteAPIEndpoint the URL
+	// the other site's standby redirects mutating calls to; both are
+	// required with it and refused without it.
+	StretchedControlPlane bool
+	Site                  string
+	SiteAPIEndpoint       string
 }
 
 // ClusterCapacityReading is one capacity sample of a cluster, in bytes.
@@ -215,6 +226,8 @@ func clusterFromDTO(d cpapi.ClusterDTO) Cluster {
 		LeaderSite:      ptr.From(d.LeaderSite, ""),
 		LostSite:        ptr.From(d.LostSite, ""),
 		LostSiteState:   ptr.From(d.LostSiteState, ""),
+
+		StretchedControlPlane: ptr.BoolFromOrFalse(d.StretchedControlPlane),
 	}
 }
 
@@ -247,6 +260,9 @@ func clusterParamsOf(p CreateClusterParams) cpapi.ClusterParams {
 		IsSingleNode:           isTrue(p.SingleNode),
 		SyncReplication:        isTrue(p.SyncReplication),
 		LeaderSite:             nonEmpty(p.LeaderSite),
+		StretchedControlPlane:  isTrue(p.StretchedControlPlane),
+		Site:                   nonEmpty(p.Site),
+		SiteApiEndpoint:        nonEmpty(p.SiteAPIEndpoint),
 		SnodeApiService:        nonEmpty(p.WorkloadNames.NodeAPIService),
 		SpdkProxyService:       nonEmpty(p.WorkloadNames.SpdkProxyService),
 		SpdkProxyTlsSecret:     nonEmpty(p.WorkloadNames.SpdkProxyTLSSecret),

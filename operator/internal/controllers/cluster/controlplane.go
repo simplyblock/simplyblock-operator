@@ -80,6 +80,15 @@ type ControlPlane interface {
 	ShutdownNode(ctx context.Context, clusterID, nodeID string) error
 	RestartNode(ctx context.Context, clusterID, nodeID string) error
 
+	// ManagementNodes lists the control planes registered with a cluster, each
+	// with its site on a stretched control plane.
+	ManagementNodes(ctx context.Context, clusterID string) ([]atlascp.ManagementNode, error)
+
+	// RegisterManagementNode registers this site's control plane with a
+	// cluster whose control plane is stretched: the site it runs in and the
+	// endpoint the other site's standby redirects mutating calls to.
+	RegisterManagementNode(ctx context.Context, clusterID string, params atlascp.RegisterManagementNodeParams) error
+
 	// SetLeaderSite records site as the cluster's leader on the cluster record
 	// of a stretched cluster. Setting the value it already has is a success.
 	SetLeaderSite(ctx context.Context, clusterID, site string) error
@@ -276,6 +285,27 @@ func (c *httpControlPlane) RestartNode(ctx context.Context, clusterID, nodeID st
 	return c.post(ctx,
 		fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterID, nodeID),
 		map[string]bool{"force": true})
+}
+
+func (c *httpControlPlane) ManagementNodes(
+	ctx context.Context, clusterID string,
+) ([]atlascp.ManagementNode, error) {
+	api, err := c.atlasFor(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return api.ManagementNodes(ctx, clusterID)
+}
+
+func (c *httpControlPlane) RegisterManagementNode(
+	ctx context.Context, clusterID string, params atlascp.RegisterManagementNodeParams,
+) error {
+	api, err := c.atlasFor(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = api.RegisterManagementNode(ctx, clusterID, params)
+	return err
 }
 
 func (c *httpControlPlane) SetLeaderSite(ctx context.Context, clusterID, site string) error {

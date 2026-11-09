@@ -235,6 +235,8 @@ type fakeControlPlane struct {
 	cancelTask   func(string, string) error
 
 	setLeaderSite     func(string, string) error
+	managementNodes   func(string) ([]atlascp.ManagementNode, error)
+	registerSite      func(string, atlascp.RegisterManagementNodeParams) error
 	reachability      func(string, []string) ([]WorkerReachability, error)
 	serviceClasses    func(string) (ServiceClassConfig, error)
 	setServiceClasses func(string, ServiceClassConfig) error
@@ -251,12 +253,30 @@ type fakeControlPlane struct {
 	shutdownNodeCalls int
 	restartNodeCalls  int
 	cancelTaskCalls   int
+	registerSiteCalls int
 
 	serviceClassesCalls    int
 	setServiceClassesCalls int
 }
 
 func (f *fakeControlPlane) Endpoint(context.Context) string { return f.endpoint }
+
+func (f *fakeControlPlane) ManagementNodes(_ context.Context, clusterID string) ([]atlascp.ManagementNode, error) {
+	if f.managementNodes == nil {
+		return nil, nil
+	}
+	return f.managementNodes(clusterID)
+}
+
+func (f *fakeControlPlane) RegisterManagementNode(
+	_ context.Context, clusterID string, params atlascp.RegisterManagementNodeParams,
+) error {
+	f.registerSiteCalls++
+	if f.registerSite == nil {
+		return nil
+	}
+	return f.registerSite(clusterID, params)
+}
 
 func (f *fakeControlPlane) SetLeaderSite(_ context.Context, clusterID, site string) error {
 	if f.setLeaderSite == nil {

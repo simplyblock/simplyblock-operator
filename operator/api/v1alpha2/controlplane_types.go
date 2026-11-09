@@ -80,6 +80,85 @@ const (
 	ControlPlaneStepInstalled ControlPlaneStep = "Installed"
 )
 
+// StretchedControlPlaneRole is which of the two sites bootstraps the shared
+// FoundationDB.
+// +kubebuilder:validation:Enum=Bootstrap;Join
+type StretchedControlPlaneRole string
+
+const (
+	// StretchedControlPlaneRoleBootstrap creates the database: its FoundationDB
+	// comes up alone, and its region is the one with priority, so the database
+	// prefers to run its transaction system there.
+	StretchedControlPlaneRoleBootstrap StretchedControlPlaneRole = "Bootstrap"
+	// StretchedControlPlaneRoleJoin joins the database the Bootstrap site
+	// created, reached through the connection string in
+	// seedConnectionStringSecretRef, and adds the second region to it.
+	StretchedControlPlaneRoleJoin StretchedControlPlaneRole = "Join"
+)
+
+// StretchedControlPlaneSpec is one site of a stretched control plane. The two
+// sites' specs mirror each other: each names itself and the other, and the one
+// that bootstraps the database is the same on both, which is what makes both
+// operators render the same FoundationDB region configuration.
+// +kubebuilder:validation:XValidation:rule="self.site != self.peerSite",message="site and peerSite must differ"
+// +kubebuilder:validation:XValidation:rule="self.role != 'Join' || has(self.seedConnectionStringSecretRef)",message="a Join site needs seedConnectionStringSecretRef: the connection string of the database the Bootstrap site created"
+type StretchedControlPlaneSpec struct {
+	// Site is the name of the site this control plane runs in. Every
+	// control-plane pod learns it, storage nodes added from this Kubernetes
+	// cluster carry it, and the StorageCluster of this site names the same
+	// site in spec.stretched.site.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
+	Site string `json:"site"`
+
+	// PeerSite is the other site's name.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
+	PeerSite string `json:"peerSite"`
+
+	// Role is Bootstrap on the site that creates the database and Join on the
+	// one that joins it.
+	// +kubebuilder:validation:Required
+	Role StretchedControlPlaneRole `json:"role"`
+
+	// APIEndpoint is the URL of this site's management API as the other site
+	// and its clients reach it (a load balancer or node port, not the
+	// in-cluster Service). The other site's standby control plane redirects
+	// mutating calls to it while this site leads, and the operator records it
+	// on the cluster at creation (Bootstrap) or registration (Join).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^https?://.+`
+	APIEndpoint string `json:"apiEndpoint"`
+
+	// SeedConnectionStringSecretRef names a Secret in the operator's namespace
+	// whose "cluster-file" key holds the connection string of the database the
+	// Bootstrap site created (its FoundationDB ConfigMap's cluster-file).
+	// Required on a Join site, ignored on the Bootstrap site.
+	// +optional
+	SeedConnectionStringSecretRef *corev1.LocalObjectReference `json:"seedConnectionStringSecretRef,omitempty"`
+}
+
+// IsJoin reports whether this is the site joining the database another
+// created.
+func (s *StretchedControlPlaneSpec) IsJoin() bool {
+	return s != nil && s.Role == StretchedControlPlaneRoleJoin
+}
+
+// BootstrapSite is the site that created the database, whichever side asks.
+func (s *StretchedControlPlaneSpec) BootstrapSite() string {
+	if s.IsJoin() {
+		return s.PeerSite
+	}
+	return s.Site
+}
+
+// SeedConnectionStringKey is the key of the Secret
+// seedConnectionStringSecretRef names, the same key the FoundationDB
+// ConfigMap uses.
+const SeedConnectionStringKey = "cluster-file"
+
 // FoundationDBSpec is the sizing of the FoundationDB the operator installs.
 type FoundationDBSpec struct {
 	// Replicas is the number of coordinators. Three is the smallest count that
@@ -209,6 +288,7 @@ func (l *LocalControlPlane) TLSProvider() ControlPlaneTLSProvider {
 // LocalControlPlane is a control plane this cluster hosts, installed and owned
 // by the operator. Its objects carry a controller reference to the ControlPlane,
 // so the ownership spine starts at a real edge rather than at a Helm release.
+// +kubebuilder:validation:XValidation:rule="has(self.stretch) == has(oldSelf.stretch)",message="stretch is immutable: a site is a property of the installation, and the database behind a stretched control plane is laid out for two sites"
 type LocalControlPlane struct {
 	// Image is the management API and control-plane image.
 	// Any registry is accepted, mirrors included, as long as the value is a
@@ -226,6 +306,15 @@ type LocalControlPlane struct {
 	// FoundationDB sizes the FoundationDB the management API stores its state in.
 	// +optional
 	FoundationDB *FoundationDBSpec `json:"foundationDB,omitempty"`
+
+	// Stretch makes this control plane one site of a stretched control plane:
+	// two Kubernetes clusters, one per site, whose control planes share one
+	// FoundationDB laid out as two regions (one per site, three copies in
+	// each), one site leading at a time (docs/designs/design-stretched-control-plane.md).
+	// Unset, the control plane is an ordinary single-site installation.
+	// Immutable: a site is a property of the installation.
+	// +optional
+	Stretch *StretchedControlPlaneSpec `json:"stretch,omitempty"`
 
 	// Replicas is the number of management API instances. Two is what the chart
 	// ships and what the phases assume: a single instance makes Degraded

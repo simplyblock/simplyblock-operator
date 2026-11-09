@@ -307,7 +307,11 @@ func (r *ControlPlaneReconciler) performInstallStep(
 ) (done bool, held string, err error) {
 	switch current {
 	case stepApplyingFoundationDB:
-		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, foundationDBObjects(cp))
+		seed, err := r.seedConnectionString(ctx, cp)
+		if err != nil {
+			return false, err.Error(), nil
+		}
+		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, foundationDBObjects(cp, seed))
 
 	case stepAwaitingFoundationDB:
 		health, err := readFoundationDB(ctx, r.Client, cp.Namespace)
@@ -320,6 +324,11 @@ func (r *ControlPlaneReconciler) performInstallStep(
 		return true, "", nil
 
 	case stepBuildingIndices:
+		if stretchOf(cp).IsJoin() {
+			// The database, and its indices, are the Bootstrap site's: a
+			// Join site shares them and has nothing to backfill.
+			return true, "", nil
+		}
 		return r.buildIndices(ctx, cp)
 
 	case stepApplyingDatastore:
@@ -400,9 +409,13 @@ func (r *ControlPlaneReconciler) applyEverything(
 	if err != nil {
 		return err
 	}
+	seed, err := r.seedConnectionString(ctx, cp)
+	if err != nil {
+		return err
+	}
 	for _, set := range [][]client.Object{
 		datastoreObjects(cp),
-		foundationDBObjects(cp),
+		foundationDBObjects(cp, seed),
 		api,
 	} {
 		if err := applyAll(ctx, r.Client, cp, r.Scheme, set); err != nil {

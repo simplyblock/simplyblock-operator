@@ -91,7 +91,7 @@ const fdbCoordinatorDisk = "10G"
 // foundationDBObjects is everything the ApplyingFoundationDB step writes, in the
 // order it depends on itself: the accounts, then the roles that name them, then
 // the controller, then the cluster the controller reconciles.
-func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
+func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane, seed string) []client.Object {
 	ns := cp.Namespace
 	//nolint:prealloc // the literal is the declaration; the append below is the conditional set
 	objects := []client.Object{
@@ -104,9 +104,38 @@ func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 		fdbPodRoleObject(ns),
 		fdbPodRoleBindingObject(ns),
 		fdbOperatorDeployment(cp),
-		foundationDBCluster(cp),
+		foundationDBCluster(cp, seed),
 	}
 	return append(objects, fdbPeerCertificate(cp)...)
+}
+
+// seedConnectionString is what a Join site's FoundationDBCluster starts from:
+// the connection string of the database the Bootstrap site created, read from
+// the Secret the spec names. "" on every other control plane. A Join site
+// whose Secret is missing or empty cannot render its database, which is
+// reported as the error so the step holds on it rather than creating a second,
+// separate database.
+func (r *ControlPlaneReconciler) seedConnectionString(
+	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
+) (string, error) {
+	stretch := stretchOf(cp)
+	if !stretch.IsJoin() {
+		return "", nil
+	}
+	ref := stretch.SeedConnectionStringSecretRef
+	if ref == nil || ref.Name == "" {
+		return "", fmt.Errorf("a Join site needs spec.source.local.stretch.seedConnectionStringSecretRef")
+	}
+	var secret corev1.Secret
+	if err := r.Get(ctx, client.ObjectKey{Namespace: cp.Namespace, Name: ref.Name}, &secret); err != nil {
+		return "", fmt.Errorf("read the seed connection string Secret %s: %w", ref.Name, err)
+	}
+	seed := strings.TrimSpace(string(secret.Data[simplyblockv1alpha2.SeedConnectionStringKey]))
+	if seed == "" {
+		return "", fmt.Errorf("the seed connection string Secret %s has no %q key: copy the Bootstrap "+
+			"site's FoundationDB ConfigMap cluster-file into it", ref.Name, simplyblockv1alpha2.SeedConnectionStringKey)
+	}
+	return seed, nil
 }
 
 // foundationDBClusterScoped is the half of that set the garbage collector will
@@ -343,9 +372,13 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 // addresses, DNS locality, and a per-class pod template that names the pods'
 // account. What varies with the spec is the coordinator count, the storage
 // class, and the resources.
-func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Unstructured {
+func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane, seed string) *unstructured.Unstructured {
 	fdb := foundationDBSpecOf(cp)
 	processes := coordinatorCount(fdb)
+	stretch := stretchOf(cp)
+	if stretch != nil {
+		processes = stretchProcessCount(fdb)
+	}
 
 	// The class templates are identical apart from their anti-affinity, and the
 	// FoundationDB operator replaces general.podTemplate wholesale when a class
@@ -442,9 +475,7 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 				"processClassLabels":   []any{"foundationdb.org/fdb-process-class"},
 				"processGroupIDLabels": []any{"foundationdb.org/fdb-process-group-id"},
 			},
-			"databaseConfiguration": map[string]any{
-				"redundancy_mode": redundancyMode(processes),
-			},
+			"databaseConfiguration": databaseConfiguration(stretch, processes),
 			"processCounts": map[string]any{
 				"cluster_controller": int64(1),
 				"log":                processes,
@@ -468,10 +499,54 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 			"sidecarContainer": sidecarContainerSpec(peerTLS),
 		},
 	}}
+	if stretch != nil {
+		spec := obj.Object["spec"].(map[string]any)
+		// One FoundationDBCluster per site, both describing one database: each
+		// site's processes carry its name as their data center and as the
+		// prefix that keeps their process group IDs apart from the other
+		// site's, and the Join site starts from the Bootstrap site's
+		// connection string rather than creating a database of its own.
+		spec["dataCenter"] = stretch.Site
+		spec["processGroupIDPrefix"] = stretch.Site
+		if seed != "" {
+			spec["seedConnectionString"] = seed
+		}
+	}
 	obj.SetGroupVersionKind(fdbClusterGVK)
 	obj.SetName(ComponentFDBCluster)
 	obj.SetNamespace(cp.Namespace)
 	return obj
+}
+
+// databaseConfiguration is the database's replication. A single site keeps as
+// many copies as its coordinator count supports. A stretched control plane
+// keeps three copies in each of two regions, one region per site: triple is
+// the design's floor per site (docs/designs/design-stretched-control-plane.md), and
+// the Bootstrap site's region has the priority, so the database runs its
+// transaction system there while that site is up. Both sites render the same
+// block, which is what the FoundationDB operator requires of the clusters
+// that share a database.
+func databaseConfiguration(stretch *simplyblockv1alpha2.StretchedControlPlaneSpec, processes int64) map[string]any {
+	if stretch == nil {
+		return map[string]any{"redundancy_mode": redundancyMode(processes)}
+	}
+	bootstrap := stretch.BootstrapSite()
+	join := stretch.PeerSite
+	if stretch.IsJoin() {
+		join = stretch.Site
+	}
+	return map[string]any{
+		"redundancy_mode": "triple",
+		"usable_regions":  int64(2),
+		"regions": []any{
+			map[string]any{"datacenters": []any{
+				map[string]any{"id": bootstrap, "priority": int64(1)},
+			}},
+			map[string]any{"datacenters": []any{
+				map[string]any{"id": join, "priority": int64(0)},
+			}},
+		},
+	}
 }
 
 // logCollectorMetadata marks a database pod for the log collector. Each process
@@ -562,6 +637,16 @@ func coordinatorCount(fdb *simplyblockv1alpha2.FoundationDBSpec) int64 {
 		return 3
 	}
 	return int64(*fdb.Replicas)
+}
+
+// stretchProcessCount is how many storage and log processes one site of a
+// stretched control plane runs: at least three, which triple needs in each
+// region, and more where the spec asks for more.
+func stretchProcessCount(fdb *simplyblockv1alpha2.FoundationDBSpec) int64 {
+	if n := coordinatorCount(fdb); n > 3 {
+		return n
+	}
+	return 3
 }
 
 // redundancyMode is how many copies FoundationDB keeps, derived from the
