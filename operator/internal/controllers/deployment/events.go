@@ -54,6 +54,9 @@ const (
 	StripeBelowMinimumWorkers = "StripeBelowMinimumWorkers"
 	StripeSingleNodeCount     = "StripeSingleNodeCount"
 	StripeBelowMinimumDevices = "StripeBelowMinimumDevices"
+	// StripeBelowMinimumFailureDomains is a document whose groups declare
+	// failure domains, fewer distinct ones than the stripe has chunks.
+	StripeBelowMinimumFailureDomains = "StripeBelowMinimumFailureDomains"
 
 	// AwaitingNodes is the expansion waiting for a node it created to come
 	// online before it asks for the cluster to be activated.
