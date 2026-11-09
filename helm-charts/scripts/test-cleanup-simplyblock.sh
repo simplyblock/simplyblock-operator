@@ -133,7 +133,14 @@ EOF
 #!/usr/bin/env bash
 S="$STATE_DIR"
 case "$1" in
-  list) [[ -f "$S/release" ]] && printf 'simplyblock-operator\tsimplyblock\t1\n'; exit 0 ;;
+  list)
+    if [[ -f "$S/release" ]]; then
+      echo '[{"name":"simplyblock","namespace":"simplyblock","chart":"simplyblock-operator-1.0.0"}]'
+    else
+      echo '[]'
+    fi
+    exit 0
+    ;;
   uninstall)
     rm -f "$S/release"
     if [[ -f "$S/ops" ]]; then
@@ -165,5 +172,58 @@ EOF
   fi
 }
 stateful_case
+
+# Regression: the chart's VolumeSnapshotClass CRD survived cleanup on k3s
+# (2026-11-09). Step 5 kept it as in use because the operator's own
+# VolumeSnapshotClass, deleted only later in step 5a, was still an instance.
+snapshot_class_case() {
+  local name="own VolumeSnapshotClass does not keep the snapshot CRD"
+  local dir="$WORK/snapclass"
+  mkdir -p "$dir/bin" "$dir/state"
+  touch "$dir/state/vsc"
+  cat > "$dir/bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+S="$STATE_DIR"
+vsc=volumesnapshotclasses.snapshot.storage.k8s.io
+args=" $* "
+case "$1" in
+  get)
+    if [[ "$2" == crd && "${3:-}" == "$vsc" ]]; then
+      [[ -f "$S/crd-deleted" ]] && exit 1
+      [[ "$args" == *release-namespace* ]] && echo simplyblock
+      exit 0
+    fi
+    if [[ "$*" == "get crd -o name" ]]; then
+      echo customresourcedefinition.apiextensions.k8s.io/storageclusters.storage.simplyblock.io
+      exit 0
+    fi
+    [[ "$2" == crd && "${3:-}" != -* ]] && exit 1
+    if [[ "$2" == "$vsc" && "$args" == *" --no-headers "* ]]; then
+      [[ -f "$S/vsc" ]] && echo "simplyblock-snapshots csi.simplyblock.io Delete 1m"
+      exit 0
+    fi
+    [[ "$args" == *" -o json "* ]] && echo '{"items":[]}'
+    exit 0
+    ;;
+  delete)
+    [[ "$2" == volumesnapshotclass && "$args" == *" -l "* ]] && rm -f "$S/vsc"
+    [[ "$2" == crd && "$3" == "$vsc" ]] && touch "$S/crd-deleted"
+    exit 0
+    ;;
+esac
+exit 0
+EOF
+  # shellcheck disable=SC2016
+  printf '#!/usr/bin/env bash\n[[ "$1" == list ]] && echo "[]"\nexit 0\n' > "$dir/bin/helm"
+  chmod +x "$dir/bin/kubectl" "$dir/bin/helm"
+  PATH="$dir/bin:$PATH" STATE_DIR="$dir/state" bash "$SCRIPT" -f simplyblock >/dev/null 2>&1
+  if [[ -f "$dir/state/crd-deleted" ]]; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name: the volumesnapshotclasses CRD was kept"
+    FAILED=1
+  fi
+}
+snapshot_class_case
 
 exit "$FAILED"
