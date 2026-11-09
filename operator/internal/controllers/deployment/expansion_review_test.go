@@ -154,17 +154,30 @@ func TestAnOpenShiftDocumentCanLeaveTheKubeletToTheFleet(t *testing.T) {
 	}
 }
 
-// The flags are read for exactly the environments admission lets state them.
-func TestTheEnvironmentsThatStateNodeFlagsMatchAdmission(t *testing.T) {
-	for environment, want := range map[simplyblockv1alpha2.KubernetesEnvironment]bool{
-		simplyblockv1alpha2.KubernetesEnvironmentVanilla:   true,
-		simplyblockv1alpha2.KubernetesEnvironmentOpenShift: true,
-		simplyblockv1alpha2.KubernetesEnvironmentTalos:     false,
-		simplyblockv1alpha2.KubernetesEnvironmentEKS:       false,
-		simplyblockv1alpha2.KubernetesEnvironmentRancher:   false,
+// A stated flag replaces the environment's decision on every environment, the
+// managed services included: the schema admits it everywhere, and a flag
+// admitted and then ignored would be a setting the reviewer approved that the
+// cluster never got.
+func TestAStatedFlagReplacesTheEnvironmentsDecisionEverywhere(t *testing.T) {
+	for _, environment := range []simplyblockv1alpha2.KubernetesEnvironment{
+		simplyblockv1alpha2.KubernetesEnvironmentTalos,
+		simplyblockv1alpha2.KubernetesEnvironmentEKS,
+		simplyblockv1alpha2.KubernetesEnvironmentRancher,
 	} {
-		if got := statesNodeFlags(environment); got != want {
-			t.Errorf("statesNodeFlags(%s) = %v, want %v", environment, got, want)
+		config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+			c.Spec.Environment = environment
+			c.Spec.Cluster.EnableKubeletConfiguration = ptr.To(true)
+			c.Spec.Cluster.EnableCpuTopology = ptr.To(true)
+		})
+
+		workload := reconcilerFor(t).buildWorkload(config)
+		if workload.EnableKubeletConfiguration == nil || !*workload.EnableKubeletConfiguration {
+			t.Errorf("%s: the kubelet flag is %v, want the document's true",
+				environment, workload.EnableKubeletConfiguration)
+		}
+		if workload.EnableCpuTopology == nil || !*workload.EnableCpuTopology {
+			t.Errorf("%s: the CPU topology flag is %v, want the document's true",
+				environment, workload.EnableCpuTopology)
 		}
 	}
 }

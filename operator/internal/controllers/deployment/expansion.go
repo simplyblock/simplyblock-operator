@@ -513,15 +513,15 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		workload.EnableKubeletConfiguration = ptr.To(true)
 	}
 
-	// Vanilla says nothing about how its workers are built, so a Vanilla
-	// document may state both flags itself. So may an OpenShift one: what it
-	// decides above is the default for a fleet that leaves the kubelet to the
-	// storage nodes, and a fleet that manages its pool's KubeletConfig itself
-	// states the kubelet flag false. Admission refuses them on every other
-	// environment, and they are read only here, so a document admitted before
-	// that rule cannot override what its environment decided.
-	if template := config.Spec.Cluster; template != nil &&
-		statesNodeFlags(config.Spec.Environment) {
+	// What the environment decides above is the default, and a document that
+	// states either flag replaces it. The environment describes the platform,
+	// not where a particular fleet keeps its kubelet configuration: a fleet that
+	// manages its pool's KubeletConfig itself states the kubelet flag false on
+	// OpenShift, and one whose Vanilla workers are built like a managed service's
+	// states it false there. Admission used to refuse a stated flag everywhere
+	// but Vanilla, to keep a reviewer from overriding a decision they did not
+	// understand; it went when that turned out to be a setting fleets need.
+	if template := config.Spec.Cluster; template != nil {
 		if template.EnableKubeletConfiguration != nil {
 			workload.EnableKubeletConfiguration = ptr.To(*template.EnableKubeletConfiguration)
 		}
@@ -530,20 +530,6 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		}
 	}
 	return workload
-}
-
-// statesNodeFlags reports whether a document in this environment may state the
-// kubelet and CPU topology flags itself. It is the admission rule's list, and
-// the two have to agree: a flag admitted and then ignored here is a setting the
-// reviewer approved that the cluster never got.
-func statesNodeFlags(environment simplyblockv1alpha2.KubernetesEnvironment) bool {
-	switch environment {
-	case simplyblockv1alpha2.KubernetesEnvironmentVanilla,
-		simplyblockv1alpha2.KubernetesEnvironmentOpenShift:
-		return true
-	default:
-		return false
-	}
 }
 
 // awaitCluster waits for the control plane to have created the cluster, which is
