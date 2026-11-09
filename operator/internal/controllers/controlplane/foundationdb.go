@@ -31,7 +31,6 @@ package controlplane
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -109,11 +108,6 @@ func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 	}
 	return append(objects, fdbPeerCertificate(cp)...)
 }
-
-// fdbMinimumRecoveryTimeForExclusion is the uptime, in seconds, the
-// FoundationDB operator waits for after a recovery before it excludes a process.
-// It still keeps an exclusion from following a recovery straight away.
-const fdbMinimumRecoveryTimeForExclusion = 30
 
 // foundationDBClusterScoped is the half of that set the garbage collector will
 // not remove with the ControlPlane, and which the finalizer therefore deletes.
@@ -287,12 +281,6 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 			Command: []string{"/manager"},
 			Args: []string{
 				"--health-probe-bind-address=:9443",
-				// The operator excludes a process only once the database has been up
-				// this long since its last recovery. A replacement joining causes a
-				// recovery, so the default 120 s is spent on every process a drain
-				// replaces (internal/webhook/foundationdb_eviction.go) before the old
-				// one can go, and an EKS node group update gives a drain 15 minutes.
-				"--minimum-recovery-time-for-exclusion=" + strconv.Itoa(fdbMinimumRecoveryTimeForExclusion),
 			},
 			// The operator reconciles the database, so it reaches it the way its
 			// processes reach each other and needs the same material.
