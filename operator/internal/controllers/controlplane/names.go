@@ -82,8 +82,9 @@ const (
 	clusterRoleBindingName = "simplyblock-binding"
 
 	// podTeardownRoleName and podTeardownBindingName grant the same account the
-	// one thing it does that is confined to its own namespace, so it is a Role
-	// rather than another rule on the cluster-wide one.
+	// one thing it does that is confined to its own namespace, deleting a storage
+	// node's SPDK pod and Service, so it is a Role rather than another rule on
+	// the cluster-wide one.
 	podTeardownRoleName    = "simplyblock-pod-teardown"
 	podTeardownBindingName = "simplyblock-pod-teardown-binding"
 
