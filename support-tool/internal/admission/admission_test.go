@@ -79,17 +79,21 @@ func cdc(env simplyblockv1alpha2.KubernetesEnvironment, edit func(*simplyblockv1
 	return c
 }
 
-func TestATalosDocumentStatingTheVanillaFlagsIsRefused(t *testing.T) {
-	found := refusals(t, cdc(simplyblockv1alpha2.KubernetesEnvironmentTalos, func(c *simplyblockv1alpha2.ClusterTemplate) {
-		c.EnableCpuTopology = ptr.To(true)
-	}))
-	if !contains(found, "Vanilla") {
-		t.Errorf("the refusals are %v", found)
-	}
-	if found := refusals(t, cdc(simplyblockv1alpha2.KubernetesEnvironmentVanilla, func(c *simplyblockv1alpha2.ClusterTemplate) {
-		c.EnableCpuTopology = ptr.To(true)
-	})); len(found) != 0 {
-		t.Errorf("a Vanilla document stating the flag is refused: %v", found)
+// The kubelet and CPU topology flags may be stated on every environment: the
+// environment decides their default and a document that states one replaces
+// it. The schema used to refuse them everywhere but Vanilla.
+func TestADocumentStatingTheKubeletAndTopologyFlagsIsAdmittedOnEveryEnvironment(t *testing.T) {
+	for _, env := range []simplyblockv1alpha2.KubernetesEnvironment{
+		simplyblockv1alpha2.KubernetesEnvironmentVanilla,
+		simplyblockv1alpha2.KubernetesEnvironmentOpenShift,
+		simplyblockv1alpha2.KubernetesEnvironmentTalos,
+	} {
+		if found := refusals(t, cdc(env, func(c *simplyblockv1alpha2.ClusterTemplate) {
+			c.EnableCpuTopology = ptr.To(true)
+			c.EnableKubeletConfiguration = ptr.To(false)
+		})); len(found) != 0 {
+			t.Errorf("a %s document stating the flags is refused: %v", env, found)
+		}
 	}
 }
 
