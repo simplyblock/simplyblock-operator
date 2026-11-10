@@ -69,3 +69,37 @@ func ValidateExternalURL(rawURL string) error {
 	}
 	return nil
 }
+
+// ValidateExternalHostPort is ValidateExternalURL's counterpart for an
+// endpoint with no URL scheme, e.g. a KMIP server's host:port (KMIP is a
+// binary TTLV protocol over TLS, not an HTTP API). Same SSRF checks: host
+// must not be a blocked IP literal, and if it is a hostname, none of its
+// resolved addresses may be blocked either.
+func ValidateExternalHostPort(hostport string) error {
+	if hostport == "" {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return fmt.Errorf("malformed host:port: %w", err)
+	}
+	if host == "" {
+		return fmt.Errorf("host:port must contain a host")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if IsBlockedIP(ip) {
+			return fmt.Errorf("endpoint targets a restricted IP address (%s)", host)
+		}
+		return nil
+	}
+	addrs, err := net.LookupHost(host)
+	if err != nil {
+		return fmt.Errorf("cannot resolve host %q: %w", host, err)
+	}
+	for _, addr := range addrs {
+		if ip := net.ParseIP(addr); ip != nil && IsBlockedIP(ip) {
+			return fmt.Errorf("endpoint resolves to a restricted IP address (%s)", addr)
+		}
+	}
+	return nil
+}

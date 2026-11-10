@@ -49,7 +49,7 @@ func TestClientCreateClusterSendsTheSpecsFieldNames(t *testing.T) {
 		CRName: "prod", CRNamespace: "sb", CRPlural: "storageclusters", DeviceMode: "nvme",
 		WorkloadNames: prodWorkloadNames(),
 		Backup:        &ClusterBackup{Endpoint: "http://minio:9000", AccessKeyID: "AKID", SecretAccessKey: "SK"},
-		VaultBaseURL:  "https://vault:8200",
+		KMS:           &ClusterKMS{VaultEndpoint: "https://vault:8200"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -70,9 +70,9 @@ func TestClientCreateClusterSendsTheSpecsFieldNames(t *testing.T) {
 	if backup["endpoint"] != "http://minio:9000" || credentials["access_key_id"] != "AKID" {
 		t.Errorf("backup_config = %v", body["backup_config"])
 	}
-	vault, _ := body["hashicorp_vault_settings"].(map[string]any)
-	if vault["base_url"] != "https://vault:8200" {
-		t.Errorf("hashicorp_vault_settings = %v", body["hashicorp_vault_settings"])
+	kms, _ := body["kms_settings"].(map[string]any)
+	if kms["base_url"] != "https://vault:8200" || kms["provider"] != "vault" {
+		t.Errorf("kms_settings = %v", body["kms_settings"])
 	}
 
 	if got.ID != testCluster || got.Secret != "s3cret" || got.NDCS != 2 || got.NPCS != 1 || !got.Shrinking {

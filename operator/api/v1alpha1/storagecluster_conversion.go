@@ -43,7 +43,9 @@
 //     the way up. That is not an upgrade-time cost but a per-write one: while
 //     v1alpha1 is the storage version, a field that does not survive is lost on
 //     every write, and a controller writing status.phase would read back a
-//     cluster that never had one.
+//     cluster that never had one. spec.kms.kmip.endpoint joins this set for the
+//     same reason: KMIP has no v1alpha1 shape at all, unlike Vault, which
+//     hashicorpVaultSettings already carries down losslessly.
 //
 // Both sets are conversion state and nothing else. Nothing but this file reads
 // them, and they go when v1alpha1 does.
@@ -128,6 +130,13 @@ const (
 	// Losing the workload names would re-derive them, and every node's
 	// hostname is built from them.
 	annoClusterStatusWorkloadNames = "storage.simplyblock.io/conversion-status.workloadNames"
+
+	// KMIP has no v1alpha1 shape at all, unlike Vault (hashicorpVaultSettings
+	// already carries it down losslessly). Without this, a v1alpha1 round
+	// trip of a KMIP-configured cluster would write back spec.kms = nil, which
+	// the hub's "immutable once set" CEL rule would then reject -- a confusing
+	// failure for a write that never meant to touch the key store at all.
+	annoClusterKMSKMIPEndpoint = "storage.simplyblock.io/conversion-spec.kms.kmip.endpoint"
 )
 
 // creationStepToHub maps this version's creation sub-phase onto the hub's
@@ -396,6 +405,14 @@ func stashClusterHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageCluster) 
 		clear(meta, annoClusterBackupBucket, annoClusterBackupRegion)
 	}
 
+	if kms := src.Spec.KMS; kms != nil && kms.KMIP != nil {
+		if err := stash(meta, annoClusterKMSKMIPEndpoint, kms.KMIP.Endpoint); err != nil {
+			return err
+		}
+	} else {
+		clear(meta, annoClusterKMSKMIPEndpoint)
+	}
+
 	// A threshold is stashed only when it does not fit the narrower type, so an
 	// ordinary percentage costs no annotation and an out-of-range one is not
 	// silently truncated.
@@ -475,6 +492,17 @@ func restoreClusterHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageCluster
 	if dst.Spec.Backup != nil {
 		dst.Spec.Backup.Bucket = bucket
 		dst.Spec.Backup.Region = region
+	}
+
+	var kmipEndpoint string
+	if err := unstash(meta, annoClusterKMSKMIPEndpoint, &kmipEndpoint); err != nil {
+		return err
+	}
+	// dst.Spec.KMS == nil is the guard: kmsToHub has already run by the time
+	// ConvertTo calls this, so a vault value from a real v1alpha1 field always
+	// wins over a stale stash rather than being silently overwritten by one.
+	if kmipEndpoint != "" && dst.Spec.KMS == nil {
+		dst.Spec.KMS = &v1alpha2.KMSSpec{KMIP: &v1alpha2.KMIPKMS{Endpoint: kmipEndpoint}}
 	}
 
 	if err := restoreWideThreshold(meta, annoClusterWarnThreshold, &dst.Spec.WarningThreshold); err != nil {
