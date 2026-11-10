@@ -199,3 +199,24 @@ func TestAnOrdinaryControlPlaneLeavesTheStretchedFlowAlone(t *testing.T) {
 		t.Errorf("create body names a stretched control plane without one: %+v", posted)
 	}
 }
+
+// On a stretched control plane the record's leader site belongs to the
+// control plane (set-leader-site, takeover): the leader's StorageCluster does
+// not write its own site back over a planned move to the peer.
+func TestALeaderOnAStretchedControlPlaneLeavesAMovedLeaderSiteAlone(t *testing.T) {
+	reading := syncCluster()
+	reading.LeaderSite = peerSite
+	var wrote []string
+	api := &fakeControlPlane{
+		cluster:       func(string) (atlascp.Cluster, error) { return reading, nil },
+		setLeaderSite: func(_, site string) error { wrote = append(wrote, site); return nil },
+	}
+	rec := &recorder{}
+	r := newClusterReconciler(t, api, rec, newTestCluster(asSite(simplyblockv1alpha2.StretchedRoleLeader)),
+		clusterSecretOf())
+	r.Stretch = onStretchedControlPlane()
+	reconcileCluster(t, r, 1)
+	if len(wrote) != 0 || rec.has(LeaderSiteRecorded) {
+		t.Errorf("the leader wrote leader_site %v over the control plane's move to %q", wrote, peerSite)
+	}
+}

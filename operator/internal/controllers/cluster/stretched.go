@@ -311,12 +311,21 @@ func creatingLeaderSite(cluster *simplyblockv1alpha2.StorageCluster) string {
 // the record names another or none. The control plane refuses a site it
 // records as lost, and the leader does not ask for it. A failed write is
 // logged and tried again on the next pass.
+//
+// On a stretched control plane the record's leader site is the control
+// plane's own: `control-plane set-leader-site` and `takeover` move it, and the
+// lease follows (docs/designs/design-stretched-control-plane.md). The
+// StorageCluster's role is only the role it was created with there, so this
+// site writing itself back would undo every planned move; it writes nothing.
 func (r *StorageClusterReconciler) recordLeaderSite(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, reading subscriptions.ClusterDTO,
 ) {
 	s := cluster.Spec.Stretched
 	if s == nil || s.Role != simplyblockv1alpha2.StretchedRoleLeader ||
 		reading.LeaderSite == s.Site || reading.LostSite == s.Site {
+		return
+	}
+	if r.stretchedControlPlane(ctx) != nil {
 		return
 	}
 	if err := r.API.SetLeaderSite(ctx, cluster.Status.UUID, s.Site); err != nil {

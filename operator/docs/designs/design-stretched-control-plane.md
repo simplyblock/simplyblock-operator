@@ -171,7 +171,12 @@ Nothing here changes: the control plane decides who leads (sbcli lease
 agent), fences by pausing its own services, and the operator on the standby
 side keeps reconciling against its local API, which serves reads and redirects
 writes. The operator never moves the lease; `control-plane set-leader-site`
-and `takeover` are an administrator's or an upper layer's calls.
+and `takeover` are an administrator's or an upper layer's calls. Nor does it
+move the cluster record's `leader_site` back: the sync-replication leader's
+habit of writing its own site there (`LeaderSiteRecorded`, which makes the
+record follow a StorageCluster role swap) is off on a stretched control plane,
+where the StorageCluster role is only the role the cluster was created with
+and `leader_site` is the control plane's.
 
 ## 5. Supported data-plane schemes on Kubernetes
 
