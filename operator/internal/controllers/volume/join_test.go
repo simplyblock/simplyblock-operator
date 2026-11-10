@@ -149,6 +149,77 @@ func TestAnOffPinPlanCreatesOneChildMigrationNamingItsCreator(t *testing.T) {
 	}
 }
 
+// U-61a: a plan whose preflight found a subsystem held by a migration or move
+// is waited out in Migrating with no child of its own, and the join goes on
+// once the hold ends (live 2026-11-10: three siblings labeled at once, the
+// operator restarted while one was still planning, and its plan was refused
+// on the subsystem its siblings' migration was moving).
+func TestAPlanHeldByAMigrationWaitsInMigratingWithoutAChild(t *testing.T) {
+	w := newJoinWorld(t)
+	w.offPin()
+	w.api.plan.Colocation = &controlplane.Colocation{
+		Refusal: "SubsystemBusy: subsystem " + joinSourceNQN + " is held by an active migration or move",
+	}
+
+	w.runUntil(stepJoinMigrating, 10)
+	ops := w.run(3)
+	if terminal(ops.Status.Phase) {
+		t.Fatalf("phase = %q (%s), want the join still running while the hold lasts", ops.Status.Phase, ops.Status.Message)
+	}
+	if n := len(w.children()); n != 0 {
+		t.Fatalf("created %d child migrations while the subsystem was held", n)
+	}
+	if w.log.count("join") != 0 {
+		t.Fatal("joined while the subsystem was held")
+	}
+
+	// The hold ends with the volume on the pin: its siblings' migration
+	// carried it there.
+	w.api.plan = controlplane.JoinPlan{Steps: []string{controlplane.JoinStepJoin, controlplane.JoinStepColocate}}
+	w.runUntil(stepSelectingSubsystem, 10)
+	if w.log.count("join") != 1 {
+		t.Errorf("joins = %d, want 1", w.log.count("join"))
+	}
+	if n := len(w.children()); n != 0 {
+		t.Errorf("created %d child migrations for a volume already on the pin", n)
+	}
+	if got := w.ops().Status.JoinConsistencyGroup.MigrationName; got != "" {
+		t.Errorf("status.migrationName = %q, want none: no migration of its own ran", got)
+	}
+}
+
+// U-61b: a restart between the write-ahead of the child's name and its
+// creation re-enters Migrating. When the volume has reached the pin meanwhile
+// (its subsystem moved with a sibling's join), no child is created and the
+// join goes on (live 2026-11-10: "no StorageNode reports the group's node"
+// every 15 s, for the 24 h of the step).
+func TestAMigratingJoinWhoseVolumeReachedThePinMeanwhileSkipsTheChild(t *testing.T) {
+	w := newJoinWorld(t)
+	w.offPin()
+	w.runUntil(stepJoinMigrating, 10)
+
+	// The crash: the name is recorded, the child is not.
+	for _, child := range w.children() {
+		if err := w.r.Delete(context.Background(), &child); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ops := w.ops()
+	ops.Status.JoinConsistencyGroup.MigrationName = childName(ops)
+	if err := w.r.Status().Update(context.Background(), ops); err != nil {
+		t.Fatal(err)
+	}
+	w.api.plan = controlplane.JoinPlan{Steps: []string{controlplane.JoinStepJoin, controlplane.JoinStepColocate}}
+
+	w.runUntil(stepSelectingSubsystem, 10)
+	if n := len(w.children()); n != 0 {
+		t.Errorf("created %d child migrations for a volume already on the pin", n)
+	}
+	if w.log.count("join") != 1 {
+		t.Errorf("joins = %d, want 1", w.log.count("join"))
+	}
+}
+
 // U-62
 func TestAnOnPinPlanSkipsTheMigration(t *testing.T) {
 	w := newJoinWorld(t)

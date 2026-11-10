@@ -400,6 +400,19 @@ have after the migration, counting `J`'s subsystem as already on `N`. A refused
 preflight fails the operation before the migration starts, so a volume is never
 moved to a node that cannot take it into the group.
 
+A subsystem the preflight finds held by an active migration or move is not a
+refusal: the plan reports it as `colocation.refusal` `SubsystemBusy: ...` and
+the join waits it out in `Migrating`, the step with a migration's deadline,
+creating no child of its own. Before it creates the child, `Migrating` takes the
+plan again rather than trusting `Planning`'s: a sibling's join may have
+migrated this volume's whole subsystem meanwhile, and a restart between the
+write-ahead of the child's name and its creation lands here too. A plan that no
+longer migrates goes on to `Joining`; a plan still held waits. (Live 2026-11-10:
+three siblings labeled at once, operator restarted at `Migrating Migrating
+Planning`; the one still planning was refused on the subsystem its siblings'
+migration was moving, and one at `Migrating` looked up a StorageNode for an empty
+node id every 15 s.)
+
 A source subsystem left with no namespace after the move is deleted at commit,
 on every HA node, so a flip into a fresh subsystem can leave the node's
 subsystem count unchanged.
@@ -677,6 +690,8 @@ the finalizer anyway still runs the commit or the rollback below.
 | Leaving: the split is rolled back                                                         | any swap step        | `Failed` after the rollback path. The volume stays a member of its old group, in the old group's subsystem                                                                                       |
 | Leaving: the detach returns 5xx                                                           | `Leaving`            | Retried. The volume is already in its own subsystem                                                                                                                                              |
 | Preflight refuses for capacity                                                            | `Planning`           | `Failed`, `SubsystemLimitReached`. Nothing migrated                                                                                                                                              |
+| Preflight finds a subsystem held by a migration or move                                   | `Planning`           | Waits in `Migrating` with no child; plans again when the hold ends                                                                                                                               |
+| The volume reached the pin with a sibling's migration                                     | `Migrating`          | No child created; `Joining`. The write-ahead child name is cleared                                                                                                                               |
 | Child migration fails or aborts                                                           | `Migrating`          | `Failed`, `ConsistencyGroupMigrationFailed`. The volume stays where the child left it                                                                                                            |
 | Members endpoint returns 409                                                              | `Joining`            | `Failed`, `ConsistencyGroupJoinRefused`                                                                                                                                                          |
 | Selection refused for capacity                                                            | `SelectingSubsystem` | `Failed`, `SubsystemLimitReached`. The volume is a member in its own subsystem                                                                                                                   |

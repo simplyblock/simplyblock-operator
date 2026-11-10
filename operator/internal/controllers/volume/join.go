@@ -410,10 +410,18 @@ func (r *PersistentVolumeOpsReconciler) planJoin(
 			return "", false, err
 		}
 	}
-	if plan.Has(controlplane.JoinStepMigrate) {
+	if plan.Has(controlplane.JoinStepMigrate) || planHeld(plan) {
 		return stepJoinMigrating, true, nil
 	}
 	return stepJoining, true, nil
+}
+
+// planHeld is a plan whose preflight found a subsystem held by an active
+// migration or move. Unlike a capacity refusal a hold ends, so the join waits
+// it out in Migrating, the step with a migration's deadline, since what holds
+// the subsystem is one (or a move, which is shorter), and plans again after.
+func planHeld(plan controlplane.JoinPlan) bool {
+	return plan.Colocation != nil && strings.HasPrefix(plan.Colocation.Refusal, "SubsystemBusy")
 }
 
 // childName is the name of the Migrate operation a join creates. A join named
@@ -449,7 +457,33 @@ func (r *PersistentVolumeOpsReconciler) joinMigrate(
 	var child simplyblockv1alpha2.PersistentVolumeOps
 	err := r.Get(ctx, types.NamespacedName{Name: name}, &child)
 	if apierrors.IsNotFound(err) {
-		ref, err := r.joinTargetNode(ctx, ops, subject)
+		// No child yet. The plan is taken again rather than trusted from
+		// Planning: a sibling's join may have migrated this volume's whole
+		// subsystem meanwhile (a restart between the name's write-ahead and
+		// the create lands here too), and a held subsystem is waited out.
+		plan, err := r.Join.PlanConsistencyGroupJoin(
+			ctx, subject.clusterUUID, joinOf(ops).GroupUUID, subject.handle.VolumeID)
+		if errors.Is(err, controlplane.ErrMembershipRefused) {
+			return "", false, joinFatalf(ReasonConsistencyGroupJoinRefused,
+				"consistency group %s refused the volume: %v", ops.Spec.JoinConsistencyGroup.GroupName, err)
+		}
+		if err != nil {
+			return "", false, err
+		}
+		if planHeld(plan) {
+			return "", false, waitingf("the join waits for the migration or move holding a subsystem: %s",
+				strings.TrimPrefix(plan.Colocation.Refusal, "SubsystemBusy: "))
+		}
+		if !plan.Has(controlplane.JoinStepMigrate) {
+			// The volume is on the group's node: nothing of its own to migrate.
+			if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.PersistentVolumeOpsStatus) {
+				joinStatus(status).MigrationName = ""
+			}); err != nil {
+				return "", false, err
+			}
+			return stepJoining, true, nil
+		}
+		ref, err := r.joinTargetNode(ctx, subject, plan)
 		if err != nil {
 			return "", false, err
 		}
@@ -492,12 +526,8 @@ func phaseOrPending(phase simplyblockv1alpha2.PersistentVolumeOpsPhase) simplybl
 
 // joinTargetNode is the StorageNode the plan names as the group's node.
 func (r *PersistentVolumeOpsReconciler) joinTargetNode(
-	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
+	ctx context.Context, subject *subject, plan controlplane.JoinPlan,
 ) (simplyblockv1alpha2.StorageNodeReference, error) {
-	plan, err := r.Join.PlanConsistencyGroupJoin(ctx, subject.clusterUUID, joinOf(ops).GroupUUID, subject.handle.VolumeID)
-	if err != nil {
-		return simplyblockv1alpha2.StorageNodeReference{}, err
-	}
 	var nodes simplyblockv1alpha2.StorageNodeList
 	if err := r.List(ctx, &nodes, client.InNamespace(subject.namespace())); err != nil {
 		return simplyblockv1alpha2.StorageNodeReference{}, fmt.Errorf("list the storage nodes: %w", err)
