@@ -1050,8 +1050,8 @@ spec:
                   enableCpuTopology:
                     description: |-
                       EnableCpuTopology turns on topology-aware CPU assignment on the storage
-                      nodes. Unset leaves it to spec.environment: OpenShift turns it on, and
-                      every other environment leaves it off. Stated, it replaces what the
+                      nodes. Unset leaves it to spec.environment: OpenShift and Talos turn it on,
+                      and every other environment leaves it off. Stated, it replaces what the
                       environment decides, for a fleet whose workers the environment does not
                       describe.
                     type: boolean
@@ -1101,7 +1101,8 @@ spec:
                       and the rolling reboot of that pool which applying it takes.
 
                       Unset leaves it to spec.environment: on for Vanilla, OpenShift, Rancher,
-                      and K3s, and off for Talos, EKS, GKE, AKS, and OKE, whose kubelet
+                      K3s, and Talos (whose kubelet is configured through the Talos API), and
+                      off for EKS, GKE, AKS, and OKE, whose kubelet
                       configuration is not writable or is rebuilt with every node. Stated, it
                       replaces what the environment decides. A fleet that manages its kubelet
                       configuration itself states it false: a storage node then neither
@@ -16365,8 +16366,8 @@ spec:
                       enableCpuTopology:
                         description: |-
                           EnableCpuTopology turns on topology-aware CPU assignment on the storage
-                          nodes. Unset leaves it to spec.environment: OpenShift turns it on, and
-                          every other environment leaves it off. Stated, it replaces what the
+                          nodes. Unset leaves it to spec.environment: OpenShift and Talos turn it on,
+                          and every other environment leaves it off. Stated, it replaces what the
                           environment decides, for a fleet whose workers the environment does not
                           describe.
                         type: boolean
@@ -16416,7 +16417,8 @@ spec:
                           and the rolling reboot of that pool which applying it takes.
 
                           Unset leaves it to spec.environment: on for Vanilla, OpenShift, Rancher,
-                          and K3s, and off for Talos, EKS, GKE, AKS, and OKE, whose kubelet
+                          K3s, and Talos (whose kubelet is configured through the Talos API), and
+                          off for EKS, GKE, AKS, and OKE, whose kubelet
                           configuration is not writable or is rebuilt with every node. Stated, it
                           replaces what the environment decides. A fleet that manages its kubelet
                           configuration itself states it false: a storage node then neither
@@ -18095,8 +18097,8 @@ spec:
                             enableCpuTopology:
                               description: |-
                                 EnableCpuTopology turns on topology-aware CPU assignment on the storage
-                                nodes. Unset leaves it to spec.environment: OpenShift turns it on, and
-                                every other environment leaves it off. Stated, it replaces what the
+                                nodes. Unset leaves it to spec.environment: OpenShift and Talos turn it on,
+                                and every other environment leaves it off. Stated, it replaces what the
                                 environment decides, for a fleet whose workers the environment does not
                                 describe.
                               type: boolean
@@ -18146,7 +18148,8 @@ spec:
                                 and the rolling reboot of that pool which applying it takes.
 
                                 Unset leaves it to spec.environment: on for Vanilla, OpenShift, Rancher,
-                                and K3s, and off for Talos, EKS, GKE, AKS, and OKE, whose kubelet
+                                K3s, and Talos (whose kubelet is configured through the Talos API), and
+                                off for EKS, GKE, AKS, and OKE, whose kubelet
                                 configuration is not writable or is rebuilt with every node. Stated, it
                                 replaces what the environment decides. A fleet that manages its kubelet
                                 configuration itself states it false: a storage node then neither
