@@ -912,6 +912,21 @@ spec:
                                 the document is what makes it present when the cluster is created, where
                                 setting it on the StorageCluster afterward races with that creation.
                               properties:
+                                kmip:
+                                  description: KMIP stores keys in a KMIP-speaking
+                                    appliance.
+                                  properties:
+                                    endpoint:
+                                      description: |-
+                                        Endpoint is the KMIP server address, host:port, for example,
+                                        kmip.example.com:5696. Rejected unless it resolves to an external
+                                        address. No URL scheme: KMIP is a binary TTLV protocol over TLS, not
+                                        an HTTP API, so it has no scheme convention to validate against.
+                                      pattern: ^[a-zA-Z0-9.-]+:[0-9]{1,5}$
+                                      type: string
+                                  required:
+                                  - endpoint
+                                  type: object
                                 vault:
                                   description: Vault stores keys in HashiCorp Vault.
                                   properties:

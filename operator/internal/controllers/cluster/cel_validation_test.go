@@ -199,6 +199,11 @@ func TestStorageClusterKMSIsImmutableOnceSet(t *testing.T) {
 		"clearing the block": func(c *simplyblockv1alpha2.StorageCluster) {
 			c.Spec.KMS = nil
 		},
+		"switching providers": func(c *simplyblockv1alpha2.StorageCluster) {
+			c.Spec.KMS = &simplyblockv1alpha2.KMSSpec{
+				KMIP: &simplyblockv1alpha2.KMIPKMS{Endpoint: "kmip.example.com:5696"},
+			}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var stored simplyblockv1alpha2.StorageCluster

@@ -94,7 +94,7 @@ func TestAnUnstatedThresholdIsZeroOnTheWire(t *testing.T) {
 // A key store the operator cannot reach is a configuration error the user can
 // fix, and it is refused before a cluster is created rather than after.
 func TestAVaultURLThatIsNotExternalIsRefused(t *testing.T) {
-	_, err := vaultConfig(&simplyblockv1alpha2.KMSSpec{
+	_, err := kmsConfig(&simplyblockv1alpha2.KMSSpec{
 		Vault: &simplyblockv1alpha2.VaultKMS{Endpoint: "https://127.0.0.1:8200"},
 	})
 	if err == nil {
@@ -104,14 +104,34 @@ func TestAVaultURLThatIsNotExternalIsRefused(t *testing.T) {
 	// An address literal rather than a name, because the check resolves a name
 	// and a test must not depend on DNS. 203.0.113.0/24 is TEST-NET-3, which
 	// is routable as far as the check is concerned and reaches nothing.
-	got, err := vaultConfig(&simplyblockv1alpha2.KMSSpec{
+	got, err := kmsConfig(&simplyblockv1alpha2.KMSSpec{
 		Vault: &simplyblockv1alpha2.VaultKMS{Endpoint: "https://203.0.113.10:8200"},
 	})
 	if err != nil {
 		t.Fatalf("an external vault endpoint was refused: %v", err)
 	}
-	if got != "https://203.0.113.10:8200" {
-		t.Errorf("vaultConfig = %q, want the endpoint carried through", got)
+	if got == nil || got.VaultEndpoint != "https://203.0.113.10:8200" || got.KMIPEndpoint != "" {
+		t.Errorf("kmsConfig = %+v, want the vault endpoint carried through", got)
+	}
+}
+
+// Same check, for a KMIP endpoint (host:port, no URL scheme).
+func TestAKMIPEndpointThatIsNotExternalIsRefused(t *testing.T) {
+	_, err := kmsConfig(&simplyblockv1alpha2.KMSSpec{
+		KMIP: &simplyblockv1alpha2.KMIPKMS{Endpoint: "127.0.0.1:5696"},
+	})
+	if err == nil {
+		t.Error("a loopback KMIP endpoint was accepted")
+	}
+
+	got, err := kmsConfig(&simplyblockv1alpha2.KMSSpec{
+		KMIP: &simplyblockv1alpha2.KMIPKMS{Endpoint: "203.0.113.10:5696"},
+	})
+	if err != nil {
+		t.Fatalf("an external KMIP endpoint was refused: %v", err)
+	}
+	if got == nil || got.KMIPEndpoint != "203.0.113.10:5696" || got.VaultEndpoint != "" {
+		t.Errorf("kmsConfig = %+v, want the KMIP endpoint carried through", got)
 	}
 }
 
@@ -122,14 +142,15 @@ func TestAnAbsentKeyStoreSendsNothing(t *testing.T) {
 		"no block":       nil,
 		"no provider":    {},
 		"an empty vault": {Vault: &simplyblockv1alpha2.VaultKMS{}},
+		"an empty kmip":  {KMIP: &simplyblockv1alpha2.KMIPKMS{}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := vaultConfig(kms)
+			got, err := kmsConfig(kms)
 			if err != nil {
-				t.Fatalf("vaultConfig: %v", err)
+				t.Fatalf("kmsConfig: %v", err)
 			}
-			if got != "" {
-				t.Errorf("vaultConfig = %q, want nothing sent", got)
+			if got != nil {
+				t.Errorf("kmsConfig = %+v, want nothing sent", got)
 			}
 		})
 	}

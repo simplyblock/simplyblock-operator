@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -315,6 +316,36 @@ const (
 func (e HCPKeyDescriptorType) Valid() bool {
 	switch e {
 	case Hcp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KMIPKMSSettingsProvider.
+const (
+	KMIPKMSSettingsProviderKmip KMIPKMSSettingsProvider = "kmip"
+)
+
+// Valid indicates whether the value is a known member of the KMIPKMSSettingsProvider enum.
+func (e KMIPKMSSettingsProvider) Valid() bool {
+	switch e {
+	case KMIPKMSSettingsProviderKmip:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KMIPKeyDescriptorType.
+const (
+	KMIPKeyDescriptorTypeKmip KMIPKeyDescriptorType = "kmip"
+)
+
+// Valid indicates whether the value is a known member of the KMIPKeyDescriptorType enum.
+func (e KMIPKeyDescriptorType) Valid() bool {
+	switch e {
+	case KMIPKeyDescriptorTypeKmip:
 		return true
 	default:
 		return false
@@ -918,6 +949,21 @@ func (e UpdatableClusterParametersTwoNodeFencingAuthority) Valid() bool {
 	}
 }
 
+// Defines values for VaultKMSSettingsProvider.
+const (
+	Vault VaultKMSSettingsProvider = "vault"
+)
+
+// Valid indicates whether the value is a known member of the VaultKMSSettingsProvider enum.
+func (e VaultKMSSettingsProvider) Valid() bool {
+	switch e {
+	case Vault:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateParamsHaType.
 const (
 	CreateParamsHaTypeHa     CreateParamsHaType = "ha"
@@ -1470,11 +1516,11 @@ type ClusterParams struct {
 	EnableNodeAffinity     *bool                    `json:"enable_node_affinity,omitempty"`
 	Fabric                 *string                  `json:"fabric,omitempty"`
 	HaType                 *ClusterParamsHaType     `json:"ha_type,omitempty"`
-	HashicorpVaultSettings *HashicorpVaultSettings  `json:"hashicorp_vault_settings,omitempty"`
 	HugepagesMem           *int                     `json:"hugepages_mem,omitempty"`
 	InflightIoThreshold    *int                     `json:"inflight_io_threshold,omitempty"`
 	InlineChecksum         *bool                    `json:"inline_checksum,omitempty"`
 	IsSingleNode           *bool                    `json:"is_single_node,omitempty"`
+	KmsSettings            *KMSSettings             `json:"kms_settings,omitempty"`
 	LeaderSite             *string                  `json:"leader_site,omitempty"`
 	LvolGeometryEnabled    *bool                    `json:"lvol_geometry_enabled,omitempty"`
 	MaxQueueSize           *int                     `json:"max_queue_size,omitempty"`
@@ -1971,12 +2017,29 @@ type HTTPValidationError struct {
 	Detail *[]ValidationError `json:"detail,omitempty"`
 }
 
-// HashicorpVaultSettings defines model for HashicorpVaultSettings.
-type HashicorpVaultSettings struct {
-	BaseUrl      *string `json:"base_url,omitempty"`
-	CertRole     *string `json:"cert_role,omitempty"`
-	KvMount      *string `json:"kv_mount,omitempty"`
-	TransitMount *string `json:"transit_mount,omitempty"`
+// KMIPKMSSettings A KMIP-speaking key management appliance.
+type KMIPKMSSettings struct {
+	Provider  *KMIPKMSSettingsProvider `json:"provider,omitempty"`
+	ServerUrl string                   `json:"server_url"`
+}
+
+// KMIPKMSSettingsProvider defines model for KMIPKMSSettings.Provider.
+type KMIPKMSSettingsProvider string
+
+// KMIPKeyDescriptor Keys held in a KMIP-speaking appliance, wrapped under a named key.
+type KMIPKeyDescriptor struct {
+	DekPath   string                 `json:"dek_path"`
+	KekName   string                 `json:"kek_name"`
+	ServerUrl *string                `json:"server_url,omitempty"`
+	Type      *KMIPKeyDescriptorType `json:"type,omitempty"`
+}
+
+// KMIPKeyDescriptorType defines model for KMIPKeyDescriptor.Type.
+type KMIPKeyDescriptorType string
+
+// KMSSettings defines model for KMSSettings.
+type KMSSettings struct {
+	union json.RawMessage
 }
 
 // LocatedManifestsInput Manifests that were read from one location, and that location.
@@ -2670,6 +2733,19 @@ type ValidationErrorLoc1 = int
 type ValidationError_Loc_Item struct {
 	union json.RawMessage
 }
+
+// VaultKMSSettings HashiCorp Vault (or an OpenBao-compatible server): a Transit mount
+// wraps/unwraps DEKs, a KV mount stores the wrapped ciphertext.
+type VaultKMSSettings struct {
+	BaseUrl      string                    `json:"base_url"`
+	CertRole     *string                   `json:"cert_role,omitempty"`
+	KvMount      *string                   `json:"kv_mount,omitempty"`
+	Provider     *VaultKMSSettingsProvider `json:"provider,omitempty"`
+	TransitMount *string                   `json:"transit_mount,omitempty"`
+}
+
+// VaultKMSSettingsProvider defines model for VaultKMSSettings.Provider.
+type VaultKMSSettingsProvider string
 
 // VolumeDTO defines model for VolumeDTO.
 type VolumeDTO struct {
@@ -3512,6 +3588,107 @@ type ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigr
 
 // ClustersUpgradeApiV2ClustersClusterIdUpdatePostJSONRequestBody defines body for ClustersUpgradeApiV2ClustersClusterIdUpdatePost for application/json ContentType.
 type ClustersUpgradeApiV2ClustersClusterIdUpdatePostJSONRequestBody = UnderscoreUpdateParams
+
+// AsVaultKMSSettings returns the union data inside the KMSSettings as a VaultKMSSettings
+func (t KMSSettings) AsVaultKMSSettings() (VaultKMSSettings, error) {
+	var body VaultKMSSettings
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromVaultKMSSettings overwrites any union data inside the KMSSettings as the provided VaultKMSSettings
+func (t *KMSSettings) FromVaultKMSSettings(v VaultKMSSettings) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"provider":"vault"}`))
+	t.union = b
+	return err
+}
+
+// MergeVaultKMSSettings performs a merge with any union data inside the KMSSettings, using the provided VaultKMSSettings
+func (t *KMSSettings) MergeVaultKMSSettings(v VaultKMSSettings) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"provider":"vault"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsKMIPKMSSettings returns the union data inside the KMSSettings as a KMIPKMSSettings
+func (t KMSSettings) AsKMIPKMSSettings() (KMIPKMSSettings, error) {
+	var body KMIPKMSSettings
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromKMIPKMSSettings overwrites any union data inside the KMSSettings as the provided KMIPKMSSettings
+func (t *KMSSettings) FromKMIPKMSSettings(v KMIPKMSSettings) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"provider":"kmip"}`))
+	t.union = b
+	return err
+}
+
+// MergeKMIPKMSSettings performs a merge with any union data inside the KMSSettings, using the provided KMIPKMSSettings
+func (t *KMSSettings) MergeKMIPKMSSettings(v KMIPKMSSettings) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"provider":"kmip"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t KMSSettings) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"provider"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t KMSSettings) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "kmip":
+		return t.AsKMIPKMSSettings()
+	case "vault":
+		return t.AsVaultKMSSettings()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t KMSSettings) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *KMSSettings) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
 
 // AsUnderscoreCreateParams returns the union data inside the RootModelUnionCreateParamsCloneParams as a UnderscoreCreateParams
 func (t RootModelUnionCreateParamsCloneParams) AsUnderscoreCreateParams() (UnderscoreCreateParams, error) {

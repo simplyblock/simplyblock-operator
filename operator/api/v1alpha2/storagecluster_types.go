@@ -160,6 +160,17 @@ type VaultKMS struct {
 	Endpoint string `json:"endpoint"`
 }
 
+// KMIPKMS configures a KMIP-speaking key management appliance.
+type KMIPKMS struct {
+	// Endpoint is the KMIP server address, host:port, for example,
+	// kmip.example.com:5696. Rejected unless it resolves to an external
+	// address. No URL scheme: KMIP is a binary TTLV protocol over TLS, not
+	// an HTTP API, so it has no scheme convention to validate against.
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9.-]+:[0-9]{1,5}$`
+	// +kubebuilder:validation:Required
+	Endpoint string `json:"endpoint"`
+}
+
 // KMSSpec selects where the cluster stores volume encryption keys. It is a
 // block with one member per provider so that the providers are siblings, which
 // is what makes choosing between them expressible.
@@ -167,6 +178,10 @@ type KMSSpec struct {
 	// Vault stores keys in HashiCorp Vault.
 	// +optional
 	Vault *VaultKMS `json:"vault,omitempty"`
+
+	// KMIP stores keys in a KMIP-speaking appliance.
+	// +optional
+	KMIP *KMIPKMS `json:"kmip,omitempty"`
 }
 
 // BackupCredentialsSource selects how a backup store's credentials are

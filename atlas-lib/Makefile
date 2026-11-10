@@ -36,7 +36,7 @@ all: build test ## Build and test the library.
 generate: $(GENERATED) ## Generate the control-plane API client, its response validation, and the link protocol.
 
 internal/cpapi/cpapi.gen.go: ../shared/openapi.json internal/cpapi/oapi-codegen.yaml \
-		internal/cpapi/gen.go
+		internal/cpapi/overlay.yaml internal/cpapi/gen.go
 	go generate ./internal/cpapi/...
 
 # The rules are checked against the spec and resolved against the client, so

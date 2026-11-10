@@ -1109,7 +1109,7 @@ func (r *StorageClusterReconciler) creationParams(
 		return atlascp.CreateClusterParams{}, err
 	}
 
-	vault, err := vaultConfig(cluster.Spec.KMS)
+	kms, err := kmsConfig(cluster.Spec.KMS)
 	if err != nil {
 		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
 			InvalidConfig, InvalidConfig, "The key store is not usable: %v", err)
@@ -1147,7 +1147,7 @@ func (r *StorageClusterReconciler) creationParams(
 		RPCBasePort:         ptr.IntFrom(cluster.Spec.RpcBasePort, 8080),
 		SnodeAPIPort:        ptr.IntFrom(cluster.Spec.SnodeApiPort, 50001),
 		Backup:              backup,
-		VaultBaseURL:        vault,
+		KMS:                 kms,
 		EnableFailureDomain: ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains),
 		InlineChecksum:      ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
 		Atomic4K:            ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
@@ -1236,17 +1236,28 @@ func (r *StorageClusterReconciler) backupConfig(
 	}, nil
 }
 
-// vaultConfig is the key store's endpoint. The regrouping under spec.kms is
-// Kubernetes-side only: the control plane keeps hashicorp_vault_settings.base_url,
-// and this is where the two meet.
-func vaultConfig(kms *simplyblockv1alpha2.KMSSpec) (string, error) {
-	if kms == nil || kms.Vault == nil || kms.Vault.Endpoint == "" {
-		return "", nil
+// kmsConfig is the key store's endpoint. The regrouping under spec.kms is
+// Kubernetes-side only: the control plane keeps a discriminated kms_settings
+// (provider: vault | kmip), and this is where the two meet. spec.kms itself
+// guarantees at most one of Vault/KMIP is set (immutable once set, CEL-checked
+// at the type level), so this never has to arbitrate between them.
+func kmsConfig(kms *simplyblockv1alpha2.KMSSpec) (*atlascp.ClusterKMS, error) {
+	if kms == nil {
+		return nil, nil
 	}
-	if err := atlasnet.ValidateExternalURL(kms.Vault.Endpoint); err != nil {
-		return "", fmt.Errorf("spec.kms.vault.endpoint: %w", err)
+	if kms.Vault != nil && kms.Vault.Endpoint != "" {
+		if err := atlasnet.ValidateExternalURL(kms.Vault.Endpoint); err != nil {
+			return nil, fmt.Errorf("spec.kms.vault.endpoint: %w", err)
+		}
+		return &atlascp.ClusterKMS{VaultEndpoint: kms.Vault.Endpoint}, nil
 	}
-	return kms.Vault.Endpoint, nil
+	if kms.KMIP != nil && kms.KMIP.Endpoint != "" {
+		if err := atlasnet.ValidateExternalHostPort(kms.KMIP.Endpoint); err != nil {
+			return nil, fmt.Errorf("spec.kms.kmip.endpoint: %w", err)
+		}
+		return &atlascp.ClusterKMS{KMIPEndpoint: kms.KMIP.Endpoint}, nil
+	}
+	return nil, nil
 }
 
 // writeClusterSecret records the cluster's UUID and secret beside the object
