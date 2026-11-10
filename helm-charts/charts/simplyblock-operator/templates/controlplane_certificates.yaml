@@ -1,41 +1,7 @@
 {{- if and .Values.tls.enabled (eq .Values.tls.provider "cert-manager") }}
-{{- if index .Values.tls "cert-manager" "createSelfSignedIssuer" }}
----
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: {{ index .Values.tls "cert-manager" "cluster-issuer" | quote }}
-spec:
-  selfSigned: {}
-{{- end }}
----
-# The CA Certificate must live in the cert-manager namespace so that the
-# ClusterIssuer below can read its backing secret. ClusterIssuers always look
-# for CA secrets in the namespace where cert-manager itself is running.
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: simplyblock-certificate-authority
-  namespace: {{ index .Values.tls "cert-manager" "namespace" }}
-spec:
-  isCA: true
-  commonName: simplyblock-certificate-authority
-  secretName: simplyblock-certificate-authority-tls
-  privateKey:
-    algorithm: ECDSA
-    size: 256
-  issuerRef:
-    kind: ClusterIssuer
-    name: {{ index .Values.tls "cert-manager" "cluster-issuer" | quote }}
----
-# ClusterIssuer is cluster-scoped; namespace in metadata is ignored.
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: simplyblock-certificate-authority-issuer
-spec:
-  ca:
-    secretName: simplyblock-certificate-authority-tls
+# The root ClusterIssuer, the CA Certificate, and the CA ClusterIssuer are
+# the operator's (--cert-manager-ca-chain): the CA must live in cert-manager's
+# cluster resource namespace, which only a reader of the cluster can find.
 ---
 # CA bundle certificate in the release namespace. Pods cannot mount secrets
 # across namespaces, so this certificate (issued by the ClusterIssuer above)

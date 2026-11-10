@@ -39,6 +39,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/metricsapi"
+	"github.com/simplyblock/simplyblock-operator/internal/prerequisites"
 	"github.com/simplyblock/simplyblock-operator/internal/sitelink"
 	"github.com/simplyblock/simplyblock-operator/internal/sitesvc"
 
@@ -287,6 +288,16 @@ func main() {
 	flag.DurationVar(&deviceSMARTInterval, "device-smart-interval", nodecontroller.DefaultSMARTInterval,
 		"How often each storage device's SMART health log is read. A StorageDeviceOps with action "+
 			"CheckHealth reads one immediately.")
+	var caChain bool
+	var caRootIssuer string
+	var caCreateRoot bool
+	flag.BoolVar(&caChain, "cert-manager-ca-chain", false,
+		"Keep the simplyblock CA chain in place: the CA Certificate in cert-manager's cluster resource "+
+			"namespace and the CA ClusterIssuer that signs every simplyblock certificate.")
+	flag.StringVar(&caRootIssuer, "cert-manager-root-issuer", prerequisites.SelfSignedIssuerName,
+		"The ClusterIssuer the CA Certificate is minted from.")
+	flag.BoolVar(&caCreateRoot, "cert-manager-create-root-issuer", true,
+		"Create the root ClusterIssuer as a self-signed issuer.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -543,6 +554,16 @@ func main() {
 		os.Exit(1)
 	}
 	ctrlMgr := gatedManager{Manager: mgr, gate: webhookGate.open}
+	if caChain {
+		if err := mgr.Add(&prerequisites.CAChainKeeper{
+			Client:   mgr.GetClient(),
+			Chain:    prerequisites.CAChain{RootIssuer: caRootIssuer, CreateRoot: caCreateRoot},
+			Interval: time.Minute,
+		}); err != nil {
+			setupLog.Error(err, "unable to add the CA chain keeper")
+			os.Exit(1)
+		}
+	}
 
 	cpSubscriptions := cpinformer.NewSubscriptionManager(streamCfg, ctrl.Log.WithName("cpinformer"), cpinformer.LeaderOnly)
 	deviceSubscription := subscriptions.NewDeviceSubscription()
