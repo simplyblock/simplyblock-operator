@@ -34,6 +34,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nqn"
@@ -473,6 +474,48 @@ func (r *PersistentVolumeOpsReconciler) ensureDeadline(
 	})
 }
 
+// moveHappened reports whether the control plane has the namespaces in the
+// target, and records it in status when it learns so. Status alone cannot
+// answer: a pass that died between the move call and its status write leaves
+// a move that happened and a status that says it did not (live 2026-11-10).
+// The control plane is asked only while status does not already say target,
+// so a pass inside the window costs one GET at most.
+func (r *PersistentVolumeOpsReconciler) moveHappened(
+	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
+) (bool, error) {
+	join := joinOf(ops)
+	if join.MoveID == "" {
+		return false, nil
+	}
+	if join.NamespacesAt == simplyblockv1alpha2.SubsystemSideTarget {
+		return true, nil
+	}
+	move, err := r.Join.GetSubsystemMove(ctx, subject.clusterUUID, moveGroupOf(join), join.MoveID)
+	if err != nil {
+		if errors.Is(err, errs.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read the move %s: %w", join.MoveID, err)
+	}
+	if move.NamespacesAt != controlplane.NamespacesAtTarget {
+		return false, nil
+	}
+	if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.PersistentVolumeOpsStatus) {
+		joinStatus(status).NamespacesAt = simplyblockv1alpha2.SubsystemSideTarget
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// pastDeadline reports that the suspend window has closed: from then on a
+// host's watchdog may have resumed it on its own, on whichever subsystem held
+// the namespace, so the operation can no longer assume where a host's I/O is.
+func (r *PersistentVolumeOpsReconciler) pastDeadline(ops *simplyblockv1alpha2.PersistentVolumeOps) bool {
+	deadline := joinOf(ops).SuspendDeadline
+	return deadline != nil && !r.now().Before(deadline.Time)
+}
+
 // joinMove confirms every host still holds its I/O under the same plugin
 // process, then has the control plane move the namespaces.
 func (r *PersistentVolumeOpsReconciler) joinMove(
@@ -482,7 +525,14 @@ func (r *PersistentVolumeOpsReconciler) joinMove(
 		return "", false, err
 	}
 	join := joinOf(ops)
-	if join.NamespacesAt != simplyblockv1alpha2.SubsystemSideTarget {
+	happened, err := r.moveHappened(ctx, ops, subject)
+	if err != nil {
+		return "", false, err
+	}
+	// A move that happened is not checked for or started again: the hosts
+	// may already have been resumed on the target by their watchdogs, and
+	// the only way from here is forward.
+	if !happened {
 		if host, err := r.unrecordedConsumer(ctx, ops); err != nil {
 			return "", false, err
 		} else if host != "" {
@@ -512,7 +562,7 @@ func (r *PersistentVolumeOpsReconciler) joinMove(
 			}
 		}
 
-		_, err := r.Join.StartSubsystemMove(ctx, subject.clusterUUID, moveGroupOf(join), join.MoveID, join.SuspendDeadline.Time)
+		_, err = r.Join.StartSubsystemMove(ctx, subject.clusterUUID, moveGroupOf(join), join.MoveID, join.SuspendDeadline.Time)
 		switch {
 		case errors.Is(err, controlplane.ErrDeadlinePassed), errors.Is(err, controlplane.ErrMoveFailed),
 			errors.Is(err, controlplane.ErrMoveConflict):
@@ -665,6 +715,24 @@ func (r *PersistentVolumeOpsReconciler) beginRollback(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
 	machine *statemachine.Machine[step], reason string,
 ) (ctrl.Result, error) {
+	// Once the window has closed, a move that happened is never taken back:
+	// a host the operation cannot reach may have been resumed on the target
+	// by its watchdog, and putting the namespaces back would fail its I/O.
+	// The operation goes forward instead, resuming each host on the target as
+	// it can reach it, and commits. Before the deadline the hosts are still
+	// held, and a rollback is what the step asked for.
+	if joinOf(ops).RollbackReason == "" && r.pastDeadline(ops) {
+		happened, err := r.moveHappened(ctx, ops, subject)
+		if err != nil {
+			return ctrl.Result{RequeueAfter: joinInsideWindow}, r.note(ctx, ops,
+				fmt.Sprintf("%s; could not learn from the control plane whether the move happened: %v", reason, err))
+		}
+		if happened {
+			r.event(ops, corev1.EventTypeWarning, ReasonSubsystemSwapDeferred,
+				"The move had happened when %s; the hosts are resumed on the target as they can be reached, and the move is committed", reason)
+			return r.enterJoinStep(ctx, ops, machine, stepJoinResuming)
+		}
+	}
 	if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.PersistentVolumeOpsStatus) {
 		join := joinStatus(status)
 		if join.RollbackReason == "" {

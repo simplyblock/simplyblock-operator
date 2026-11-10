@@ -566,3 +566,121 @@ func TestAHostThatAttachesInsideTheWindowRollsBackBeforeTheMove(t *testing.T) {
 		}
 	}
 }
+
+// Live 2026-11-10 (regression_test/26 edge-operator-window): the operator was
+// killed after the control plane had moved the namespaces and before the
+// status recorded it. The node's watchdog resumed the host on the target at
+// the deadline, the new operator pod read "not moved" from its status, found
+// the host's plugin not yet re-linked, and rolled the move back: the control
+// plane took the namespace out from under a live mapping and the pod got I/O
+// errors. A move that happened is learned from the control plane and, once
+// the deadline has passed, only ever committed.
+func TestAMoveThatHappenedBeforeTheOperatorDiedIsCommittedNeverRolledBack(t *testing.T) {
+	w := newJoinWorld(t)
+	w.runUntil(stepMovingNamespaces, 30)
+
+	// The control plane did the move; the status write that would say so was lost.
+	w.api.move.NamespacesAt = controlplane.NamespacesAtTarget
+	ops := w.ops()
+	if ops.Status.JoinConsistencyGroup.NamespacesAt == simplyblockv1alpha2.SubsystemSideTarget {
+		t.Fatal("precondition: the status already says the namespaces are at the target")
+	}
+	// The deadline passed while nobody was reconciling: the watchdog resumed
+	// each host on the target on its own.
+	w.now = w.now.Add(2 * suspendTimeout(ops))
+	for _, name := range []string{joinHost, memberHost} {
+		w.node(name).suspended = map[string]bool{}
+		for h := range w.node(name).pointsAt {
+			w.node(name).pointsAt[h] = joinTargetNQN
+		}
+	}
+	// And the new operator pod cannot reach one host yet.
+	w.peers.unreachable[memberHost] = true
+
+	for range 6 {
+		if _, err := w.pass(); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	if w.log.count("rollback") != 0 {
+		t.Fatalf("the move was rolled back under a host that may run on the target: %v", w.log.calls)
+	}
+	if w.log.count("move") != 0 {
+		t.Fatalf("the move was started again: %v", w.log.calls)
+	}
+	if phase := w.ops().Status.Phase; terminal(phase) {
+		t.Fatalf("the operation ended %s while a host was unreachable", phase)
+	}
+
+	w.peers.unreachable[memberHost] = false
+	ops = w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
+	}
+	if w.log.count("commit") != 1 || w.log.count("rollback") != 0 {
+		t.Errorf("commits = %d, rollbacks = %d, want 1 and 0: %v", w.log.count("commit"), w.log.count("rollback"), w.log.calls)
+	}
+	if w.log.index("resume "+memberHost+" "+joinTargetNQN) < 0 {
+		t.Errorf("%s was not resumed on the target once reachable: %v", memberHost, w.log.calls)
+	}
+}
+
+// The same lost write, but the operation fails (its step outlived its
+// deadline because the host never came back): it still commits rather than
+// rolls back, because the host may be running on the target. The step deadline
+// runs on wall time, so the failure is driven directly.
+func TestAMoveThatHappenedIsCommittedEvenWhenTheOperationFails(t *testing.T) {
+	w := newJoinWorld(t)
+	w.runUntil(stepMovingNamespaces, 30)
+	w.api.move.NamespacesAt = controlplane.NamespacesAtTarget
+	w.now = w.now.Add(2 * suspendTimeout(w.ops()))
+
+	ops := w.ops()
+	subject, err := w.r.resolve(context.Background(), ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.r.failJoin(context.Background(), ops, subject, ReasonStepDeadlineExceeded, "step Resuming outlived its deadline"); err != nil {
+		t.Fatal(err)
+	}
+	ops = w.ops()
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed {
+		t.Fatalf("phase = %q (%s), want Failed", ops.Status.Phase, ops.Status.Message)
+	}
+	if w.log.count("rollback") != 0 || w.log.count("commit") != 1 {
+		t.Errorf("commits = %d, rollbacks = %d, want 1 and 0: %v", w.log.count("commit"), w.log.count("rollback"), w.log.calls)
+	}
+	if !strings.Contains(ops.Status.Message, "committed") {
+		t.Errorf("message %q does not say the move was committed", ops.Status.Message)
+	}
+}
+
+// A failure before the window closed releases the move as before: the hosts
+// are still held, and nothing can have resumed on the target.
+func TestAFailureBeforeTheDeadlineStillReleasesTheMove(t *testing.T) {
+	w := newJoinWorld(t)
+	w.runUntil(stepMovingNamespaces, 30)
+	w.api.move.NamespacesAt = controlplane.NamespacesAtTarget
+
+	ops := w.ops()
+	subject, err := w.r.resolve(context.Background(), ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.r.failJoin(context.Background(), ops, subject, ReasonStepDeadlineExceeded, "step outlived its deadline"); err != nil {
+		t.Fatal(err)
+	}
+	if w.log.count("rollback") != 1 || w.log.count("commit") != 0 {
+		t.Errorf("commits = %d, rollbacks = %d, want 0 and 1: %v", w.log.count("commit"), w.log.count("rollback"), w.log.calls)
+	}
+}
+
+// Before the deadline the hosts are still held, so a namespace that never
+// appears on a host is still answered by rolling the move back (design §11).
+func TestANamespaceThatNeverAppearsBeforeTheDeadlineStillRollsBack(t *testing.T) {
+	w := newJoinWorld(t)
+	w.runUntil(stepJoinResuming, 30)
+	w.node(memberHost).resumeErrs = []error{fmt.Errorf("%w: never appeared", swaprpc.ErrNamespaceNotFound)}
+
+	w.rolledBack(w.run(40))
+}

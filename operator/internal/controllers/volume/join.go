@@ -859,7 +859,25 @@ func (r *PersistentVolumeOpsReconciler) failJoin(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject, reason, message string,
 ) (ctrl.Result, error) {
 	if join := joinOf(ops); join.MoveID != "" {
-		if err := r.Join.RollbackSubsystemMove(ctx, subject.clusterUUID, moveGroupOf(join), join.MoveID); err != nil {
+		// A move that happened after the window closed is committed, not
+		// released: a host may be running on the target already (see
+		// beginRollback), and the failure is reported with the namespaces
+		// where they are.
+		happened := false
+		if r.pastDeadline(ops) {
+			var err error
+			if happened, err = r.moveHappened(ctx, ops, subject); err != nil {
+				return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops,
+					fmt.Sprintf("%s; could not learn whether the move happened: %v", message, err))
+			}
+		}
+		if happened {
+			if err := r.Join.CommitSubsystemMove(ctx, subject.clusterUUID, moveGroupOf(join), join.MoveID); err != nil {
+				return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops,
+					fmt.Sprintf("%s; committing the move that happened: %v", message, err))
+			}
+			message += fmt.Sprintf("; the namespaces had moved into %s and the move is committed", join.TargetNQN)
+		} else if err := r.Join.RollbackSubsystemMove(ctx, subject.clusterUUID, moveGroupOf(join), join.MoveID); err != nil {
 			return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops,
 				fmt.Sprintf("%s; releasing the reserved move: %v", message, err))
 		}

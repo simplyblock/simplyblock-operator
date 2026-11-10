@@ -510,6 +510,14 @@ error, and the reconciler decides between retrying and rolling back (§7).
 The same call is the rollback: with the source NQN it resumes the volume on its
 source subsystem once the control plane put the namespace back there.
 
+A rollback is only ever decided while the hosts are known to be held. Once the
+deadline has passed, a host's watchdog may have resumed it on the target, so the
+reconciler first asks the control plane where the namespaces are, and a move
+that happened goes forward from there: each host is resumed on the target as it
+can be reached, and the move is committed, whatever step asked for the rollback
+and even if the operation ends Failed. Status alone cannot answer, because a
+pass can die between the move call and the write that records it (§11).
+
 The kernel admits a namespace only while no other subsystem on the host holds
 its identity (UUID and NGUID), and logs `ignoring nsid N because of duplicate
 IDs` otherwise. A controller of the source subsystem that is not live, such as
@@ -876,6 +884,7 @@ host's capability instead of an assertion about all of them.
 |----------------------------------------------------|---------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
 | Control plane unreachable before `Suspending`      | HTTP error                            | Retried with backoff. No host is touched                                                                                                  |
 | Control plane unreachable during the window        | HTTP error in `MovingNamespaces`      | The reconciler retries until the deadline, then rolls back. The control plane refuses a late move (P0-4). The watchdog resumes every host |
+| Operator dies between the move call and its status write | `MovingNamespaces` re-entered with no namespace location, or any rollback or failure after the deadline | The reconciler asks the control plane where the namespaces are before it decides (`GET /subsystem-moves/{id}`). A move that happened is never taken back once the window has closed: the watchdog may have resumed a host on the target, so the operation resumes each host there as it can be reached, and commits, even when it ends Failed. Live 2026-11-10: without this, a rollback removed the namespace under a resumed host and the pod saw I/O errors |
 | A host unreachable over the link during the window | gRPC error                            | Rollback. The unreachable host's watchdog resolves it by namespace UUID                                                                   |
 | The namespace never appears on the target          | `Resume` times out                    | Rollback to the source, and the operation fails with `SubsystemSwapRolledBack`                                                            |
 | The kernel refuses the reload                      | `Resume` error                        | The mapping stays suspended, the reconciler rolls back, and the reload onto the source device is retried                                  |
