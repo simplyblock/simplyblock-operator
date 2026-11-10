@@ -217,7 +217,59 @@ func (w *cgMembershipWatcher) reconcile(ctx context.Context, pvc *corev1.Persist
 				group.Name, label)
 			return nil
 		}
+		if w.joinOps != nil {
+			return w.requestColocation(ctx, client, pvc, pv.Name, label, groupID, handle.VolumeID)
+		}
 		return w.colocateMember(ctx, client, pvc, groupID, label, handle.VolumeID)
+	}
+	return nil
+}
+
+// requestColocation brings a member that is not in its group's subsystem into
+// it, through the same operation a late join uses. A member is left outside
+// the subsystem when its join's swap rolled back after the membership was
+// recorded (live 2026-11-10): the operation is then Failed, its event asks for
+// it to be deleted, and the pass after the deletion has to create a new one,
+// which only this path does for a member. The control plane's plan answers
+// whether the member is colocated, and reserves nothing; a member in its
+// subsystem produces no call and no event.
+func (w *cgMembershipWatcher) requestColocation(
+	ctx context.Context, client membershipClient,
+	pvc *corev1.PersistentVolumeClaim, pvName, label, groupID, lvolID string,
+) error {
+	plan, err := client.PlanConsistencyGroupJoin(ctx, groupID, lvolID)
+	if err != nil {
+		if errors.Is(err, controlplane.ErrMembershipRefused) {
+			w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupColocationDeferred",
+				"volume stays in its own subsystem for now (consistency group %q): %v", label, err)
+			return nil
+		}
+		return fmt.Errorf("plan the co-location of %s with consistency group %q: %w", lvolID, label, err)
+	}
+	if !plan.Has(controlplane.JoinStepColocate) {
+		return nil
+	}
+	name := joinOperationName(lvolID, label)
+	phase, created, err := w.joinOps.Ensure(ctx, name, pvName, label)
+	if err != nil {
+		return fmt.Errorf("request the co-location of %s with consistency group %q: %w", pvName, label, err)
+	}
+	switch {
+	case created:
+		w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupJoinStarted",
+			"volume is a member of consistency group %q but not in its subsystem %s; moving it through PersistentVolumeOps %s",
+			label, plan.TargetNQN, name)
+	case phase == opsSucceeded:
+		w.recorder.Eventf(pvc, corev1.EventTypeWarning, "ConsistencyGroupNotColocated",
+			"PersistentVolumeOps %s ended Succeeded, but the volume is not in consistency group %q's subsystem %s; "+
+				"delete it to retry", name, label, plan.TargetNQN)
+	case phase == opsFailed || phase == opsAborted:
+		w.recorder.Eventf(pvc, corev1.EventTypeWarning, "ConsistencyGroupJoinFailed",
+			"PersistentVolumeOps %s moving the volume into consistency group %q's subsystem ended %s; delete it to retry",
+			name, label, phase)
+	default:
+		w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupJoining",
+			"PersistentVolumeOps %s is moving the volume into consistency group %q's subsystem (phase %q)", name, label, phase)
 	}
 	return nil
 }

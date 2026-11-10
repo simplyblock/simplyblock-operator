@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -410,5 +411,109 @@ func TestARelabelBackToAGroupTheVolumeLeftIsAConflict(t *testing.T) {
 	}
 	if len(ops.existing) != 1 {
 		t.Fatalf("no new operation expected, got %v", ops.existing)
+	}
+}
+
+// ordersGroup is the group the member tests below label their volume into.
+const ordersGroup = "orders-db"
+
+// memberOutsideItsSubsystem is a volume that joined orders-db but is not in
+// the group's subsystem: the state a rolled-back swap leaves behind. The
+// control plane's plan for such a member is the one step that remains.
+func memberOutsideItsSubsystem(lvol string) *fakeMembership {
+	m := groupOrdersDB()
+	m.groupIDByLvol = map[string]string{lvol: "g1"}
+	m.plan = &controlplane.JoinPlan{Steps: []string{controlplane.JoinStepColocate}, TargetNQN: "nqn.group"}
+	return m
+}
+
+// Live 2026-11-10 (regression_test/26 edge-*-window): after a join's swap
+// rolled back, the volume was a member in its own subsystem, and nothing ever
+// moved it: the watcher only requested the operation for a non-member, so
+// deleting the failed operation, which its own event asked for, created
+// nothing. A member the control plane says is outside its subsystem gets the
+// same operation a late join does.
+func TestAMemberOutsideItsSubsystemRequestsTheJoinOperation(t *testing.T) {
+	ops := &fakeJoinOps{}
+	watcher, pvc, recorder := joinWatcher(t, "orders", testLvol, memberOutsideItsSubsystem(testLvol), ops)
+
+	if err := watcher.reconcile(context.Background(), pvc); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(ops.requests) != 1 || ops.requests[0][0] != wantOpName(ordersGroup) || ops.requests[0][2] != ordersGroup {
+		t.Fatalf("requests = %v, want one %s for %s", ops.requests, wantOpName(ordersGroup), ordersGroup)
+	}
+	if !hasEvent(drain(recorder), "Normal ConsistencyGroupJoinStarted") {
+		t.Fatal("the request was not announced on the PVC")
+	}
+}
+
+// A member in its group's subsystem is converged: no operation, no event, and
+// the control plane's old co-location call is not made either.
+func TestAMemberInItsSubsystemRequestsNothing(t *testing.T) {
+	ops := &fakeJoinOps{}
+	membership := groupOrdersDB()
+	membership.groupIDByLvol = map[string]string{testLvol: "g1"}
+	membership.plan = &controlplane.JoinPlan{}
+	watcher, pvc, recorder := joinWatcher(t, "orders", testLvol, membership, ops)
+
+	if err := watcher.reconcile(context.Background(), pvc); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(ops.requests) != 0 || len(membership.colocated) != 0 {
+		t.Fatalf("a converged member produced requests %v, co-locations %v", ops.requests, membership.colocated)
+	}
+	if events := drain(recorder); len(events) != 0 {
+		t.Fatalf("a converged member produced events %v", events)
+	}
+}
+
+// The operation's phase is reported the way a late join's is, and a Failed one
+// says that deleting it retries, which is now true: the next pass creates a
+// new one for a member still outside the subsystem.
+func TestAMemberOutsideItsSubsystemReportsItsOperationsPhase(t *testing.T) {
+	for _, tc := range []struct {
+		phase string
+		want  string
+	}{
+		{opsFailed, "Warning ConsistencyGroupJoinFailed"},
+		{opsAborted, "Warning ConsistencyGroupJoinFailed"},
+		{"Running", "Normal ConsistencyGroupJoining"},
+		{opsSucceeded, "Warning ConsistencyGroupNotColocated"},
+	} {
+		t.Run(tc.phase, func(t *testing.T) {
+			ops := &fakeJoinOps{phase: tc.phase, existing: map[string]bool{wantOpName(ordersGroup): true}}
+			watcher, pvc, recorder := joinWatcher(t, "orders", testLvol, memberOutsideItsSubsystem(testLvol), ops)
+			if err := watcher.reconcile(context.Background(), pvc); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			events := drain(recorder)
+			if !hasEvent(events, tc.want) {
+				t.Fatalf("events = %v, want one starting %q", events, tc.want)
+			}
+			if tc.phase == opsFailed && !strings.Contains(strings.Join(events, "\n"), "delete it to retry") {
+				t.Fatalf("events = %v, want the retry instruction", events)
+			}
+		})
+	}
+}
+
+// A plan the control plane refuses (the group's node at its subsystem limit,
+// for one) is a hold, reported as before, with no operation requested.
+func TestAMemberWhoseColocationIsRefusedIsHeldWithAnEvent(t *testing.T) {
+	ops := &fakeJoinOps{}
+	membership := memberOutsideItsSubsystem(testLvol)
+	membership.plan = nil
+	membership.planErr = fmt.Errorf("%w: node holds its maximum of subsystems", controlplane.ErrMembershipRefused)
+	watcher, pvc, recorder := joinWatcher(t, "orders", testLvol, membership, ops)
+
+	if err := watcher.reconcile(context.Background(), pvc); err != nil {
+		t.Fatalf("a refused plan is not an error: %v", err)
+	}
+	if len(ops.requests) != 0 {
+		t.Fatalf("a refused co-location requested %v", ops.requests)
+	}
+	if !hasEvent(drain(recorder), "Normal ConsistencyGroupColocationDeferred") {
+		t.Fatal("the hold was not reported")
 	}
 }
