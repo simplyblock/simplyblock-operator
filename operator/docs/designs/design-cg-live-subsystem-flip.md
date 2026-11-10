@@ -714,7 +714,11 @@ plane for the member's plan (`POST /members/plan`, which reserves nothing); a
 plan with the colocate step gets the same `cg-join-<lvol>-<group>` operation,
 and its phase is reported the same way, so deleting a failed one really does
 retry. A member in its subsystem gets no call and no event. A plan the control
-plane refuses is held with `ConsistencyGroupColocationDeferred`, as before.
+plane refuses is held with `ConsistencyGroupColocationDeferred`, as before. The plan's vote for the
+group's subsystem leaves the member itself out, as the move target selection
+leaves the joiner out: counted, one member alone in each subsystem tied, and
+NQN order decided whether the member was "already there" (live 2026-11-10,
+`plan_late_join`).
 
 A label changed to name another group is the second trigger. The watcher
 requests a join of the new group, `cg-join-<lvol>-<group>`, and the operation
