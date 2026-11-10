@@ -6,12 +6,14 @@ package controlplane
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -177,5 +179,66 @@ func TestPrometheusReplicasHaveTheNamesThanosQueryDials(t *testing.T) {
 	}
 	if sts := findTyped[*appsv1.StatefulSet](t, objects, ComponentPrometheus); sts.Spec.ServiceName != prometheusHeadlessService {
 		t.Errorf("StatefulSet serviceName = %q, want %q", sts.Spec.ServiceName, prometheusHeadlessService)
+	}
+}
+
+// Regression: 2026-11-10-prometheus-borrowed-identity. Under mutual TLS every
+// client presents its own certificate, and Prometheus presented the management
+// API's serving certificate, so it held the server's key and the server could
+// not tell its scraper from itself.
+func TestPrometheusPresentsItsOwnClientCertificate(t *testing.T) {
+	cp := aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{})
+	if !cp.Spec.Source.Local.RequiresClientCertificate() {
+		t.Fatal("the default control plane is expected to require client certificates")
+	}
+	objects := managementAPIObjects(cp)
+
+	spec := findTyped[*appsv1.StatefulSet](t, objects, ComponentPrometheus).Spec.Template.Spec
+	mountsClient := false
+	for _, v := range spec.Volumes {
+		if v.Secret != nil && v.Secret.SecretName == ServingCertSecret {
+			t.Errorf("Prometheus mounts the serving Secret %s in volume %s", ServingCertSecret, v.Name)
+		}
+		if v.Secret != nil && v.Secret.SecretName == prometheusClientSecret {
+			mountsClient = true
+		}
+	}
+	if !mountsClient {
+		t.Errorf("Prometheus does not mount its client Secret %s", prometheusClientSecret)
+	}
+
+	var cert *unstructured.Unstructured
+	for _, obj := range objects {
+		if u, ok := obj.(*unstructured.Unstructured); ok && u.GetKind() == "Certificate" &&
+			u.GetName() == prometheusClientCertificate {
+			cert = u
+		}
+	}
+	if cert == nil {
+		t.Fatalf("no Certificate %s in the install", prometheusClientCertificate)
+	}
+	if got, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName"); got != prometheusClientSecret {
+		t.Errorf("the Certificate issues into %q, want %q", got, prometheusClientSecret)
+	}
+	usages, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "usages")
+	if !slices.Contains(usages, "client auth") || slices.Contains(usages, "server auth") {
+		t.Errorf("the Certificate's usages are %v, want client auth without server auth", usages)
+	}
+}
+
+// Without mutual TLS there is nothing to present, so no client Certificate is
+// issued. The OpenShift service CA signs serving certificates only, so that
+// provider keeps the shared volume until #863 settles it.
+func TestPrometheusClientCertificateOnlyUnderCertManagerMutualTLS(t *testing.T) {
+	off := false
+	for name, tls := range map[string]simplyblockv1alpha2.ControlPlaneTLS{
+		"no mutual TLS": {EnableMutualTLS: &off},
+		"OpenShift":     {Provider: simplyblockv1alpha2.ControlPlaneTLSOpenShift},
+	} {
+		for _, obj := range managementAPIObjects(aLocalControlPlane(tls)) {
+			if obj.GetName() == prometheusClientCertificate {
+				t.Errorf("%s: the install carries %T %s", name, obj, prometheusClientCertificate)
+			}
+		}
 	}
 }

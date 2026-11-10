@@ -69,6 +69,14 @@ spec:
             # the CSI plugins' client certificates.
             - --csi-link-client-ca-file=/etc/simplyblock/tls/ca.crt
             {{- end }}
+            {{- if and .Values.tls.enabled (eq .Values.tls.provider "cert-manager") }}
+            - --cert-manager-ca-chain
+            - --cert-manager-root-issuer={{ index .Values.tls "cert-manager" "cluster-issuer" }}
+            - --cert-manager-create-root-issuer={{ index .Values.tls "cert-manager" "createSelfSignedIssuer" }}
+            {{- with index .Values.tls "cert-manager" "caSecretName" }}
+            - --cert-manager-ca-secret={{ . }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.volumeMigration.legacy }}
             # An upgrade turns this on so the migrations already raised against
             # the registered kind keep being driven. A rename and a scope change

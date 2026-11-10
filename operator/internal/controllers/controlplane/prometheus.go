@@ -12,6 +12,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/ptr"
@@ -38,15 +39,20 @@ const (
 	prometheusVolumeSize = "20Gi"
 
 	prometheusTLSPath = "/etc/prometheus/tls"
-	thanosGRPCPort    = 10901
-	thanosHTTPPort    = 10902
+
+	// prometheusClientCertificate and its Secret are the names the chart issued
+	// them under, so an install that came from the chart already has the Secret.
+	prometheusClientCertificate = "simplyblock-prometheus-client"
+	prometheusClientSecret      = "simplyblock-prometheus-client-tls"
+	thanosGRPCPort              = 10901
+	thanosHTTPPort              = 10902
 )
 
 // prometheusObjects is the account and its pod discovery grant, the scrape
 // configuration, the server, and its Service.
 func prometheusObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 	ns := cp.Namespace
-	return []client.Object{
+	objects := []client.Object{
 		serviceAccount(ns, prometheusServiceAccount, nil),
 		prometheusRole(ns),
 		prometheusRoleBinding(ns),
@@ -55,6 +61,52 @@ func prometheusObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 		prometheusService(ns),
 		prometheusHeadless(ns),
 	}
+	if prometheusHasOwnCertificate(cp.Spec.Source.Local) {
+		objects = append(objects, prometheusClientCertificateObject(ns))
+	}
+	return objects
+}
+
+// prometheusHasOwnCertificate says whether Prometheus presents a client
+// certificate of its own. The OpenShift service CA signs serving certificates
+// only, so that provider still presents the serving one (#863).
+func prometheusHasOwnCertificate(local *simplyblockv1alpha2.LocalControlPlane) bool {
+	return local.RequiresClientCertificate() &&
+		local.TLSProvider() == simplyblockv1alpha2.ControlPlaneTLSCertManager
+}
+
+// prometheusClientCertificateObject is Prometheus's client identity under
+// mutual TLS: client auth only, so it cannot serve as the management API.
+func prometheusClientCertificateObject(namespace string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "cert-manager.io/v1",
+		"kind":       "Certificate",
+		"metadata":   map[string]any{"name": prometheusClientCertificate, "namespace": namespace},
+		"spec": map[string]any{
+			"commonName": prometheusServiceAccount,
+			"secretName": prometheusClientSecret,
+			"issuerRef": map[string]any{
+				"kind": "ClusterIssuer",
+				"name": utils.CertManagerClusterIssuerName,
+			},
+			"usages": []any{"digital signature", "key encipherment", "client auth"},
+		},
+	}}
+}
+
+// prometheusTLSVolume is Prometheus's own client Secret where it has one, which
+// carries the CA it verifies the management API against, and the shared
+// control-plane volume otherwise.
+func prometheusTLSVolume(local *simplyblockv1alpha2.LocalControlPlane) []corev1.Volume {
+	if !prometheusHasOwnCertificate(local) {
+		return tlsVolume(local)
+	}
+	return []corev1.Volume{{
+		Name: tlsVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{SecretName: prometheusClientSecret},
+		},
+	}}
 }
 
 // prometheusRole lets the server discover the rebalancer probe pods in its own
@@ -175,7 +227,7 @@ func prometheusStatefulSet(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Statefu
 		}}},
 	}
 	if local.ServesTLS() {
-		volumes = append(volumes, tlsVolume(local)...)
+		volumes = append(volumes, prometheusTLSVolume(local)...)
 		prometheusMounts = append(prometheusMounts,
 			corev1.VolumeMount{Name: tlsVolumeName, MountPath: prometheusTLSPath, ReadOnly: true})
 	}

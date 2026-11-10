@@ -662,27 +662,6 @@ controlplane:
     # S3 backup credentials through Amazon EKS's pod-identity webhook. Empty adds no annotation.
     eksRoleARN: ""
 
-    # One site of a stretched control plane: two Kubernetes clusters, one per
-    # site, whose control planes share one FoundationDB laid out as two
-    # regions (three copies in each), one site leading at a time. Both sites
-    # install this chart; the Bootstrap site first, the Join site with the
-    # Bootstrap site's FoundationDB connection string (the `cluster-file` key
-    # of its simplyblock-fdb-cluster-config ConfigMap) in a Secret here.
-    # Immutable once the control plane exists.
-    stretch:
-      # -- Makes this control plane one site of a stretched control plane.
-      enabled: false
-      # -- This site's name; nodes added from this cluster carry it.
-      site: ""
-      # -- The other site's name.
-      peerSite: ""
-      # -- `Bootstrap` creates the database, `Join` joins the one the Bootstrap site created.
-      role: Bootstrap
-      # -- URL of this site's management API as the other site reaches it (load balancer or node port).
-      apiEndpoint: ""
-      # -- Join only: Secret in this namespace whose `cluster-file` key is the Bootstrap site's connection string.
-      seedConnectionStringSecretRef: ""
-
   # Where the control plane is, for deployment.profile: managed.
   managed:
     # Base URL of the management API. Required for that profile. A loopback or
@@ -1266,7 +1245,7 @@ prometheus:
     # -- Path of the simplyblock Prometheus configuration.
     configPath: /etc/simplyblock-config/prometheus.yml
     # -- Additional volumes of the Prometheus pod: the scrape configuration, the object store
-    # configuration, and the TLS client certificate and CA.
+    # configuration, and the TLS CA.
     extraVolumes:
       - name: simplyblock-prometheus-config
         configMap:
@@ -1274,14 +1253,8 @@ prometheus:
       - name: objstore-config
         configMap:
           name: simplyblock-objstore-config
-      - name: prometheus-client-tls
-        secret:
-          secretName: simplyblock-prometheus-client-tls
-          optional: true
-      # The CA the control plane's certificate is verified against. It is its
-      # own volume because the client certificate above is issued only for
-      # mutual TLS, and a scrape that encrypts without verifying is one an
-      # in-cluster impersonator answers.
+      # The CA the control plane's certificate is verified against: a scrape
+      # that encrypts without verifying is one an in-cluster impersonator answers.
       - name: prometheus-ca-tls
         secret:
           secretName: simplyblock-ca-bundle-tls
@@ -1290,9 +1263,6 @@ prometheus:
     extraVolumeMounts:
       - name: simplyblock-prometheus-config
         mountPath: /etc/simplyblock-config
-      - name: prometheus-client-tls
-        mountPath: /etc/prometheus/certs
-        readOnly: true
       - name: prometheus-ca-tls
         mountPath: /etc/prometheus/ca
         readOnly: true
@@ -1707,24 +1677,19 @@ tls:
   # Required if provider == cert-manager. Names a ClusterIssuer used to mint
   # the chart's own CA Certificate.
   cert-manager:
-    # When true, the chart creates a self-signed ClusterIssuer whose name is
+    # When true, the operator creates a self-signed ClusterIssuer whose name is
     # given by cluster-issuer. Set to false to use an issuer you created yourself.
     # -- Creates a self-signed ClusterIssuer named by `cluster-issuer`. `false` uses an existing
     # issuer.
     createSelfSignedIssuer: true
     # -- ClusterIssuer the chart mints its CA certificate from.
     cluster-issuer: selfsigned
-    # Namespace where cert-manager is installed. The chart's CA secret is placed
-    # here so that the ClusterIssuer can locate it (ClusterIssuers always read CA
-    # secrets from the cert-manager controller namespace).
-    # -- Namespace cert-manager runs in. The chart places its CA Secret there so the ClusterIssuer can
-    # read it.
-    namespace: cert-manager
-    # A CA Secret (tls.crt, tls.key) that already exists in that namespace, to
-    # sign with instead of minting a CA. The Join site of a stretched control
-    # plane names a copy of the Bootstrap site's simplyblock-certificate-authority-tls
-    # here, so FoundationDB's processes of both sites trust each other.
-    # -- Existing CA Secret in `namespace` to sign with instead of minting one. Empty mints a CA.
+    # A CA Secret (tls.crt, tls.key) that already exists in cert-manager's
+    # cluster resource namespace, to sign with instead of minting a CA. The
+    # Join site of a stretched control plane names a copy of the Bootstrap
+    # site's simplyblock-certificate-authority-tls here, so FoundationDB's
+    # processes of both sites trust each other.
+    # -- Existing CA Secret in cert-manager's cluster resource namespace to sign with instead of minting one. Empty mints a CA.
     caSecretName: ""
 
   # Mutual TLS (clients present and verify certificates). Only allowed when

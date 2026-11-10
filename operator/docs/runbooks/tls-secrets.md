@@ -17,6 +17,7 @@ operator's namespace before the pods that mount them start.
 | `<driver>-csi-controller-client-tls` and `<driver>-csi-node-client-tls` | Secret    | Mutual TLS on the driver            | The chart, as cert-manager Certificates               |
 | `simplyblock-webappapi-tls`, `simplyblock-foundationdb-tls`             | Secret    | Always with TLS                     | The operator                                          |
 | `simplyblock-storage-node-api-tls`, `simplyblock-spdk-proxy-tls`        | Secret    | Always with TLS                     | The operator (cert-manager) or OpenShift's service CA |
+| `simplyblock-prometheus-client-tls` (`tls.crt`, `tls.key`, `ca.crt`)    | Secret    | Mutual TLS, provider `cert-manager` | The operator, as a cert-manager Certificate           |
 
 `<driver>` is the `SimplyblockDriver`'s name, `simplyblock` for the chart's. The
 operator presents a client certificate when the pair is mounted at
