@@ -56,10 +56,12 @@ func isPNFSRequest(caps []*csi.VolumeCapability) (bool, error) {
 	if !pnfs {
 		// The driver must advertise MULTI_NODE_MULTI_WRITER for an RWX claim
 		// to bind, and that advertisement is global. Without this refusal an
-		// RWX claim on any other fsType goes down the block path: two nodes
-		// mounting one filesystem with nothing coordinating them.
+		// RWX filesystem claim goes down the block path: two nodes mounting one
+		// filesystem with nothing coordinating them. Raw block has no
+		// filesystem, so its writers are the application's to coordinate.
 		for _, c := range caps {
-			if c.GetAccessMode().GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+			if c.GetMount() != nil &&
+				c.GetAccessMode().GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
 				return false, status.Errorf(codes.InvalidArgument,
 					"ReadWriteMany is served by a pNFS export; set %s: %q on the StorageClass",
 					fsTypeParameter, pnfsFSType)
