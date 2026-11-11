@@ -12238,6 +12238,10 @@
             "type": "boolean",
             "title": "Enable Failure Domain"
           },
+          "lvol_geometry_enabled": {
+            "type": "boolean",
+            "title": "Lvol Geometry Enabled"
+          },
           "device_mode": {
             "type": "string",
             "title": "Device Mode"
@@ -12336,6 +12340,7 @@
           "node_affinity",
           "anti_affinity",
           "enable_failure_domain",
+          "lvol_geometry_enabled",
           "device_mode",
           "inline_checksum",
           "atomic_4k",
@@ -12598,6 +12603,11 @@
             "type": "boolean",
             "title": "Enable Failure Domain",
             "default": false
+          },
+          "lvol_geometry_enabled": {
+            "type": "boolean",
+            "title": "Lvol Geometry Enabled",
+            "default": true
           },
           "sync_replication": {
             "type": "boolean",
