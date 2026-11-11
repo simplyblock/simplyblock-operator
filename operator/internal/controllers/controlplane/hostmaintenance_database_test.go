@@ -436,9 +436,33 @@ func TestAwaitingHostWaitsForTheRecordedProcessGroups(t *testing.T) {
 		group("log-1", "log", drainedZone), group("storage-1", "storage", drainedZone),
 		group("log-2", "log", otherZone), group("log-3", "log", thirdZone), group("storage-4", "storage", fourthZone),
 	)
+	// The pods the eviction produced, ready: younger than the drain and running.
+	drainedAt := metav1.NewTime(time.Now().Add(-time.Minute))
+	ops := h.current()
+	base := ops.DeepCopy()
+	ops.Status.HostMaintenance.DrainObservedAt = &drainedAt
+	if err := h.c.Status().Patch(context.Background(), ops, client.MergeFrom(base)); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"log-1", "storage-1"} {
+		var pod corev1.Pod
+		if err := h.c.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: ComponentFDBCluster + "-" + id}, &pod); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.c.Delete(context.Background(), &pod); err != nil {
+			t.Fatal(err)
+		}
+		fresh := anFDBPod(id, drainedWorker)
+		fresh.CreationTimestamp = metav1.Now()
+		fresh.Status.Phase = corev1.PodRunning
+		fresh.Status.ContainerStatuses = []corev1.ContainerStatus{{Ready: true}}
+		if err := h.c.Create(context.Background(), fresh); err != nil {
+			t.Fatal(err)
+		}
+	}
 	h.pass()
 	if h.step() != string(stepLeavingMaintenance) {
-		t.Errorf("step = %s, want LeavingMaintenance once the processes report, cordon or not: %s", h.step(), h.current().Status.Message)
+		t.Errorf("step = %s, want LeavingMaintenance once the replacements are ready, cordon or not: %s", h.step(), h.current().Status.Message)
 	}
 }
 
@@ -603,4 +627,90 @@ func TestAFinishedWindowReportsItsPlacement(t *testing.T) {
 	if done.Status.HostMaintenance.CoordinatorPlacement != simplyblockv1alpha2.HostMaintenanceCoordinatorPlacementSharedHost {
 		t.Errorf("placement = %s, want SharedHost kept on the record", done.Status.HostMaintenance.CoordinatorPlacement)
 	}
+}
+
+// The lab's first drain ended AwaitingHost nine seconds before the FoundationDB
+// operator wrote MissingProcesses on the evicted groups, so the window cleared
+// the zone while the host was still away. The step has to wait for the pods
+// the drain evicted to be replaced and ready, and may take a pod older than
+// the drain as returned only once the worker is schedulable again, which is
+// the cordon that was never drained.
+//
+// Regression: 2026-11-11-awaiting-host-ends-before-the-eviction-is-visible.
+func TestAwaitingHostWaitsForThePodsTheDrainEvictedToReturn(t *testing.T) {
+	drainedAt := metav1.NewTime(time.Now().Add(-time.Minute))
+	before := metav1.NewTime(drainedAt.Add(-time.Hour))
+	after := metav1.NewTime(drainedAt.Add(30 * time.Second))
+
+	readyPod := func(id, worker string, created metav1.Time, ready bool) *corev1.Pod {
+		pod := anFDBPod(id, worker)
+		pod.CreationTimestamp = created
+		pod.Status.Phase = corev1.PodRunning
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Ready: ready}}
+		return pod
+	}
+	withDrain := func(h *windowHarness) {
+		ops := h.current()
+		base := ops.DeepCopy()
+		ops.Status.HostMaintenance.DrainObservedAt = &drainedAt
+		if err := h.c.Status().Patch(context.Background(), ops, client.MergeFrom(base)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	world := func(pods ...*corev1.Pod) []client.Object {
+		w := fourHostWorld()
+		kept := w[:0]
+		for _, o := range w {
+			if p, isPod := o.(*corev1.Pod); isPod && (p.Name == ComponentFDBCluster+"-log-1" || p.Name == ComponentFDBCluster+"-storage-1") {
+				continue
+			}
+			kept = append(kept, o)
+		}
+		for _, p := range pods {
+			kept = append(kept, p)
+		}
+		return kept
+	}
+
+	t.Run("the pods from before the drain, still running, do not count while the node is cordoned", func(t *testing.T) {
+		cordon := world(readyPod("log-1", drainedWorker, before, true), readyPod("storage-1", drainedWorker, before, true))
+		for i := range cordon {
+			if n, isNode := cordon[i].(*corev1.Node); isNode && n.Name == drainedWorker {
+				n.Spec.Unschedulable = true
+			}
+		}
+		h := windowAt(t, cordon, stepAwaitingHost)
+		withDrain(h)
+		h.pass()
+		if h.step() != string(stepAwaitingHost) {
+			t.Errorf("step = %s, want AwaitingHost: the eviction has not shown yet", h.step())
+		}
+	})
+
+	t.Run("replacement pods that are not ready do not count", func(t *testing.T) {
+		h := windowAt(t, world(readyPod("log-1", drainedWorker, after, false), readyPod("storage-1", drainedWorker, after, false)), stepAwaitingHost)
+		withDrain(h)
+		h.pass()
+		if h.step() != string(stepAwaitingHost) {
+			t.Errorf("step = %s, want AwaitingHost while the replacements are not ready", h.step())
+		}
+	})
+
+	t.Run("replacement pods that are ready complete the step, cordon or not", func(t *testing.T) {
+		h := windowAt(t, world(readyPod("log-1", otherWorker, after, true), readyPod("storage-1", otherWorker, after, true)), stepAwaitingHost)
+		withDrain(h)
+		h.pass()
+		if h.step() != string(stepLeavingMaintenance) {
+			t.Errorf("step = %s, want LeavingMaintenance: %s", h.step(), h.current().Status.Message)
+		}
+	})
+
+	t.Run("the pods from before the drain count once the node is schedulable again", func(t *testing.T) {
+		h := windowAt(t, world(readyPod("log-1", drainedWorker, before, true), readyPod("storage-1", drainedWorker, before, true)), stepAwaitingHost)
+		withDrain(h)
+		h.pass()
+		if h.step() != string(stepLeavingMaintenance) {
+			t.Errorf("step = %s, want LeavingMaintenance for a cordon that was never drained: %s", h.step(), h.current().Status.Message)
+		}
+	})
 }

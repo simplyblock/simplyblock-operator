@@ -176,14 +176,25 @@ func (r *ControlPlaneOpsReconciler) windowMoveCoordinators(
 	return true, "", nil
 }
 
-// windowAwaitHost is the AwaitingHost step (§5.9). It completes when no process
-// group recorded at Holding carries MissingProcesses. It reads nothing from the
-// Node: the processes come back on the same node after a reboot, on a
-// replacement after a termination, and a group that left the status altogether
-// was replaced by the FoundationDB operator and counts as returned.
+// windowAwaitHost is the AwaitingHost step (§5.9). It completes when every
+// process group recorded at Holding is back: its pod is ready, carries no
+// MissingProcesses condition, and is either a replacement the drain's eviction
+// produced, which is a pod younger than the drain, or the pod from before the
+// drain on a worker that is schedulable again, which is a cordon that was
+// never drained. It reads nothing else from the Node: the processes come back
+// on the same node after a reboot, on a replacement after a termination, and
+// a group that left the status altogether was replaced by the FoundationDB
+// operator and counts as returned.
+//
+// The eviction's effect takes seconds to show in the FoundationDB operator's
+// status, so the pods are what the step reads first: the lab's first drain
+// ended this step nine seconds before MissingProcesses was written.
 func (r *ControlPlaneOpsReconciler) windowAwaitHost(
 	ctx context.Context, ops *simplyblockv1alpha2.ControlPlaneOps,
 ) (bool, string, error) {
+	hm := ops.Status.HostMaintenance
+	worker := ops.Spec.HostMaintenance.WorkerNode
+
 	groups, err := r.fdbProcessGroups(ctx, ops.Namespace)
 	if err != nil {
 		return false, "", err
@@ -192,21 +203,68 @@ func (r *ControlPlaneOpsReconciler) windowAwaitHost(
 	for _, g := range groups {
 		byID[g.ID] = g
 	}
-	var missing []string
-	for _, id := range ops.Status.HostMaintenance.ProcessGroups {
-		if g, ok := byID[id]; ok && g.Missing {
-			missing = append(missing, id)
+	var pods corev1.PodList
+	err = r.List(ctx, &pods, client.InNamespace(ops.Namespace), client.HasLabels{utils.LabelFDBClusterName})
+	if err != nil {
+		return false, "", fmt.Errorf("list the FoundationDB pods: %w", err)
+	}
+	podOf := make(map[string]*corev1.Pod, len(pods.Items))
+	for i := range pods.Items {
+		podOf[pods.Items[i].Labels["foundationdb.org/fdb-process-group-id"]] = &pods.Items[i]
+	}
+	schedulable := false
+	var node corev1.Node
+	if err := r.Get(ctx, client.ObjectKey{Name: worker}, &node); err == nil {
+		schedulable = !node.Spec.Unschedulable
+	} else if !apierrors.IsNotFound(err) {
+		return false, "", fmt.Errorf("read Node %s: %w", worker, err)
+	}
+
+	var waiting []string
+	for _, id := range hm.ProcessGroups {
+		g, inStatus := byID[id]
+		if !inStatus {
+			continue
+		}
+		pod := podOf[id]
+		switch {
+		case pod == nil:
+			waiting = append(waiting, id+" (no pod)")
+		case g.Missing:
+			waiting = append(waiting, id+" (missing)")
+		case !podReady(pod):
+			waiting = append(waiting, id+" (pod not ready)")
+		case hm.DrainObservedAt != nil && pod.CreationTimestamp.After(hm.DrainObservedAt.Time):
+			// A replacement the eviction produced, ready: back.
+		case schedulable:
+			// The pod from before the drain, on a worker schedulable again: the
+			// cordon was never drained, and the processes never left.
+		default:
+			waiting = append(waiting, id+" (not yet evicted)")
 		}
 	}
-	if len(missing) == 0 {
+	if len(waiting) == 0 {
 		return true, "", nil
 	}
 	message := fmt.Sprintf("waiting for %d FoundationDB process groups of %s to report back: %s",
-		len(missing), ops.Spec.HostMaintenance.WorkerNode, strings.Join(missing, ", "))
+		len(waiting), worker, strings.Join(waiting, ", "))
 	if ops.Status.Message != message {
 		r.emit(ops, corev1.EventTypeNormal, AwaitingHostReturn, message)
 	}
 	return false, message, nil
+}
+
+// podReady is a running pod whose containers are all ready.
+func podReady(pod *corev1.Pod) bool {
+	if pod.Status.Phase != corev1.PodRunning || len(pod.Status.ContainerStatuses) == 0 {
+		return false
+	}
+	for _, c := range pod.Status.ContainerStatuses {
+		if !c.Ready {
+			return false
+		}
+	}
+	return true
 }
 
 // windowLeaveMaintenance is the LeavingMaintenance step (§5.7). It reads which

@@ -656,13 +656,19 @@ pods land on another node or wait for this one, as the volume class decides.
 
 ### 5.9 Awaiting the processes, and ending
 
-`AwaitingHost` completes when no process group recorded at `Holding` carries a
-`MissingProcesses` condition in `FoundationDBCluster.status.processGroups`. It
-reads nothing from the Node: a node-bound volume brings the processes back on
-the same node after its reboot, a cloud volume brings them back on a
-replacement, and a Node that was terminated no longer exists to be read. A
-process group that has left the status altogether, because the upstream
-operator replaced it past its failure-detection window, counts as returned. Its
+`AwaitingHost` completes when every process group recorded at `Holding` is
+back: its pod is ready, it carries no `MissingProcesses` condition in
+`FoundationDBCluster.status.processGroups`, and the pod is either younger than
+the drain, which is the replacement the eviction produced, or the pod from
+before the drain on a worker that is schedulable again, which is a cordon that
+was never drained. The pods are read first because the eviction's effect takes
+seconds to reach the upstream operator's status, and a step that read only the
+conditions ended before the eviction had shown. The step reads nothing else
+from the Node: a node-bound volume brings the processes back on the same node
+after its reboot, a cloud volume brings them back on a replacement, and a Node
+that was terminated no longer exists to be read. A process group that has left
+the status altogether, because the upstream operator replaced it past its
+failure-detection window, counts as returned. Its
 deadline is the one length nobody controls, and an expiry fails the window
 rather than recovering anything: the budget is already gone, the maintenance
 zone expires on its own, and the event says the processes did not come back.

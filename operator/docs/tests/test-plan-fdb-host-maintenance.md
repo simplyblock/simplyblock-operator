@@ -169,14 +169,14 @@ File: `operator/internal/controllers/controlplane/controlplaneops_test.go`
 
 File: `operator/internal/controllers/controlplane/hostmaintenance_test.go`
 
-| #    | Scenario                                                                                                   | Type                | Test                                                           |
-|------|------------------------------------------------------------------------------------------------------------|---------------------|----------------------------------------------------------------|
-| U-69 | The step holds with `AwaitingHostReturn` while a recorded process group is missing, whatever the Node says | Positive            | `TestAwaitingHostWaitsForTheRecordedProcessGroups`             |
-| U-70 | The step completes when no recorded process group is missing while the Node is still cordoned              | Positive            | `TestAwaitingHostWaitsForTheRecordedProcessGroups`             |
-| U-71 | The step completes when no recorded process group is missing and the Node has been deleted                 | Positive            | `TestAwaitingHostCompletesWithTheNodeGoneAndTheGroupsReplaced` |
-| U-74 | A Node deletion deletes a terminal window, and leaves a window in `AwaitingHost` running                   | Positive + Negative | `TestAnUncordonOrAGoneNodeDeletesAFinishedWindow`              |
-| U-91 | `Holding` records the zone and the process groups whose fault domain it is, before the budget is created   | Positive            | `TestHoldingRecordsTheZoneBeforeTheBudget`                     |
-| U-92 | A recorded process group the upstream operator replaced, so that it left the status, counts as returned    | Boundary            | `TestAwaitingHostCompletesWithTheNodeGoneAndTheGroupsReplaced` |
+| #    | Scenario                                                                                                                      | Type                | Test                                                           |
+|------|-------------------------------------------------------------------------------------------------------------------------------|---------------------|----------------------------------------------------------------|
+| U-69 | The step holds with `AwaitingHostReturn` while a recorded process group is missing, whatever the Node says                    | Positive            | `TestAwaitingHostWaitsForTheRecordedProcessGroups`             |
+| U-70 | The step completes when every recorded group's replacement pod is ready and none is missing, while the Node is still cordoned | Positive            | `TestAwaitingHostWaitsForTheRecordedProcessGroups`             |
+| U-71 | The step completes when no recorded process group is missing and the Node has been deleted                                    | Positive            | `TestAwaitingHostCompletesWithTheNodeGoneAndTheGroupsReplaced` |
+| U-74 | A Node deletion deletes a terminal window, and leaves a window in `AwaitingHost` running                                      | Positive + Negative | `TestAnUncordonOrAGoneNodeDeletesAFinishedWindow`              |
+| U-91 | `Holding` records the zone and the process groups whose fault domain it is, before the budget is created                      | Positive            | `TestHoldingRecordsTheZoneBeforeTheBudget`                     |
+| U-92 | A recorded process group the upstream operator replaced, so that it left the status, counts as returned                       | Boundary            | `TestAwaitingHostCompletesWithTheNodeGoneAndTheGroupsReplaced` |
 
 ### The Lock (design §7.3)
 
@@ -194,21 +194,22 @@ File: `operator/internal/controllers/controlplane/controlplaneops_test.go`
 
 File: `operator/internal/controllers/controlplane/hostmaintenance_test.go` and `operator/internal/controllers/controlplane/fdbcommand_test.go`
 
-| #    | Scenario                                                                                                                                                                                                          | Type       | Test                                                        |
-|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|-------------------------------------------------------------|
-| U-75 | `Holding` creates the sentinel Job `<operation>-sentinel`: `fdbMonitorImage` with `sleep infinity`, `spec.nodeName` set to the worker, `backoffLimit: 0`, owned by the operation, and no label the budget selects | Positive   | `TestTheSentinelIsAPinnedPauseJobNothingRecreates`          |
-| U-76 | The sentinel pod's deletion timestamp, or its absence after the Job recorded a pod, writes `drainObservedAt` and `drainObservedBy: Sentinel` on a `Holding` window                                                | Positive   | `TestTheSentinelsEvictionIsTheDrain`                        |
-| U-77 | A second signal does not overwrite an observation already recorded                                                                                                                                                | Negative   | `TestTheFirstObservationIsNotOverwritten`                   |
-| U-78 | A sentinel deleted while the window is past `Holding` writes nothing, and a sentinel that never got a pod writes nothing                                                                                          | Negative   | `TestASignalAfterHoldingWritesNothing`                      |
-| U-79 | A non-FoundationDB pod on the worker carrying `DisruptionTarget` with reason `EvictionByEvictionAPI` writes `drainObservedBy: PodDisruption`                                                                      | Positive   | `TestANeighborsEvictionIsTheDrain`                          |
-| U-80 | The same condition on a pod on another worker, or with another reason, writes nothing                                                                                                                             | Negative   | `TestADisruptionThatIsNotAnEvictionIsNotTheDrain`           |
-| U-81 | `Holding` completes only when the budget reports zero allowed disruptions and a drain has been observed, in either order                                                                                          | Boundary   | `TestHoldingNeedsBothTheReportAndTheDrain`                  |
-| U-82 | `Holding` with no observation waits to its deadline, fails, and the teardown deletes the budget                                                                                                                   | Negative   | `TestAHoldingWindowNothingReachesReleasesOnItsDeadline`     |
-| U-94 | A sentinel Job that cannot be created leaves the window `Holding` with the budget up and `EvictionHeld`, and the neighbor signal still completes it                                                               | Negative   | `TestASentinelThatCannotBeCreatedStillLeavesTheHoldWorking` |
-| U-96 | The `Holding` deadline is measured from the latest `drainObservedAt` across the windows of the namespace, and from the window's own creation while none exists                                                    | Boundary   | `TestTheHoldingDeadlineFollowsTheLastDrainInTheNamespace`   |
-| U-97 | A window older than the deadline keeps holding when another window observed a drain inside it, and fails when none did                                                                                            | Boundary   | `TestTheHoldingDeadlineFollowsTheLastDrainInTheNamespace`   |
-| U-98 | A drain observed by one window re-enqueues every other window in `Holding` and re-arms its deadline                                                                                                               | Positive   | `TestADrainObservedByOneWindowWakesTheOthers`               |
-| U-99 | A budget whose owner has no scale subresource carries `SyncFailed` and no pod count, and `Holding` still completes on it. Regression: the lab's first cordon on 2026-11-11 sat in `Holding` forever               | Regression | `TestHoldingAcceptsABudgetTheControllerCannotCount`         |
+| #     | Scenario                                                                                                                                                                                                                                                                                                                                 | Type       | Test                                                        |
+|-------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|-------------------------------------------------------------|
+| U-75  | `Holding` creates the sentinel Job `<operation>-sentinel`: `fdbMonitorImage` with `sleep infinity`, `spec.nodeName` set to the worker, `backoffLimit: 0`, owned by the operation, and no label the budget selects                                                                                                                        | Positive   | `TestTheSentinelIsAPinnedPauseJobNothingRecreates`          |
+| U-76  | The sentinel pod's deletion timestamp, or its absence after the Job recorded a pod, writes `drainObservedAt` and `drainObservedBy: Sentinel` on a `Holding` window                                                                                                                                                                       | Positive   | `TestTheSentinelsEvictionIsTheDrain`                        |
+| U-77  | A second signal does not overwrite an observation already recorded                                                                                                                                                                                                                                                                       | Negative   | `TestTheFirstObservationIsNotOverwritten`                   |
+| U-78  | A sentinel deleted while the window is past `Holding` writes nothing, and a sentinel that never got a pod writes nothing                                                                                                                                                                                                                 | Negative   | `TestASignalAfterHoldingWritesNothing`                      |
+| U-79  | A non-FoundationDB pod on the worker carrying `DisruptionTarget` with reason `EvictionByEvictionAPI` writes `drainObservedBy: PodDisruption`                                                                                                                                                                                             | Positive   | `TestANeighborsEvictionIsTheDrain`                          |
+| U-80  | The same condition on a pod on another worker, or with another reason, writes nothing                                                                                                                                                                                                                                                    | Negative   | `TestADisruptionThatIsNotAnEvictionIsNotTheDrain`           |
+| U-81  | `Holding` completes only when the budget reports zero allowed disruptions and a drain has been observed, in either order                                                                                                                                                                                                                 | Boundary   | `TestHoldingNeedsBothTheReportAndTheDrain`                  |
+| U-82  | `Holding` with no observation waits to its deadline, fails, and the teardown deletes the budget                                                                                                                                                                                                                                          | Negative   | `TestAHoldingWindowNothingReachesReleasesOnItsDeadline`     |
+| U-94  | A sentinel Job that cannot be created leaves the window `Holding` with the budget up and `EvictionHeld`, and the neighbor signal still completes it                                                                                                                                                                                      | Negative   | `TestASentinelThatCannotBeCreatedStillLeavesTheHoldWorking` |
+| U-96  | The `Holding` deadline is measured from the latest `drainObservedAt` across the windows of the namespace, and from the window's own creation while none exists                                                                                                                                                                           | Boundary   | `TestTheHoldingDeadlineFollowsTheLastDrainInTheNamespace`   |
+| U-97  | A window older than the deadline keeps holding when another window observed a drain inside it, and fails when none did                                                                                                                                                                                                                   | Boundary   | `TestTheHoldingDeadlineFollowsTheLastDrainInTheNamespace`   |
+| U-98  | A drain observed by one window re-enqueues every other window in `Holding` and re-arms its deadline                                                                                                                                                                                                                                      | Positive   | `TestADrainObservedByOneWindowWakesTheOthers`               |
+| U-99  | A budget whose owner has no scale subresource carries `SyncFailed` and no pod count, and `Holding` still completes on it. Regression: the lab's first cordon on 2026-11-11 sat in `Holding` forever                                                                                                                                      | Regression | `TestHoldingAcceptsABudgetTheControllerCannotCount`         |
+| U-100 | The pods from before the drain, still running on a cordoned worker, do not count as returned, nor do replacements that are not ready, and the pods from before the drain count once the worker is schedulable again. Regression: the lab's first drain on 2026-11-11 cleared the zone nine seconds before `MissingProcesses` was written | Regression | `TestAwaitingHostWaitsForThePodsTheDrainEvictedToReturn`    |
 
 ### Leaving Hosts and the Zone Takeover (design §5.5, §5.7)
 
@@ -385,7 +386,7 @@ Struck rows are not counted.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 95        | 93      | U-45, U-73  |
+| Unit        | 96        | 94      | U-45, U-73  |
 | Integration | 10        | 0       | I-01 … I-10 |
 | E2E         | 13        | 0       | E-01 … E-14 |
 | Manual      | 5         | 0       | M-01 … M-05 |
@@ -394,22 +395,22 @@ Struck rows are not counted.
 
 ## 7. Coverage by Design Section
 
-| Design section           | IDs                                                          |
-|--------------------------|--------------------------------------------------------------|
-| §4 Data model            | U-63, U-64, U-65, U-68                                       |
-| §5.1 Trigger             | U-52 … U-60, U-74, I-01, I-04, I-10                          |
-| §5.2 Holding             | U-23 … U-26, U-81, U-91, I-01, U-99                          |
-| §5.3 Observing the drain | U-75 … U-82, U-94, U-96 … U-98, I-08, E-11, E-12, M-04, M-05 |
-| §5.4 Commands            | U-17 … U-22, U-89, U-90                                      |
-| §5.5 Choosing            | U-01 … U-16, U-43, U-45, U-85, E-01, E-05, E-08, E-13        |
-| §5.6 Verifying           | U-41, U-42, I-02, I-05, M-01                                 |
-| §5.7 Maintenance mode    | U-34 … U-39, U-86 … U-88, U-95, E-02, E-04, M-02             |
-| §5.8 Releasing           | U-27, U-28, I-02                                             |
-| §5.9 Awaiting and ending | U-29 … U-33, U-48, U-50, U-51, U-69 … U-71, U-92, I-03, E-14 |
-| §5.10 Converged worker   | U-27, I-06, E-07                                             |
-| §5.11 Rolling update     | E-11, E-12, I-09                                             |
-| §6 State machine         | U-61, U-62, U-46, U-96, U-97, I-07                           |
-| §7.3 Lock                | U-72, U-73, U-83, U-84, U-93, E-13                           |
+| Design section           | IDs                                                                 |
+|--------------------------|---------------------------------------------------------------------|
+| §4 Data model            | U-63, U-64, U-65, U-68                                              |
+| §5.1 Trigger             | U-52 … U-60, U-74, I-01, I-04, I-10                                 |
+| §5.2 Holding             | U-23 … U-26, U-81, U-91, I-01, U-99                                 |
+| §5.3 Observing the drain | U-75 … U-82, U-94, U-96 … U-98, I-08, E-11, E-12, M-04, M-05        |
+| §5.4 Commands            | U-17 … U-22, U-89, U-90                                             |
+| §5.5 Choosing            | U-01 … U-16, U-43, U-45, U-85, E-01, E-05, E-08, E-13               |
+| §5.6 Verifying           | U-41, U-42, I-02, I-05, M-01                                        |
+| §5.7 Maintenance mode    | U-34 … U-39, U-86 … U-88, U-95, E-02, E-04, M-02                    |
+| §5.8 Releasing           | U-27, U-28, I-02                                                    |
+| §5.9 Awaiting and ending | U-29 … U-33, U-48, U-50, U-51, U-69 … U-71, U-92, I-03, E-14, U-100 |
+| §5.10 Converged worker   | U-27, I-06, E-07                                                    |
+| §5.11 Rolling update     | E-11, E-12, I-09                                                    |
+| §6 State machine         | U-61, U-62, U-46, U-96, U-97, I-07                                  |
+| §7.3 Lock                | U-72, U-73, U-83, U-84, U-93, E-13                                  |
 
 ---
 
