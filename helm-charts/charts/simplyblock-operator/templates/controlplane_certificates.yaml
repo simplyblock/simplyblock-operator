@@ -1,4 +1,4 @@
-{{- if and .Values.tls.enabled (eq .Values.tls.provider "cert-manager") }}
+{{- if and .Values.tls.enabled (eq .Values.tls.provider "cert-manager") (include "simplyblock.certManagerServed" .) }}
 # The root ClusterIssuer, the CA Certificate, and the CA ClusterIssuer are
 # the operator's (--cert-manager-ca-chain): the CA must live in cert-manager's
 # cluster resource namespace, which only a reader of the cluster can find.

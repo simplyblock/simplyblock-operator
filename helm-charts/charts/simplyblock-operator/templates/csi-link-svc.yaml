@@ -36,7 +36,7 @@ spec:
       port: {{ .Values.csiLink.port }}
       targetPort: csi-link
       protocol: TCP
-{{- if and $issue (eq .Values.tls.provider "cert-manager") }}
+{{- if and $issue (eq .Values.tls.provider "cert-manager") (include "simplyblock.certManagerServed" .) }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate

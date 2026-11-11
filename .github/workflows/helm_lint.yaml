@@ -40,6 +40,9 @@ jobs:
           helm template simplyblock-operator helm-charts/charts/simplyblock-operator
           --api-versions cert-manager.io/v1
 
+      - name: TLS prerequisites
+        run: helm-charts/scripts/test-tls-prerequisites.sh
+
       - name: Required objects
         run: helm-charts/scripts/check-rendered-objects.sh
 

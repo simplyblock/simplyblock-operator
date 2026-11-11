@@ -168,3 +168,20 @@ serving-cert annotation).
 simplyblock-csi-link-tls
 {{- end -}}
 {{- end -}}
+
+{{/* Whether the operator installs cert-manager: a standalone ControlPlane does,
+     unless controlplane.local.prerequisites.installCertManager is false. */}}
+{{- define "simplyblock.operatorInstallsCertManager" -}}
+{{- if and (eq .Values.deployment.profile "standalone") (ne .Values.controlplane.local.prerequisites.installCertManager false) -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* Whether cert-manager objects can be applied now. Until the operator has
+     installed cert-manager they are left out; it issues the ones the install
+     needs, and the next render (an ArgoCD refresh, a helm upgrade) adds them. */}}
+{{- define "simplyblock.certManagerServed" -}}
+{{- if .Capabilities.APIVersions.Has "cert-manager.io/v1" -}}
+true
+{{- end -}}
+{{- end -}}
