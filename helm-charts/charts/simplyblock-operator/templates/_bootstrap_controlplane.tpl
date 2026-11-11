@@ -129,6 +129,9 @@ spec:
         seedConnectionStringSecretRef:
           name: {{ .seedConnectionStringSecretRef | quote }}
         {{- end }}
+        {{- if .witnessSite }}
+        witnessSite: {{ .witnessSite | quote }}
+        {{- end }}
       {{- end }}
       {{- end }}
       {{- with .Values.controlplane.local.prerequisites }}
