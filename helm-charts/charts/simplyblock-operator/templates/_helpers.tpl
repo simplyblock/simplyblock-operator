@@ -181,7 +181,7 @@ true
 
 {{/* Whether cert-manager objects can be applied now. Until the operator has
      installed cert-manager they are left out; it issues the ones the install
-     needs, and the next render (an ArgoCD refresh, a helm upgrade) adds them. */}}
+     needs, and the next render (an Argo CD refresh, a helm upgrade) adds them. */}}
 {{- define "simplyblock.certManagerServed" -}}
 {{- if .Capabilities.APIVersions.Has "cert-manager.io/v1" -}}
 true

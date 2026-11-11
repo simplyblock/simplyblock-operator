@@ -1,4 +1,4 @@
-# ArgoCD Application that installs the simplyblock operator chart, its control
+# Argo CD Application that installs the simplyblock operator chart, its control
 # plane (standalone profile), and the CSI driver. The operator installs missing
 # prerequisites itself, cert-manager included, so nothing has to be synced first.
 apiVersion: argoproj.io/v1alpha1
@@ -11,7 +11,8 @@ spec:
   source:
     repoURL: https://install.simplyblock.io/helm
     chart: simplyblock-operator
-    targetRevision: 26.4.0-beta5
+    # The first chart release with the fixes in this directory's pull request.
+    targetRevision: <chart-version>
     helm:
       releaseName: simplyblock-operator
       valuesObject:

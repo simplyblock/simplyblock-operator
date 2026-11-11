@@ -128,7 +128,7 @@ func TestTheIssuerChainIssuesTheCSILinkServingCertificate(t *testing.T) {
 		t.Errorf("secretName = %q, want simplyblock-csi-link-tls", s)
 	}
 	// The same names the chart renders, so the two never overwrite each other
-	// (an ArgoCD-managed release reported the Certificate OutOfSync otherwise).
+	// (an Argo CD-managed release reported the Certificate OutOfSync otherwise).
 	dnsNames, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
 	want := []string{"simplyblock-csi-link", "simplyblock-csi-link.simplyblock", "simplyblock-csi-link.simplyblock.svc"}
 	if !slices.Equal(dnsNames, want) {
