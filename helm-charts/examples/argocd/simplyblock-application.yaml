@@ -1,6 +1,8 @@
 # Argo CD Application that installs the simplyblock operator chart, its control
 # plane (standalone profile), and the CSI driver. The operator installs missing
 # prerequisites itself, cert-manager included, so nothing has to be synced first.
+# The chart's discovery run leaves a draft ClusterDeploymentConfig, which is
+# reviewed and approved in the cluster, not synced from git.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -15,11 +17,6 @@ spec:
     targetRevision: <chart-version>
     helm:
       releaseName: simplyblock-operator
-      valuesObject:
-        # The storage plane is declared in git (storage-application.yaml), so no
-        # discovery draft is left waiting in the cluster.
-        discovery:
-          enabled: false
   destination:
     server: https://kubernetes.default.svc
     namespace: simplyblock
