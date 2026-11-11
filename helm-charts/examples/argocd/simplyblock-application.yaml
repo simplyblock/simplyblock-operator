@@ -1,0 +1,30 @@
+# ArgoCD Application that installs the simplyblock operator chart, its control
+# plane (standalone profile), and the CSI driver. The operator installs missing
+# prerequisites itself, cert-manager included, so nothing has to be synced first.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: simplyblock
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://install.simplyblock.io/helm
+    chart: simplyblock-operator
+    targetRevision: 26.4.0-beta5
+    helm:
+      releaseName: simplyblock-operator
+      valuesObject:
+        # The storage plane is declared in git (storage-application.yaml), so no
+        # discovery draft is left waiting in the cluster.
+        discovery:
+          enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: simplyblock
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
