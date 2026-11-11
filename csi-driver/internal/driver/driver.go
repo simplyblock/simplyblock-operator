@@ -325,13 +325,24 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	go reconnect.MonitorConnection(markBroken(podGuardian), manager, cd.GetName(), nodeName)
 	go node.KeepLayoutsPrimed(context.Background(), cd.GetName())
 
-	go node.ReportInitiator(context.Background(), nodeName)
+	go advertiseNVMeTCPCapability(kubeClient, nodeName)
 	go advertiseVDOCapability(kubeClient, nodeName)
 	go advertiseKVMCapability(kubeClient, nodeName)
 	go advertiseSubnets(kubeClient, nodeName)
 	go advertiseHostNQN(kubeClient, nodeName)
 
 	return ns, nil
+}
+
+// advertiseNVMeTCPCapability logs whether this node has the NVMe/TCP initiator
+// and publishes it as the nvme-tcp-capable label, in the background for the same
+// reason as the VDO probe: a failure here degrades to "not yet advertised"
+// rather than blocking node plugin startup.
+func advertiseNVMeTCPCapability(kubeClient kubernetes.Interface, nodeName string) {
+	err := node.AdvertiseNVMeTCPCapability(context.Background(), kubeClient, nodeName)
+	if err != nil {
+		klog.Errorf("failed to advertise nvme-tcp-capable for node %s: %v", nodeName, err)
+	}
 }
 
 // advertiseVDOCapability runs once in the background, same as the guardian

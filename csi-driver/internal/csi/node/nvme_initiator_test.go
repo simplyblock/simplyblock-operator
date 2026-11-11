@@ -11,6 +11,10 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kfake "k8s.io/client-go/kubernetes/fake"
+
+	"github.com/simplyblock/atlas/kube"
 )
 
 const awsKernel = "6.8.0-1044-aws"
@@ -113,5 +117,70 @@ func TestStageAsksNothingOfANodeWithAnInitiator(t *testing.T) {
 	}
 	if host.modprobed != 0 {
 		t.Errorf("modprobe ran %d times on a node whose initiator is loaded, want none", host.modprobed)
+	}
+}
+
+func nvmeTCPLabel(t *testing.T, client *kfake.Clientset) (string, bool) {
+	t.Helper()
+	node, err := client.CoreV1().Nodes().Get(context.Background(), "node-a", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, managed := node.Annotations[kube.AnnoNVMeTCPCapableManagedBy]
+	return node.Labels[kube.LabelNVMeTCPCapable], managed
+}
+
+// A reader sees every node's initiator state at once: a node whose module is
+// loaded says so on the label, and marks the label as the probe's own.
+func TestAdvertiseNVMeTCPCapabilityLabelsANodeWithTheInitiator(t *testing.T) {
+	client := kfake.NewSimpleClientset(testNode(nil, nil))
+	host := &fabricsHost{fabrics: true}
+	if err := advertiseNVMeTCPCapability(context.Background(), client, "node-a", host.check()); err != nil {
+		t.Fatalf("advertiseNVMeTCPCapability: %v", err)
+	}
+	if label, managed := nvmeTCPLabel(t, client); label != vdoCapableTrue || !managed {
+		t.Errorf("label = %q, managed = %t, want true and managed", label, managed)
+	}
+}
+
+// The whole point for this customer: a node missing linux-modules-extra is
+// labeled false, so it stands out in kubectl get nodes without anyone reading a
+// DaemonSet log or waiting for a mount to fail.
+func TestAdvertiseNVMeTCPCapabilityLabelsANodeWithoutTheInitiatorFalse(t *testing.T) {
+	client := kfake.NewSimpleClientset(testNode(nil, nil))
+	host := &fabricsHost{modprobe: errors.New("exit status 1")}
+	if err := advertiseNVMeTCPCapability(context.Background(), client, "node-a", host.check()); err != nil {
+		t.Fatalf("advertiseNVMeTCPCapability: %v", err)
+	}
+	if label, _ := nvmeTCPLabel(t, client); label != vdoCapableFalse {
+		t.Errorf("label = %q, want false", label)
+	}
+}
+
+// A hand-set label is an operator's override, left alone.
+func TestAdvertiseNVMeTCPCapabilityLeavesAnOperatorSetLabelAlone(t *testing.T) {
+	client := kfake.NewSimpleClientset(testNode(map[string]string{kube.LabelNVMeTCPCapable: vdoCapableTrue}, nil))
+	host := &fabricsHost{modprobe: errors.New("exit status 1")}
+	if err := advertiseNVMeTCPCapability(context.Background(), client, "node-a", host.check()); err != nil {
+		t.Fatalf("advertiseNVMeTCPCapability: %v", err)
+	}
+	if label, managed := nvmeTCPLabel(t, client); label != vdoCapableTrue || managed {
+		t.Errorf("label = %q, managed = %t, want the operator's true left untouched", label, managed)
+	}
+}
+
+// A label the probe wrote is its own to overwrite, which is how a node that lost
+// the module stops claiming it has it.
+func TestAdvertiseNVMeTCPCapabilityOverwritesItsOwnPriorLabel(t *testing.T) {
+	client := kfake.NewSimpleClientset(testNode(
+		map[string]string{kube.LabelNVMeTCPCapable: vdoCapableTrue},
+		map[string]string{kube.AnnoNVMeTCPCapableManagedBy: kube.AnnoNVMeTCPCapableManagedByAutoDetect},
+	))
+	host := &fabricsHost{modprobe: errors.New("exit status 1")}
+	if err := advertiseNVMeTCPCapability(context.Background(), client, "node-a", host.check()); err != nil {
+		t.Fatalf("advertiseNVMeTCPCapability: %v", err)
+	}
+	if label, _ := nvmeTCPLabel(t, client); label != vdoCapableFalse {
+		t.Errorf("label = %q, want the probe's own label overwritten to false", label)
 	}
 }

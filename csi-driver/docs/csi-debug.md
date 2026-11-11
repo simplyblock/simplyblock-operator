@@ -27,6 +27,12 @@ sudo dnf install -y kernel-modules-extra                  # RHEL and its derivat
 sudo modprobe nvme-tcp
 ```
 
+A mount failure is not the only signal. The CSI node plugin probes the module at start and publishes the result as a node label, so a missing module is visible before any volume is requested. One command lists every node's state:
+```
+kubectl get nodes -L storage.simplyblock.io/nvme-tcp-capable
+```
+A node showing `false` is missing the module and fails to mount a volume until it is installed. The plugin owns the label. A value pinned by hand (for example, on a golden image) is left alone: set the label and remove its `storage.simplyblock.io/nvme-tcp-capable-managed-by` annotation, and the probe no longer overwrites it.
+
 #### the worker nodes should be able to contact simplyblock storage node
 
 Since SPDK uses remote NVMe connection, make sure that there is network connectivity between the simplyblock storage node and the Kubernetes worker nodes.

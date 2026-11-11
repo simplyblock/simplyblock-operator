@@ -8,6 +8,11 @@
 // failed with what nvme-cli says when /dev/nvme-fabrics is not there, once for
 // every path, and nothing in it names the package. So the check is made here,
 // where the answer reaches the pod's events, and it says what to install.
+//
+// The same check runs once at plugin start (AdvertiseNVMeTCPCapability): it logs
+// the verdict and publishes an nvme-tcp-capable node label, so a missing module
+// shows up before any volume is asked for and is visible across the cluster,
+// without keeping pods off a node.
 package node
 
 import (
@@ -16,7 +21,10 @@ import (
 	"os"
 	"strings"
 
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog"
+
+	"github.com/simplyblock/atlas/kube"
 )
 
 // fabricsDevice is what the kernel's NVMe-oF initiator exposes once any of its
@@ -83,16 +91,37 @@ func (c initiatorCheck) ensure(ctx context.Context) error {
 		release, fabricsDevice, said, initiatorModule, extra, initiatorModule)
 }
 
-// ReportInitiator says once, at start, whether this node can connect a volume.
+// AdvertiseNVMeTCPCapability says once, at start, whether this node can connect a
+// volume: as a log line, and as the nvme-tcp-capable node label a reader can see
+// across the cluster.
 //
-// It is a log line and not a refusal to start: the plugin still serves the
-// volumes that are staged, and the stage of a new one makes the same check and
-// reports it where a pod's events show it. What this adds is the answer before
-// any volume is asked for.
-func ReportInitiator(ctx context.Context, nodeName string) {
-	if err := hostInitiatorCheck().ensure(ctx); err != nil {
+// It is not a refusal to start. The plugin still serves the volumes that are
+// staged, and the stage of a new one makes the same check and reports it where a
+// pod's events show it. What this adds is the answer before any volume is asked
+// for, loud in the log and visible on the Node, so a missing module is not
+// something anyone has to go looking for.
+//
+// Runs once at process start, like the VDO and KVM probes. A module installed or
+// removed afterward is not noticed until the plugin restarts; the per-stage check
+// is what catches it in the meantime.
+func AdvertiseNVMeTCPCapability(ctx context.Context, kubeClient kubernetes.Interface, nodeName string) error {
+	return advertiseNVMeTCPCapability(ctx, kubeClient, nodeName, hostInitiatorCheck().ensure)
+}
+
+func advertiseNVMeTCPCapability(
+	ctx context.Context, kubeClient kubernetes.Interface, nodeName string, ensure func(context.Context) error,
+) error {
+	capable := true
+	if err := ensure(ctx); err != nil {
 		klog.Errorf("initiator check: node %s: %v", nodeName, err)
-		return
+		capable = false
+	} else {
+		klog.Infof("initiator check: node %s has the NVMe/TCP initiator loaded", nodeName)
 	}
-	klog.Infof("initiator check: node %s has the NVMe-oF initiator loaded", nodeName)
+	return publishCapability(ctx, kubeClient, nodeName, capabilityLabel{
+		probe:        "nvme-tcp",
+		label:        kube.LabelNVMeTCPCapable,
+		managedBy:    kube.AnnoNVMeTCPCapableManagedBy,
+		managedValue: kube.AnnoNVMeTCPCapableManagedByAutoDetect,
+	}, capable)
 }
