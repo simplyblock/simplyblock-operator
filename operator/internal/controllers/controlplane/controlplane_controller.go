@@ -765,9 +765,6 @@ func errorsAs[T error](err error, target *T) bool {
 // its completion advances the installation rather than the retry interval doing
 // it.
 //
-// The cluster-file ConfigMap is watched too, so a coordinator move restamps the
-// workloads that mount it.
-//
 // The ControlPlane's own watch is filtered to generation changes. Every probe
 // stamps status.lastChecked, and an unfiltered watch turns that write into
 // another reconcile, which probes and stamps again.
