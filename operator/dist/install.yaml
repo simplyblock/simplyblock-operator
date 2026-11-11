@@ -2232,6 +2232,10 @@ spec:
     - jsonPath: .status.step.state
       name: Step
       type: string
+    - jsonPath: .spec.hostMaintenance.workerNode
+      name: Worker
+      priority: 1
+      type: string
     - jsonPath: .status.message
       name: Message
       priority: 1
@@ -2245,7 +2249,7 @@ spec:
         description: |-
           ControlPlaneOps is a single operation performed against the control plane. It
           runs to a terminal phase and stays afterward as the audit record of what was
-          done, with which parameters, and how it ended. Only one may be active per
+          done, with which parameters, and how it ended. Only one may act on the
           control plane at a time, which the entity's status.activeOpsRef enforces.
         properties:
           apiVersion:
@@ -2272,9 +2276,10 @@ spec:
               Everything except spec.abort is frozen once the object is admitted, which is
               what makes the status an audit of the request that ran rather than of whatever
               the object says now. The parameters are consumed several steps apart:
-              Preflight reads spec.upgrade.image and Applying writes it, and Draining reads
-              spec.restart.components before Restarting rolls them. An edit in between
-              produces an operation that checked one thing and did another.
+              Preflight reads spec.upgrade.image and Applying writes it, Draining reads
+              spec.restart.components before Restarting rolls them, and Holding labels the
+              pods of spec.hostMaintenance.workerNode that Releasing unlabels. An edit in
+              between produces an operation that checked one thing and did another.
 
               What is frozen is each parameter block's presence together with its
               contents.
@@ -2295,6 +2300,7 @@ spec:
                 - Restart
                 - Upgrade
                 - Backup
+                - HostMaintenance
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -2328,6 +2334,21 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              hostMaintenance:
+                description: |-
+                  HostMaintenance parameterizes action HostMaintenance and is ignored by
+                  the others.
+                properties:
+                  workerNode:
+                    description: |-
+                      WorkerNode is the Kubernetes Node whose FoundationDB processes the window
+                      takes roles off. It is the Node's name, and the zone the window maintains
+                      is the Node's kubernetes.io/hostname label.
+                    minLength: 1
+                    type: string
+                required:
+                - workerNode
+                type: object
               restart:
                 description: Restart parameterizes action Restart and is ignored by
                   the others.
@@ -2375,6 +2396,13 @@ spec:
                 created the FoundationDBBackup against'
               rule: has(self.backup) == has(oldSelf.backup) && (!has(self.backup)
                 || self.backup == oldSelf.backup)
+            - message: 'spec.hostMaintenance is immutable: the budget and the maintenance
+                zone were raised for the worker the operation was admitted with'
+              rule: has(self.hostMaintenance) == has(oldSelf.hostMaintenance) && (!has(self.hostMaintenance)
+                || self.hostMaintenance == oldSelf.hostMaintenance)
+            - message: action HostMaintenance needs spec.hostMaintenance, which names
+                the worker
+              rule: self.action != 'HostMaintenance' || has(self.hostMaintenance)
           status:
             description: ControlPlaneOpsStatus is the observed state of one control-plane
               operation.
@@ -2389,6 +2417,62 @@ spec:
                 description: CompletedAt is when it reached a terminal phase.
                 format: date-time
                 type: string
+              hostMaintenance:
+                description: HostMaintenance is what a HostMaintenance window did,
+                  written as it goes.
+                properties:
+                  coordinatorPlacement:
+                    description: |-
+                      CoordinatorPlacement is how the set was placed: one per host, two on
+                      one host, or not written at all.
+                    enum:
+                    - Spread
+                    - SharedHost
+                    - Unchanged
+                    type: string
+                  coordinators:
+                    description: |-
+                      Coordinators is the set the window wrote, as the addresses the cluster
+                      file carries. Empty when the window wrote none.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  drainObservedAt:
+                    description: |-
+                      DrainObservedAt is when a drain of the worker was first seen. Empty while
+                      the window holds without one.
+                    format: date-time
+                    type: string
+                  drainObservedBy:
+                    description: |-
+                      DrainObservedBy is which signal saw the drain: the eviction of the
+                      window's sentinel pod, or the eviction of another pod on the worker.
+                    enum:
+                    - Sentinel
+                    - PodDisruption
+                    type: string
+                  maintenanceUntil:
+                    description: |-
+                      MaintenanceUntil is when the maintenance mode the window set expires on
+                      its own. Empty when the mode could not be set.
+                    format: date-time
+                    type: string
+                  processGroups:
+                    description: |-
+                      ProcessGroups are the FoundationDB process groups whose fault domain was
+                      the zone when the window started. They are what AwaitingHost waits for,
+                      wherever they come back.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  zone:
+                    description: |-
+                      Zone is the FoundationDB fault domain the window maintains, read from
+                      the worker's kubernetes.io/hostname label when the window started.
+                    type: string
+                type: object
               message:
                 description: |-
                   Message is the reason the phase is what it is: one sentence, replaced as
@@ -2459,7 +2543,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Draining'',''Restarting'',''Awaiting'',''Preflight'',''Applying'',''Verifying'',''Requesting'',''Completed'']'
+                  rule: '!has(self.state) || self.state in [''Draining'',''Restarting'',''Awaiting'',''Preflight'',''Applying'',''Verifying'',''Requesting'',''Holding'',''EnteringMaintenance'',''MovingCoordinators'',''Releasing'',''AwaitingHost'',''LeavingMaintenance'',''Cleanup'',''Completed'']'
             type: object
         type: object
     served: true
