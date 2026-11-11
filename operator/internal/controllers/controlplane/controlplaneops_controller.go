@@ -278,6 +278,11 @@ func (r *ControlPlaneOpsReconciler) advance(
 		if errorsAs(err, &fatal) {
 			return r.failAndRelease(ctx, ops, target, fatal.Error())
 		}
+		if apierrors.IsConflict(err) {
+			// A status write on a window the cache served stale. The next pass
+			// reads the fresh object, and nothing is wrong to log.
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return ctrl.Result{}, err
 	case !done:
 		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, held)

@@ -182,7 +182,11 @@ func (r *ControlPlaneOpsReconciler) holdingStillOpen(
 	if ops.Status.Step.Deadline == nil || deadline.After(ops.Status.Step.Deadline.Time) {
 		base := ops.DeepCopy()
 		ops.Status.Step.Deadline = &deadline
-		if err := r.Status().Patch(ctx, ops, client.MergeFrom(base)); err != nil {
+		patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+		if err := r.Status().Patch(ctx, ops, patch); err != nil {
+			if apierrors.IsConflict(err) {
+				return false, err
+			}
 			return false, fmt.Errorf("extend the Holding deadline of %s: %w", ops.Name, err)
 		}
 	}

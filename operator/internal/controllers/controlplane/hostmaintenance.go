@@ -447,7 +447,15 @@ func (r *ControlPlaneOpsReconciler) patchWindow(
 		ops.Status.HostMaintenance = &simplyblockv1alpha2.HostMaintenanceStatus{}
 	}
 	mutate(ops.Status.HostMaintenance)
-	if err := r.Status().Patch(ctx, ops, client.MergeFrom(base)); err != nil {
+	// The patch carries the window's resourceVersion, so a pass that runs on a
+	// window read before the previous pass's write reached the cache fails on a
+	// conflict instead of performing the step again and emitting its event
+	// twice. The controller requeues on the conflict and reads the fresh object.
+	patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+	if err := r.Status().Patch(ctx, ops, patch); err != nil {
+		if apierrors.IsConflict(err) {
+			return err
+		}
 		return fmt.Errorf("record the window's status: %w", err)
 	}
 	return nil

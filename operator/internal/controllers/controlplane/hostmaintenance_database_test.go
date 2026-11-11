@@ -714,3 +714,39 @@ func TestAwaitingHostWaitsForThePodsTheDrainEvictedToReturn(t *testing.T) {
 		}
 	})
 }
+
+// A pass that runs on a window read before the previous pass's status write
+// has reached the cache must not perform the step again: the Job it finds is
+// the same, but the event it would emit is a duplicate on the audit record,
+// which both lab runs showed as a doubled MaintenanceModeSet. The status write
+// carries the window's resourceVersion, so the stale pass fails on a conflict
+// and the next pass reads the fresh object.
+//
+// Regression: 2026-11-11-a-stale-pass-emits-the-maintenance-event-twice.
+func TestAStalePassDoesNotRepeatAStepsEvent(t *testing.T) {
+	h := windowAt(t, fourHostWorld(), stepEnteringMaintenance)
+	h.pass()
+	h.jobEnds(fdbCommandMaintenanceOn, true)
+	stale := h.current()
+
+	h.pass()
+	if h.recorder.count(MaintenanceModeSet) != 1 {
+		t.Fatalf("MaintenanceModeSet emitted %d times after the pass, want once", h.recorder.count(MaintenanceModeSet))
+	}
+
+	// The same step performed again on the object as it was before that pass.
+	cp := &simplyblockv1alpha2.ControlPlane{}
+	if err := h.c.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: SingletonName}, cp); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := h.r.windowEnterMaintenance(context.Background(), stale, cp)
+	if err == nil {
+		t.Fatal("the stale pass succeeded, and its event is a duplicate on the record")
+	}
+	if !apierrors.IsConflict(err) {
+		t.Errorf("err = %v, want a conflict the controller requeues on", err)
+	}
+	if h.recorder.count(MaintenanceModeSet) != 1 {
+		t.Errorf("MaintenanceModeSet emitted %d times, want still once", h.recorder.count(MaintenanceModeSet))
+	}
+}

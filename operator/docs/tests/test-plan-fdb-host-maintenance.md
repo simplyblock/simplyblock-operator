@@ -210,6 +210,7 @@ File: `operator/internal/controllers/controlplane/hostmaintenance_test.go` and `
 | U-98  | A drain observed by one window re-enqueues every other window in `Holding` and re-arms its deadline                                                                                                                                                                                                                                      | Positive   | `TestADrainObservedByOneWindowWakesTheOthers`               |
 | U-99  | A budget whose owner has no scale subresource carries `SyncFailed` and no pod count, and `Holding` still completes on it. Regression: the lab's first cordon on 2026-11-11 sat in `Holding` forever                                                                                                                                      | Regression | `TestHoldingAcceptsABudgetTheControllerCannotCount`         |
 | U-100 | The pods from before the drain, still running on a cordoned worker, do not count as returned, nor do replacements that are not ready, and the pods from before the drain count once the worker is schedulable again. Regression: the lab's first drain on 2026-11-11 cleared the zone nine seconds before `MissingProcesses` was written | Regression | `TestAwaitingHostWaitsForThePodsTheDrainEvictedToReturn`    |
+| U-101 | A pass on a window the cache served stale fails its status write on a conflict and emits nothing, so a step's event appears once on the record. Regression: both lab runs on 2026-11-11 showed `MaintenanceModeSet` twice                                                                                                                | Regression | `TestAStalePassDoesNotRepeatAStepsEvent`                    |
 
 ### Leaving Hosts and the Zone Takeover (design §5.5, §5.7)
 
@@ -386,7 +387,7 @@ Struck rows are not counted.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 96        | 94      | U-45, U-73  |
+| Unit        | 97        | 95      | U-45, U-73  |
 | Integration | 10        | 0       | I-01 … I-10 |
 | E2E         | 13        | 0       | E-01 … E-14 |
 | Manual      | 5         | 0       | M-01 … M-05 |
@@ -404,7 +405,7 @@ Struck rows are not counted.
 | §5.4 Commands            | U-17 … U-22, U-89, U-90                                             |
 | §5.5 Choosing            | U-01 … U-16, U-43, U-45, U-85, E-01, E-05, E-08, E-13               |
 | §5.6 Verifying           | U-41, U-42, I-02, I-05, M-01                                        |
-| §5.7 Maintenance mode    | U-34 … U-39, U-86 … U-88, U-95, E-02, E-04, M-02                    |
+| §5.7 Maintenance mode    | U-34 … U-39, U-86 … U-88, U-95, E-02, E-04, M-02, U-101             |
 | §5.8 Releasing           | U-27, U-28, I-02                                                    |
 | §5.9 Awaiting and ending | U-29 … U-33, U-48, U-50, U-51, U-69 … U-71, U-92, I-03, E-14, U-100 |
 | §5.10 Converged worker   | U-27, I-06, E-07                                                    |
