@@ -1,0 +1,11 @@
+--- a/Cargo.toml	2025-12-22 21:53:15.000000000 +0000
++++ b/Cargo.toml	2026-01-13 20:27:59.442336008 +0000
+@@ -7,7 +7,7 @@
+ crate-type = ["cdylib", "lib"]
+ 
+ [features]
+-default = ["pg14"]
++default = ["pg18"]
+ #pg11 = ["pgrx/pg11", "pgrx-tests/pg11" ]
+ #pg12 = ["pgrx/pg12", "pgrx-tests/pg12" ]
+ #pg13 = ["pgrx/pg13", "pgrx-tests/pg13" ]

@@ -1,0 +1,5 @@
+config BR2_PACKAGE_NEONVMD
+	bool "neonvmd"
+	depends on BR2_PACKAGE_HOST_GO_TARGET_ARCH_SUPPORTS
+	help
+	  This is the Neon VM daemon.

@@ -1,0 +1,24 @@
+[Unit]
+Description=vm-monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=vm-monitor
+Group=vm-monitor
+
+Environment="RUST_LOG=info"
+
+ExecStart=/usr/bin/vm-monitor --cgroup=system.slice --addr="0.0.0.0:10301"
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vm-monitor
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+config BR2_PACKAGE_PGROONGA
+	bool "pgroonga"
+	depends on BR2_PACKAGE_POSTGRESQL
+	select BR2_PACKAGE_GROONGA
+	select BR2_PACKAGE_ZSTD
+	help
+	  PGroonga extension for PostgreSQL.

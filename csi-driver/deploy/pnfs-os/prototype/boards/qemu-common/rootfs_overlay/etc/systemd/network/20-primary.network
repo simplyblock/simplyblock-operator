@@ -1,0 +1,12 @@
+[Match]
+Name=enp0s3
+
+[Link]
+RequiredForOnline=routable
+
+[Network]
+DHCP=yes
+
+# Route .cluster.local queries to this interface's DNS server (kube-dns).
+# Without this, resolved has no domain scope for .cluster.local and queries time out.
+Domains=~cluster.local

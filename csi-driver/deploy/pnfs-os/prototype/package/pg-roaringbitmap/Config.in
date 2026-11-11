@@ -1,0 +1,5 @@
+config BR2_PACKAGE_PG_ROARINGBITMAP
+	bool "pg-roaringbitmap"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  RoaringBitmap extension for PostgreSQL.

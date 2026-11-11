@@ -1,0 +1,23 @@
+[Unit]
+Description=pgbouncer
+After=migrations.service
+Requires=migrations.service
+
+[Service]
+User=pgbouncer
+Group=pgbouncer
+
+ExecStart=/usr/sbin/pgbouncer /vela/config/pgbouncer_pg18.ini
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pgbouncer
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/vela
+
+[Install]
+WantedBy=multi-user.target

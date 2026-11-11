@@ -1,0 +1,75 @@
+From 867ca75b369c5c6183bd74cea65fdda1037eb924 Mon Sep 17 00:00:00 2001
+From: "Christoph Engelbert (noctarius)" <chris@simplyblock.io>
+Date: Mon, 12 Oct 2026 12:20:47 +0200
+Subject: [PATCH] xfs: raise the layout generation before a grow commits new
+ space
+
+A pNFS layout names its device under the filesystem's generation, and a
+client checks every extent it is given against the device size it looked
+up under that generation. xfs_growfs_data raised the generation only after
+the grow had committed the new space and updated the secondary
+superblocks. A write LAYOUTGET in that window was given blocks past the
+old end of the device under the old generation: the client found the
+extent outside the device it knew, returned the layout, and wrote through
+the server.
+
+Raise the generation before the new space can be allocated when the
+filesystem grows. The device already has its new size at that point:
+xfs_growfs_data_private reads the new last block before it commits
+anything, and fails the grow otherwise. A raise for a grow that then fails
+only makes clients look the same device up again. A grow raises it once;
+anything else growfs changes still raises it at the end, as before.
+---
+ fs/xfs/xfs_fsops.c | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/fs/xfs/xfs_fsops.c b/fs/xfs/xfs_fsops.c
+index 0ada7356939..9aa36cfd123 100644
+--- a/fs/xfs/xfs_fsops.c
++++ b/fs/xfs/xfs_fsops.c
+@@ -301,6 +301,7 @@ xfs_growfs_data(
+ 	struct xfs_mount	*mp,
+ 	struct xfs_growfs_data	*in)
+ {
++	bool			bumped = false;
+ 	int			error;
+ 
+ 	if (!capable(CAP_SYS_ADMIN))
+@@ -322,6 +323,20 @@ xfs_growfs_data(
+ 	}
+ 
+ 	if (in->newblocks != mp->m_sb.sb_dblocks) {
++		/*
++		 * A pNFS layout names its device under this generation, and a
++		 * client checks every extent against the device size it looked
++		 * up under it. Raise it before the new space can be allocated,
++		 * so no layout carries blocks past the old end under the old
++		 * generation. The device already has its new size: the grow
++		 * below reads its new last block before it commits anything,
++		 * and a raise for a grow that then fails only makes clients
++		 * look the same device up again.
++		 */
++		if (in->newblocks > mp->m_sb.sb_dblocks) {
++			WRITE_ONCE(mp->m_generation, mp->m_generation + 1);
++			bumped = true;
++		}
+ 		error = xfs_growfs_data_private(mp, in);
+ 		if (error)
+ 			goto out_unlock;
+@@ -340,9 +355,11 @@ xfs_growfs_data(
+ 
+ 	/*
+ 	 * Increment the generation unconditionally, after trying to update the
+-	 * secondary superblocks, as the new size is live already at this point.
++	 * secondary superblocks, as the new size is live already at this point,
++	 * unless a grow raised it before committing the new space.
+ 	 */
+-	mp->m_generation++;
++	if (!bumped)
++		WRITE_ONCE(mp->m_generation, mp->m_generation + 1);
+ out_unlock:
+ 	mutex_unlock(&mp->m_growlock);
+ 	return error;
+-- 
+2.54.0 (Apple Git-157)
+

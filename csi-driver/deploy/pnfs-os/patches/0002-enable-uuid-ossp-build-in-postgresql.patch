@@ -1,0 +1,16 @@
+diff --git a/package/postgresql/postgresql.mk b/package/postgresql/postgresql.mk
+index 86761bf939..f40ff07238 100644
+--- a/package/postgresql/postgresql.mk
++++ b/package/postgresql/postgresql.mk
+@@ -117,6 +117,11 @@ else
+ POSTGRESQL_CONF_OPTS += -Dsystemd=disabled
+ endif
+ 
++ifeq ($(BR2_PACKAGE_E2FSPROGS),y)
++POSTGRESQL_DEPENDENCIES += e2fsprogs
++POSTGRESQL_CONF_OPTS += -Duuid=e2fs
++endif
++
+ POSTGRESQL_CFLAGS = $(TARGET_CFLAGS)
+ 
+ ifneq ($(BR2_TOOLCHAIN_HAS_GCC_BUG_43744)$(BR2_TOOLCHAIN_HAS_GCC_BUG_85180),)

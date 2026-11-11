@@ -1,0 +1,1 @@
+SUBSYSTEM=="memory", ACTION=="online", TAG+="systemd", ENV{SYSTEMD_WANTS}="postgres-retune.service"

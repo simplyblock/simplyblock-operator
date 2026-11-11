@@ -1,0 +1,5 @@
+config BR2_PACKAGE_PGBOUNCER_EXPORTER
+	bool "pgbouncer-exporter"
+	depends on BR2_PACKAGE_PGBOUNCER
+	help
+	  PgBouncer Exporter for exporting PgBouncer metrics to Prometheus.

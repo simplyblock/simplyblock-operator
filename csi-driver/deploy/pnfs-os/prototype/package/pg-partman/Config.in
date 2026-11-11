@@ -1,0 +1,5 @@
+config BR2_PACKAGE_PG_PARTMAN
+	bool "pg-partman"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  pg_partman is an extension to create and manage both time-based and number-based table partition sets.

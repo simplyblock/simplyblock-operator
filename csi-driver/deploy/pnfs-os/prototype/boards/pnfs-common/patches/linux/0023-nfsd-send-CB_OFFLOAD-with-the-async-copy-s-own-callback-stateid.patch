@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Max Schettler <max@simplyblock.io>
+Date: Mon, 2 Nov 2026 16:30:00 +0100
+Subject: [PATCH] nfsd: send CB_OFFLOAD with the async copy's own callback
+ stateid
+
+DROP THIS PATCH WHEN THE KERNEL MOVES TO 6.18.58 OR LATER. Stable carries
+the identical two-line fix from 6.18.58 on, as commit 22732b0f290a ("nfsd:
+fix all-zero stateid in CB_OFFLOAD for async COPY"), and this patch will
+then fail to apply. We are on 6.18.55; see linux.hash and the
+BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE in the pnfs_qemu_* defconfigs.
+
+An asynchronous COPY answers the client immediately with a callback stateid
+and reports completion later in CB_OFFLOAD. The client registers its waiter
+under the stateid from the reply and matches the callback against it by
+memcmp (nfs4_callback_offload). nfsd sends a zeroed stateid instead, so the
+match never succeeds.
+
+nfsd4_copy() calls dup_copy_fields() before nfs4_init_copy_state(), so the
+async_copy it hands to the background thread carries a copy of cp_res taken
+while cb_stateid was still zero. The memcpy that follows writes the real
+stateid only into result->cb_stateid, which is &copy->cp_res of the
+transient per-request structure and reaches the client in the COPY reply.
+async_copy->cp_res.cb_stateid stays zero, and that is the one that matters:
+nfsd4_send_cb_offload() does
+
+	memcpy(&cbo->co_res, &copy->cp_res, sizeof(copy->cp_res));
+
+from the async_copy, and encode_cb_offload4args() puts cbo->co_res.cb_stateid
+on the wire.
+
+The ordering is deliberate. The 6.18.y backport 9b4e5e9ba5ae ("nfsd: fix
+stale s2s_cp_stateids IDR entry for async COPY", mainline d0beaee498e1)
+moved dup_copy_fields() ahead of nfs4_init_copy_state() so the
+s2s_cp_stateids IDR is registered against the durable async_copy rather
+than into per-rqstp COMPOUND memory that the next request reuses. Moving it
+back is not an option either, because dup_copy_fields() also copies
+cp_stateid and would overwrite the stateid the backport moved to the async
+copy. Populate async_copy->cp_res.cb_stateid once the stateid exists
+instead.
+
+Observed on a pNFS mount as an S3 CompleteMultipartUpload that never
+returned. The gateway's join of the uploaded parts is a copy_file_range
+against the destination object, which nfsd serves as an asynchronous COPY.
+Client and server tracepoints for one such copy, same destination file
+handle 0x03371d99 on both sides:
+
+  nfs4_copy:       len=8388608 sync=0 cb_stateid=1:0xd062d9e9
+  nfs4_cb_offload: fhandle=0x03371d99 cb_stateid=0:0x7bd5c66f
+  nfsd_cb_offload: fh_hash=0x03371d99 stateid 00000000:00000000 count=8388608 status=0
+
+The copy itself succeeds and CB_OFFLOAD is delivered and acknowledged;
+nfs4_callback_offload() simply cannot match it, parks it on
+pending_cb_stateids and returns NFS4_OK, and the waiting task is never
+completed. A client whose handle_async_copy() has the
+wait_for_completion_interruptible_timeout() and OFFLOAD_STATUS poll recovers
+after a delay; one that waits on the completion alone waits forever.
+
+Mainline never needs this: the async COPY rework, f307b4f7ed17 ("nfsd:
+split nfsd4_copy into transient and durable async copy objects"), allocates
+the stateid up front, writes result->cb_stateid and only then duplicates,
+and warns in a comment that duplicating first would leave the callback
+stateid zeroed. That rework was judged too risky to backport, which is why
+6.18.y took the targeted fix instead.
+
+Fixes: 9b4e5e9ba5ae ("nfsd: fix stale s2s_cp_stateids IDR entry for async COPY")
+Signed-off-by: Max Schettler <max@simplyblock.io>
+---
+ fs/nfsd/nfs4proc.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/fs/nfsd/nfs4proc.c b/fs/nfsd/nfs4proc.c
+index bc14c39..a1f20e5 100644
+--- a/fs/nfsd/nfs4proc.c
++++ b/fs/nfsd/nfs4proc.c
+@@ -2084,6 +2084,17 @@
+ 			goto out_dec_async_copy_err;
+ 		memcpy(&result->cb_stateid, &async_copy->cp_stateid.cs_stid,
+ 			sizeof(result->cb_stateid));
++		/*
++		 * CB_OFFLOAD encodes cp_cb_offload.co_res.cb_stateid, which
++		 * nfsd4_send_cb_offload() takes from this async_copy's
++		 * cp_res. dup_copy_fields() ran before nfs4_init_copy_state()
++		 * created the stateid, so that cp_res still holds zeros and
++		 * only the reply's copy got the real one. Reordering the dup
++		 * is not an option: it also copies cp_stateid, and would
++		 * overwrite the stateid created just above.
++		 */
++		memcpy(&async_copy->cp_res.cb_stateid, &async_copy->cp_stateid.cs_stid,
++		       sizeof(async_copy->cp_res.cb_stateid));
+ 		if ((READ_ONCE(copy->nf_dst->nf_file->f_mode) &
+ 			       FMODE_NOCMTIME) != 0)
+ 			async_copy->attr_update = true;
+-- 
+2.56.0
+

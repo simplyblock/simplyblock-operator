@@ -1,0 +1,6 @@
+config BR2_PACKAGE_PG_DUCKDB
+	bool "pg-duckdb"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  pg_duckdb integrates DuckDB's columnar-vectorized analytics engine into PostgreSQL, enabling
+	  high-performance analytics and data-intensive applications.

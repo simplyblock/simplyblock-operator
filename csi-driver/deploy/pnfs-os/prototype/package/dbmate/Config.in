@@ -1,0 +1,4 @@
+config BR2_PACKAGE_DBMATE
+	bool "dbmate"
+	help
+	  Database migration tool.

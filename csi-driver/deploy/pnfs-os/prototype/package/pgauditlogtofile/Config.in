@@ -1,0 +1,6 @@
+config BR2_PACKAGE_PGAUDITLOGTOFILE
+	bool "pgauditlogtofile"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  pgAudit Log to File is an addon for pgAudit to redirect audit logs to an independent file extension
+	  for PostgreSQL.

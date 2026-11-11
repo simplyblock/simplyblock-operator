@@ -1,0 +1,70 @@
+# pNFS metadata server: kernel nfsd (NFSv4.1+) with SCSI and block layouts,
+# backed by simplyblock volumes over NVMe-oF/TCP with native ANA multipath.
+
+CONFIG_NETWORK_FILESYSTEMS=y
+CONFIG_FILE_LOCKING=y
+CONFIG_KEYS=y
+
+# NFS server
+CONFIG_NFSD=y
+# CONFIG_NFSD_V2 is not set
+# CONFIG_NFSD_V3_ACL is not set
+CONFIG_NFSD_V4=y
+CONFIG_NFSD_BLOCKLAYOUT=y
+CONFIG_NFSD_SCSILAYOUT=y
+# CONFIG_NFSD_FLEXFILELAYOUT is not set
+# CONFIG_NFSD_V4_SECURITY_LABEL is not set
+
+# NFS client, only for the local 127.0.0.1:/ health self-check
+CONFIG_NFS_FS=y
+# CONFIG_NFS_V2 is not set
+# CONFIG_NFS_V3 is not set
+CONFIG_NFS_V4=y
+CONFIG_NFS_V4_1=y
+# CONFIG_NFS_V4_2 is not set
+# CONFIG_ROOT_NFS is not set
+
+# NVMe-oF/TCP initiator with native multipath (nvme_get_unique_id used by
+# the SCSI layout, persistent reservations used for client fencing)
+CONFIG_NVME_CORE=y
+CONFIG_NVME_MULTIPATH=y
+CONFIG_NVME_FABRICS=y
+CONFIG_NVME_TCP=y
+
+# Device mapper for LVM-striped exports
+CONFIG_MD=y
+CONFIG_BLK_DEV_DM=y
+
+CONFIG_XFS_FS=y
+
+# Guest contract: static address from the kernel command line (ip=), systemd
+CONFIG_IP_PNP=y
+CONFIG_FHANDLE=y
+
+# Hang diagnostics. In run pnfs-1791558094 nfsd stopped closing client
+# connections while the guest kept running, and the console said nothing:
+# none of these were on. A task blocked for 60 s prints its stack, a CPU stuck
+# without scheduling prints too, and the agent reads nfsd threads' stacks from
+# /proc/<pid>/stack. Magic SysRq lets the runner ask for all blocked tasks
+# (sysrq-w) through QEMU's monitor. DEBUG_KERNEL only unlocks these options.
+CONFIG_DEBUG_KERNEL=y
+CONFIG_DETECT_HUNG_TASK=y
+CONFIG_DEFAULT_HUNG_TASK_TIMEOUT=60
+CONFIG_SOFTLOCKUP_DETECTOR=y
+CONFIG_STACKTRACE=y
+CONFIG_MAGIC_SYSRQ=y
+CONFIG_MAGIC_SYSRQ_DEFAULT_ENABLE=0x1
+
+# Memory the guest gives back. The runner always attaches a virtio balloon with
+# free-page reporting and deflate-on-OOM, so pages the guest frees return to
+# the host without anyone driving the balloon. The pod can then request less
+# than its limit. Stated here even where the base config already has them,
+# because the runner's device depends on them.
+CONFIG_VIRTIO_BALLOON=y
+CONFIG_PAGE_REPORTING=y
+CONFIG_BALLOON_COMPACTION=y
+
+# QEMU's fw_cfg in sysfs: the runner hands the guest its debug SSH key as the
+# item opt/io.simplyblock/ssh_authorized_keys, read from
+# /sys/firmware/qemu_fw_cfg/by_name/. fw_cfg is ACPI-described on both arches.
+CONFIG_FW_CFG_SYSFS=y

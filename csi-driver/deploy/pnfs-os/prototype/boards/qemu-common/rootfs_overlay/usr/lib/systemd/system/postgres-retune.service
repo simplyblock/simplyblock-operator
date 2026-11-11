@@ -1,0 +1,15 @@
+[Unit]
+Description=Re-tune PostgreSQL configuration after resource change
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+
+ExecStart=timescaledb-tune --yes \
+    --conf-path /vela/config/postgresql.conf \
+    --pg-version $(cat /var/lib/postgresql/data/PG_VERSION)
+ExecStartPost=-systemctl reload postgresql.service
+
+StandardOutput=journal
+StandardError=journal

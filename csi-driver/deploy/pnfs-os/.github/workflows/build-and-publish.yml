@@ -1,0 +1,59 @@
+name: Build and Publish
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+      - name: Cleanup
+        run: |
+          rm -rf *
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Set up Docker build environment
+        run: |
+          ./builder initialize
+          ./builder docker setup -i
+          ./builder docker clean
+      - name: Prepare environment
+        run: |
+          ./builder setup
+      - name: Build
+        run: |
+          ./builder build
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5.10.0  # Explicitly use == 5.10.0, otherwise the action linter reports a false-negative. We should be able to remove this soon.
+        with:
+          images: |
+            ghcr.io/${{ github.repository }}/vela-image
+            docker.io/simplyblock/vela-image
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha
+
+      - name: Create manifest list and push
+        run: |
+          while IFS= read -r tag; do
+            docker tag vela-image:latest "$tag"
+            docker push "$tag"
+          done <<< "$(jq -r '.tags[]' <<< '${{ steps.meta.outputs.json }}')"

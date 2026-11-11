@@ -1,0 +1,5 @@
+config BR2_PACKAGE_PG_HINT_PLAN
+	bool "pg-hint-plan"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  PG Hint Plan extension for PostgreSQL.

@@ -1,0 +1,295 @@
+api:
+  enabled: true
+
+sources:
+  host_metrics:
+    filesystem:
+      devices:
+        excludes: 
+        - binfmt_misc
+        - tmpfs  # Avoid errors statting /run/credentials/ that occur even though it should be excluded
+      filesystems:
+        excludes: 
+        - binfmt_misc
+        - tmpfs  # Avoid errors statting /run/credentials/ that occur even though it should be excluded
+      mountPoints:
+        excludes: 
+        - "*/proc/sys/fs/binfmt_misc"
+        - "*/run/credentials/*"
+    type: host_metrics
+
+  journald:
+    type: journald
+    include_units:
+      - pgbouncer.service
+      - pgbouncer-exporter.service
+      - postgres-exporter.service
+      - postgres-meta.service
+      - postgresql.service
+      - postgrest.service
+      - storage.service
+
+transforms:
+  route_logs:
+    type: route
+    inputs:
+      - journald
+    route:
+      pgbouncer: '._SYSTEMD_UNIT == "pgbouncer.service"'
+      pgbouncer_exporter: '._SYSTEMD_UNIT == "pgbouncer-exporter.service"'
+      postgres_exporter: '._SYSTEMD_UNIT == "postgres-exporter.service"'
+      postgres_meta: '._SYSTEMD_UNIT == "postgres-meta.service"'
+      postgresql: '._SYSTEMD_UNIT == "postgresql.service"'
+      postgrest: '._SYSTEMD_UNIT == "postgrest.service"'
+      storage: '._SYSTEMD_UNIT == "storage.service"'
+
+  postgresql_logs:
+    type: remap
+    inputs:
+      - route_logs.postgresql
+    source: |-
+      .appname = "postgres"
+      .message_id = uuid_v7()
+      .level = "INFO"
+      parsed, err = parse_regex(.message, r'.*(?P<level>INFO|NOTICE|WARNING|ERROR|LOG|FATAL|PANIC?):.*', numeric_groups: false)
+      if err == null && parsed != null {
+       .level = upcase!(parsed.level)
+      }
+      if .level == "PANIC" || .level == "FATAL" || .level == "ERROR" {
+        .severity = "error"
+      } else if .level == "WARNING" {
+        .severity = "warning"
+      } else {
+        .severity = "success"
+      }
+  postgrest_logs:
+    type: remap
+    inputs:
+      - route_logs.postgrest
+    source: |-
+      .appname = "postgrest"
+      .message_id = uuid_v7()
+      .level = "INFO"
+      .severity = "success"
+      parsed, err = parse_regex(.message, r'^(?P<time>.*): (?P<msg>.*)$')
+      if err == null && parsed != null {
+        .message = parsed.msg
+        .timestamp = parse_timestamp!(parsed.time, format: "%d/%b/%Y:%H:%M:%S %z")
+      }
+  pgmeta_logs:
+    type: remap
+    inputs:
+      - route_logs.postgres_meta
+    source: |-
+      .appname = "pgmeta"
+      .message_id = uuid_v7()
+      .level = "LOG"
+      parsed, err = parse_json(.message)
+      if err == null && parsed != null {
+        .level = upcase!(parsed.level)
+        .metadata.hostname = parsed.hostname
+        .message = parsed.msg
+        ts, ts_err = parse_timestamp(.time, format: "%+")
+        if ts_err == null {
+          .timestamp = ts
+        } else {
+          .timestamp = now()
+        }
+      }
+      if .level == "ERROR" || .level == "FATAL" {
+        .severity = "error"
+      } else if .level == "WARN" {
+        .severity = "warning"
+      } else {
+        .severity = "success"
+      }
+  pgbouncer_logs:
+    type: remap
+    inputs:
+      - route_logs.pgbouncer
+    source: |-
+      .appname = "pgbouncer"
+      .message_id = uuid_v7()
+      .level = "INFO"
+      parsed, err = parse_regex(.message, r'^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) UTC \[(?P<pid>\d+)\] (?P<level>[A-Z]+) (?P<msg>.*)$')
+      if err == null && parsed != null {
+        .level = upcase!(parsed.level)
+        .message = parsed.msg
+        ts, ts_err = parse_timestamp(parsed.time, format: "%F %T%.3f %Z", timezone: "UTC")
+        if ts_err == null {
+          .timestamp = ts
+        }
+      }
+      if .level == "ERROR" || .level == "FATAL" {
+        .severity = "error"
+      } else if .level == "WARN" {
+        .severity = "warning"
+      } else {
+        .severity = "success"
+      }
+  pgexporter_logs:
+    type: remap
+    inputs:
+      - route_logs.postgres_exporter
+    source: |-
+      .appname = "pgexporter"
+      .message_id = uuid_v7()
+      .level = "INFO"
+      parsed, err = parse_key_value(.message)
+      if err == null && parsed != null {
+        .message = parsed.msg
+        if exists(parsed.err) {
+          .message = parsed.err
+        }
+        if exists(parsed.level) {
+          .level = upcase!(parsed.level)
+        }
+        if exists(parsed.time) {
+          ts, ts_err = parse_timestamp(.time, format: "%+")
+          if ts_err == null {
+            .timestamp = ts
+          }
+        }
+      }
+      if .level == "ERROR" || .level == "FATAL" {
+        .severity = "error"
+      } else if .level == "WARN" {
+        .severity = "warning"
+      } else {
+        .severity = "success"
+      }
+  pgbouncer_exporter_logs:
+    type: remap
+    inputs:
+      - route_logs.pgbouncer_exporter
+    source: |-
+      .appname = "pgbouncer_exporter"
+      .message_id = uuid_v7()
+      .level = "INFO"
+      parsed, err = parse_key_value(.message)
+      if err == null && parsed != null {
+        .message = parsed.msg
+        if exists(parsed.err) {
+          .message = parsed.err
+        }
+        if exists(parsed.level) {
+          .level = upcase!(parsed.level)
+        }
+        if exists(parsed.time) {
+          ts, ts_err = parse_timestamp(.time, format: "%+")
+          if ts_err == null {
+            .timestamp = ts
+          }
+        }
+      }
+      if .level == "ERROR" || .level == "FATAL" {
+        .severity = "error"
+      } else if .level == "WARN" {
+        .severity = "warning"
+      } else {
+        .severity = "success"
+      }
+  storage_logs:
+    type: remap
+    inputs:
+      - route_logs.storage
+    source: |-
+      .appname = "storage"
+      .message_id = uuid_v7()
+      parsed, err = parse_json(.message)
+      if err == null && parsed != null {
+        if exists(parsed.level) {
+          lvl, lvl_err = to_int(parsed.level)
+          if lvl_err == null {
+            if lvl >= 50 {
+              .level = "ERROR"
+            } else if lvl >= 40 {
+              .level = "WARN"
+            } else if lvl >= 30 {
+              .level = "INFO"
+            } else if lvl >= 20 {
+              .level = "DEBUG"
+            } else if lvl >= 10 {
+              .level = "TRACE"
+            } else {
+              .level = "INFO"
+            }
+          }
+        }
+        if exists(parsed.msg) {
+          .message = parsed.msg
+        }
+        if exists(parsed.time) {
+          ts, ts_err = parse_timestamp(parsed.time, format: "%+")
+          if ts_err == null {
+            .timestamp = ts
+          }
+        }
+        if exists(parsed.error) && is_object(parsed.error) {
+          if exists(parsed.error.message) {
+            .error_message = parsed.error.message
+          }
+          if exists(parsed.error.name) {
+            .error_name = parsed.error.name
+          }
+          if exists(parsed.error.statusCode) {
+            .error_status_code = parsed.error.statusCode
+          }
+        }
+      }
+      if .level == "ERROR" {
+        .severity = "error"
+      } else if .level == "WARN" {
+        .severity = "warning"
+      } else {
+        .severity = "success"
+      }
+
+
+sinks:
+  prom_exporter:
+    type: prometheus_exporter
+    inputs:
+      - host_metrics
+    address: "0.0.0.0:9100"
+
+  basic_sink:
+    type: 'loki'
+    inputs:
+      - postgresql_logs
+      - pgmeta_logs
+      - pgbouncer_logs
+      - pgexporter_logs
+      - pgbouncer_exporter_logs
+      - storage_logs
+    endpoint: 'http://loki.loki.svc.cluster.local:3100'
+    labels:
+      branch_id: '${VELA_BRANCH?VELA_BRANCH is required}'
+      level: '{{ .level }}'
+      severity: '{{ .severity }}'
+      appname: '{{ .appname }}'
+      service: '{{ .appname }}'
+    encoding:
+      codec: json
+
+  http_sink:
+    type: 'loki'
+    inputs:
+      - postgrest_logs
+    endpoint: 'http://loki.loki.svc.cluster.local:3100'
+    labels:
+      branch_id: '${VELA_BRANCH?VELA_BRANCH is required}'
+      level: '{{ .level }}'
+      severity: '{{ .severity }}'
+      appname: '{{ .appname }}'
+      service: '{{ .appname }}'
+      status: '{{ .metadata.response.status_code }}'
+      method: '{{ .metadata.request.method }}'
+      path: '{{ .metadata.request.path }}'
+    encoding:
+      codec: json
+
+  dummy:
+    type: blackhole
+    inputs:
+      - route_logs._unmatched

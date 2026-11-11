@@ -1,0 +1,7 @@
+# The published pNFS MDS guest, built by CI for every architecture at once from
+# guest/<arch>/{vmlinuz,disk.qcow2}, which the workflow collects after each
+# board's build. Only COPY, so buildx builds every platform without emulation.
+FROM scratch
+ARG TARGETARCH
+COPY ${TARGETARCH}/vmlinuz /vmlinuz
+COPY ${TARGETARCH}/disk.qcow2 /disk.qcow2

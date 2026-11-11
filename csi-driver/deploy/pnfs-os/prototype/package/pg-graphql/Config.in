@@ -1,0 +1,7 @@
+config BR2_PACKAGE_PG_GRAPHQL
+	bool "pg-graphql"
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	depends on BR2_PACKAGE_POSTGRESQL
+	select BR2_PACKAGE_HOST_RUSTC
+	help
+	  The pg_graphql extension reflects a GraphQL schema from the existing SQL schema.

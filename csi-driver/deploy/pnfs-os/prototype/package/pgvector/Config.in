@@ -1,0 +1,5 @@
+config BR2_PACKAGE_PGVECTOR
+	bool "pgvector"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  PgVector extension for PostgreSQL.

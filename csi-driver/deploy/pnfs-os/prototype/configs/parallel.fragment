@@ -1,0 +1,11 @@
+# Build packages in parallel, merged over a board's defconfig by
+# `./builder setup <board> --parallel`.
+#
+# Per-package directories give every package its own copy of exactly its
+# declared dependencies, which is what makes a top-level `make -jN` safe:
+# `./builder build` runs one when the configuration carries this option.
+# Buildroot marks it experimental. A package depending on something it never
+# declared fails here rather than building by luck, so the switch is off by
+# default. The include paths move into output/per-package/, so the first build
+# after switching misses the compiler cache.
+BR2_PER_PACKAGE_DIRECTORIES=y

@@ -1,0 +1,82 @@
+From d93fff8e4150462e03cb7c57735fed39c0826344 Mon Sep 17 00:00:00 2001
+From: "Christoph Engelbert (noctarius)" <chris@simplyblock.io>
+Date: Sun, 11 Oct 2026 10:47:53 +0200
+Subject: [PATCH] nfsd: answer an unknown export with a retry for a while after
+ starting
+
+0003 answers a request for an export not exported yet with
+NFS4ERR_DELAY during grace, since after a restart whatever exports the
+filesystems may still be at it. But grace ends as soon as every client
+has reclaimed, and on a pNFS metadata server that took 12.5 seconds
+while its exports were restored one at a time, about one a second. A
+request for an export restored after that got NFS4ERR_STALE: a mkdir, a
+truncate, and a stat failed with ESTALE, and a client's final write-back
+failed, which fio saw as EIO.
+
+pnfs_export_restore extends the same answer to that many seconds after
+nfsd started, whether or not grace has ended. It defaults to 0, which
+leaves 0003's behavior as it was. The cost is that a request for an
+export that really was removed waits that long before failing.
+---
+ fs/nfsd/nfsfh.c | 29 +++++++++++++++++++++++++++--
+ 1 file changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/fs/nfsd/nfsfh.c b/fs/nfsd/nfsfh.c
+index eab8d2c52..480342f5d 100644
+--- a/fs/nfsd/nfsfh.c
++++ b/fs/nfsd/nfsfh.c
+@@ -9,6 +9,8 @@
+  */
+ 
+ #include <linux/exportfs.h>
++#include <linux/moduleparam.h>
++#include <linux/timekeeping.h>
+ 
+ #include <linux/sunrpc/svcauth_gss.h>
+ #include "nfsd.h"
+@@ -135,6 +137,25 @@ static inline __be32 check_pseudo_root(struct dentry *dentry,
+ 	return nfs_ok;
+ }
+ 
++/*
++ * How long after nfsd starts an unknown export is answered with a retry rather
++ * than STALE, for a server whose exports are restored by something outside
++ * the kernel after it starts. 0, the default, leaves it to the grace period.
++ */
++static unsigned int pnfs_export_restore;
++module_param(pnfs_export_restore, uint, 0644);
++MODULE_PARM_DESC(pnfs_export_restore,
++	"Seconds after nfsd starts in which an unknown export is answered NFS4ERR_DELAY rather than STALE");
++
++static bool nfsd_restoring_exports(struct net *net)
++{
++	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
++	unsigned int window = READ_ONCE(pnfs_export_restore);
++
++	return window && nn->boot_time_bt &&
++		ktime_get_boottime_seconds() - nn->boot_time_bt < window;
++}
++
+ /*
+  * Use the given filehandle to look up the corresponding export and
+  * dentry.  On success, the results are used to set fh_export and
+@@ -203,10 +224,14 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct net *net,
+ 		 * whatever exports its filesystems is still at it. STALE ends
+ 		 * that state for good (the client drops a reclaimed open and
+ 		 * fails the application's I/O with EBADF), so ask the client
+-		 * to retry. Once grace is over, an unknown export is stale.
++		 * to retry. Grace can end early, once every client has
++		 * reclaimed, while exports are still being restored, so the
++		 * same holds for pnfs_export_restore seconds after nfsd
++		 * started. After both, an unknown export is stale.
+ 		 */
+ 		if (PTR_ERR(exp) == -ENOENT)
+-			return locks_in_grace(net) ? nfserr_jukebox : error;
++			return locks_in_grace(net) || nfsd_restoring_exports(net) ?
++				nfserr_jukebox : error;
+ 
+ 		return nfserrno(PTR_ERR(exp));
+ 	}
+-- 
+2.54.0 (Apple Git-157)
+

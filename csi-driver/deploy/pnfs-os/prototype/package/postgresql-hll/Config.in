@@ -1,0 +1,5 @@
+config BR2_PACKAGE_POSTGRESQL_HLL
+	bool "postgresql-hll"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  HyperLogLog extension for PostgreSQL.

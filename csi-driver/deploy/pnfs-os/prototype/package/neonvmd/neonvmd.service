@@ -1,0 +1,17 @@
+[Unit]
+Description=neonvmd
+
+[Service]
+ExecStart=/neonvm/bin/neonvmd --addr=0.0.0.0:25183
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=neonvmd
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ReadWritePaths=/vela
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+config BR2_PACKAGE_PGSODIUM
+	bool "pgsodium"
+	depends on BR2_PACKAGE_POSTGRESQL
+	select BR2_PACKAGE_LIBSODIUM
+	select BR2_PACKAGE_LIBSODIUM_FULL
+	help
+	  pgsodium is an encryption library extension for PostgreSQL using the libsodium library for high level
+	  cryptographic algorithms.

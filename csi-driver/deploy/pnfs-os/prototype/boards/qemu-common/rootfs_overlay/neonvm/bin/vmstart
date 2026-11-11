@@ -1,0 +1,33 @@
+#!/neonvm/bin/sh
+
+/neonvm/bin/cat <<'EOF' >/neonvm/bin/vmstarter.sh
+
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+EOF
+
+if /neonvm/bin/test -f /neonvm/runtime/env.sh; then
+    /neonvm/bin/cat /neonvm/runtime/env.sh >>/neonvm/bin/vmstarter.sh
+fi
+
+
+
+
+if /neonvm/bin/test -f /neonvm/runtime/command.sh; then
+    /neonvm/bin/cat /neonvm/runtime/command.sh >>/neonvm/bin/vmstarter.sh
+else
+
+    /neonvm/bin/echo -n  >> /neonvm/bin/vmstarter.sh
+fi
+
+
+if /neonvm/bin/test -f /neonvm/runtime/args.sh; then
+    /neonvm/bin/echo -n ' ' >>/neonvm/bin/vmstarter.sh
+    /neonvm/bin/cat /neonvm/runtime/args.sh >>/neonvm/bin/vmstarter.sh
+else
+
+    /neonvm/bin/echo -n ' '/bin/sh >> /neonvm/bin/vmstarter.sh
+fi
+
+/neonvm/bin/chmod +x /neonvm/bin/vmstarter.sh
+
+/neonvm/bin/flock -o /neonvm/vmstart.lock -c 'test -e /neonvm/vmstart.allowed && /neonvm/bin/su-exec root /neonvm/bin/sh /neonvm/bin/vmstarter.sh'

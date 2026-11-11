@@ -1,0 +1,5 @@
+config BR2_PACKAGE_IP4R
+	bool "ip4r"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  IP4R extension for PostgreSQL.

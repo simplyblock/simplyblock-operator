@@ -1,0 +1,8 @@
+config BR2_PACKAGE_POSTGRESQL_ANONYMIZER
+	bool "postgresql-anonymizer"
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	depends on BR2_PACKAGE_POSTGRESQL
+	select BR2_PACKAGE_HOST_RUSTC
+	help
+	  PostgreSQL Anonymizer is an extension to mask or replace personally identifiable information (PII) or
+	  commercially sensitive data from a Postgres database.

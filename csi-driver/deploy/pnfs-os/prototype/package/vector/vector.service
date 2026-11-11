@@ -1,0 +1,22 @@
+[Unit]
+Description=Vector log aggregation
+ConditionPathExists=/vela/secrets/analytics/branch
+
+[Service]
+User=vector
+Group=vector
+
+ExecStart=sh -c 'VELA_BRANCH="$(cat /vela/secrets/analytics/branch | awk \'{print toupper($0)}\')" /sbin/vector -c /etc/vector/vector.yaml --color never'
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vector
+
+StateDirectory=vector
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

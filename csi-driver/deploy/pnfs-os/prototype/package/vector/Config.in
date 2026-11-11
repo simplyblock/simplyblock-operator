@@ -1,0 +1,5 @@
+config BR2_PACKAGE_VECTOR
+	bool "vector"
+	help
+	  Vector is a high-performance, end-to-end (agent & aggregator) observability data pipeline that puts
+	  you in control of your observability data.

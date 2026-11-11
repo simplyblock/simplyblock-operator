@@ -1,0 +1,5 @@
+*.old
+images/
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,4 @@
+config BR2_PACKAGE_SYSTEMD_EXPORTER
+	bool "systemd-exporter"
+	help
+	  Systemd Exporter for exporting system service status and metrics to Prometheus.

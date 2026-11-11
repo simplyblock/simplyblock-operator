@@ -1,0 +1,7 @@
+config BR2_PACKAGE_PG_JSONSCHEMA
+	bool "pg-jsonschema"
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	depends on BR2_PACKAGE_POSTGRESQL
+	select BR2_PACKAGE_HOST_RUSTC
+	help
+	  pg_jsonschema is a PostgreSQL extension adding support for JSON schema validation on json and jsonb data types.
