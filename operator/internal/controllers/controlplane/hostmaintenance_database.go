@@ -1,15 +1,17 @@
 // The HostMaintenance window's steps that talk to FoundationDB, each through
 // one command Job of fdbcommand.go: entering and leaving maintenance mode for
 // the worker's zone, moving the coordinators off the worker and verifying the
-// move in the cluster file, and waiting for the worker's process groups to
-// report back.
+// move in the cluster file, excluding the worker's log and stateless processes
+// so their roles move while they are alive and including them once they are
+// back, and waiting for the worker's process groups to report back.
 //
 // None of these steps holds the drain on a failed command. A command that
 // fails completes its step degraded, with an event saying what did not happen,
 // because the budget's job is to hold the eviction until the move has been
 // attempted, and an attempt that failed is an attempt.
 //
-// design-fdb-host-maintenance.md §5.5 through §5.9 are the specification.
+// design-fdb-host-maintenance.md §5.5 through §5.9 and §5.12 are the
+// specification.
 
 package controlplane
 
@@ -173,6 +175,127 @@ func (r *ControlPlaneOpsReconciler) windowMoveCoordinators(
 	r.emit(ops, corev1.EventTypeNormal, CoordinatorsMoved, fmt.Sprintf(
 		"the coordinators are %s, %s", strings.Join(hm.Coordinators, " "), placement))
 	fdbCoordinatorMovesTotal.WithLabelValues(ops.Namespace, string(hm.CoordinatorPlacement)).Inc()
+	return true, "", nil
+}
+
+// localityPrefix is how FoundationDB names a process by its instance ID in
+// exclude and include, which is stable across the pod's IP changing when the
+// eviction recreates it.
+const localityPrefix = "locality_instance_id:"
+
+// excludeCommand and includeCommand are the two commands of the hand-off over
+// a list of process group IDs.
+func excludeCommand(ids []string) string { return localityCommand("exclude", ids) }
+func includeCommand(ids []string) string { return localityCommand("include", ids) }
+
+func localityCommand(verb string, ids []string) string {
+	parts := make([]string, 0, len(ids)+1)
+	parts = append(parts, verb)
+	for _, id := range ids {
+		parts = append(parts, localityPrefix+id)
+	}
+	return strings.Join(parts, " ")
+}
+
+// handoffCandidates are the recorded process groups whose class is not
+// storage, in the recorded order: the ones whose roles an exclusion moves
+// without moving data.
+func handoffCandidates(recorded []string, groups []fdbProcessGroup) []string {
+	classOf := make(map[string]string, len(groups))
+	for _, g := range groups {
+		classOf[g.ID] = g.Class
+	}
+	var ids []string
+	for _, id := range recorded {
+		class, known := classOf[id]
+		if known && class != "storage" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// windowExcludeProcesses is the ExcludingProcesses step (§5.12). It records
+// the worker's log and stateless process groups before the Job that excludes
+// them, issues the waiting exclude so that the Job completes only once
+// FoundationDB reports the processes safe to remove, and completes on either
+// outcome: a failed exclusion is reported and the budget still comes down,
+// and the recorded list is kept because the exclusion may have been written
+// before the wait timed out.
+func (r *ControlPlaneOpsReconciler) windowExcludeProcesses(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.ControlPlaneOps,
+	target *simplyblockv1alpha2.ControlPlane,
+) (bool, string, error) {
+	hm := ops.Status.HostMaintenance
+	zone := hm.Zone
+	if len(hm.ExcludedProcesses) == 0 {
+		groups, err := r.fdbProcessGroups(ctx, ops.Namespace)
+		if err != nil {
+			return false, "", err
+		}
+		ids := handoffCandidates(hm.ProcessGroups, groups)
+		if len(ids) == 0 {
+			return true, "", nil
+		}
+		if err := r.patchWindow(ctx, ops, func(s *simplyblockv1alpha2.HostMaintenanceStatus) {
+			s.ExcludedProcesses = ids
+		}); err != nil {
+			return false, "", err
+		}
+		hm = ops.Status.HostMaintenance
+	}
+
+	job, err := r.commandJob(ctx, ops, target, fdbCommandExclude, excludeCommand(hm.ExcludedProcesses))
+	if err != nil {
+		return false, "", err
+	}
+	switch jobOutcome(job) {
+	case jobRunning:
+		return false, fmt.Sprintf("handing the roles of %s off zone %s",
+			strings.Join(hm.ExcludedProcesses, ", "), zone), nil
+	case jobFailed:
+		r.emit(ops, corev1.EventTypeWarning, ProcessesNotHandedOff, fmt.Sprintf(
+			"the roles of %s were not handed off zone %s (Job %s failed); the eviction proceeds with "+
+				"them in place and costs the recovery the hand-off spares",
+			strings.Join(hm.ExcludedProcesses, ", "), zone, job.Name))
+		return true, "", nil
+	}
+	r.emit(ops, corev1.EventTypeNormal, ProcessesHandedOff, fmt.Sprintf(
+		"%s are excluded and hold no role; the eviction of zone %s kills nothing the transaction system needs",
+		strings.Join(hm.ExcludedProcesses, ", "), zone))
+	return true, "", nil
+}
+
+// windowIncludeProcesses is the IncludingProcesses step (§5.12). It lifts the
+// exclusion the window wrote, once the processes are back to take roles
+// again, and completes on either outcome: a failed include hands the command
+// to a human, because a process left excluded runs no role.
+func (r *ControlPlaneOpsReconciler) windowIncludeProcesses(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.ControlPlaneOps,
+	target *simplyblockv1alpha2.ControlPlane,
+) (bool, string, error) {
+	hm := ops.Status.HostMaintenance
+	if len(hm.ExcludedProcesses) == 0 {
+		return true, "", nil
+	}
+	command := includeCommand(hm.ExcludedProcesses)
+	job, err := r.commandJob(ctx, ops, target, fdbCommandInclude, command)
+	if err != nil {
+		return false, "", err
+	}
+	switch jobOutcome(job) {
+	case jobRunning:
+		return false, fmt.Sprintf("including %s again", strings.Join(hm.ExcludedProcesses, ", ")), nil
+	case jobFailed:
+		r.emit(ops, corev1.EventTypeWarning, ProcessesLeftExcluded, fmt.Sprintf(
+			"%s are still excluded and run no role (Job %s failed); run `%s` against the database by hand",
+			strings.Join(hm.ExcludedProcesses, ", "), job.Name, command))
+		return true, "", nil
+	}
+	r.emit(ops, corev1.EventTypeNormal, ProcessesIncluded,
+		fmt.Sprintf("%s are included again and may take roles", strings.Join(hm.ExcludedProcesses, ", ")))
 	return true, "", nil
 }
 

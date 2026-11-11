@@ -295,8 +295,8 @@ func TestMovingCoordinatorsWritesTheSetThenWaitsForTheFile(t *testing.T) {
 
 	h.rewriteClusterFile("log-2", "log-3", "storage-4")
 	h.pass()
-	if h.step() != string(stepReleasing) {
-		t.Fatalf("step = %s, want Releasing once the file agrees: %s", h.step(), h.current().Status.Message)
+	if h.step() != string(stepExcludingProcesses) {
+		t.Fatalf("step = %s, want ExcludingProcesses once the file agrees: %s", h.step(), h.current().Status.Message)
 	}
 	if h.recorder.count(CoordinatorsMoved) != 1 {
 		t.Errorf("CoordinatorsMoved emitted %d times, want once", h.recorder.count(CoordinatorsMoved))
@@ -337,8 +337,8 @@ func TestATooSmallClusterMovesNothingAndSaysSo(t *testing.T) {
 	if h.recorder.count(CoordinatorsNotMoved) != 1 {
 		t.Errorf("CoordinatorsNotMoved emitted %d times, want once", h.recorder.count(CoordinatorsNotMoved))
 	}
-	if ops.Status.Step.State != string(stepReleasing) {
-		t.Errorf("step = %s, want Releasing", ops.Status.Step.State)
+	if ops.Status.Step.State != string(stepExcludingProcesses) {
+		t.Errorf("step = %s, want ExcludingProcesses", ops.Status.Step.State)
 	}
 }
 
@@ -348,8 +348,8 @@ func TestAHostHoldingNoCoordinatorMovesNothingQuietly(t *testing.T) {
 	world[len(world)-1] = aClusterFile("log-2", "log-3", "storage-4")
 	h := windowAt(t, world, stepMovingCoordinators)
 	h.pass()
-	if h.step() != string(stepReleasing) {
-		t.Errorf("step = %s, want Releasing", h.step())
+	if h.step() != string(stepExcludingProcesses) {
+		t.Errorf("step = %s, want ExcludingProcesses", h.step())
 	}
 	if h.recorder.count(CoordinatorsNotMoved) != 0 || h.recorder.count(CoordinatorsMoved) != 0 {
 		t.Error("an event was emitted for a host that held no coordinator")
@@ -369,8 +369,8 @@ func TestAFailedCoordinatorsCommandLeavesTheSetUnchanged(t *testing.T) {
 	if h.recorder.count(CoordinatorsNotMoved) != 1 {
 		t.Errorf("CoordinatorsNotMoved emitted %d times, want once", h.recorder.count(CoordinatorsNotMoved))
 	}
-	if ops.Status.Step.State != string(stepReleasing) {
-		t.Errorf("step = %s, want Releasing", ops.Status.Step.State)
+	if ops.Status.Step.State != string(stepExcludingProcesses) {
+		t.Errorf("step = %s, want ExcludingProcesses", ops.Status.Step.State)
 	}
 }
 
@@ -461,8 +461,8 @@ func TestAwaitingHostWaitsForTheRecordedProcessGroups(t *testing.T) {
 		}
 	}
 	h.pass()
-	if h.step() != string(stepLeavingMaintenance) {
-		t.Errorf("step = %s, want LeavingMaintenance once the replacements are ready, cordon or not: %s", h.step(), h.current().Status.Message)
+	if h.step() != string(stepIncludingProcesses) {
+		t.Errorf("step = %s, want IncludingProcesses once the replacements are ready, cordon or not: %s", h.step(), h.current().Status.Message)
 	}
 }
 
@@ -478,8 +478,8 @@ func TestAwaitingHostCompletesWithTheNodeGoneAndTheGroupsReplaced(t *testing.T) 
 		t.Fatal(err)
 	}
 	h.pass()
-	if h.step() != string(stepLeavingMaintenance) {
-		t.Errorf("step = %s, want LeavingMaintenance with the groups gone from the status: %s", h.step(), h.current().Status.Message)
+	if h.step() != string(stepIncludingProcesses) {
+		t.Errorf("step = %s, want IncludingProcesses with the groups gone from the status: %s", h.step(), h.current().Status.Message)
 	}
 }
 
@@ -700,8 +700,8 @@ func TestAwaitingHostWaitsForThePodsTheDrainEvictedToReturn(t *testing.T) {
 		h := windowAt(t, world(readyPod("log-1", otherWorker, after, true), readyPod("storage-1", otherWorker, after, true)), stepAwaitingHost)
 		withDrain(h)
 		h.pass()
-		if h.step() != string(stepLeavingMaintenance) {
-			t.Errorf("step = %s, want LeavingMaintenance: %s", h.step(), h.current().Status.Message)
+		if h.step() != string(stepIncludingProcesses) {
+			t.Errorf("step = %s, want IncludingProcesses: %s", h.step(), h.current().Status.Message)
 		}
 	})
 
@@ -709,8 +709,8 @@ func TestAwaitingHostWaitsForThePodsTheDrainEvictedToReturn(t *testing.T) {
 		h := windowAt(t, world(readyPod("log-1", drainedWorker, before, true), readyPod("storage-1", drainedWorker, before, true)), stepAwaitingHost)
 		withDrain(h)
 		h.pass()
-		if h.step() != string(stepLeavingMaintenance) {
-			t.Errorf("step = %s, want LeavingMaintenance for a cordon that was never drained: %s", h.step(), h.current().Status.Message)
+		if h.step() != string(stepIncludingProcesses) {
+			t.Errorf("step = %s, want IncludingProcesses for a cordon that was never drained: %s", h.step(), h.current().Status.Message)
 		}
 	})
 }

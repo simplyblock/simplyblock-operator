@@ -9,6 +9,7 @@ package controlplane
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -236,15 +237,28 @@ func (in *unstructuredListStub) DeepCopyObject() runtime.Object {
 // has one method that matters here, and a fake is less machinery than a real
 // broadcaster with a fake clientset behind it.
 type recordingRecorder struct {
-	reasons []string
-	types   []string
+	reasons  []string
+	types    []string
+	messages []string
 }
 
 func (r *recordingRecorder) Eventf(
-	_ runtime.Object, _ runtime.Object, eventType, reason, _, _ string, _ ...any,
+	_ runtime.Object, _ runtime.Object, eventType, reason, _, note string, args ...any,
 ) {
 	r.types = append(r.types, eventType)
 	r.reasons = append(r.reasons, reason)
+	r.messages = append(r.messages, fmt.Sprintf(note, args...))
+}
+
+// last returns the message of the most recent event with a reason, or "" when
+// none was emitted, which is what a test asserting what an event says needs.
+func (r *recordingRecorder) last(reason string) string {
+	for i := len(r.reasons) - 1; i >= 0; i-- {
+		if r.reasons[i] == reason {
+			return r.messages[i]
+		}
+	}
+	return ""
 }
 
 // count returns how many events carried a reason, which is what a test

@@ -71,8 +71,10 @@ var undeletableControlPlaneSteps = map[simplyblockv1alpha2.ControlPlaneOpsStep]s
 
 	simplyblockv1alpha2.ControlPlaneOpsStepEnteringMaintenance: "FoundationDB's maintenance mode is being set for the worker's zone",
 	simplyblockv1alpha2.ControlPlaneOpsStepMovingCoordinators:  "the coordinators are being moved off the worker",
+	simplyblockv1alpha2.ControlPlaneOpsStepExcludingProcesses:  "the worker's log and stateless processes are handing their roles off",
 	simplyblockv1alpha2.ControlPlaneOpsStepReleasing:           "the budget over the worker's FoundationDB pods is being released",
 	simplyblockv1alpha2.ControlPlaneOpsStepAwaitingHost:        "the worker's FoundationDB processes are still coming back",
+	simplyblockv1alpha2.ControlPlaneOpsStepIncludingProcesses:  "the worker's returned processes are being included again",
 	simplyblockv1alpha2.ControlPlaneOpsStepLeavingMaintenance:  "FoundationDB's maintenance mode is being cleared",
 	simplyblockv1alpha2.ControlPlaneOpsStepCleanup:             "the window's markers are being removed",
 }

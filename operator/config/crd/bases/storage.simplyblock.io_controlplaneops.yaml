@@ -249,6 +249,15 @@ spec:
                     - Sentinel
                     - PodDisruption
                     type: string
+                  excludedProcesses:
+                    description: |-
+                      ExcludedProcesses are the process groups the window excluded before the
+                      release, by ID, which IncludingProcesses and the terminal teardown
+                      include again. Empty when the host had only storage processes.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
                   maintenanceUntil:
                     description: |-
                       MaintenanceUntil is when the maintenance mode the window set expires on
@@ -340,7 +349,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Draining'',''Restarting'',''Awaiting'',''Preflight'',''Applying'',''Verifying'',''Requesting'',''Holding'',''EnteringMaintenance'',''MovingCoordinators'',''Releasing'',''AwaitingHost'',''LeavingMaintenance'',''Cleanup'',''Completed'']'
+                  rule: '!has(self.state) || self.state in [''Draining'',''Restarting'',''Awaiting'',''Preflight'',''Applying'',''Verifying'',''Requesting'',''Holding'',''EnteringMaintenance'',''MovingCoordinators'',''ExcludingProcesses'',''Releasing'',''AwaitingHost'',''IncludingProcesses'',''LeavingMaintenance'',''Cleanup'',''Completed'']'
             type: object
         type: object
     served: true

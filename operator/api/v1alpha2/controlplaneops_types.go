@@ -79,7 +79,7 @@ const (
 // ControlPlaneOpsStep is one step of a running control-plane operation. Which
 // steps belong to which action is declared by that action's graph rather than by
 // this type, which is why the enum stays flat as actions are added.
-// +kubebuilder:validation:Enum=Draining;Restarting;Awaiting;Preflight;Applying;Verifying;Requesting;Holding;EnteringMaintenance;MovingCoordinators;Releasing;AwaitingHost;LeavingMaintenance;Cleanup;Completed
+// +kubebuilder:validation:Enum=Draining;Restarting;Awaiting;Preflight;Applying;Verifying;Requesting;Holding;EnteringMaintenance;MovingCoordinators;ExcludingProcesses;Releasing;AwaitingHost;IncludingProcesses;LeavingMaintenance;Cleanup;Completed
 type ControlPlaneOpsStep string
 
 const (
@@ -122,12 +122,19 @@ const (
 	// ControlPlaneOpsStepMovingCoordinators writes a coordinator set that names
 	// no process on the worker, and completes once the cluster file agrees.
 	ControlPlaneOpsStepMovingCoordinators ControlPlaneOpsStep = "MovingCoordinators"
+	// ControlPlaneOpsStepExcludingProcesses excludes the worker's log and
+	// stateless processes, so that their roles move while they are alive and
+	// the eviction kills processes that hold nothing.
+	ControlPlaneOpsStepExcludingProcesses ControlPlaneOpsStep = "ExcludingProcesses"
 	// ControlPlaneOpsStepReleasing takes the budget down, which is what lets
 	// the drain proceed.
 	ControlPlaneOpsStepReleasing ControlPlaneOpsStep = "Releasing"
 	// ControlPlaneOpsStepAwaitingHost waits for the worker's FoundationDB
 	// process groups to report back, on the same node or a replacement.
 	ControlPlaneOpsStepAwaitingHost ControlPlaneOpsStep = "AwaitingHost"
+	// ControlPlaneOpsStepIncludingProcesses lifts the exclusion the window
+	// wrote, once the processes are back to take roles again.
+	ControlPlaneOpsStepIncludingProcesses ControlPlaneOpsStep = "IncludingProcesses"
 	// ControlPlaneOpsStepLeavingMaintenance clears the maintenance mode the
 	// window set, when the active zone is still the window's own.
 	ControlPlaneOpsStepLeavingMaintenance ControlPlaneOpsStep = "LeavingMaintenance"
@@ -312,6 +319,13 @@ type HostMaintenanceStatus struct {
 	// +optional
 	CoordinatorPlacement HostMaintenanceCoordinatorPlacement `json:"coordinatorPlacement,omitempty"`
 
+	// ExcludedProcesses are the process groups the window excluded before the
+	// release, by ID, which IncludingProcesses and the terminal teardown
+	// include again. Empty when the host had only storage processes.
+	// +listType=set
+	// +optional
+	ExcludedProcesses []string `json:"excludedProcesses,omitempty"`
+
 	// MaintenanceUntil is when the maintenance mode the window set expires on
 	// its own. Empty when the mode could not be set.
 	// +optional
@@ -327,7 +341,7 @@ type ControlPlaneOpsStatus struct {
 	// Step is the position of the running action's state machine. It is
 	// persisted before the side effect that step performs, so a step reported
 	// here is a step that started.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Draining','Restarting','Awaiting','Preflight','Applying','Verifying','Requesting','Holding','EnteringMaintenance','MovingCoordinators','Releasing','AwaitingHost','LeavingMaintenance','Cleanup','Completed']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Draining','Restarting','Awaiting','Preflight','Applying','Verifying','Requesting','Holding','EnteringMaintenance','MovingCoordinators','ExcludingProcesses','Releasing','AwaitingHost','IncludingProcesses','LeavingMaintenance','Cleanup','Completed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

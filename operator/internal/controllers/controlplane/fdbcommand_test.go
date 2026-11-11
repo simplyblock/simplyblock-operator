@@ -57,7 +57,7 @@ func TestACommandJobRunsFdbcliAgainstTheMountedClusterFile(t *testing.T) {
 		t.Errorf("image = %s, want the FoundationDB image %s", c.Image, image(fdbMonitorImage))
 	}
 	script := strings.Join(c.Command, " ")
-	for _, want := range []string{"fdbcli", "-C " + clusterFilePath, "--timeout 30", "--exec"} {
+	for _, want := range []string{"fdbcli", "-C " + clusterFilePath, `--timeout "${FDBCLI_TIMEOUT:-30}"`, "--exec"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("command %q does not carry %q", script, want)
 		}

@@ -10,13 +10,14 @@
 
 ## Phase 0 — External Prerequisites
 
-| #    | Prerequisite                                                                                                                                                                                                 | Kind       | Blocks                            | Status                         |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|-----------------------------------|--------------------------------|
-| P0-1 | The FoundationDB operator keeps a coordinator set it did not choose while the set is valid: stateful classes, DNS addresses, the desired count, and at most one coordinator per fault domain                 | Ecosystem  | `MovingCoordinators` (§5.5)       | Available, verified in v2.13.0 |
-| P0-2 | The FoundationDB operator never selects a process whose zone is under maintenance as a coordinator candidate, and fails its own re-election when the remaining zones cannot satisfy its one-per-domain limit | Ecosystem  | The shared-host fallback (§5.5)   | Available, verified in v2.13.0 |
-| P0-3 | `fdbcli` in the `fdb-kubernetes-monitor` image the processes run, at `/usr/bin/fdbcli`, with the `coordinators`, `maintenance on`, bare `maintenance`, and `maintenance off` commands of FoundationDB 7.3    | Ecosystem  | Every command step (§5.4)         | Available                      |
-| P0-4 | FoundationDB holds one maintenance zone at a time, and a zone's processes report `under_maintenance` in the machine-readable status                                                                          | Ecosystem  | `EnteringMaintenance` (§5.7)      | Available                      |
-| P0-5 | An evicted pod carries the `DisruptionTarget` condition with reason `EvictionByEvictionAPI`                                                                                                                  | Kubernetes | The secondary drain signal (§5.3) | Available from Kubernetes 1.26 |
+| #    | Prerequisite                                                                                                                                                                                                                    | Kind       | Blocks                            | Status                                                                 |
+|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|-----------------------------------|------------------------------------------------------------------------|
+| P0-1 | The FoundationDB operator keeps a coordinator set it did not choose while the set is valid: stateful classes, DNS addresses, the desired count, and at most one coordinator per fault domain                                    | Ecosystem  | `MovingCoordinators` (§5.5)       | Available, verified in v2.13.0                                         |
+| P0-2 | The FoundationDB operator never selects a process whose zone is under maintenance as a coordinator candidate, and fails its own re-election when the remaining zones cannot satisfy its one-per-domain limit                    | Ecosystem  | The shared-host fallback (§5.5)   | Available, verified in v2.13.0                                         |
+| P0-3 | `fdbcli` in the `fdb-kubernetes-monitor` image the processes run, at `/usr/bin/fdbcli`, with the `coordinators`, `maintenance on`, bare `maintenance`, `maintenance off`, `exclude`, and `include` commands of FoundationDB 7.3 | Ecosystem  | Every command step (§5.4)         | Available                                                              |
+| P0-4 | FoundationDB holds one maintenance zone at a time, and a zone's processes report `under_maintenance` in the machine-readable status                                                                                             | Ecosystem  | `EnteringMaintenance` (§5.7)      | Available                                                              |
+| P0-5 | An evicted pod carries the `DisruptionTarget` condition with reason `EvictionByEvictionAPI`                                                                                                                                     | Kubernetes | The secondary drain signal (§5.3) | Available from Kubernetes 1.26                                         |
+| P0-6 | FoundationDB excludes and includes a process by its `locality_instance_id`, and the FoundationDB operator leaves an exclusion it did not make in place                                                                          | Ecosystem  | The hand-off (§5.12)              | Available from FoundationDB 7.1, operator behavior verified in v2.13.0 |
 
 P0-1 is what makes a move stick: an upstream operator that re-elects on every
 pass reverts the set within one reconcile, and the window releases with the
@@ -73,9 +74,10 @@ once with a PodDisruptionBudget that allows no disruption, and then waits. When
 a drain reaches that worker, which the window sees as the eviction of a
 sentinel pod it placed beside them, the window sets FoundationDB's maintenance mode for the host's zone, moves every
 coordinator the host holds onto processes on other hosts, verifies the move in
-the cluster file, and deletes the budget so the drain proceeds. After the host's
-processes report back, on the same node or a replacement, the window clears the
-maintenance mode and ends.
+the cluster file, hands the host's log and stateless roles off through an
+exclusion, and deletes the budget so the drain proceeds. After the host's
+processes report back, on the same node or a replacement, the window includes
+them again, clears the maintenance mode, and ends.
 
 The window never refuses a drain. Every command it issues can fail, and every
 failure before `Releasing` is reported and stepped over, because a budget that
@@ -84,13 +86,16 @@ saying why. What the window guarantees is ordering: nothing is evicted before
 the coordinators have been given the chance to move, the move takes seconds,
 and the budget is gone within one step of that chance being spent.
 
-Commits and reads continue throughout, with one qualification §2 states as a
-non-goal. FoundationDB loses no committed transaction while a log replica
-survives, and the window keeps the coordinator quorum whole, but every process
-that holds a transaction-system role causes a recovery of a few seconds when it
-dies. The window cannot remove that recovery. It removes the quorum risk, the
-data movement, and the dependency on the upstream operator being alive at the
-moment of eviction.
+Commits and reads continue throughout. FoundationDB loses no committed
+transaction while a log replica survives, and the window keeps the coordinator
+quorum whole. Every recovery the drain causes is one the window asked for while
+the processes were alive: the maintenance mode, the coordinator move, and the
+hand-off each cost the database about a second, which clients see as latency.
+What the window removes is the uncontrolled recovery, the one FoundationDB
+runs only after its failure detector has declared a killed process dead, which
+stalls every commit in flight for the detector's delay. With it go the quorum
+risk, the data movement, and the dependency on the upstream operator being
+alive at the moment of eviction.
 
 ---
 
@@ -114,11 +119,19 @@ operator issues a FoundationDB command, and no code in the control plane
 
 Three properties of that deployment decide what a drain does to the database.
 
-**Every host holds a transaction-system role.** The cluster is applied with
-`processCounts.stateless: -1`, so the commit proxies, the GRV proxies, the
-resolvers, and the master are recruited on the storage processes, beside the log
-processes. A drain of any FoundationDB host therefore kills a process the
-transaction system depends on, which triggers a recovery.
+**Every host holds a transaction-system role.** The cluster is applied with as
+many stateless processes as log processes, one per host where the hosts allow,
+and the commit proxies, the GRV proxies, the resolvers, and the master are
+recruited on them. A host therefore runs a log process, a storage process, and
+a stateless process, and a drain of any FoundationDB host kills two processes
+the transaction system depends on. Killed without warning, those trigger a
+recovery only after FoundationDB's failure detector has given up on them, which
+is the `knob_failure_detection_delay` of four seconds on top of the pod's
+termination, and every commit in flight waits for it. Excluded while alive, the
+same processes hand their roles off in a recovery FoundationDB runs at once,
+and their later death costs nothing. The storage process is never excluded,
+because an exclusion of a storage server is a request to move its data, and
+the maintenance mode is what protects that data instead.
 
 **The coordinators sit on three hosts and move only after a loss.** With
 `redundancy_mode: double` the database wants three coordinators, one per zone.
@@ -185,17 +198,20 @@ behind is the one this design is built around: a drain is never refused.
 
 ### Non-Goals
 
-- **A recovery-free drain.** Every FoundationDB host holds a transaction-system
-  role (§1), and the coordinator move is itself a recovery. Clients retry
-  through a recovery of a few seconds, and whether the control plane's own
-  transactions do so correctly is §14 Q3.
+- **A recovery-free drain.** The maintenance mode, the coordinator move, and
+  the hand-off (§5.12) are each a recovery of about a second, run while the
+  host's processes are alive. What the window removes is the recovery that
+  follows a kill, with the failure detector's delay in front of it. Clients
+  retry through the recoveries that remain, and whether the control plane's
+  own transactions do so correctly is §14 Q3.
 - **Replacing process groups.** The window moves roles, never pods. A
   replacement needs a spare worker (§1), and the upstream operator's own
   replacement logic remains in charge of a process that stays down past its
   failure-detection window.
-- **Moving log or stateless roles off the host.** FoundationDB recruits those
-  roles itself, and the only lever that moves them is an exclusion, which is a
-  replacement.
+- **Moving storage data off the host.** The hand-off excludes log and
+  stateless processes only. An exclusion of a storage process is a request to
+  re-replicate its data, which on a large database outlasts any drain, and the
+  maintenance mode of §5.7 protects that data in place instead.
 - **Protecting hosts drained together.** Two workers drained at the same moment
   get two moves in sequence, each taking seconds, and the second host's pods are
   held for that long. When every FoundationDB host is drained at once the
@@ -235,8 +251,10 @@ behind is the one this design is built around: a drain is never refused.
 │   │     for the drain signal                                         │     │
 │   │  5. takes the lock, runs fdbcli through a Job per command        │     │
 │   │  6. chooses coordinators from FoundationDBCluster.status         │     │
-│   │  7. verifies the move in ConfigMap cluster-file, releases,       │     │
-│   │     gives the lock back, waits for the processes, clears the zone│     │
+│   │  7. verifies the move in ConfigMap cluster-file, excludes the    │     │
+│   │     host's log and stateless processes, releases, gives the      │     │
+│   │     lock back, waits for the processes, includes them, clears    │     │
+│   │     the zone                                                     │     │
 │   └──────────────────────────────────────────────────────────────────┘     │
 │                                                                            │
 │   ControlPlane.status.activeOpsRef    ControlPlaneOps.spec.hostMaintenance │
@@ -247,6 +265,7 @@ behind is the one this design is built around: a drain is never refused.
 ┌──────────────────────────────▼─────────────────────────────────────────────┐
 │  FoundationDB 7.3 (fdbcli)                                                 │
 │  maintenance on <zone> <seconds>    coordinators <dns:port> ...            │
+│  exclude locality_instance_id:<id>  include locality_instance_id:<id>      │
 │  maintenance (status)               maintenance off                        │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -315,11 +334,11 @@ creation.
 ### 4.2 The steps
 
 ```go
-// +kubebuilder:validation:Enum=Draining;Restarting;Awaiting;Preflight;Applying;Verifying;Requesting;Holding;EnteringMaintenance;MovingCoordinators;Releasing;AwaitingHost;LeavingMaintenance;Cleanup;Completed
+// +kubebuilder:validation:Enum=Draining;Restarting;Awaiting;Preflight;Applying;Verifying;Requesting;Holding;EnteringMaintenance;MovingCoordinators;ExcludingProcesses;Releasing;AwaitingHost;IncludingProcesses;LeavingMaintenance;Cleanup;Completed
 type ControlPlaneOpsStep string
 ```
 
-The seven new values are the window's (§6). The CEL rule on `status.step.state`
+The nine new values are the window's (§6). The CEL rule on `status.step.state`
 lists them as well. The enum stays flat, because which steps belong to which
 action is the graph's to declare.
 
@@ -334,10 +353,11 @@ HostMaintenance *HostMaintenanceStatus `json:"hostMaintenance,omitempty"`
 `HostMaintenanceStatus` carries the zone the window maintains, the process
 groups that were on the host when the window started, when and how the drain
 was observed, the coordinator set the window wrote, how that set was placed
-(`Spread`, `SharedHost`, or `Unchanged`), and when the maintenance mode it set
-expires. The zone, the process groups, and the set are what a later step acts
-on, and the drain observation and the placement are the two facts about the
-window that `Succeeded` does not say.
+(`Spread`, `SharedHost`, or `Unchanged`), the process groups the window
+excluded, and when the maintenance mode it set expires. The zone, the process
+groups, the set, and the exclusions are what a later step acts on, and the
+drain observation and the placement are the two facts about the window that
+`Succeeded` does not say.
 
 A `Worker` print column at priority 1 shows `spec.hostMaintenance.workerNode`,
 so `kubectl get cpops -o wide` answers which host a window is for.
@@ -364,6 +384,7 @@ status:
     zone: ip-10-0-12-71.eu-central-1.compute.internal
     processGroups:
       - log-16954
+      - stateless-2271
       - storage-54325
     drainObservedAt: "2026-11-11T14:02:09Z"
     drainObservedBy: Sentinel
@@ -372,6 +393,9 @@ status:
       - simplyblock-fdb-cluster-log-80289.simplyblock-fdb-cluster.simplyblock.svc.cluster.local:4501
       - simplyblock-fdb-cluster-storage-73729.simplyblock-fdb-cluster.simplyblock.svc.cluster.local:4501
     coordinatorPlacement: Spread
+    excludedProcesses:
+      - log-16954
+      - stateless-2271
     maintenanceUntil: "2026-11-11T18:02:31Z"
 ```
 
@@ -648,11 +672,13 @@ zone is the windows' for the length of the pool's maintenance.
 
 ### 5.8 Releasing
 
-`Releasing` deletes the budget and removes the label from the pods, and
-completes when the budget is gone. The control plane's lock is given back on
-completion (§7.3). From here the drain's next retry evicts the pods, the
-upstream operator recreates each under its process group, and the recreated
-pods land on another node or wait for this one, as the volume class decides.
+`Releasing` runs once the hand-off of §5.12 has had its chance. It deletes the
+budget and removes the label from the pods, and completes when the budget is
+gone. The control plane's lock is given back on completion (§7.3). From here
+the drain's next retry evicts the pods, which by now hold no role the
+transaction system needs, the upstream operator recreates each under its
+process group, and the recreated pods land on another node or wait for this
+one, as the volume class decides.
 
 ### 5.9 Awaiting the processes, and ending
 
@@ -672,6 +698,9 @@ failure-detection window, counts as returned. Its
 deadline is the one length nobody controls, and an expiry fails the window
 rather than recovering anything: the budget is already gone, the maintenance
 zone expires on its own, and the event says the processes did not come back.
+
+`IncludingProcesses` follows the return and lifts the exclusion (§5.12), and
+`LeavingMaintenance` clears the zone (§5.7).
 
 `Cleanup` removes any label the release left behind and completes. It is on
 the success path only. A window that fails or is aborted runs the same teardown
@@ -731,6 +760,83 @@ At every point the coordinator quorum is whole, no storage data is copied for a
 host whose processes are minutes from returning, and no drain waits on another
 host's absence.
 
+### 5.12 Handing the transaction roles off
+
+A process that is killed while it holds a transaction-system role costs the
+database two things in sequence: the failure detector's delay, during which
+every commit in flight waits on a process that will never answer, and the
+recovery itself. A process that is excluded while it is alive costs only the
+second, and that recovery runs the moment the exclusion is written. The window
+therefore excludes the host's log and stateless processes after the coordinator
+move and before the budget comes down, so the eviction kills processes that hold
+nothing.
+
+`ExcludingProcesses` reads the class of every process group recorded at
+`Holding` from `FoundationDBCluster.status.processGroups`, keeps those whose
+class is not `storage`, writes their IDs to
+`status.hostMaintenance.excludedProcesses` before the Job that excludes them,
+and issues one command for all of them, each named by its locality:
+
+```
+exclude locality_instance_id:log-16954 locality_instance_id:stateless-2271
+```
+
+The command is the waiting form, so `fdbcli` returns once FoundationDB reports
+the processes safe to remove: the recovery has recruited the transaction system
+elsewhere, and no storage server still needs the old log generation. For log
+and stateless processes that is seconds, and the Job carries a longer `fdbcli`
+timeout than the other commands for it. A `Complete` Job completes the step
+with `ProcessesHandedOff`. A `Failed` Job completes it with
+`ProcessesNotHandedOff` and the recorded list kept, because the exclusion may
+have been written before the wait timed out, and an include of a process that
+was never excluded is harmless. A host whose recorded groups are all `storage`
+completes the step with no Job. The storage process is never excluded, because
+FoundationDB answers that exclusion by re-replicating the server's data, which
+is what the maintenance mode of §5.7 exists to prevent. Its data stays where it
+is, and its roles are only storage.
+
+The upstream operator records the exclusion as the `ProcessIsMarkedAsExcluded`
+condition on the process group and does nothing else with it: it includes only
+processes it has itself removed (P0-6). An excluded group reads as unhealthy to
+the coordinator choice of §5.5, which keeps a later window from electing a
+process that holds no roles.
+
+`IncludingProcesses` runs after `AwaitingHost` and issues the inverse command
+over the recorded list:
+
+```
+include locality_instance_id:log-16954 locality_instance_id:stateless-2271
+```
+
+A `Complete` Job completes the step with `ProcessesIncluded`. A `Failed` Job
+completes it with `ProcessesLeftExcluded`, whose message carries the command to
+run by hand, because a process left excluded runs no role and the cluster is
+that process short until someone includes it. A window that recorded no
+exclusion issues nothing. FoundationDB recruits the returned processes back
+into the transaction system in the recovery it runs for any better-fit
+process that appears, which is the recovery the host's return caused before
+the hand-off existed.
+
+A window that ends on any path other than `Cleanup` after `ExcludingProcesses`
+began includes from its terminal teardown (§5.9), best effort, through the same
+Job, and names the processes in `MaintenanceMarkersLeft` when the Job could
+not be created.
+
+**The layout that makes the hand-off complete.** The hand-off moves only the
+roles of the processes it excludes. For the eviction to find nothing left, no
+transaction-system role may sit on the host's storage process, which is where
+FoundationDB puts the proxies, the resolvers, and the master when a cluster
+has no stateless process to carry them. The `FoundationDBCluster` is therefore
+applied with `processCounts.stateless` equal to the log count rather than
+disabled, which is one stateless process per host on the lab's shape, and
+FoundationDB recruits the transaction system on them. A stateless process holds
+no data and claims no volume, so its pod is the general template's container
+and nothing else. On a cluster whose stateless processes are fewer than the
+commit proxies FoundationDB wants, the surplus proxy lands on a storage
+process, and a drain of that host still costs one recovery after the kill: a
+shape the `CoordinatorsNotMoved` family of events does not report, and that
+§14 Q6 holds.
+
 ---
 
 ## 6. State Machine
@@ -753,11 +859,17 @@ effect each step performs, and every step requeues rather than waits.
   MovingCoordinators   ← choose the set (§5.5), write it to status, Job: coordinators
     │  cluster file names no process on the host, or placement Unchanged
     ▼
+  ExcludingProcesses   ← record the host's log and stateless groups, Job: exclude <localities>
+    │  Job Complete, or Job Failed with ProcessesNotHandedOff, or nothing to exclude
+    ▼
   Releasing            ← delete the budget, remove the label
     │  budget gone (gives the lock back)
     ▼
   AwaitingHost         ← nothing
-    │  no recorded process group carries MissingProcesses
+    │  every recorded process group is back (§5.9)
+    ▼
+  IncludingProcesses   ← Job: include <localities>
+    │  Job Complete, or Job Failed with ProcessesLeftExcluded, or nothing excluded
     ▼
   LeavingMaintenance   ← Job: maintenance (the status), then Job: maintenance off when the zone is its own
     │  Job Complete, or Job Failed with MaintenanceModeLeft
@@ -770,8 +882,10 @@ effect each step performs, and every step requeues rather than waits.
 | `Holding`             | 6 hours since the last drain observed in the namespace | yes       | no             |
 | `EnteringMaintenance` | 5 minutes                                              | no        | yes            |
 | `MovingCoordinators`  | 10 minutes                                             | no        | yes            |
+| `ExcludingProcesses`  | 10 minutes                                             | no        | yes            |
 | `Releasing`           | 5 minutes                                              | no        | yes            |
 | `AwaitingHost`        | 4 hours                                                | no        | no             |
+| `IncludingProcesses`  | 5 minutes                                              | no        | no             |
 | `LeavingMaintenance`  | 5 minutes                                              | no        | no             |
 | `Cleanup`             | 5 minutes                                              | no        | no             |
 
@@ -796,11 +910,15 @@ the storage node's wait for a host, since the two wait for the same reboot.
 | Only hosts already holding a coordinator remain             | `MovingCoordinators`  | Placement `SharedHost`, `CoordinatorsMoved` names the shared host, step completes                                                                                                                     |
 | `coordinators` Job fails                                    | `MovingCoordinators`  | Placement `Unchanged`, `CoordinatorsNotMoved`, step completes                                                                                                                                         |
 | Cluster file still names the host after a `Complete` Job    | `MovingCoordinators`  | Holds to the deadline, then the window fails with `CoordinatorsReverted`, and the terminal teardown releases                                                                                          |
+| The host's recorded groups are all `storage`                | `ExcludingProcesses`  | No Job, step completes                                                                                                                                                                                |
+| `exclude` Job fails                                         | `ExcludingProcesses`  | `ProcessesNotHandedOff`, step completes, the recorded list is kept for the include                                                                                                                    |
+| `include` Job fails                                         | `IncludingProcesses`  | `ProcessesLeftExcluded` with the command to run by hand, step completes                                                                                                                               |
 | The budget cannot be deleted                                | `Releasing`           | Requeue. On the deadline the window fails, and the terminal teardown retries once, then `MaintenanceMarkersLeft`                                                                                      |
 | The processes do not return                                 | `AwaitingHost`        | Window fails on the deadline, and the maintenance zone expires on its own                                                                                                                             |
 | The status read or `maintenance off` fails                  | `LeavingMaintenance`  | `MaintenanceModeLeft`, step completes                                                                                                                                                                 |
 | Operator restart                                            | any                   | The step is persisted and every Job is named, so the pass after the restart reads rather than redoes                                                                                                  |
 | The operation is deleted while running                      | any                   | The delete guard refuses it from `EnteringMaintenance` on, as it refuses an abort there. A delete that reaches the controller runs the terminal teardown and releases the lock if the window holds it |
+| The window fails or is deleted after `ExcludingProcesses`   | any later step        | The terminal teardown creates the `include` Job, best effort, and `MaintenanceMarkersLeft` names the processes when it cannot                                                                         |
 | The `ControlPlane` is deleted                               | any                   | Missing-target failure, as for every `Ops` kind                                                                                                                                                       |
 
 ---
@@ -899,17 +1017,20 @@ like the commands, under the same grant.
 ## 8. FoundationDB Interface
 
 The window has no control-plane (`sbcli`) dependency. Its external calls are
-four `fdbcli` commands, each issued through the Job of §5.4.
+six `fdbcli` commands, each issued through the Job of §5.4.
 
 | Command                             | Step                  | Idempotency                                                                                     |
 |-------------------------------------|-----------------------|-------------------------------------------------------------------------------------------------|
 | `maintenance on <zone> <seconds>`   | `EnteringMaintenance` | Replaces the zone and its remaining time. Replaying it extends the window, which is harmless    |
 | `coordinators <addr> <addr> <addr>` | `MovingCoordinators`  | Writing the set already in place is a no-op in FoundationDB. The Job's name is the replay guard |
+| `exclude <locality> ...`            | `ExcludingProcesses`  | Excluding an excluded process is a no-op, and the waiting form returns at once for it           |
+| `include <locality> ...`            | `IncludingProcesses`  | Including a process that is not excluded is a no-op                                             |
 | `maintenance` (the status)          | `LeavingMaintenance`  | A read                                                                                          |
 | `maintenance off`                   | `LeavingMaintenance`  | Clearing no zone succeeds                                                                       |
 
-Every command causes at most one recovery: `coordinators` always, and the three
-maintenance commands never. The sliding `Holding` deadline of §5.3 is re-armed
+Every command causes at most one recovery: `coordinators` and `exclude`
+always, `include` when FoundationDB finds the returned processes a better fit,
+and the three maintenance commands never. The sliding `Holding` deadline of §5.3 is re-armed
 on every pass of a `Holding` window, which runs at least every fifteen seconds,
 and on the pass a drain observed elsewhere enqueues. The Job carries `--timeout 30` so that a command
 against a database that cannot answer fails inside the Job's own deadline.
@@ -927,22 +1048,24 @@ maintenance mode's length is the `AwaitingHost` deadline, which §14 Q1 holds.
 
 ## 10. Failure Modes and Fallback
 
-| Failure                                                         | Detection                                              | Behavior                                                                                                                                                                                                               |
-|-----------------------------------------------------------------|--------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| The database cannot answer a command                            | The Job fails after its retries                        | The step completes degraded and says so. The budget is never held on it                                                                                                                                                |
-| Every worker in the pool is cordoned                            | Nothing special                                        | The Job tolerates the cordon taint and runs on a cordoned worker other than the window's. Every window holds, and each moves when its drain arrives                                                                    |
-| The Job's pod cannot be scheduled                               | The Job stays active to `activeDeadlineSeconds`        | As a failed command. A cluster with no host for the database's selector is one whose drain still proceeds                                                                                                              |
-| The sentinel cannot be created or never starts                  | Nothing                                                | A Pending sentinel is still evicted, and its deletion is still the signal. A sentinel that was never created leaves the neighbor's `DisruptionTarget` as the signal, or the deadline when the worker has no unheld pod |
-| The drain bypasses the eviction API                             | Nothing                                                | No budget holds a direct delete, and no signal reaches the window. The pods are gone with their roles, which is today's behavior. The window waits in `Holding` to its deadline, then fails and tears down             |
-| The upstream operator reverts the set                           | The cluster file names the host after a `Complete` Job | The step holds to its deadline, the window fails with `CoordinatorsReverted`, and the teardown releases the drain. The signal that P0-1 or P0-2 changed                                                                |
-| Too few processes off the leaving hosts                         | §5.5 Step 3                                            | Placement `Unchanged`, the absence runs one coordinator short, which is today's behavior, named in an event                                                                                                            |
-| Two workers drained at the same moment                          | The lock                                               | The second window holds with `MoveQueued` for the seconds of the first move, then moves with the first host excluded from its candidates                                                                               |
-| The worker is cordoned and never drained                        | Nothing                                                | The window holds with the budget up and no command issued, to the uncordon, or to six hours after the last drain any window observed. Nothing in the database changes                                                  |
-| The host's processes return while a later window holds the zone | `LeavingMaintenance` reads the maintenance status      | The earlier window clears nothing and completes. The zone belongs to the host that left last                                                                                                                           |
-| The operator pod is on the worker                               | Nothing special                                        | The step is persisted and the Jobs are named, so a manager rescheduled elsewhere resumes. The operator's own budget is the storage node's concern and not this window's                                                |
-| The processes never return                                      | `AwaitingHost` deadline                                | The window fails. The maintenance zone expires on its own, and the upstream operator replaces the process groups past its own window                                                                                   |
-| A terminal teardown cannot remove the budget                    | Delete returns an error twice                          | `MaintenanceMarkersLeft` on the operation, which is the one event a worker that will not drain is explained by                                                                                                         |
-| The node name is not the hostname                               | Nothing                                                | The zone is read from the Node's `kubernetes.io/hostname` label at `Holding`, so the command names the zone FoundationDB knows                                                                                         |
+| Failure                                                         | Detection                                                    | Behavior                                                                                                                                                                                                               |
+|-----------------------------------------------------------------|--------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| The database cannot answer a command                            | The Job fails after its retries                              | The step completes degraded and says so. The budget is never held on it                                                                                                                                                |
+| Every worker in the pool is cordoned                            | Nothing special                                              | The Job tolerates the cordon taint and runs on a cordoned worker other than the window's. Every window holds, and each moves when its drain arrives                                                                    |
+| The Job's pod cannot be scheduled                               | The Job stays active to `activeDeadlineSeconds`              | As a failed command. A cluster with no host for the database's selector is one whose drain still proceeds                                                                                                              |
+| The sentinel cannot be created or never starts                  | Nothing                                                      | A Pending sentinel is still evicted, and its deletion is still the signal. A sentinel that was never created leaves the neighbor's `DisruptionTarget` as the signal, or the deadline when the worker has no unheld pod |
+| The drain bypasses the eviction API                             | Nothing                                                      | No budget holds a direct delete, and no signal reaches the window. The pods are gone with their roles, which is today's behavior. The window waits in `Holding` to its deadline, then fails and tears down             |
+| The upstream operator reverts the set                           | The cluster file names the host after a `Complete` Job       | The step holds to its deadline, the window fails with `CoordinatorsReverted`, and the teardown releases the drain. The signal that P0-1 or P0-2 changed                                                                |
+| Too few processes off the leaving hosts                         | §5.5 Step 3                                                  | Placement `Unchanged`, the absence runs one coordinator short, which is today's behavior, named in an event                                                                                                            |
+| The exclusion does not complete                                 | The `exclude` Job fails after its retries                    | `ProcessesNotHandedOff`, the budget comes down, and the eviction costs the recovery a completed hand-off spares. The recorded list is still included afterward                                                         |
+| A process is left excluded                                      | The `include` Job fails, or the teardown could not create it | `ProcessesLeftExcluded` or `MaintenanceMarkersLeft` carries the `include` command to run by hand. The process runs no role until then                                                                                  |
+| Two workers drained at the same moment                          | The lock                                                     | The second window holds with `MoveQueued` for the seconds of the first move, then moves with the first host excluded from its candidates                                                                               |
+| The worker is cordoned and never drained                        | Nothing                                                      | The window holds with the budget up and no command issued, to the uncordon, or to six hours after the last drain any window observed. Nothing in the database changes                                                  |
+| The host's processes return while a later window holds the zone | `LeavingMaintenance` reads the maintenance status            | The earlier window clears nothing and completes. The zone belongs to the host that left last                                                                                                                           |
+| The operator pod is on the worker                               | Nothing special                                              | The step is persisted and the Jobs are named, so a manager rescheduled elsewhere resumes. The operator's own budget is the storage node's concern and not this window's                                                |
+| The processes never return                                      | `AwaitingHost` deadline                                      | The window fails. The maintenance zone expires on its own, and the upstream operator replaces the process groups past its own window                                                                                   |
+| A terminal teardown cannot remove the budget                    | Delete returns an error twice                                | `MaintenanceMarkersLeft` on the operation, which is the one event a worker that will not drain is explained by                                                                                                         |
+| The node name is not the hostname                               | Nothing                                                      | The zone is read from the Node's `kubernetes.io/hostname` label at `Holding`, so the command names the zone FoundationDB knows                                                                                         |
 
 ---
 
@@ -973,6 +1096,10 @@ object that exists before the window does.
 | The coordinators were moved, and the message names the set and whether two share a host        | `Normal`  | `CoordinatorsMoved`        | `ControlPlaneOps` |
 | The coordinators were not moved, and the message names the counts or the failed command        | `Warning` | `CoordinatorsNotMoved`     | `ControlPlaneOps` |
 | The cluster file still names the host after the move, so the set was reverted under the window | `Warning` | `CoordinatorsReverted`     | `ControlPlaneOps` |
+| The host's log and stateless processes were excluded and hold no role                          | `Normal`  | `ProcessesHandedOff`       | `ControlPlaneOps` |
+| The exclusion did not complete and the eviction proceeds with the roles in place               | `Warning` | `ProcessesNotHandedOff`    | `ControlPlaneOps` |
+| The returned processes were included again                                                     | `Normal`  | `ProcessesIncluded`        | `ControlPlaneOps` |
+| A process is left excluded, and the message carries the command to include it                  | `Warning` | `ProcessesLeftExcluded`    | `ControlPlaneOps` |
 | The budget is gone and the drain proceeds                                                      | `Normal`  | `EvictionReleased`         | `ControlPlaneOps` |
 | The window is waiting for the host's process groups to report back                             | `Normal`  | `AwaitingHostReturn`       | `ControlPlaneOps` |
 | Maintenance mode was cleared                                                                   | `Normal`  | `MaintenanceModeCleared`   | `ControlPlaneOps` |
@@ -990,13 +1117,13 @@ verified, and it is the event to look for after an upgrade of that operator.
 
 ### Prometheus Metrics
 
-| Metric                                                  | Labels                           | Description                                                                                      |
-|---------------------------------------------------------|----------------------------------|--------------------------------------------------------------------------------------------------|
-| `simplyblock_controlplane_fdb_maintenance_zone_state`   | `namespace`, `worker`            | Gauge, 1 while a window believes it holds the maintenance zone for the worker                    |
-| `simplyblock_controlplane_fdb_eviction_hold_seconds`    | `namespace`, `signal`            | Histogram of the time between the drain being observed and the budget going down                 |
-| `simplyblock_controlplane_fdb_holding_windows_count`    | `namespace`                      | Gauge of windows in `Holding`, which after a pool-wide cordon is the number of hosts still to go |
-| `simplyblock_controlplane_fdb_command_duration_seconds` | `namespace`, `command`, `result` | Histogram of each `fdbcli` Job's duration by command and `Complete` or `Failed`                  |
-| `simplyblock_controlplane_fdb_coordinator_moves_total`  | `namespace`, `placement`         | Windows by placement: `Spread`, `SharedHost`, or `Unchanged`                                     |
+| Metric                                                  | Labels                           | Description                                                                                           |
+|---------------------------------------------------------|----------------------------------|-------------------------------------------------------------------------------------------------------|
+| `simplyblock_controlplane_fdb_maintenance_zone_state`   | `namespace`, `worker`            | Gauge, 1 while a window believes it holds the maintenance zone for the worker                         |
+| `simplyblock_controlplane_fdb_eviction_hold_seconds`    | `namespace`, `signal`            | Histogram of the time between the drain being observed and the budget going down                      |
+| `simplyblock_controlplane_fdb_holding_windows_count`    | `namespace`                      | Gauge of windows in `Holding`, which after a pool-wide cordon is the number of hosts still to go      |
+| `simplyblock_controlplane_fdb_command_duration_seconds` | `namespace`, `command`, `result` | Histogram of each `fdbcli` Job's duration by command and `Complete` or `Failed`, `exclude` among them |
+| `simplyblock_controlplane_fdb_coordinator_moves_total`  | `namespace`, `placement`         | Windows by placement: `Spread`, `SharedHost`, or `Unchanged`                                          |
 
 **`simplyblock_controlplane_fdb_eviction_hold_seconds` is what the node pool
 update feels.** It measures from the drain being observed to the budget's
@@ -1046,11 +1173,17 @@ Full scenario matrix, coverage status, and hand-off test concepts:
 - **What does not exist yet:** an `envtest` suite with the FoundationDB CRDs,
   a lab with exactly three FoundationDB hosts, and a lab on cloud volumes where
   a drained node is replaced rather than rebooted.
-- **Implemented:** the API (§4), the window's steps (§5.2 to §5.9), the
-  coordinator choice (§5.5), the drain signals and the sliding deadline
-  (§5.3), the lock scope (§7.3), the raise on the cordon (§5.1), and the
-  metrics (§11), each with its unit scenarios. **Not yet:** the integration
-  suite, the end-to-end suite, and a live run.
+- **E2E, the hand-off:** a raw FoundationDB client beside the management-API
+  load, committing and reading on a fixed cadence with a short timeout and no
+  retry, is what tells a controlled recovery from an uncontrolled one: the
+  first is a latency spike, the second is a timeout. It is the assertion
+  behind §5.12.
+- **Implemented:** the API (§4), the window's steps (§5.2 to §5.9 and §5.12),
+  the coordinator choice (§5.5), the drain signals and the sliding deadline
+  (§5.3), the lock scope (§7.3), the raise on the cordon (§5.1), the metrics
+  (§11), and the stateless layout (§5.12), each with its unit scenarios.
+  **Not yet:** the integration suite, the end-to-end suite, and a live run of
+  the hand-off.
 
 The scenarios that must not be cut are the drain signals of §5.3, the three
 placements of §5.5, the lock scope of §7.3, the budget being gone on every
@@ -1061,12 +1194,18 @@ terminal path (§5.9), and the reverted-set detection (§5.6).
 ## 13. Migration Strategy
 
 The change is additive: one enum value on `spec.action`, one optional parameter
-block, seven enum values on the step, and one optional status block. Existing
+block, nine enum values on the step, and one optional status block. Existing
 operations are unaffected. The CEL rule on
 `status.step.state` is widened, never narrowed. The lock machinery's change
 (§7.3) keeps the three existing actions holding the lock from their first step
 to their last. `make -C operator manifests generate` and `make helm-sync`
 regenerate the CRD and the chart.
+
+An existing `FoundationDBCluster` gains its stateless processes on the
+operator's next apply of the spec (§5.12). The upstream operator creates the
+pods, and FoundationDB moves the transaction system onto them in one recovery
+when it finds them, which is the recovery any better-fit process causes. No
+data moves, and no pod of another class is touched.
 
 Nothing migrates on the storage node's side. Its `HostMaintenance` keeps the
 FoundationDB entry in `evictionTargets`, which §5.10 relies on.
@@ -1075,13 +1214,14 @@ FoundationDB entry in `evictionTargets`, which §5.10 relies on.
 
 ## 14. Open Questions
 
-| #   | Question                                                                                                                                                                                                                                                                                                                                                                                                            | Owner              |
-|-----|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
-| 1   | **Maintenance mode length:** the window sets it to the `AwaitingHost` deadline of four hours, which is the storage node's as well. A host that is drained for a replacement rather than a reboot leaves data under-replicated for that long before data distribution reacts. Whether the length should be shorter and refreshed by `AwaitingHost` on each pass depends on how long a replacement takes in the field | Operator team      |
-| 2   | **The restamp on a planned move:** the cluster-file hash annotation rolls every FoundationDB consumer when the coordinators change ([#466](https://github.com/simplyblock/simplyblock-operator/issues/466)). A move the operator itself made is a case the restamp could skip, since a running client follows a coordinator change on its own. Whether it should is #466's                                          | Operator team      |
-| 3   | **Control-plane transactions through a recovery:** whether `sbcli` retries `commit_unknown_result` and `not_committed` through the recovery the move and the eviction each cause. The window's claim that commits continue rests on the client doing so                                                                                                                                                             | Control plane team |
-| 4   | **A FoundationDB host with no window at all:** a worker cordoned while the control plane is `Unavailable` cannot run a Job against the database. The design raises the window and lets the commands fail (§10), which is the drain-never-refused rule applied. Whether the raise should be skipped instead, so the record does not say a window ran when nothing could                                              | Operator team      |
-| 5   | **The zone takeover:** a later window's `maintenance on` ends the earlier window's protection while its processes may still be returning (§5.7). Whether `EnteringMaintenance` should instead wait a bounded time for the earlier zone to clear depends on how long a replacement's processes take to report, against the fifteen minutes a drain may be held                                                       | Operator team      |
+| #   | Question                                                                                                                                                                                                                                                                                                                                                                                                               | Owner              |
+|-----|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
+| 1   | **Maintenance mode length:** the window sets it to the `AwaitingHost` deadline of four hours, which is the storage node's as well. A host that is drained for a replacement rather than a reboot leaves data under-replicated for that long before data distribution reacts. Whether the length should be shorter and refreshed by `AwaitingHost` on each pass depends on how long a replacement takes in the field    | Operator team      |
+| 2   | **The restamp on a planned move:** the cluster-file hash annotation rolls every FoundationDB consumer when the coordinators change ([#466](https://github.com/simplyblock/simplyblock-operator/issues/466)). A move the operator itself made is a case the restamp could skip, since a running client follows a coordinator change on its own. Whether it should is #466's                                             | Operator team      |
+| 3   | **Control-plane transactions through a recovery:** whether `sbcli` retries `commit_unknown_result` and `not_committed` through the recovery the move and the eviction each cause. The window's claim that commits continue rests on the client doing so                                                                                                                                                                | Control plane team |
+| 4   | **A FoundationDB host with no window at all:** a worker cordoned while the control plane is `Unavailable` cannot run a Job against the database. The design raises the window and lets the commands fail (§10), which is the drain-never-refused rule applied. Whether the raise should be skipped instead, so the record does not say a window ran when nothing could                                                 | Operator team      |
+| 5   | **The zone takeover:** a later window's `maintenance on` ends the earlier window's protection while its processes may still be returning (§5.7). Whether `EnteringMaintenance` should instead wait a bounded time for the earlier zone to clear depends on how long a replacement's processes take to report, against the fifteen minutes a drain may be held                                                          | Operator team      |
+| 6   | **A role the hand-off cannot reach:** a transaction-system role on a storage process, because the cluster has fewer stateless processes than FoundationDB wants proxies, is a role the eviction still kills (§5.12). Whether the window should read `status json` for it and say so, or the stateless count should follow the proxy count instead of the log count, depends on how often the shape occurs in the field | Operator team      |
 
 ---
 
@@ -1169,7 +1309,7 @@ const (
 // ControlPlaneOpsStep is one step of a running control-plane operation. Which
 // steps belong to which action is declared by that action's graph rather than by
 // this type, which is why the enum stays flat as actions are added.
-// +kubebuilder:validation:Enum=Draining;Restarting;Awaiting;Preflight;Applying;Verifying;Requesting;Holding;EnteringMaintenance;MovingCoordinators;Releasing;AwaitingHost;LeavingMaintenance;Cleanup;Completed
+// +kubebuilder:validation:Enum=Draining;Restarting;Awaiting;Preflight;Applying;Verifying;Requesting;Holding;EnteringMaintenance;MovingCoordinators;ExcludingProcesses;Releasing;AwaitingHost;IncludingProcesses;LeavingMaintenance;Cleanup;Completed
 type ControlPlaneOpsStep string
 
 const (
@@ -1212,12 +1352,19 @@ const (
 	// ControlPlaneOpsStepMovingCoordinators writes a coordinator set that names
 	// no process on the worker, and completes once the cluster file agrees.
 	ControlPlaneOpsStepMovingCoordinators ControlPlaneOpsStep = "MovingCoordinators"
+	// ControlPlaneOpsStepExcludingProcesses excludes the worker's log and
+	// stateless processes, so that their roles move while they are alive and
+	// the eviction kills processes that hold nothing.
+	ControlPlaneOpsStepExcludingProcesses ControlPlaneOpsStep = "ExcludingProcesses"
 	// ControlPlaneOpsStepReleasing takes the budget down, which is what lets
 	// the drain proceed.
 	ControlPlaneOpsStepReleasing ControlPlaneOpsStep = "Releasing"
 	// ControlPlaneOpsStepAwaitingHost waits for the worker's FoundationDB
 	// process groups to report back, on the same node or a replacement.
 	ControlPlaneOpsStepAwaitingHost ControlPlaneOpsStep = "AwaitingHost"
+	// ControlPlaneOpsStepIncludingProcesses lifts the exclusion the window
+	// wrote, once the processes are back to take roles again.
+	ControlPlaneOpsStepIncludingProcesses ControlPlaneOpsStep = "IncludingProcesses"
 	// ControlPlaneOpsStepLeavingMaintenance clears the maintenance mode the
 	// window set, when the active zone is still the window's own.
 	ControlPlaneOpsStepLeavingMaintenance ControlPlaneOpsStep = "LeavingMaintenance"
@@ -1402,6 +1549,13 @@ type HostMaintenanceStatus struct {
 	// +optional
 	CoordinatorPlacement HostMaintenanceCoordinatorPlacement `json:"coordinatorPlacement,omitempty"`
 
+	// ExcludedProcesses are the process groups the window excluded before the
+	// release, by ID, which IncludingProcesses and the terminal teardown
+	// include again. Empty when the host had only storage processes.
+	// +listType=set
+	// +optional
+	ExcludedProcesses []string `json:"excludedProcesses,omitempty"`
+
 	// MaintenanceUntil is when the maintenance mode the window set expires on
 	// its own. Empty when the mode could not be set.
 	// +optional
@@ -1417,7 +1571,7 @@ type ControlPlaneOpsStatus struct {
 	// Step is the position of the running action's state machine. It is
 	// persisted before the side effect that step performs, so a step reported
 	// here is a step that started.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Draining','Restarting','Awaiting','Preflight','Applying','Verifying','Requesting','Holding','EnteringMaintenance','MovingCoordinators','Releasing','AwaitingHost','LeavingMaintenance','Cleanup','Completed']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Draining','Restarting','Awaiting','Preflight','Applying','Verifying','Requesting','Holding','EnteringMaintenance','MovingCoordinators','ExcludingProcesses','Releasing','AwaitingHost','IncludingProcesses','LeavingMaintenance','Cleanup','Completed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

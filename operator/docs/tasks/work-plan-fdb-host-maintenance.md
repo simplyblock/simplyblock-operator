@@ -5,7 +5,7 @@ Test plan: [`tests/test-plan-fdb-host-maintenance.md`](../tests/test-plan-fdb-ho
 
 **Author:** geoffrey1330
 **Date:** 2026-11-11
-**Design status at split:** Accepted
+**Design status at split:** Accepted. W-12 to W-14 were added on 2026-11-11 from the design's §5.12, at status Partially Implemented
 **Issues:** not yet filed
 
 Work item IDs (`W-01`) are permanent and are cited from issue bodies and commit
@@ -27,14 +27,14 @@ other's result. §1 is derived from both.
 
 ### Waves
 
-| Wave | Items            | Runs after |
-|------|------------------|------------|
-| 1    | W-01, W-03       | —          |
-| 2    | W-02, W-04, W-08 | wave 1     |
-| 3    | W-05             | wave 2     |
-| 4    | W-06             | wave 3     |
-| 5    | W-07             | wave 4     |
-| 6    | W-09, W-10, W-11 | wave 5     |
+| Wave | Items                  | Runs after |
+|------|------------------------|------------|
+| 1    | W-01, W-03, W-14       | —          |
+| 2    | W-02, W-04, W-08, W-12 | wave 1     |
+| 3    | W-05                   | wave 2     |
+| 4    | W-06                   | wave 3     |
+| 5    | W-07, W-13             | wave 4     |
+| 6    | W-09, W-10, W-11       | wave 5     |
 
 ### Critical path
 
@@ -376,6 +376,78 @@ rest on the four-worker lab, and records those two as pending the labs.
       with the run's evidence attached to the issue
 - [ ] E-08 and E-14 run green once their labs exist, or stay in the test plan's
       gap table with the lab named
+
+### W-12 — Add the hand-off steps and the exclusion record to ControlPlaneOps
+
+**Depends on:** W-01
+**Conflicts with:** —
+**Labels:** operator, enhancement, high
+**Design:** §4.2, §4.3, §5.12, §6
+**Scenarios:** U-111, U-113
+**Size:** S
+
+Add the steps `ExcludingProcesses` and `IncludingProcesses` to the
+`ControlPlaneOpsStep` enum and the CEL rule on `status.step.state`, the field
+`status.hostMaintenance.excludedProcesses`, the two steps to the window's graph
+between `MovingCoordinators` and `Releasing` and between `AwaitingHost` and
+`LeavingMaintenance`, `ExcludingProcesses` to the lock-holding steps, and both
+to the delete guard. Regenerate the manifests and the chart.
+
+**Acceptance criteria**
+
+- [ ] The step enum, the CEL rule, and Appendix A agree on the two new values
+- [ ] `ExcludingProcesses` holds the lock and `IncludingProcesses` does not (U-111)
+- [ ] The delete guard refuses both steps, and the guard-and-graph agreement
+      test passes (U-113)
+- [ ] `make -C operator manifests generate` and `make helm-sync` produce no
+      further diff
+
+### W-13 — Hand the transaction roles off before the release
+
+**Depends on:** W-06, W-12
+**Conflicts with:** —
+**Labels:** operator, enhancement, high
+**Design:** §5.12, §8, §10, §11
+**Scenarios:** U-102, U-103, U-104, U-105, U-106, U-107, U-108, U-109, U-110
+**Size:** M
+
+Implement `ExcludingProcesses` and `IncludingProcesses` in
+`hostmaintenance_database.go`: read the recorded groups' classes from the
+`FoundationDBCluster` status, write the non-storage IDs to
+`excludedProcesses` before the Job, issue the waiting `exclude` over their
+localities with a longer `fdbcli` timeout, complete on `Complete` with
+`ProcessesHandedOff` and on `Failed` with `ProcessesNotHandedOff`, issue the
+`include` after `AwaitingHost` with `ProcessesIncluded` or
+`ProcessesLeftExcluded`, and create the include Job from the terminal teardown
+when the window ends early with an exclusion recorded. Add the four events.
+
+**Acceptance criteria**
+
+- [ ] Every scenario listed above passes in `hostmaintenance_database_test.go`
+- [ ] No storage-class process group is ever named in an `exclude` command (U-102)
+- [ ] A `Failed` exclude does not hold the budget (U-104)
+- [ ] A window that fails after excluding leaves an `include` Job behind (U-110)
+
+### W-14 — Apply dedicated stateless processes
+
+**Depends on:** —
+**Conflicts with:** —
+**Labels:** operator, enhancement, high
+**Design:** §1, §5.12, §13
+**Scenarios:** U-112
+**Size:** S
+
+Change `foundationDBCluster` in `foundationdb.go` to apply
+`processCounts.stateless` equal to the log count instead of `-1`, so the
+transaction system is recruited on stateless processes and the hand-off of
+W-13 leaves nothing on the storage process. The item is independent of W-13
+and is what makes W-13 complete on a drain.
+
+**Acceptance criteria**
+
+- [ ] `processCounts.stateless` equals `processCounts.log` for every replica
+      count the install test covers (U-112)
+- [ ] The design's §1 and §13 describe the applied layout
 
 ---
 

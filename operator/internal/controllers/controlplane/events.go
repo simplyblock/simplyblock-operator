@@ -129,6 +129,19 @@ const (
 	// or the failed command.
 	CoordinatorsMoved    = "CoordinatorsMoved"
 	CoordinatorsNotMoved = "CoordinatorsNotMoved"
+	// ProcessesHandedOff and ProcessesNotHandedOff are the two outcomes of the
+	// exclusion that moves the worker's log and stateless roles while the
+	// processes are alive (design-fdb-host-maintenance.md §5.12). The second
+	// is the eviction proceeding with the roles in place, which costs the
+	// recovery the hand-off exists to spare.
+	ProcessesHandedOff    = "ProcessesHandedOff"
+	ProcessesNotHandedOff = "ProcessesNotHandedOff"
+	// ProcessesIncluded and ProcessesLeftExcluded are the two outcomes of the
+	// include that lifts that exclusion once the processes are back. The
+	// second carries the command to run by hand, because a process left
+	// excluded runs no role.
+	ProcessesIncluded     = "ProcessesIncluded"
+	ProcessesLeftExcluded = "ProcessesLeftExcluded"
 	// CoordinatorsReverted is the cluster file still naming the host after a
 	// completed move, which is the FoundationDB operator behaving differently
 	// from what the design verified. It is the event to look for after an

@@ -364,10 +364,14 @@ func (r *ControlPlaneOpsReconciler) perform(
 		return r.windowEnterMaintenance(ctx, ops, target)
 	case stepMovingCoordinators:
 		return r.windowMoveCoordinators(ctx, ops, target)
+	case stepExcludingProcesses:
+		return r.windowExcludeProcesses(ctx, ops, target)
 	case stepReleasing:
 		return r.windowRelease(ctx, ops)
 	case stepAwaitingHost:
 		return r.windowAwaitHost(ctx, ops)
+	case stepIncludingProcesses:
+		return r.windowIncludeProcesses(ctx, ops, target)
 	case stepLeavingMaintenance:
 		return r.windowLeaveMaintenance(ctx, ops, target)
 	case stepCleanup:

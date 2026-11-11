@@ -7,7 +7,7 @@
 // the control plane's lock, sets FoundationDB's maintenance mode for the
 // worker's zone, moves the coordinators the worker holds onto other hosts,
 // verifies the move in the cluster file, and deletes the budget so the drain
-// proceeds. Afterward it waits for the worker's process groups to report back,
+// proceeds. Afterward, it waits for the worker's process groups to report back,
 // wherever they come back, and clears the maintenance mode it set.
 //
 //	Holding ──► EnteringMaintenance ──► MovingCoordinators ──► Releasing ──►
@@ -151,7 +151,7 @@ func (r *ControlPlaneOpsReconciler) windowHold(
 	// the FoundationDBCluster, has no scale subresource, so the controller
 	// cannot count them. The eviction API refuses evictions under such a budget
 	// all the same, which is what the hold needs, so the condition's presence
-	// and zero allowed disruptions are the whole of "reported".
+	// and zero allowed disruptions are the whole of "reported."
 	reported := budgetSynced(budget) && budget.Status.DisruptionsAllowed == 0
 	if !reported {
 		return false, fmt.Sprintf(
@@ -267,11 +267,41 @@ func (r *ControlPlaneOpsReconciler) teardownWindow(
 	if err := r.deleteSentinel(ctx, ops); err != nil {
 		left = append(left, fmt.Sprintf("the sentinel (%v)", err))
 	}
+	if err := r.includeFromTeardown(ctx, ops); err != nil {
+		left = append(left, err.Error())
+	}
 	if len(left) > 0 {
 		r.emit(ops, corev1.EventTypeWarning, MaintenanceMarkersLeft, fmt.Sprintf(
 			"the window for %s ended with markers it could not remove, and the worker will not "+
 				"drain until they are: %s", worker, strings.Join(left, "; ")))
 	}
+}
+
+// includeFromTeardown lifts the exclusion a window wrote when the window ends
+// on a path that never reaches IncludingProcesses (design §5.12). It creates
+// the include Job and does not wait for it, because the teardown is a terminal
+// transition and the Job outlives it under the operation's owner reference.
+// The error names the processes and the command, which is what the
+// MaintenanceMarkersLeft event then carries.
+func (r *ControlPlaneOpsReconciler) includeFromTeardown(
+	ctx context.Context, ops *simplyblockv1alpha2.ControlPlaneOps,
+) error {
+	hm := ops.Status.HostMaintenance
+	if hm == nil || len(hm.ExcludedProcesses) == 0 {
+		return nil
+	}
+	command := includeCommand(hm.ExcludedProcesses)
+	var target simplyblockv1alpha2.ControlPlane
+	key := client.ObjectKey{Namespace: ops.Namespace, Name: ops.Spec.ControlPlaneRef}
+	if err := r.Get(ctx, key, &target); err != nil {
+		return fmt.Errorf("the exclusion of %s, which no Job could include without the ControlPlane (%v); run `%s` by hand",
+			strings.Join(hm.ExcludedProcesses, ", "), err, command)
+	}
+	if _, err := r.commandJob(ctx, ops, &target, fdbCommandInclude, command); err != nil {
+		return fmt.Errorf("the exclusion of %s (%v); run `%s` by hand",
+			strings.Join(hm.ExcludedProcesses, ", "), err, command)
+	}
+	return nil
 }
 
 // zoneOf is the FoundationDB fault domain of a worker, which is its hostname

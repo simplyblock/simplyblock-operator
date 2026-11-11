@@ -12,9 +12,11 @@
 // Job already present reads it rather than creating a second one, which is the
 // write-ahead guard for every command. The one command whose output matters
 // writes it to the container's termination message, which the pod's status
-// carries, so no log access is needed.
+// carries, so no log access is needed. The waiting exclude of §5.12 is the one
+// command that may legitimately run for minutes, and it carries its own fdbcli
+// timeout and Job deadline.
 //
-// design-fdb-host-maintenance.md §5.3 and §5.4 are the specification.
+// design-fdb-host-maintenance.md §5.3, §5.4, and §5.12 are the specification.
 
 package controlplane
 
@@ -24,6 +26,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -48,6 +51,8 @@ const (
 	fdbCommandCoordinators      fdbCommand = "coordinators"
 	fdbCommandMaintenanceStatus fdbCommand = "maintenance-status"
 	fdbCommandMaintenanceOff    fdbCommand = "maintenance-off"
+	fdbCommandExclude           fdbCommand = "exclude"
+	fdbCommandInclude           fdbCommand = "include"
 	// fdbCommandSentinel is not a command: it is the pause pod of §5.3, named
 	// with the same scheme so one function names every Job of a window.
 	fdbCommandSentinel fdbCommand = "sentinel"
@@ -74,20 +79,43 @@ const (
 	// answer, inside the Job's own deadline.
 	fdbcliTimeoutSeconds = 30
 
+	// fdbcliTimeoutEnv is the variable the script reads its timeout from, so
+	// that one script serves the quick commands and the waiting exclude.
+	fdbcliTimeoutEnv = "FDBCLI_TIMEOUT"
+
 	// commandJobAttempts, commandJobDeadlineSeconds, and jobTTLSeconds are the
 	// Job's limits of design §5.4.
 	commandJobAttempts        = 4
 	commandJobDeadlineSeconds = 120
 	jobTTLSeconds             = 3600
+
+	// excludeTimeoutSeconds and excludeJobDeadlineSeconds are the waiting
+	// exclude's limits (design §5.12): fdbcli returns only once FoundationDB
+	// reports the processes safe to remove, which is seconds for log and
+	// stateless processes and longer on a database still catching up, and
+	// the Job's deadline leaves room for two attempts inside the step's ten
+	// minutes.
+	excludeTimeoutSeconds     = 240
+	excludeJobDeadlineSeconds = 540
 )
 
 // fdbcliScript runs the command passed as the script's first argument, prints
 // its output, and copies it to the termination message, which is what makes
 // `maintenance status` readable from the pod's status. The exit code is the
-// command's, which fdbcli --exec sets non-zero on failure.
+// command's, which fdbcli --exec sets non-zero on failure. The timeout is the
+// Job's FDBCLI_TIMEOUT, or the quick commands' default.
 var fdbcliScript = fmt.Sprintf(
-	`out=$(%s -C %s --timeout %d --exec "$1" 2>&1); rc=$?; printf '%%s\n' "$out"; printf '%%s' "$out" > /dev/termination-log; exit $rc`,
-	fdbcliPath, clusterFilePath, fdbcliTimeoutSeconds)
+	`out=$(%s -C %s --timeout "${%s:-%d}" --exec "$1" 2>&1); rc=$?; printf '%%s\n' "$out"; printf '%%s' "$out" > /dev/termination-log; exit $rc`,
+	fdbcliPath, clusterFilePath, fdbcliTimeoutEnv, fdbcliTimeoutSeconds)
+
+// commandLimits are the fdbcli timeout and the Job deadline of a command: the
+// quick ones share the defaults, and the waiting exclude has its own.
+func commandLimits(cmd fdbCommand) (timeoutSeconds int, deadlineSeconds int64) {
+	if cmd == fdbCommandExclude {
+		return excludeTimeoutSeconds, excludeJobDeadlineSeconds
+	}
+	return fdbcliTimeoutSeconds, commandJobDeadlineSeconds
+}
 
 // fdbJobName is `<operation>-<command>`, shortened to a DNS label when the
 // operation's name leaves no room, by hashing the part of it that is cut.
@@ -121,6 +149,7 @@ func fdbCommandJob(
 ) *batchv1.Job {
 	worker := ops.Spec.HostMaintenance.WorkerNode
 	labels := windowJobLabels(ops)
+	timeoutSeconds, deadlineSeconds := commandLimits(cmd)
 	spec := corev1.PodSpec{
 		RestartPolicy: corev1.RestartPolicyNever,
 		NodeSelector:  foundationDBNodeSelector(cp),
@@ -131,6 +160,7 @@ func fdbCommandJob(
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			Command:         []string{"/bin/sh", "-c", fdbcliScript, "fdbcli"},
 			Args:            []string{exec},
+			Env:             []corev1.EnvVar{{Name: fdbcliTimeoutEnv, Value: strconv.Itoa(timeoutSeconds)}},
 			VolumeMounts:    []corev1.VolumeMount{clusterFileMount()},
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{
@@ -167,7 +197,7 @@ func fdbCommandJob(
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            ptr.To(int32(commandJobAttempts - 1)),
-			ActiveDeadlineSeconds:   ptr.To(int64(commandJobDeadlineSeconds)),
+			ActiveDeadlineSeconds:   ptr.To(deadlineSeconds),
 			TTLSecondsAfterFinished: ptr.To(int32(jobTTLSeconds)),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{

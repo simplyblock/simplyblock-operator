@@ -1637,6 +1637,11 @@ func (in *HostMaintenanceStatus) DeepCopyInto(out *HostMaintenanceStatus) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.ExcludedProcesses != nil {
+		in, out := &in.ExcludedProcesses, &out.ExcludedProcesses
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.MaintenanceUntil != nil {
 		in, out := &in.MaintenanceUntil, &out.MaintenanceUntil
 		*out = (*in).DeepCopy()

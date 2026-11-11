@@ -445,11 +445,16 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 			"databaseConfiguration": map[string]any{
 				"redundancy_mode": redundancyMode(processes),
 			},
+			// The transaction system runs on as many stateless processes as
+			// there are log processes, so that a storage process carries no
+			// role a drain of its host would kill
+			// (design-fdb-host-maintenance.md §5.12). A stateless process
+			// claims no volume.
 			"processCounts": map[string]any{
 				"cluster_controller": int64(1),
 				"log":                processes,
 				"storage":            processes,
-				"stateless":          int64(-1),
+				"stateless":          processes,
 			},
 			"processes": map[string]any{
 				"general": general,

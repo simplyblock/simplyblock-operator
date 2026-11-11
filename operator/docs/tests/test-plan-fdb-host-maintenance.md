@@ -233,6 +233,25 @@ File: `operator/internal/controllers/controlplane/fdbcommand_test.go`
 | U-89 | The Job tolerates `node.kubernetes.io/unschedulable` with effect `NoSchedule` and carries a required node affinity away from the worker | Positive | `TestACommandJobToleratesTheCordonAndAvoidsTheWorker` |
 | U-90 | On a cluster where the worker is the only node matching the selector, the affinity is dropped                                           | Boundary | `TestACommandJobOnTheOnlyNodeCarriesNoAffinity`       |
 
+### Handing the Roles Off (design §5.12)
+
+Files: `operator/internal/controllers/controlplane/hostmaintenance_handoff_test.go`, `controlplaneops_test.go`, `install_test.go`, and `operator/internal/webhook/controlplaneops_validator_test.go`
+
+| #     | Scenario                                                                                                                                                   | Type       | Test                                                                                 |
+|-------|------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------------------------------------|
+| U-102 | `ExcludingProcesses` writes the recorded groups whose class is not `storage` to `excludedProcesses` before the Job, and the command names each by locality | Positive   | `TestExcludingProcessesHandsTheLogAndStatelessRolesOff`                              |
+| U-103 | A `Complete` `exclude` Job completes the step with `ProcessesHandedOff`, and the window moves to `Releasing`                                               | Positive   | `TestExcludingProcessesHandsTheLogAndStatelessRolesOff`                              |
+| U-104 | A `Failed` `exclude` Job completes the step with `ProcessesNotHandedOff`, and `excludedProcesses` is kept for the include                                  | Negative   | `TestAFailedExclusionReleasesAndKeepsTheListForTheInclude`                           |
+| U-105 | A host whose recorded groups are all `storage` completes the step with no Job and no event                                                                 | Boundary   | `TestAStorageOnlyHostExcludesNothing`                                                |
+| U-106 | An operator restart in `ExcludingProcesses` reads the existing Job rather than creating a second                                                           | Regression | `TestARestartInExcludingProcessesReadsTheExistingJob`                                |
+| U-107 | `IncludingProcesses` issues `include` over the recorded list and completes with `ProcessesIncluded`                                                        | Positive   | `TestIncludingProcessesLiftsTheRecordedExclusion`                                    |
+| U-108 | A `Failed` `include` Job completes the step with `ProcessesLeftExcluded`, whose message carries the `include` command                                      | Negative   | `TestAFailedIncludeNamesTheCommandToRunByHand`                                       |
+| U-109 | A window that recorded no exclusion issues no `include` Job                                                                                                | Boundary   | `TestAWindowThatExcludedNothingIncludesNothing`                                      |
+| U-110 | A window that fails after `ExcludingProcesses` creates the `include` Job from its terminal teardown                                                        | Negative   | `TestAWindowThatFailsAfterExcludingStillIncludes`                                    |
+| U-111 | `ExcludingProcesses` holds the lock, `IncludingProcesses` does not, and the two sit between the steps §6 places them between                               | Positive   | `TestOnlyTheMoveHoldsTheLock`, `TestTheWindowsGraphIsALineAbortableOnlyWhileHolding` |
+| U-112 | The `FoundationDBCluster` is applied with `processCounts.stateless` equal to the log count                                                                 | Positive   | `TestStatelessProcessesMatchTheLogCount`                                             |
+| U-113 | The delete guard refuses a delete in `ExcludingProcesses` and `IncludingProcesses`, and the refusal table agrees with the graph                            | Positive   | `TestTheControlPlaneRefusalTableAndTheGraphAgree`                                    |
+
 ---
 
 ## 2. Integration Tests
@@ -286,6 +305,7 @@ the drain is listed unchanged after it.
 | E-12     | E-11 with each window's sentinel deleted by hand before its drain → every window reports `drainObservedBy: PodDisruption` and the holds stay under sixty seconds                                                                                                | Positive | —    |
 | E-13     | Drain two FoundationDB hosts at the same moment → the second window emits `MoveQueued`, its candidates exclude the first host, and both drains complete                                                                                                         | Positive | —    |
 | E-14     | On a cluster with cloud volumes, drain and terminate a host → its pods return on a replacement node, and the window ends `Succeeded` with the Node gone                                                                                                         | Positive | —    |
+| E-15     | Drain the host of a log process under a raw FoundationDB client committing and reading every half second with a 5 s timeout and no retry → no commit or read fails, every recovery happens before the budget comes down, and none follows the eviction          | Positive | —    |
 
 ---
 
@@ -323,9 +343,10 @@ FoundationDB expires the maintenance zone.
 
 **Design reference:** design §14 Q3
 
-**What to verify:** the management API's writes during the move and during the
-eviction either succeed or return a retryable error, and no write is reported
-successful and then absent.
+**What to verify:** the management API's writes during the move, the
+hand-off, and the eviction either succeed or return a retryable error, and no
+write is reported successful and then absent. E-15 is the same run with a raw
+client beside it, which is what separates a latency spike from a timeout.
 
 **Test concept:**
 1. Drive a loop of volume creates through the management API, each followed by
@@ -370,14 +391,15 @@ after the cordon are still holding when it does.
 
 ## 5. Axis Coverage
 
-| Axis               | Values covered                                                                                                            | IDs                                                        | Not covered                                           |
-|--------------------|---------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------|-------------------------------------------------------|
-| FoundationDB hosts | 1, 2, 3, 4, 5                                                                                                             | U-10, U-09, U-08, U-01, U-11, E-08                         | more than five hosts, and a `three_data_hall` cluster |
-| Worker shape       | FoundationDB only, converged with a storage node                                                                          | U-27, I-06, E-06, E-07                                     | a worker with two FoundationDB pods of one class      |
-| Coordinator count  | 1 (`single`), 3 (`double`), 5 (`triple`)                                                                                  | U-10, U-01, U-11                                           | 9 (multi-region)                                      |
-| Drain shape        | one drain, pool-wide cordon with serial drains, two at once, cordon only, replacement, an update longer than the deadline | E-01, E-11, E-13, E-10, E-14, I-09, I-10, U-72, U-97, M-05 | a drain that bypasses the eviction API                |
-| Drain signal       | eviction request, neighbor eviction, none                                                                                 | U-75, I-08, U-79, E-12, U-82, M-04                         | both signals arriving in the same reconcile           |
-| Lifecycle          | restart per step, uncordon per step, Node deletion, deletion of the window                                                | U-46, I-07, U-56, U-57, U-74, I-10, U-33                   | the `ControlPlane` deleted mid-window                 |
+| Axis                | Values covered                                                                                                            | IDs                                                        | Not covered                                           |
+|---------------------|---------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------|-------------------------------------------------------|
+| FoundationDB hosts  | 1, 2, 3, 4, 5                                                                                                             | U-10, U-09, U-08, U-01, U-11, E-08                         | more than five hosts, and a `three_data_hall` cluster |
+| Worker shape        | FoundationDB only, converged with a storage node                                                                          | U-27, I-06, E-06, E-07                                     | a worker with two FoundationDB pods of one class      |
+| Coordinator count   | 1 (`single`), 3 (`double`), 5 (`triple`)                                                                                  | U-10, U-01, U-11                                           | 9 (multi-region)                                      |
+| Drain shape         | one drain, pool-wide cordon with serial drains, two at once, cordon only, replacement, an update longer than the deadline | E-01, E-11, E-13, E-10, E-14, I-09, I-10, U-72, U-97, M-05 | a drain that bypasses the eviction API                |
+| Drain signal        | eviction request, neighbor eviction, none                                                                                 | U-75, I-08, U-79, E-12, U-82, M-04                         | both signals arriving in the same reconcile           |
+| Lifecycle           | restart per step, uncordon per step, Node deletion, deletion of the window                                                | U-46, U-106, I-07, U-56, U-57, U-74, I-10, U-33            | the `ControlPlane` deleted mid-window                 |
+| Classes on the host | log and storage, log and stateless and storage, storage only                                                              | U-102, U-105, E-01, E-15                                   | a host with a stateless process and no log            |
 
 ---
 
@@ -387,9 +409,9 @@ Struck rows are not counted.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 97        | 95      | U-45, U-73  |
+| Unit        | 109       | 107     | U-45, U-73  |
 | Integration | 10        | 0       | I-01 … I-10 |
-| E2E         | 13        | 0       | E-01 … E-14 |
+| E2E         | 14        | 0       | E-01 … E-15 |
 | Manual      | 5         | 0       | M-01 … M-05 |
 
 ---
@@ -410,6 +432,7 @@ Struck rows are not counted.
 | §5.9 Awaiting and ending | U-29 … U-33, U-48, U-50, U-51, U-69 … U-71, U-92, I-03, E-14, U-100 |
 | §5.10 Converged worker   | U-27, I-06, E-07                                                    |
 | §5.11 Rolling update     | E-11, E-12, I-09                                                    |
+| §5.12 Hand-off           | U-102 … U-113, E-15, M-03                                           |
 | §6 State machine         | U-61, U-62, U-46, U-96, U-97, I-07                                  |
 | §7.3 Lock                | U-72, U-73, U-83, U-84, U-93, E-13                                  |
 
@@ -422,7 +445,7 @@ Struck rows are not counted.
 | U-45        | A `SharedHost` set completing the step with `CoordinatorsMoved` naming the shared host | The placement is proven at the choice (U-08). The step's event text for it is not asserted                                                         |
 | U-73        | A `Restart` running during `AwaitingHost` and waiting during a move                    | The lock scope is proven on the window's own transitions (U-83, U-84). The other action's view of it is not asserted                               |
 | I-01 … I-10 | Every integration scenario                                                             | No `envtest` suite carries the FoundationDB CRDs yet                                                                                               |
-| E-01 … E-14 | Every end-to-end scenario                                                              | Needs the implementation. E-08 needs a lab with exactly three FoundationDB hosts, and E-14 a lab on cloud volumes whose drained node is replaced   |
+| E-01 … E-15 | Every end-to-end scenario                                                              | Needs the implementation. E-08 needs a lab with exactly three FoundationDB hosts, and E-14 a lab on cloud volumes whose drained node is replaced   |
 | M-01 … M-05 | The manual scenarios                                                                   | Failure injection in the FoundationDB operator, a powered-off host, a client harness, a worker with no unheld pod, and a multi-hour serial drain   |
 | —           | More than five FoundationDB hosts, and a `three_data_hall` cluster                     | The operator never applies either shape                                                                                                            |
 | —           | A worker with two FoundationDB pods of one class                                       | The anti-affinity is preferred, not required, so it can happen on a small cluster. The choice treats such pods as one host, and nothing asserts it |

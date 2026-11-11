@@ -772,8 +772,8 @@ func TestTheWindowsGraphIsALineAbortableOnlyWhileHolding(t *testing.T) {
 	if graph.Initial != stepHolding {
 		t.Errorf("initial step = %s, want Holding", graph.Initial)
 	}
-	want := []opsStep{stepHolding, stepEnteringMaintenance, stepMovingCoordinators, stepReleasing,
-		stepAwaitingHost, stepLeavingMaintenance, stepCleanup}
+	want := []opsStep{stepHolding, stepEnteringMaintenance, stepMovingCoordinators, stepExcludingProcesses,
+		stepReleasing, stepAwaitingHost, stepIncludingProcesses, stepLeavingMaintenance, stepCleanup}
 	current := graph.Initial
 	for i, step := range want {
 		if current != step {
@@ -798,8 +798,8 @@ func TestTheWindowsGraphIsALineAbortableOnlyWhileHolding(t *testing.T) {
 		t.Error("HostMaintenance has no initial deadline, so Holding cannot time out")
 	}
 	unabortable := UnabortableSteps()
-	for _, step := range []opsStep{stepEnteringMaintenance, stepMovingCoordinators, stepReleasing,
-		stepAwaitingHost, stepLeavingMaintenance, stepCleanup} {
+	for _, step := range []opsStep{stepEnteringMaintenance, stepMovingCoordinators, stepExcludingProcesses,
+		stepReleasing, stepAwaitingHost, stepIncludingProcesses, stepLeavingMaintenance, stepCleanup} {
 		if !slices.Contains(unabortable, step) {
 			t.Errorf("%s is abortable, and the window has already changed the database there", step)
 		}
@@ -810,7 +810,7 @@ func TestTheWindowsGraphIsALineAbortableOnlyWhileHolding(t *testing.T) {
 // and chooses among hosts, and every other action holds it from its first step
 // to its last, as it always has.
 //
-// U-83 (the declaration) and U-93 in test-plan-fdb-host-maintenance.md.
+// U-83 (the declaration), U-93, and U-111 in test-plan-fdb-host-maintenance.md.
 func TestOnlyTheMoveHoldsTheLock(t *testing.T) {
 	graphs := opsGraphs()
 	for _, act := range []simplyblockv1alpha2.ControlPlaneOpsAction{
@@ -827,7 +827,8 @@ func TestOnlyTheMoveHoldsTheLock(t *testing.T) {
 	window := simplyblockv1alpha2.ControlPlaneOpsActionHostMaintenance
 	for step, want := range map[opsStep]bool{
 		stepHolding: false, stepEnteringMaintenance: true, stepMovingCoordinators: true,
-		stepReleasing: true, stepAwaitingHost: false, stepLeavingMaintenance: false, stepCleanup: false,
+		stepExcludingProcesses: true, stepReleasing: true, stepAwaitingHost: false,
+		stepIncludingProcesses: false, stepLeavingMaintenance: false, stepCleanup: false,
 	} {
 		if got := holdsLock(window, step); got != want {
 			t.Errorf("HostMaintenance holds the lock in %s = %v, want %v", step, got, want)

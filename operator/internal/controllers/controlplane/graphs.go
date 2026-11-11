@@ -50,8 +50,10 @@ const (
 	stepHolding             = simplyblockv1alpha2.ControlPlaneOpsStepHolding
 	stepEnteringMaintenance = simplyblockv1alpha2.ControlPlaneOpsStepEnteringMaintenance
 	stepMovingCoordinators  = simplyblockv1alpha2.ControlPlaneOpsStepMovingCoordinators
+	stepExcludingProcesses  = simplyblockv1alpha2.ControlPlaneOpsStepExcludingProcesses
 	stepReleasing           = simplyblockv1alpha2.ControlPlaneOpsStepReleasing
 	stepAwaitingHost        = simplyblockv1alpha2.ControlPlaneOpsStepAwaitingHost
+	stepIncludingProcesses  = simplyblockv1alpha2.ControlPlaneOpsStepIncludingProcesses
 	stepLeavingMaintenance  = simplyblockv1alpha2.ControlPlaneOpsStepLeavingMaintenance
 	stepCleanup             = simplyblockv1alpha2.ControlPlaneOpsStepCleanup
 )
@@ -117,8 +119,10 @@ const (
 	holdingDeadline             = 6 * time.Hour
 	enteringMaintenanceDeadline = 5 * time.Minute
 	movingCoordinatorsDeadline  = 10 * time.Minute
+	excludingProcessesDeadline  = 10 * time.Minute
 	releasingDeadline           = 5 * time.Minute
 	awaitingHostDeadline        = 4 * time.Hour
+	includingProcessesDeadline  = 5 * time.Minute
 	leavingMaintenanceDeadline  = 5 * time.Minute
 	cleanupDeadline             = 5 * time.Minute
 )
@@ -244,8 +248,9 @@ func opsGraphs() statemachine.MultiConfig[opsStep] {
 		},
 
 		// HostMaintenance holds a worker's FoundationDB pods from the cordon,
-		// moves the roles off the worker when its drain arrives, and waits for
-		// the processes to come back. Holding is the one abortable step: nothing
+		// moves the coordinators and hands the transaction roles off the
+		// worker when its drain arrives, and waits for the processes to come
+		// back and take roles again. Holding is the one abortable step: nothing
 		// has been done to the database from there, and from EnteringMaintenance
 		// on something has to clear what was set.
 		action(simplyblockv1alpha2.ControlPlaneOpsActionHostMaintenance): {
@@ -261,16 +266,24 @@ func opsGraphs() statemachine.MultiConfig[opsStep] {
 					OnEnter: deadline[opsStep](enteringMaintenanceDeadline),
 				},
 				stepMovingCoordinators: {
-					To:      []opsStep{stepReleasing},
+					To:      []opsStep{stepExcludingProcesses},
 					OnEnter: deadline[opsStep](movingCoordinatorsDeadline),
+				},
+				stepExcludingProcesses: {
+					To:      []opsStep{stepReleasing},
+					OnEnter: deadline[opsStep](excludingProcessesDeadline),
 				},
 				stepReleasing: {
 					To:      []opsStep{stepAwaitingHost},
 					OnEnter: deadline[opsStep](releasingDeadline),
 				},
 				stepAwaitingHost: {
-					To:      []opsStep{stepLeavingMaintenance},
+					To:      []opsStep{stepIncludingProcesses},
 					OnEnter: deadline[opsStep](awaitingHostDeadline),
+				},
+				stepIncludingProcesses: {
+					To:      []opsStep{stepLeavingMaintenance},
+					OnEnter: deadline[opsStep](includingProcessesDeadline),
 				},
 				stepLeavingMaintenance: {
 					To:      []opsStep{stepCleanup},
@@ -292,6 +305,7 @@ var opsLockedSteps = map[statemachine.Action]map[opsStep]bool{
 	action(simplyblockv1alpha2.ControlPlaneOpsActionHostMaintenance): {
 		stepEnteringMaintenance: true,
 		stepMovingCoordinators:  true,
+		stepExcludingProcesses:  true,
 		stepReleasing:           true,
 	},
 }
