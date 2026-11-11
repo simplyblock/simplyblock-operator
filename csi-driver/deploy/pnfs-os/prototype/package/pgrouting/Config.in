@@ -1,6 +1,0 @@
-config BR2_PACKAGE_PGROUTING
-	bool "pgrouting"
-	depends on BR2_PACKAGE_POSTGRESQL
-	select BR2_PACKAGE_BOOST
-	help
-	  PgRouting extension for PostgreSQL.

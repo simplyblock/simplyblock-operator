@@ -1,0 +1,2 @@
+name: PNFSOS
+desc: pNFS metadata server guest (kernel and root filesystem) for the simplyblock MDS image

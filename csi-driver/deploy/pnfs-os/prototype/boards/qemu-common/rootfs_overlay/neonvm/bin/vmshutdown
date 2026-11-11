@@ -1,2 +1,0 @@
-#!/neonvm/bin/sh
-rm /neonvm/vmstart.allowed

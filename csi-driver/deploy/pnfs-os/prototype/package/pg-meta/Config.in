@@ -1,6 +1,0 @@
-config BR2_PACKAGE_PG_META
-	bool "pg-meta"
-	select BR2_PACKAGE_NODEJS_SRC
-	select BR2_PACKAGE_HOST_NODEJS
-	help
-	  This is the Supabase-based pg-meta service.

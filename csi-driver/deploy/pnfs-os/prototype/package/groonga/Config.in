@@ -1,4 +1,0 @@
-config BR2_PACKAGE_GROONGA
-	bool "groonga"
-	help
-	  Groonga is a fast full text search engine.

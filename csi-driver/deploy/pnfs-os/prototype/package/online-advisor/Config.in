@@ -1,5 +1,0 @@
-config BR2_PACKAGE_ONLINE_ADVISOR
-	bool "online-advisor"
-	depends on BR2_PACKAGE_POSTGRESQL
-	help
-	  Online Advisor extension for PostgreSQL.

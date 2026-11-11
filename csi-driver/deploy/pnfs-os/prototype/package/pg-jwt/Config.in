@@ -1,5 +1,0 @@
-config BR2_PACKAGE_PG_JWT
-	bool "pg-jwt"
-	depends on BR2_PACKAGE_POSTGRESQL
-	help
-	  JWT extension for PostgreSQL.

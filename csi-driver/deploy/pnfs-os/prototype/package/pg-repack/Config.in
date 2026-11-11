@@ -1,5 +1,0 @@
-config BR2_PACKAGE_PG_REPACK
-	bool "pg-repack"
-	depends on BR2_PACKAGE_POSTGRESQL
-	help
-	  Repack extension for PostgreSQL.

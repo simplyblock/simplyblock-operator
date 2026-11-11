@@ -1,5 +1,0 @@
-config BR2_PACKAGE_PREFIX
-	bool "prefix"
-	depends on BR2_PACKAGE_POSTGRESQL
-	help
-	  Prefix extension for PostgreSQL.

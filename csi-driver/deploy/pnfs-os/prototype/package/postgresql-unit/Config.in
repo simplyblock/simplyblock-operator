@@ -1,5 +1,0 @@
-config BR2_PACKAGE_POSTGRESQL_UNIT
-	bool "postgresql-unit"
-	depends on BR2_PACKAGE_POSTGRESQL
-	help
-	  PostgreSQL SI Unit extension for PostgreSQL.

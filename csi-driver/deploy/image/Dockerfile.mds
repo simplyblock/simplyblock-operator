@@ -3,16 +3,16 @@
 # §5.6). mds-proxy runs from this image on the host's network, beside the
 # metadata server pod, so it always speaks the runner's protocol (§8.5).
 #
-# The guest kernel and root filesystem are built by pnfs-os (vela-os,
-# boards/pnfs-common) and published as GUEST_IMAGE, spdkcsi:pnfsos: a
-# multi-architecture manifest of scratch images, each holding /vmlinuz and
-# /disk.qcow2 for one architecture. This image only assembles
+# The guest kernel and root filesystem are built by pnfs-os (deploy/pnfs-os)
+# and published as GUEST_IMAGE, spdkcsi:pnfsos-<tree>: a multi-architecture
+# manifest of scratch images, each holding /vmlinuz and /disk.qcow2 for one
+# architecture. This image only assembles
 # them with QEMU and the runner, so a guest change does not rebuild Go and a
 # runner change does not rebuild buildroot. The build context is the repository
 # root, like the CSI image, because mds-runner needs the sibling atlas-lib
 # module.
 
-ARG GUEST_IMAGE=simplyblock/spdkcsi:pnfsos
+ARG GUEST_IMAGE=simplyblock/spdkcsi:pnfsos-latest
 
 FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
 ARG TARGETOS

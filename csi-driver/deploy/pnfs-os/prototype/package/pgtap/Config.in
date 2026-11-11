@@ -1,5 +1,0 @@
-config BR2_PACKAGE_PGTAP
-	bool "pgtap"
-	depends on BR2_PACKAGE_POSTGRESQL
-	help
-	  PG Tap extension for PostgreSQL.

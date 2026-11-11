@@ -1,5 +1,0 @@
-config BR2_PACKAGE_RUM
-	bool "rum"
-	depends on BR2_PACKAGE_POSTGRESQL
-	help
-	  RUM index extension for PostgreSQL.

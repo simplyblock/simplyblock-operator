@@ -1,128 +1,53 @@
-# Vela OS
+# pnfs-os
 
-<p align="center">
-    <a href="https://vela.simplyblock.io">
-<img src="https://raw.githubusercontent.com/simplyblock/vela/main/img/vela-logo-white.png" alt="Vela Logo" width="250" height="100">
-        </a>
-</p>
+The kernel and root filesystem of the pNFS metadata server guest, built with
+buildroot as an external tree. The MDS image (`../image/Dockerfile.mds`) takes
+the result as its `GUEST_IMAGE` and adds QEMU, `mds-runner`, and `mds-agent`.
+What the guest contains and what the runner has to provide is described in
+`boards/pnfs-common/README.md`.
 
-[Vela](https://vela.simplyblock.io) is a self-hostable, serverless Postgres development platform. Built on a high-performance distributed storage layer, it provides instant database branching, independent scaling of compute and storage, and enterprise-grade access control — all deployable in your own cloud. Enterprise-grade features and toolkit developers love in one product.
+## Origin
 
-**Vela OS** is the operating system which runs the Vela branch services inside the Neon Autoscaling VM. 
+Imported from [simplyblock/vela-os](https://github.com/simplyblock/vela-os),
+branch `pnfs-minimal`, commit `5040d7d7e1dc4d7cd9db72d760a024628c7e70da`, as a
+squashed `git subtree`. The history of the kernel patches and the board
+configuration up to the import is in that repository. The import commit is
+followed by one that removes everything Vela-specific: the PostgreSQL packages,
+the Vela board, the buildroot submodule and its patches, and the builder
+scripts, which are replaced by `builder/`.
 
-The Vela main repository is [here](https://github.com/simplyblock/vela).
+## Layout
 
----
+| Path                                      | Content                                                                  |
+|-------------------------------------------|--------------------------------------------------------------------------|
+| `configs/pnfs_qemu_{x64,arm64}_defconfig` | the buildroot configuration of each architecture                         |
+| `configs/*.fragment`                      | the prebuilt SDK and per-package directories, merged over a defconfig    |
+| `boards/pnfs-common/`                     | kernel patches and fragment, root filesystem overlay, post-build scripts |
+| `boards/pnfs-qemu-{x64,arm64}/`           | the base kernel configuration of each architecture                       |
+| `builder/`                                | the build environment (pinned buildroot release) and `build.sh`          |
+| `Dockerfile`                              | the published scratch image holding `/vmlinuz` and `/disk.qcow2`         |
 
-## Vela OS Build System
-
-Vela OS is built using [Buildroot](https://buildroot.org/) and a set of additional packages, which mostly integrate
-PostgreSQL extensions and tools.
-
-This repository contains the required Buildroot configuration files and the scripts which help build the Vela OS
-image in a Docker or podman environment. This build system itself if fully containerized and self-contained for easy
-execution.
-
-The following section describes the main steps and commands to build the Vela OS image. Additional commands are
-available through the builder script.
-
-A full set of commands can be retrieved by running the builder script:
-
-```bash
-$ ./builder
-```
-
----
-
-## How to build Vela OS
-
-The Vela OS build system contains of a comprehensive script which unifies and simplifies the build process.
-
-### Prerequisites
-
-Clone the Vela OS repository and change into the directory. These steps, typically, only have to performed once or when
-the buildroot submodule is updated.
+## Building
 
 ```bash
-$ git clone https://github.com/simplyblock/vela-os.git
-$ cd vela-os
+make -C csi-driver pnfs-os-amd64        # build/pnfs-os/amd64/{vmlinuz,disk.qcow2}
+make -C csi-driver pnfs-os-arm64        # build/pnfs-os/arm64/{vmlinuz,disk.qcow2}
+make -C csi-driver pnfs-os-image PNFS_OS_BUILDX_FLAGS=--push
 ```
 
-The Buildroot submodule needs to be initialized, downloaded, and patched. The build system has a command to do this in
-one step:
+Both architectures are cross-compiled on an x86_64 host, which the prebuilt SDK
+requires. `PNFS_OS_PREBUILT_SDK=0` builds the toolchain instead.
 
-```bash
-$ ./builder initialize
-```
+## Tags
 
-### Building the Builder Container Image
+The guest is tagged by content: `spdkcsi:pnfsos-<tree>`, where `<tree>` is the
+git tree object of this directory (`make -C csi-driver pnfs-os-tag`). It
+changes exactly when a file here changes, so CI builds the guest only for a
+tree it has not published yet and every MDS image names the guest it embeds.
+A build from a modified working tree is tagged `-dirty`.
 
-Since the build system is fully containerized, the container image of the builder needs to be built. The image is
-versioned (through the checksum of the Dockerfile) and can be cached for faster builds. If the image needs to be
-updated, the build system will notify and ask to rebuild the image.
-
-```bash
-$ ./builder docker setup
-```
-
-### Building the Vela OS Image
-
-To build the Vela OS image, run the following command:
-
-```bash
-$ ./builder build
-```
-
-The build system will build all required host tools, as well as all required target packages. The build is extensive
-and takes a while, especially for the first run. To speed up further builds, the build system caches built object files
-through CCache and downloaded sources. The caches are located in $HOME/ccache and $HOME/dlcache.
-
-### Adjust the Build Configuration
-
-The build system uses configuration files to adjust what needs to be built. The set of configuration files contains the
-Buildroot, the Linux kernel, and the Busybox configuration.
-
-To adjust the Buildroot configuration run the following command:
-
-```bash
-$ ./builder config
-```
-
-To adjust the Linux kernel configuration run the following command:
-
-```bash
-$ ./builder config Linux
-```
-
-To adjust the Busybox configuration run the following command:
-
-```bash
-$ ./builder config busybox
-```
-
-After adjusting one or more of the configurations, the following command needs to be run to store the changes back into
-the prototype directory:
-
-```bash
-$ ./builder saveconfig
-```
-
-### Vela Cloud (Recommended)
-
-The easiest way to get started is through **Vela Cloud**.  
-Free tier available — no credit card required.
-
-[**Get Started**](https://vela.simplyblock.io)
-
-## Community
-
-Find help, explore resources, or get involved with the Vela community.
-
-### Support & Contributions
-
-- [Open an Issue](https://github.com/simplyblock/vela/issues) – Report bugs or suggest improvements
-- [Start a Discussion](https://github.com/simplyblock/vela/discussions) – Share feedback and feature ideas, ask questions, share ideas, and connect with other users
-- [Contribute Code](https://github.com/simplyblock/vela/pulls) – Submit pull requests following our contribution guidelines
-
-We welcome contributions of all kinds — from documentation improvements and bug fixes to new features and integrations.
-
+| Tag                             | Content                                   |
+|---------------------------------|-------------------------------------------|
+| `pnfsos-<tree>-amd64`, `-arm64` | one architecture                          |
+| `pnfsos-<tree>`                 | the multi-architecture manifest over both |
+| `pnfsos-latest`                 | the manifest of the latest tree on `main` |

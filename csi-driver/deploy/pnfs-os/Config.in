@@ -1,0 +1,2 @@
+# Buildroot requires a Config.in in every external tree. The pNFS guest adds
+# no packages of its own, so there are no options to source.

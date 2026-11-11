@@ -30,10 +30,23 @@ ifeq ($(origin CSI_IMAGE_TAG), undefined)
   CSI_IMAGE_TAG := latest
 endif
 CSI_IMAGE := $(CSI_IMAGE_REGISTRY)/spdkcsi:$(CSI_IMAGE_TAG)
-# pNFS MDS image, assembled from the pnfs-os guest image (spdkcsi:pnfsos) with QEMU
-# and mds-runner, released with the CSI image under the same registry and tag.
+# pNFS guest image (deploy/pnfs-os), tagged by the git tree of its sources so
+# a tag names exactly one guest, and -dirty when the working tree changed them.
+PNFS_OS_DIR := deploy/pnfs-os
+PNFS_OS_TREE := $(shell git rev-parse HEAD:./$(PNFS_OS_DIR) 2>/dev/null)$(if $(shell git status --porcelain -- $(PNFS_OS_DIR)),-dirty)
+PNFS_OS_TAG ?= pnfsos-$(PNFS_OS_TREE)
+PNFS_OS_IMAGE ?= $(CSI_IMAGE_REGISTRY)/spdkcsi:$(PNFS_OS_TAG)
+PNFS_OS_ARCHS ?= amd64 arm64
+PNFS_OS_BUILDER ?= pnfs-os-builder
+PNFS_OS_OUT := $(BUILD_DIR)/pnfs-os
+# --push to publish; a multi-platform build cannot --load into a classic image store.
+PNFS_OS_BUILDX_FLAGS ?=
+comma := ,
+space := $(subst ,, )
+# pNFS MDS image, assembled from the guest image with QEMU and mds-runner,
+# released with the CSI image under the same registry and tag.
 MDS_IMAGE ?= $(CSI_IMAGE_REGISTRY)/spdkcsi:pnfs-mds-$(CSI_IMAGE_TAG)
-GUEST_IMAGE ?= $(CSI_IMAGE_REGISTRY)/spdkcsi:pnfsos
+GUEST_IMAGE ?= $(PNFS_OS_IMAGE)
 MDS_PLATFORMS ?= linux/amd64,linux/arm64
 # --push to publish; a multi-platform build cannot --load into a classic image store.
 MDS_BUILDX_FLAGS ?=
@@ -187,8 +200,34 @@ image:
 	sudo docker buildx build --platform linux/arm64 -t $(CSI_IMAGE)-arm64 $$proxy_opt \
 	-f deploy/image/Dockerfile ..; \
 
+.PHONY: pnfs-os-tag
+pnfs-os-tag:
+	@echo $(PNFS_OS_TAG)
+
+.PHONY: pnfs-os-builder
+pnfs-os-builder:
+	docker build -t $(PNFS_OS_BUILDER) $(PNFS_OS_DIR)/builder
+
+# One guest architecture into $(PNFS_OS_OUT)/<arch>. The build runs as the
+# invoking user, so the output is not owned by root.
+PNFS_OS_ARCH_TARGETS := $(addprefix pnfs-os-,amd64 arm64)
+.PHONY: $(PNFS_OS_ARCH_TARGETS)
+$(PNFS_OS_ARCH_TARGETS): pnfs-os-%: pnfs-os-builder
+	@echo === building the pNFS guest for $*
+	@mkdir -p $(PNFS_OS_OUT)/$*
+	docker run --rm --user $$(id -u):$$(id -g) \
+		-e PNFS_OS_VERSION=$(PNFS_OS_TAG) -e PNFS_OS_PREBUILT_SDK -e PNFS_OS_PARALLEL \
+		-v $(abspath $(PNFS_OS_DIR)):/src:ro -v $(abspath $(PNFS_OS_OUT))/$*:/out \
+		$(PNFS_OS_BUILDER) /src/builder/build.sh $*
+
+.PHONY: pnfs-os-image
+pnfs-os-image: $(addprefix pnfs-os-,$(PNFS_OS_ARCHS))
+	@echo === building $(PNFS_OS_IMAGE) for $(PNFS_OS_ARCHS)
+	docker buildx build --platform $(subst $(space),$(comma),$(addprefix linux/,$(PNFS_OS_ARCHS))) \
+		-t $(PNFS_OS_IMAGE) $(PNFS_OS_BUILDX_FLAGS) -f $(PNFS_OS_DIR)/Dockerfile $(PNFS_OS_OUT)
+
 # The MDS image needs GUEST_IMAGE for every platform it is built for, which
-# pnfs-os publishes as a multi-architecture image.
+# pnfs-os-image publishes as a multi-architecture image.
 .PHONY: mds-image
 mds-image:
 	@echo === building $(MDS_IMAGE) for $(MDS_PLATFORMS) from $(GUEST_IMAGE)

@@ -1,6 +1,0 @@
-config BR2_PACKAGE_H3
-	bool "h3"
-	depends on BR2_PACKAGE_POSTGRESQL
-	depends on BR2_PACKAGE_POSTGIS
-	help
-	  H3 Postgis extension for PostgreSQL.

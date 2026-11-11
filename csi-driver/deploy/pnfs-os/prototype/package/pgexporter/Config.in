@@ -1,9 +1,0 @@
-config BR2_PACKAGE_PGEXPORTER
-	bool "pgexporter"
-	depends on BR2_PACKAGE_POSTGRESQL
-	select BR2_PACKAGE_LIBEV
-	select BR2_PACKAGE_BZIP2
-	select BR2_PACKAGE_LZ4
-	select BR2_PACKAGE_ZSTD
-	help
-	  PGExporter for exporting PostgreSQL metrics to Prometheus.
