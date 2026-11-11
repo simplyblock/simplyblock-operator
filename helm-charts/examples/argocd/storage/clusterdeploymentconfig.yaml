@@ -1,0 +1,37 @@
+# The storage plane of one cluster, approved. Workers, interfaces, and device
+# addresses come from a discovery run's draft (kubectl -n simplyblock get
+# clusterdeploymentconfig -o yaml), reviewed and committed here.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: simplyblock-storage
+  namespace: simplyblock
+spec:
+  approved: true
+  environment: K3s
+  cluster:
+    name: simplyblock-cluster
+    clusterMode: Standard
+    enableDriveFormat: true
+    maxSubsystemCount: 30
+    vcpuCount: 5
+    network:
+      spdkOnHostNetwork: true
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
+  nodeSets:
+    - name: storage
+      groups:
+        - name: nvme
+          mgmtInterface: eth0
+          dataInterfaces:
+            - eth1
+          devices:
+            nvme:
+              - "0000:00:02.0"
+              - "0000:00:03.0"
+          workers:
+            - worker-1
+            - worker-2
+            - worker-3
