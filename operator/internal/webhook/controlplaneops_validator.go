@@ -54,6 +54,12 @@ type ControlPlaneOpsValidator struct {
 // there releases the control plane's lock while the rollout is still moving, so
 // the next operation starts against a half-applied one.
 //
+// A HostMaintenance window is undeletable from EnteringMaintenance on, for the
+// same reason an abort is refused there: it has set a maintenance zone or
+// moved the coordinators, and the window is what clears the one and waits for
+// the host behind the other. Deleting its record would leave the zone to
+// expire on its own and nothing to say where the host's processes went.
+//
 // It is the same guard StorageBackupOps carries, and the stronger of the two the
 // operation has: the finalizer alone does not catch a forced delete with no
 // grace period.
@@ -62,6 +68,13 @@ var undeletableControlPlaneSteps = map[simplyblockv1alpha2.ControlPlaneOpsStep]s
 	simplyblockv1alpha2.ControlPlaneOpsStepApplying:   "the new image is being written onto the control plane",
 	simplyblockv1alpha2.ControlPlaneOpsStepAwaiting:   "the restarted workloads are still coming back",
 	simplyblockv1alpha2.ControlPlaneOpsStepVerifying:  "the rollout is being checked against the version it asked for",
+
+	simplyblockv1alpha2.ControlPlaneOpsStepEnteringMaintenance: "FoundationDB's maintenance mode is being set for the worker's zone",
+	simplyblockv1alpha2.ControlPlaneOpsStepMovingCoordinators:  "the coordinators are being moved off the worker",
+	simplyblockv1alpha2.ControlPlaneOpsStepReleasing:           "the budget over the worker's FoundationDB pods is being released",
+	simplyblockv1alpha2.ControlPlaneOpsStepAwaitingHost:        "the worker's FoundationDB processes are still coming back",
+	simplyblockv1alpha2.ControlPlaneOpsStepLeavingMaintenance:  "FoundationDB's maintenance mode is being cleared",
+	simplyblockv1alpha2.ControlPlaneOpsStepCleanup:             "the window's markers are being removed",
 }
 
 func (v *ControlPlaneOpsValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
@@ -144,8 +157,9 @@ func (v *ControlPlaneOpsValidator) admitCreate(
 		return admission.Denied(fmt.Sprintf(
 			"ControlPlane %q names a control plane this cluster does not host, and every "+
 				"action of this kind acts on something the operator installed: Restart restarts a "+
-				"workload, Upgrade replaces its image, and Backup asks the FoundationDBCluster the "+
-				"operator applied. A control plane elsewhere is an endpoint and a credential, so "+
+				"workload, Upgrade replaces its image, Backup asks the FoundationDBCluster the "+
+				"operator applied, and HostMaintenance takes that database's processes through a "+
+				"node drain. A control plane elsewhere is an endpoint and a credential, so "+
 				"there is nothing here for any of them to act on.",
 			ops.Spec.ControlPlaneRef))
 	}
@@ -156,7 +170,7 @@ func (v *ControlPlaneOpsValidator) admitCreate(
 // actionBlockPresent refuses an action whose parameter block is absent.
 //
 // The blocks are optional on the type because each action ignores the others',
-// so the API cannot require one without requiring all three. Checking it here is
+// so the API cannot require one without requiring all of them. Checking it here is
 // what turns "the operation failed at its first step" into an error on the
 // terminal that wrote the object.
 func actionBlockPresent(ops *simplyblockv1alpha2.ControlPlaneOps) admission.Response {
@@ -170,6 +184,12 @@ func actionBlockPresent(ops *simplyblockv1alpha2.ControlPlaneOps) admission.Resp
 		if ops.Spec.Backup == nil || ops.Spec.Backup.BlobStore == "" {
 			return admission.Denied(
 				"action Backup needs spec.backup.blobStore, which names where the backup goes")
+		}
+	case simplyblockv1alpha2.ControlPlaneOpsActionHostMaintenance:
+		if ops.Spec.HostMaintenance == nil || ops.Spec.HostMaintenance.WorkerNode == "" {
+			return admission.Denied(
+				"action HostMaintenance needs spec.hostMaintenance.workerNode, which names the " +
+					"worker whose FoundationDB processes the window takes roles off")
 		}
 	case simplyblockv1alpha2.ControlPlaneOpsActionRestart:
 		// Restart takes no required block: an empty spec.restart.components

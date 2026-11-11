@@ -758,3 +758,128 @@ func TestAFinishedOperationReportsItsTerminalStep(t *testing.T) {
 		}
 	}
 }
+
+// The HostMaintenance window is a line like the others, and Holding is its one
+// abortable step: nothing has been done to the database from there, and from
+// EnteringMaintenance on something has to clear what was set.
+//
+// U-61 and U-62 in test-plan-fdb-host-maintenance.md.
+func TestTheWindowsGraphIsALineAbortableOnlyWhileHolding(t *testing.T) {
+	graph, declared := opsGraphs()[action(simplyblockv1alpha2.ControlPlaneOpsActionHostMaintenance)]
+	if !declared {
+		t.Fatal("HostMaintenance declares no graph")
+	}
+	if graph.Initial != stepHolding {
+		t.Errorf("initial step = %s, want Holding", graph.Initial)
+	}
+	want := []opsStep{stepHolding, stepEnteringMaintenance, stepMovingCoordinators, stepReleasing,
+		stepAwaitingHost, stepLeavingMaintenance, stepCleanup}
+	current := graph.Initial
+	for i, step := range want {
+		if current != step {
+			t.Fatalf("step %d is %s, want %s", i, current, step)
+		}
+		def := graph.States[current]
+		if def.Abortable != (step == stepHolding) {
+			t.Errorf("%s abortable = %v, want abortable only while Holding", step, def.Abortable)
+		}
+		if i == len(want)-1 {
+			if len(def.To) != 0 {
+				t.Errorf("%s is not terminal: %v", step, def.To)
+			}
+			break
+		}
+		if len(def.To) != 1 {
+			t.Fatalf("%s declares %d successors, want one", step, len(def.To))
+		}
+		current = def.To[0]
+	}
+	if _, ok := opsInitialDeadlines[action(simplyblockv1alpha2.ControlPlaneOpsActionHostMaintenance)]; !ok {
+		t.Error("HostMaintenance has no initial deadline, so Holding cannot time out")
+	}
+	unabortable := UnabortableSteps()
+	for _, step := range []opsStep{stepEnteringMaintenance, stepMovingCoordinators, stepReleasing,
+		stepAwaitingHost, stepLeavingMaintenance, stepCleanup} {
+		if !slices.Contains(unabortable, step) {
+			t.Errorf("%s is abortable, and the window has already changed the database there", step)
+		}
+	}
+}
+
+// The window holds the control plane's lock only while it touches the database
+// and chooses among hosts, and every other action holds it from its first step
+// to its last, as it always has.
+//
+// U-83 (the declaration) and U-93 in test-plan-fdb-host-maintenance.md.
+func TestOnlyTheMoveHoldsTheLock(t *testing.T) {
+	graphs := opsGraphs()
+	for _, act := range []simplyblockv1alpha2.ControlPlaneOpsAction{
+		simplyblockv1alpha2.ControlPlaneOpsActionRestart,
+		simplyblockv1alpha2.ControlPlaneOpsActionUpgrade,
+		simplyblockv1alpha2.ControlPlaneOpsActionBackup,
+	} {
+		for step := range graphs[action(act)].States {
+			if !holdsLock(act, step) {
+				t.Errorf("%s does not hold the lock in %s, and it always did", act, step)
+			}
+		}
+	}
+	window := simplyblockv1alpha2.ControlPlaneOpsActionHostMaintenance
+	for step, want := range map[opsStep]bool{
+		stepHolding: false, stepEnteringMaintenance: true, stepMovingCoordinators: true,
+		stepReleasing: true, stepAwaitingHost: false, stepLeavingMaintenance: false, stepCleanup: false,
+	} {
+		if got := holdsLock(window, step); got != want {
+			t.Errorf("HostMaintenance holds the lock in %s = %v, want %v", step, got, want)
+		}
+	}
+}
+
+// A window starts without the lock. Holding is a budget the window owns, so a
+// control plane held by another operation does not keep a cordoned worker's pods
+// from being held, and a pool-wide cordon raises every window at once.
+//
+// U-83 in test-plan-fdb-host-maintenance.md, the start of it; the acquisition
+// at EnteringMaintenance and the release after Releasing are tested with the
+// steps that make them reachable.
+func TestAWindowStartsWithoutTheLock(t *testing.T) {
+	ctx := context.Background()
+	cp := localControlPlane()
+	cp.Status.ActiveOpsRef = anotherOperation
+	window := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionHostMaintenance)
+	window.Spec.HostMaintenance = &simplyblockv1alpha2.HostMaintenanceSpec{WorkerNode: "vm11"}
+	c := newClient(t, cp, window)
+	recorder := &recordingRecorder{}
+	r := &ControlPlaneOpsReconciler{Client: c, Scheme: testScheme(t), Recorder: recorder}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(window)}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var after simplyblockv1alpha2.ControlPlaneOps
+	if err := c.Get(ctx, client.ObjectKeyFromObject(window), &after); err != nil {
+		t.Fatal(err)
+	}
+	if after.Status.Phase != simplyblockv1alpha2.ControlPlaneOpsPhaseRunning {
+		t.Errorf("phase = %s, want Running: the window has a budget to put up and nothing to wait for", after.Status.Phase)
+	}
+	if after.Status.Step.State != string(stepHolding) {
+		t.Errorf("step = %q, want Holding", after.Status.Step.State)
+	}
+	if after.Status.StartedAt == nil {
+		t.Error("startedAt is empty on a window that started")
+	}
+	if recorder.count(OperationQueued) != 0 {
+		t.Error("an OperationQueued event: the window waited for a lock Holding does not need")
+	}
+	if recorder.count(OperationStarted) != 1 {
+		t.Errorf("OperationStarted emitted %d times, want once", recorder.count(OperationStarted))
+	}
+	var target simplyblockv1alpha2.ControlPlane
+	if err := c.Get(ctx, client.ObjectKeyFromObject(cp), &target); err != nil {
+		t.Fatal(err)
+	}
+	if target.Status.ActiveOpsRef != anotherOperation {
+		t.Errorf("activeOpsRef = %q, want the other operation's lock untouched", target.Status.ActiveOpsRef)
+	}
+}

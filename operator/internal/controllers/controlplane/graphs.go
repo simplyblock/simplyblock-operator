@@ -45,6 +45,15 @@ const (
 	stepApplying   = simplyblockv1alpha2.ControlPlaneOpsStepApplying
 	stepVerifying  = simplyblockv1alpha2.ControlPlaneOpsStepVerifying
 	stepRequesting = simplyblockv1alpha2.ControlPlaneOpsStepRequesting
+
+	// The HostMaintenance window's steps (design-fdb-host-maintenance.md §6).
+	stepHolding             = simplyblockv1alpha2.ControlPlaneOpsStepHolding
+	stepEnteringMaintenance = simplyblockv1alpha2.ControlPlaneOpsStepEnteringMaintenance
+	stepMovingCoordinators  = simplyblockv1alpha2.ControlPlaneOpsStepMovingCoordinators
+	stepReleasing           = simplyblockv1alpha2.ControlPlaneOpsStepReleasing
+	stepAwaitingHost        = simplyblockv1alpha2.ControlPlaneOpsStepAwaitingHost
+	stepLeavingMaintenance  = simplyblockv1alpha2.ControlPlaneOpsStepLeavingMaintenance
+	stepCleanup             = simplyblockv1alpha2.ControlPlaneOpsStepCleanup
 )
 
 // How long each installation step may take before it is reported as stuck.
@@ -98,6 +107,20 @@ const (
 	verifyingDeadline = 30 * time.Minute
 
 	requestingDeadline = 5 * time.Minute
+
+	// The window's budgets (design-fdb-host-maintenance.md §6). holdingDeadline
+	// runs from the last drain any window in the namespace observed rather than
+	// from the window's creation, which hostmaintenance.go re-arms, so a pool
+	// whose update is progressing never expires a window waiting its turn.
+	// awaitingHostDeadline is the storage node's, since both wait for the same
+	// reboot, and it is also how long the maintenance zone is set for.
+	holdingDeadline             = 6 * time.Hour
+	enteringMaintenanceDeadline = 5 * time.Minute
+	movingCoordinatorsDeadline  = 10 * time.Minute
+	releasingDeadline           = 5 * time.Minute
+	awaitingHostDeadline        = 4 * time.Hour
+	leavingMaintenanceDeadline  = 5 * time.Minute
+	cleanupDeadline             = 5 * time.Minute
 )
 
 // deadline is the entry hook every state here carries: it sets the step's budget
@@ -219,7 +242,74 @@ func opsGraphs() statemachine.MultiConfig[opsStep] {
 				stepAwaiting: {OnEnter: deadline[opsStep](awaitingOpsDeadline)},
 			},
 		},
+
+		// HostMaintenance holds a worker's FoundationDB pods from the cordon,
+		// moves the roles off the worker when its drain arrives, and waits for
+		// the processes to come back. Holding is the one abortable step: nothing
+		// has been done to the database from there, and from EnteringMaintenance
+		// on something has to clear what was set.
+		action(simplyblockv1alpha2.ControlPlaneOpsActionHostMaintenance): {
+			Initial: stepHolding,
+			States: map[opsStep]statemachine.StateDef[opsStep]{
+				stepHolding: {
+					To:        []opsStep{stepEnteringMaintenance},
+					Abortable: true,
+					OnEnter:   deadline[opsStep](holdingDeadline),
+				},
+				stepEnteringMaintenance: {
+					To:      []opsStep{stepMovingCoordinators},
+					OnEnter: deadline[opsStep](enteringMaintenanceDeadline),
+				},
+				stepMovingCoordinators: {
+					To:      []opsStep{stepReleasing},
+					OnEnter: deadline[opsStep](movingCoordinatorsDeadline),
+				},
+				stepReleasing: {
+					To:      []opsStep{stepAwaitingHost},
+					OnEnter: deadline[opsStep](releasingDeadline),
+				},
+				stepAwaitingHost: {
+					To:      []opsStep{stepLeavingMaintenance},
+					OnEnter: deadline[opsStep](awaitingHostDeadline),
+				},
+				stepLeavingMaintenance: {
+					To:      []opsStep{stepCleanup},
+					OnEnter: deadline[opsStep](leavingMaintenanceDeadline),
+				},
+				stepCleanup: {OnEnter: deadline[opsStep](cleanupDeadline)},
+			},
+		},
 	}
+}
+
+// opsLockedSteps declares, per action, the steps that hold the control plane's
+// lock. An action absent from the map holds it from its first step to its last,
+// which is what Restart, Upgrade, and Backup always did. The HostMaintenance
+// window holds it only while it touches the database and chooses among hosts
+// (design-fdb-host-maintenance.md §7.3): Holding is a budget the window owns,
+// and the wait for the processes to return excludes nothing.
+var opsLockedSteps = map[statemachine.Action]map[opsStep]bool{
+	action(simplyblockv1alpha2.ControlPlaneOpsActionHostMaintenance): {
+		stepEnteringMaintenance: true,
+		stepMovingCoordinators:  true,
+		stepReleasing:           true,
+	},
+}
+
+// holdsLock reports whether an action's step runs under the control plane's
+// lock.
+func holdsLock(act simplyblockv1alpha2.ControlPlaneOpsAction, step opsStep) bool {
+	locked, declared := opsLockedSteps[action(act)]
+	if !declared {
+		return true
+	}
+	return locked[step]
+}
+
+// locksFromTheStart reports whether an action takes the lock before its first
+// step, which is every action whose first step holds it.
+func locksFromTheStart(act simplyblockv1alpha2.ControlPlaneOpsAction) bool {
+	return holdsLock(act, opsGraphs()[action(act)].Initial)
 }
 
 // opsInitialDeadlines are the budgets of the step each action's machine is born
@@ -228,9 +318,10 @@ func opsGraphs() statemachine.MultiConfig[opsStep] {
 // Setting it explicitly is what stops the first step of every operation from
 // being the one step that cannot time out.
 var opsInitialDeadlines = map[statemachine.Action]time.Duration{
-	action(simplyblockv1alpha2.ControlPlaneOpsActionRestart): drainingDeadline,
-	action(simplyblockv1alpha2.ControlPlaneOpsActionUpgrade): preflightDeadline,
-	action(simplyblockv1alpha2.ControlPlaneOpsActionBackup):  requestingDeadline,
+	action(simplyblockv1alpha2.ControlPlaneOpsActionRestart):         drainingDeadline,
+	action(simplyblockv1alpha2.ControlPlaneOpsActionUpgrade):         preflightDeadline,
+	action(simplyblockv1alpha2.ControlPlaneOpsActionBackup):          requestingDeadline,
+	action(simplyblockv1alpha2.ControlPlaneOpsActionHostMaintenance): holdingDeadline,
 }
 
 // Which steps an abort stops cleanly is declared on the states above, and the

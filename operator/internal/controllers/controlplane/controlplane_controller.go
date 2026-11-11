@@ -221,6 +221,15 @@ func (r *ControlPlaneReconciler) reconcileLocal(
 			simplyblockv1alpha2.ControlPlanePhaseInstalling, message)
 	}
 
+	// A cordoned worker that runs FoundationDB pods gets a maintenance window,
+	// and an uncordoned one has its window called off or its record removed
+	// (controlplane_hostmaintenance.go). It runs before the install machine
+	// because a Node event is what reaches it, and the install's own steps are
+	// unaffected by it.
+	if err := r.reconcileHostMaintenance(ctx, cp); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	if cp.Status.Phase != simplyblockv1alpha2.ControlPlanePhaseInstalling &&
 		cp.Status.Phase != "" {
 		return r.steadyState(ctx, cp)
@@ -793,6 +802,9 @@ func (r *ControlPlaneReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
 				return o.GetName() == clusterFileConfigMapName
 			}))).
+		// A Node's cordon, uncordon, or deletion reaches the control plane whose
+		// FoundationDB pods it carries (controlplane_hostmaintenance.go).
+		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.nodeRequests)).
 		Named("controlplane").
 		Complete(r)
 }
