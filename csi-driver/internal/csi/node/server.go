@@ -43,11 +43,14 @@ type Server struct {
 	// It is a field for the reason repairFabric is one: it reaches sysfs and the
 	// mount table directly, and a test has neither.
 	identifyStaged func(ctx context.Context, stagingTargetPath string) (lvol.Connection, error)
-	unstagePNFSFn  func(context.Context, string, export.Spec) error
-	volumeLocks    *csicommon.VolumeLocks
-	kubeClient     kubernetes.Interface
-	manager        *sbkube.Manager
-	guardian       *guardian.Guardian
+	// ensureInitiator reports why this node cannot connect a volume, or nil when
+	// it can. It is a field because it asks the kernel, and a test has none.
+	ensureInitiator func(ctx context.Context) error
+	unstagePNFSFn   func(context.Context, string, export.Spec) error
+	volumeLocks     *csicommon.VolumeLocks
+	kubeClient      kubernetes.Interface
+	manager         *sbkube.Manager
+	guardian        *guardian.Guardian
 
 	// The stretched cluster's stage gate (syncgate.go): this node's site and
 	// whether a cluster is sync, and where a volume is led from. Seams, so the
@@ -70,6 +73,7 @@ func New(d *csicommon.CSIDriver, kubeClient kubernetes.Interface, manager *sbkub
 		stack:             newStack(mounter, stackRecordDir),
 		repairFabric:      fabric.RepairAttach,
 		identifyStaged:    stagedIdentity(nvme.SysfsConfig{}),
+		ensureInitiator:   hostInitiatorCheck().ensure,
 		volumeLocks:       csicommon.NewVolumeLocks(),
 		kubeClient:        kubeClient,
 		manager:           manager,

@@ -13,6 +13,20 @@ sudo yum install -y nvme-cli;
 sudo modprobe nvme-tcp
 ```
 
+#### the worker node needs the kernel NVMe/TCP module
+
+If the worker's kernel has no `nvme-tcp` module, the volume mount fails with an error like this.
+```
+  Warning  FailedMount  kubelet  MountVolume.MountDevice failed for volume "pvc-..." : rpc error: code = FailedPrecondition desc = this node cannot connect a volume: kernel 6.8.0-1044-aws has no NVMe/TCP initiator loaded (/dev/nvme-fabrics is absent, and modprobe nvme-tcp said: modprobe: FATAL: Module nvme-tcp not found in directory /lib/modules/6.8.0-1044-aws). ...
+```
+
+Install the package that carries the module on the worker and load it. The mount is retried and needs no restart.
+```
+sudo apt-get install -y linux-modules-extra-$(uname -r)   # Ubuntu
+sudo dnf install -y kernel-modules-extra                  # RHEL and its derivatives
+sudo modprobe nvme-tcp
+```
+
 #### the worker nodes should be able to contact simplyblock storage node
 
 Since SPDK uses remote NVMe connection, make sure that there is network connectivity between the simplyblock storage node and the Kubernetes worker nodes.

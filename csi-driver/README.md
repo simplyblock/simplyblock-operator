@@ -60,6 +60,17 @@ lsmod | grep 'nvme_'
 You should see `nvme_tcp`, `nvme_fabrics`, and related modules. To make it persistent, add the module
 to `/etc/modules-load.d/nvme-tcp.conf` or `/etc/modules`, depending on your distro.
 
+On Ubuntu, the module is in the `linux-modules-extra` package of the running kernel, which the cloud
+images leave out. Install it on every node that mounts volumes, including the nodes that run no
+storage node:
+
+```bash
+sudo apt-get install -y linux-modules-extra-$(uname -r)
+```
+
+The node plugin loads the module when it is installed. When it is not, a volume mount fails with a
+`FailedPrecondition` error that names the package.
+
 ### 2. Install via Helm (Recommended)
 
 ```bash

@@ -325,6 +325,7 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	go reconnect.MonitorConnection(markBroken(podGuardian), manager, cd.GetName(), nodeName)
 	go node.KeepLayoutsPrimed(context.Background(), cd.GetName())
 
+	go node.ReportInitiator(context.Background(), nodeName)
 	go advertiseVDOCapability(kubeClient, nodeName)
 	go advertiseKVMCapability(kubeClient, nodeName)
 	go advertiseSubnets(kubeClient, nodeName)

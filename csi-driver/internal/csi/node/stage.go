@@ -126,6 +126,16 @@ func (ns *Server) NodeStageVolume(
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
+	// A node without the initiator fails every connect the same way, and what
+	// the connect says about it names nothing to do. It is refused here with
+	// the remedy, as a precondition rather than as a fault of this volume.
+	if ns.ensureInitiator != nil && vc["nqn"] != "" {
+		if err := ns.ensureInitiator(ctx); err != nil {
+			klog.Errorf("volume %s cannot be staged: %v", volumeID, err)
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+	}
+
 	artifact, err := ns.bringUp(ctx, volumeID, plan, vc)
 	if err != nil {
 		klog.Errorf("failed to bring up the stack, volumeID: %s err: %v", volumeID, err)
