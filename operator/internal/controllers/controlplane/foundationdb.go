@@ -91,7 +91,7 @@ const fdbCoordinatorDisk = "10G"
 // foundationDBObjects is everything the ApplyingFoundationDB step writes, in the
 // order it depends on itself: the accounts, then the roles that name them, then
 // the controller, then the cluster the controller reconciles.
-func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane, seed string, peerJoined bool) []client.Object {
+func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane, seed string, peerJoined, witnessJoined bool) []client.Object {
 	ns := cp.Namespace
 	//nolint:prealloc // the literal is the declaration; the append below is the conditional set
 	objects := []client.Object{
@@ -104,7 +104,7 @@ func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane, seed string, peer
 		fdbPodRoleObject(ns),
 		fdbPodRoleBindingObject(ns),
 		fdbOperatorDeployment(cp),
-		foundationDBCluster(cp, seed, peerJoined),
+		foundationDBCluster(cp, seed, peerJoined, witnessJoined),
 	}
 	return append(objects, fdbPeerCertificate(cp)...)
 }
@@ -372,7 +372,7 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 // addresses, DNS locality, and a per-class pod template that names the pods'
 // account. What varies with the spec is the coordinator count, the storage
 // class, and the resources.
-func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane, seed string, peerJoined bool) *unstructured.Unstructured {
+func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane, seed string, peerJoined, witnessJoined bool) *unstructured.Unstructured {
 	fdb := foundationDBSpecOf(cp)
 	processes := coordinatorCount(fdb)
 	stretch := stretchOf(cp)
@@ -475,7 +475,7 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane, seed string, peer
 				"processClassLabels":   []any{"foundationdb.org/fdb-process-class"},
 				"processGroupIDLabels": []any{"foundationdb.org/fdb-process-group-id"},
 			},
-			"databaseConfiguration": databaseConfiguration(stretch, processes, peerJoined),
+			"databaseConfiguration": databaseConfiguration(stretch, processes, peerJoined, witnessJoined),
 			"processCounts": map[string]any{
 				"cluster_controller": int64(1),
 				"log":                processes,
@@ -548,7 +548,7 @@ func processGroupIDPrefix(site string) string {
 // priority after). Both sites render the same block for the same state, which
 // is what the FoundationDB operator requires of clusters sharing a database.
 func databaseConfiguration(
-	stretch *simplyblockv1alpha2.StretchedControlPlaneSpec, processes int64, peerJoined bool,
+	stretch *simplyblockv1alpha2.StretchedControlPlaneSpec, processes int64, peerJoined, witnessJoined bool,
 ) map[string]any {
 	if stretch == nil {
 		return map[string]any{"redundancy_mode": redundancyMode(processes)}
@@ -562,19 +562,34 @@ func databaseConfiguration(
 	if peerJoined {
 		usable, joinPriority = 2, 0
 	}
+	region := func(site string, priority int64) map[string]any {
+		dcs := []any{map[string]any{"id": site, "priority": priority}}
+		r := map[string]any{"datacenters": dcs}
+		if stretch.WitnessSite != "" && peerJoined && witnessJoined {
+			// The witness is each region's satellite: the transaction logs a
+			// commit waits for outside the primary, so the region that takes
+			// over after losing the other already holds every acknowledged
+			// commit, and the witness's coordinators keep the majority on the
+			// surviving side.
+			r["datacenters"] = append(dcs, map[string]any{
+				"id": stretch.WitnessSite, "priority": int64(1), "satellite": int64(1),
+			})
+			r["satellite_logs"] = int64(witnessSatelliteLogs)
+			r["satellite_redundancy_mode"] = "one_satellite_double"
+		}
+		return r
+	}
 	return map[string]any{
 		"redundancy_mode": "triple",
 		"usable_regions":  usable,
-		"regions": []any{
-			map[string]any{"datacenters": []any{
-				map[string]any{"id": bootstrap, "priority": int64(1)},
-			}},
-			map[string]any{"datacenters": []any{
-				map[string]any{"id": join, "priority": joinPriority},
-			}},
-		},
+		"regions":         []any{region(bootstrap, 1), region(join, joinPriority)},
 	}
 }
+
+// witnessSatelliteLogs is how many log processes a region recruits in its
+// satellite, the witness: one_satellite_double keeps two copies, and three
+// leave one to lose.
+const witnessSatelliteLogs = 3
 
 // logCollectorMetadata marks a database pod for the log collector. Each process
 // class gets its own copy, because the FoundationDB operator replaces

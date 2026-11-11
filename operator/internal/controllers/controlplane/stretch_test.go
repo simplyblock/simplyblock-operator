@@ -7,6 +7,7 @@ package controlplane
 
 import (
 	"context"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -54,8 +55,8 @@ func regionIDs(t *testing.T, cluster *unstructured.Unstructured) []string {
 // first and with the priority, three copies in each; and each site's own
 // processes carry its name as their data center and process-group prefix.
 func TestBothSitesRenderTheSameTwoRegionDatabase(t *testing.T) {
-	bootstrap := foundationDBCluster(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap), "", true)
-	join := foundationDBCluster(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleJoin), "sb:x@10.0.0.1:4500", true)
+	bootstrap := foundationDBCluster(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap), "", true, false)
+	join := foundationDBCluster(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleJoin), "sb:x@10.0.0.1:4500", true, false)
 
 	for name, cluster := range map[string]*unstructured.Unstructured{"bootstrap": bootstrap, "join": join} {
 		if got := regionIDs(t, cluster); strings.Join(got, ",") != "a,b" {
@@ -104,7 +105,7 @@ func TestBothSitesRenderTheSameTwoRegionDatabase(t *testing.T) {
 // An ordinary control plane renders exactly what it did before: one region,
 // no data center, no prefix.
 func TestAnOrdinaryControlPlaneRendersNoRegions(t *testing.T) {
-	cluster := foundationDBCluster(localControlPlane(), "", false)
+	cluster := foundationDBCluster(localControlPlane(), "", false, false)
 	if _, found, _ := unstructured.NestedSlice(cluster.Object, "spec", "databaseConfiguration", "regions"); found {
 		t.Error("a single-site control plane renders a regions block")
 	}
@@ -228,7 +229,7 @@ func TestAStretchedSiteDoesNotWaitForTheSecondRegion(t *testing.T) {
 // processes joining under it take no data. FoundationDB then wants five
 // coordinators, which one site provides; nine, once both regions are usable.
 func TestASiteAloneConfiguresOneUsableRegion(t *testing.T) {
-	alone := foundationDBCluster(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap), "", false)
+	alone := foundationDBCluster(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap), "", false, false)
 	usable, _, _ := unstructured.NestedInt64(alone.Object, "spec", "databaseConfiguration", "usable_regions")
 	if usable != 1 {
 		t.Errorf("usable_regions = %d before the peer joined, want 1", usable)
@@ -238,7 +239,7 @@ func TestASiteAloneConfiguresOneUsableRegion(t *testing.T) {
 	if second["id"] != "b" || second["priority"] != int64(-1) {
 		t.Errorf("the peer's region = %v, want b at priority -1", second)
 	}
-	joined := foundationDBCluster(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap), "", true)
+	joined := foundationDBCluster(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap), "", true, false)
 	regions, _, _ = unstructured.NestedSlice(joined.Object, "spec", "databaseConfiguration", "regions")
 	second = regions[1].(map[string]any)["datacenters"].([]any)[0].(map[string]any)
 	if second["priority"] != int64(0) {
@@ -303,5 +304,88 @@ func TestTheAPICertificateNamesTheSiteEndpoint(t *testing.T) {
 	ips, _, _ := unstructured.NestedStringSlice(servingCertificateObjects(cp)[0].(*unstructured.Unstructured).Object, "spec", "ipAddresses")
 	if !slices.Contains(ips, "10.0.0.5") {
 		t.Errorf("ipAddresses %v lack the site endpoint's address", ips)
+	}
+}
+
+func withWitness(cp *simplyblockv1alpha2.ControlPlane) *simplyblockv1alpha2.ControlPlane {
+	cp.Spec.Source.Local.Stretch.WitnessSite = "w"
+	return cp
+}
+
+// A witness site becomes both regions' satellite once both the peer and the
+// witness have joined, identically on the two sites; before then, and
+// without a witness, the regions have no satellite.
+func TestTheWitnessIsBothRegionsSatelliteOnceJoined(t *testing.T) {
+	satellite := func(cluster *unstructured.Unstructured) []string {
+		regions, _, _ := unstructured.NestedSlice(cluster.Object, "spec", "databaseConfiguration", "regions")
+		var out []string
+		for _, region := range regions {
+			r := region.(map[string]any)
+			for _, dc := range r["datacenters"].([]any) {
+				d := dc.(map[string]any)
+				if d["satellite"] == int64(1) {
+					out = append(out, d["id"].(string)+"/"+r["satellite_redundancy_mode"].(string))
+				}
+			}
+		}
+		return out
+	}
+	boot := withWitness(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap))
+	join := withWitness(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleJoin))
+
+	if got := satellite(foundationDBCluster(boot, "", true, false)); len(got) != 0 {
+		t.Errorf("satellites before the witness joined: %v", got)
+	}
+	if got := satellite(foundationDBCluster(boot, "", false, true)); len(got) != 0 {
+		t.Errorf("satellites before the peer joined: %v", got)
+	}
+	want := []string{"w/one_satellite_double", "w/one_satellite_double"}
+	b := foundationDBCluster(boot, "", true, true)
+	j := foundationDBCluster(join, "sb:x@10.0.0.1:4500", true, true)
+	if got := satellite(b); !slices.Equal(got, want) {
+		t.Errorf("bootstrap satellites = %v, want %v", got, want)
+	}
+	cb, _, _ := unstructured.NestedMap(b.Object, "spec", "databaseConfiguration")
+	cj, _, _ := unstructured.NestedMap(j.Object, "spec", "databaseConfiguration")
+	if !reflect.DeepEqual(cb, cj) {
+		t.Errorf("the two sites render different databases with a witness:\n%v\n%v", cb, cj)
+	}
+	logs, _, _ := unstructured.NestedSlice(b.Object, "spec", "databaseConfiguration", "regions")
+	if n := logs[0].(map[string]any)["satellite_logs"]; n != int64(witnessSatelliteLogs) {
+		t.Errorf("satellite_logs = %v, want %d", n, witnessSatelliteLogs)
+	}
+	plain := stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap)
+	if got := satellite(foundationDBCluster(plain, "", true, true)); len(got) != 0 {
+		t.Errorf("satellites without a witness site: %v", got)
+	}
+}
+
+// The witness's joining is read from the same datacenter listing as the
+// peer's, independently of it, and recorded once.
+func TestTheWitnessIsRecordedOnceSeen(t *testing.T) {
+	cp := withWitness(stretchedControlPlane(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap))
+	prober := &stubProber{datacenters: []string{"a", "b"}}
+	r := &ControlPlaneReconciler{Client: newClient(t, cp), Scheme: testScheme(t), Prober: prober}
+	access := managedAccess{endpoint: "http://cp.example:5000"}
+
+	if err := r.observePeerRegion(context.Background(), cp, access); err != nil {
+		t.Fatal(err)
+	}
+	if !r.peerJoined(cp) || r.witnessJoined(cp) {
+		t.Fatalf("after a listing of a and b: peer=%v witness=%v", r.peerJoined(cp), r.witnessJoined(cp))
+	}
+	prober.datacenters = []string{"a", "b", "w"}
+	if err := r.observePeerRegion(context.Background(), cp, access); err != nil {
+		t.Fatal(err)
+	}
+	if !r.witnessJoined(cp) || cp.Status.Stretch.WitnessJoinedAt == nil || !r.peerJoined(cp) {
+		t.Fatalf("the witness was not recorded, or the peer was lost: %+v", cp.Status.Stretch)
+	}
+	prober.datacenters = []string{"a"}
+	if err := r.observePeerRegion(context.Background(), cp, access); err != nil {
+		t.Fatal(err)
+	}
+	if !r.witnessJoined(cp) || !r.peerJoined(cp) {
+		t.Fatal("a listing without them took the records back")
 	}
 }

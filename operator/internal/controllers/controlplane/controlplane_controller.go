@@ -314,7 +314,7 @@ func (r *ControlPlaneReconciler) performInstallStep(
 		}
 		// The management API is not up during the install, so the peer cannot
 		// be observed yet: a site installs with its own region alone.
-		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, foundationDBObjects(cp, seed, r.peerJoined(cp)))
+		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, foundationDBObjects(cp, seed, r.peerJoined(cp), r.witnessJoined(cp)))
 
 	case stepAwaitingFoundationDB:
 		health, err := readFoundationDB(ctx, r.Client, cp.Namespace)
@@ -367,6 +367,12 @@ func (r *ControlPlaneReconciler) peerJoined(cp *simplyblockv1alpha2.ControlPlane
 	return stretchOf(cp) != nil && cp.Status.Stretch != nil && cp.Status.Stretch.PeerJoined
 }
 
+// witnessJoined is whether this site has seen the witness site's processes in
+// the database (status.stretch.witnessJoined).
+func (r *ControlPlaneReconciler) witnessJoined(cp *simplyblockv1alpha2.ControlPlane) bool {
+	return stretchOf(cp) != nil && cp.Status.Stretch != nil && cp.Status.Stretch.WitnessJoined
+}
+
 // observePeerRegion asks the management API which FoundationDB data centers
 // have processes in the database and records, once and for good, that the
 // peer site's region has joined. A read that fails is not an error: the API
@@ -376,7 +382,12 @@ func (r *ControlPlaneReconciler) observePeerRegion(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane, access managedAccess,
 ) error {
 	stretch := stretchOf(cp)
-	if stretch == nil || r.peerJoined(cp) {
+	if stretch == nil {
+		return nil
+	}
+	wantPeer := !r.peerJoined(cp)
+	wantWitness := stretch.WitnessSite != "" && !r.witnessJoined(cp)
+	if !wantPeer && !wantWitness {
 		return nil
 	}
 	prober := r.Prober
@@ -388,18 +399,35 @@ func (r *ControlPlaneReconciler) observePeerRegion(
 		logf.FromContext(ctx).V(1).Info("the FoundationDB data centers could not be read", "error", err.Error())
 		return nil
 	}
-	if !slices.Contains(datacenters, stretch.PeerSite) {
+	peer := wantPeer && slices.Contains(datacenters, stretch.PeerSite)
+	witness := wantWitness && slices.Contains(datacenters, stretch.WitnessSite)
+	if !peer && !witness {
 		return nil
 	}
 	now := metav1.Now()
 	if err := r.writeStatus(ctx, cp, func(status *simplyblockv1alpha2.ControlPlaneStatus) {
-		status.Stretch = &simplyblockv1alpha2.StretchedControlPlaneStatus{PeerJoined: true, PeerJoinedAt: &now}
+		if status.Stretch == nil {
+			status.Stretch = &simplyblockv1alpha2.StretchedControlPlaneStatus{}
+		}
+		if peer {
+			status.Stretch.PeerJoined, status.Stretch.PeerJoinedAt = true, &now
+		}
+		if witness {
+			status.Stretch.WitnessJoined, status.Stretch.WitnessJoinedAt = true, &now
+		}
 	}); err != nil {
 		return err
 	}
-	r.emit(cp, corev1.EventTypeNormal, PeerRegionJoined, fmt.Sprintf(
-		"The FoundationDB processes of site %s have joined the database; configuring both regions as usable",
-		stretch.PeerSite))
+	if peer {
+		r.emit(cp, corev1.EventTypeNormal, PeerRegionJoined, fmt.Sprintf(
+			"The FoundationDB processes of site %s have joined the database; configuring both regions as usable",
+			stretch.PeerSite))
+	}
+	if witness {
+		r.emit(cp, corev1.EventTypeNormal, WitnessRegionJoined, fmt.Sprintf(
+			"The FoundationDB processes of witness site %s have joined the database; it becomes both regions' satellite",
+			stretch.WitnessSite))
+	}
 	return nil
 }
 
@@ -465,7 +493,7 @@ func (r *ControlPlaneReconciler) applyEverything(
 	}
 	for _, set := range [][]client.Object{
 		datastoreObjects(cp),
-		foundationDBObjects(cp, seed, r.peerJoined(cp)),
+		foundationDBObjects(cp, seed, r.peerJoined(cp), r.witnessJoined(cp)),
 		api,
 	} {
 		if err := applyAll(ctx, r.Client, cp, r.Scheme, set); err != nil {

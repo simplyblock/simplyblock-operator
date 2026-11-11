@@ -106,7 +106,7 @@ func envNamed(env []corev1.EnvVar, name string) *corev1.EnvVar {
 // Regression: 2026-10-06-graylog-receives-nothing — no database pod was marked,
 // so the processes holding every cluster definition never reached Graylog.
 func TestEveryDatabaseProcessClassIsShippedToTheLogCollector(t *testing.T) {
-	cluster := foundationDBCluster(localControlPlane(), "", false)
+	cluster := foundationDBCluster(localControlPlane(), "", false, false)
 
 	for _, class := range []string{"general", "storage", "log"} {
 		annotations, _, _ := unstructured.NestedStringMap(cluster.Object,
@@ -127,7 +127,7 @@ func TestEveryDatabaseProcessClassIsShippedToTheLogCollector(t *testing.T) {
 // Graylog while the services beside them did.
 func TestEveryWorkloadTheInstallAppliesIsShippedToTheLogCollector(t *testing.T) {
 	cp := localControlPlane()
-	objects := append(foundationDBObjects(cp, "", false),
+	objects := append(foundationDBObjects(cp, "", false, false),
 		append(datastoreObjects(cp), managementAPIObjects(cp)...)...)
 	objects = append(objects, indexJob(cp))
 

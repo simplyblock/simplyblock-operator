@@ -102,6 +102,7 @@ const (
 // operators render the same FoundationDB region configuration.
 // +kubebuilder:validation:XValidation:rule="self.site != self.peerSite",message="site and peerSite must differ"
 // +kubebuilder:validation:XValidation:rule="self.role != 'Join' || has(self.seedConnectionStringSecretRef)",message="a Join site needs seedConnectionStringSecretRef: the connection string of the database the Bootstrap site created"
+// +kubebuilder:validation:XValidation:rule="!has(self.witnessSite) || (self.witnessSite != self.site && self.witnessSite != self.peerSite)",message="witnessSite must differ from site and peerSite"
 type StretchedControlPlaneSpec struct {
 	// Site is the name of the site this control plane runs in. Every
 	// control-plane pod learns it, storage nodes added from this Kubernetes
@@ -138,6 +139,20 @@ type StretchedControlPlaneSpec struct {
 	// Required on a Join site, ignored on the Bootstrap site.
 	// +optional
 	SeedConnectionStringSecretRef *corev1.LocalObjectReference `json:"seedConnectionStringSecretRef,omitempty"`
+
+	// WitnessSite names a third site that holds FoundationDB coordinators and
+	// satellite logs but no control plane and no storage. With it, losing
+	// either site leaves the coordinator majority, so the survivor's database
+	// keeps answering and a takeover needs no FoundationDB recovery first.
+	// Once the witness's processes have joined (status.stretch.witnessJoined)
+	// both regions name it as their satellite. Both sites must name the same
+	// witness. The witness's own FoundationDBCluster joins through the
+	// Bootstrap site's connection string, runs log processes only, and does
+	// not configure the database (automationOptions.configureDatabase: false).
+	// +optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
+	WitnessSite string `json:"witnessSite,omitempty"`
 }
 
 // IsJoin reports whether this is the site joining the database another
@@ -715,6 +730,16 @@ type StretchedControlPlaneStatus struct {
 	// PeerJoinedAt is when PeerJoined was first observed.
 	// +optional
 	PeerJoinedAt *metav1.Time `json:"peerJoinedAt,omitempty"`
+
+	// WitnessJoined is whether the witness site's FoundationDB processes have
+	// been seen in the database. From then on both regions name the witness
+	// as their satellite. Never unset, for the same reason as PeerJoined.
+	// +optional
+	WitnessJoined bool `json:"witnessJoined,omitempty"`
+
+	// WitnessJoinedAt is when WitnessJoined was first observed.
+	// +optional
+	WitnessJoinedAt *metav1.Time `json:"witnessJoinedAt,omitempty"`
 }
 
 // v1alpha2 is the storage version in the manifests this repository ships, which

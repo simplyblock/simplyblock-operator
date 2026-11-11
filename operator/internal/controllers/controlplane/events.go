@@ -44,6 +44,10 @@ const (
 	// and the database is now configured with both regions.
 	PeerRegionJoined = "PeerRegionJoined"
 
+	// WitnessRegionJoined says the witness site's FoundationDB processes were
+	// seen in the database, so both regions take it as their satellite.
+	WitnessRegionJoined = "WitnessRegionJoined"
+
 	// ClustersStillPresent holds a deletion. It is a hold rather than a failure:
 	// removing the clusters resolves it, and nothing else can.
 	ClustersStillPresent = "ClustersStillPresent"
