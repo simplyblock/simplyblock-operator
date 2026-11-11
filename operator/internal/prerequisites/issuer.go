@@ -37,10 +37,6 @@ const (
 	// presents to the management API; the bundle's Deployment mounts it.
 	OperatorClientSecretName = "simplyblock-operator-client-tls"
 
-	// The CSI link's Service and the serving certificate the chart mounts for it.
-	csiLinkServiceName = "simplyblock-csi-link"
-	csiLinkSecretName  = "simplyblock-csi-link-tls"
-
 	defaultCertManagerNamespace  = "cert-manager"
 	clusterResourceNamespaceFlag = "--cluster-resource-namespace="
 )
@@ -112,20 +108,6 @@ func EnsureCertManagerIssuerChain(ctx context.Context, c client.Client, namespac
 			"commonName": "simplyblock-operator",
 			"issuerRef":  map[string]any{"kind": "ClusterIssuer", "name": CAIssuerName},
 			"usages":     []any{"digital signature", "key encipherment", "client auth"},
-		}),
-		// The CSI link's serving certificate. A chart install on a cluster
-		// without cert-manager cannot render it until this operator installs
-		// cert-manager, so the operator issues it, with the chart's spec.
-		certManagerObject("Certificate", namespace, csiLinkServiceName, map[string]any{
-			"secretName": csiLinkSecretName,
-			"commonName": csiLinkServiceName,
-			"dnsNames": []any{
-				csiLinkServiceName,
-				csiLinkServiceName + "." + namespace,
-				csiLinkServiceName + "." + namespace + ".svc",
-			},
-			"issuerRef": map[string]any{"kind": "ClusterIssuer", "name": CAIssuerName},
-			"usages":    []any{"digital signature", "key encipherment", "server auth"},
 		}),
 	})
 }
