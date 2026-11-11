@@ -115,24 +115,19 @@ func EnsureCertManagerIssuerChain(ctx context.Context, c client.Client, namespac
 		}),
 		// The CSI link's serving certificate. A chart install on a cluster
 		// without cert-manager cannot render it until this operator installs
-		// cert-manager, so the operator issues it.
+		// cert-manager, so the operator issues it, with the chart's spec.
 		certManagerObject("Certificate", namespace, csiLinkServiceName, map[string]any{
 			"secretName": csiLinkSecretName,
 			"commonName": csiLinkServiceName,
-			"dnsNames":   toAny(utils.ServiceCertificateNames(csiLinkServiceName, namespace)),
-			"issuerRef":  map[string]any{"kind": "ClusterIssuer", "name": CAIssuerName},
-			"usages":     []any{"digital signature", "key encipherment", "server auth"},
+			"dnsNames": []any{
+				csiLinkServiceName,
+				csiLinkServiceName + "." + namespace,
+				csiLinkServiceName + "." + namespace + ".svc",
+			},
+			"issuerRef": map[string]any{"kind": "ClusterIssuer", "name": CAIssuerName},
+			"usages":    []any{"digital signature", "key encipherment", "server auth"},
 		}),
 	})
-}
-
-// toAny converts names to the []any an unstructured object holds.
-func toAny(names []string) []any {
-	out := make([]any, len(names))
-	for i, n := range names {
-		out[i] = n
-	}
-	return out
 }
 
 func apply(ctx context.Context, c client.Client, objs []*unstructured.Unstructured) error {
