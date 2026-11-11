@@ -37,10 +37,13 @@ run "${DIR}/version.txt" kubectl version
 run "${DIR}/api-resources-simplyblock.txt" kubectl api-resources --api-group=storage.simplyblock.io
 
 # Discovery and deployment CRs. Missing kinds just produce an error line.
-for kind in operatorops clusterdeploymentconfig controlplane storagecluster storagenodeset storagenode storagepool; do
-  run "${DIR}/crs/${kind}.txt"  kubectl -n "${NS}" get "${kind}" -o wide
-  run "${DIR}/crs/${kind}.yaml" kubectl -n "${NS}" get "${kind}" -o yaml
-  run "${DIR}/crs/${kind}-describe.txt" kubectl -n "${NS}" describe "${kind}"
+# Fully qualified, so a same-named CRD from another vendor is never picked up.
+for kind in operatorops clusterdeploymentconfigs controlplanes storageclusters storageclusterops \
+    storagenodesets storagenodes storagenodeops storagedevices storagepools simplyblockdrivers tasks; do
+  res="${kind}.storage.simplyblock.io"
+  run "${DIR}/crs/${kind}.txt"  kubectl -n "${NS}" get "${res}" -o wide
+  run "${DIR}/crs/${kind}.yaml" kubectl -n "${NS}" get "${res}" -o yaml
+  run "${DIR}/crs/${kind}-describe.txt" kubectl -n "${NS}" describe "${res}"
 done
 
 # Nodes: labels, taints, and capacity drive what discovery proposes.
