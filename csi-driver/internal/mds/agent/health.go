@@ -1,9 +1,11 @@
 // What the guest agent reports as its health, and how the runner reads it.
 //
-// The pod's readiness follows it, so it answers one question: can this guest
-// assemble an export now. That needs the state disk mounted, since nfsd keeps
-// its client-recovery database there and must not run without it, and nfsd
-// running. The answer is served through gRPC's standard health service on
+// The pod's readiness follows it, so it answers one question: is this guest
+// ready for the call it is next sent. A booted standby is, since it holds
+// nothing until it is promoted. An active guest additionally needs the state
+// volume mounted, since nfsd keeps its client-recovery database there and must
+// not run without it, and nfsd running. A guest in the middle of a promotion
+// is not. The answer is served through gRPC's standard health service on
 // the agent's port, which the runner probes across the pod's bridge.
 
 package agent
@@ -14,6 +16,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/simplyblock/atlas/nfsexport/nfsexportrpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"k8s.io/klog"
@@ -21,6 +24,8 @@ import (
 
 // Health checks the guest.
 type Health struct {
+	// Role is the guest's role. Nil is read as active, the stricter answer.
+	Role func() nfsexportrpc.Role
 	// StateDir is where the state disk is mounted.
 	StateDir string
 	// Mounted reports whether a path is a mount point.
@@ -42,6 +47,13 @@ type Health struct {
 
 // Check returns nil while the guest can serve, and why not otherwise.
 func (h Health) Check() error {
+	switch h.role() {
+	case nfsexportrpc.RoleStandby:
+		return nil
+	case nfsexportrpc.RoleActive:
+	default:
+		return fmt.Errorf("the guest is %s", h.role())
+	}
 	mounted, err := h.Mounted(h.StateDir)
 	if err != nil {
 		return fmt.Errorf("inspecting the state disk at %s: %w", h.StateDir, err)
@@ -90,6 +102,13 @@ func WriteProbe(dir string) func() error {
 		}
 		return f.Close()
 	}
+}
+
+func (h Health) role() nfsexportrpc.Role {
+	if h.Role == nil {
+		return nfsexportrpc.RoleActive
+	}
+	return h.Role()
 }
 
 // Report keeps the health server's overall status current with check, every

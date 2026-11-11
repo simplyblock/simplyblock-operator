@@ -89,6 +89,7 @@ import (
 	volumecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/volume"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/vrgfollow"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
+	"github.com/simplyblock/simplyblock-operator/internal/mdsstate"
 	"github.com/simplyblock/simplyblock-operator/internal/placement"
 	"github.com/simplyblock/simplyblock-operator/internal/switchover"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -642,9 +643,24 @@ func main() {
 		Recorder:          mgr.GetEventRecorder("nfsexport-controller"),
 		OperatorNamespace: operatorNamespace,
 	}
+	// The metadata server's takeover. It needs the link to reach each guest, so
+	// it exists only with the link on; without it the driver coordinator still
+	// runs, with no switchover hook, and holds a scale-down.
+	var mdsFailover *controller.MDSFailoverReconciler
+	mdsHosts := &controller.MDSHostGate{}
 	if csiPeers != nil {
 		nfsExportReconciler.Assembler = controller.NewLinkAssembler(csiPeers)
 		nfsExportReconciler.Flows = csilink.NewFlows(csilink.RegistryNodePeers(csiPeers))
+		mdsGuests := csilink.NewMDSGuests(csiPeers)
+		nfsExportReconciler.Serving = controller.NewMDSServingGate(mgr.GetClient(), operatorNamespace, mdsGuests)
+		mdsFailover = &controller.MDSFailoverReconciler{
+			Client:            mgr.GetClient(),
+			Recorder:          mgr.GetEventRecorder("mds-failover"),
+			Guests:            mdsGuests,
+			Exports:           nfsExportReconciler,
+			OperatorNamespace: operatorNamespace,
+			Hosts:             mdsHosts,
+		}
 	}
 	if err := nfsExportReconciler.SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NFSExport")
@@ -679,6 +695,12 @@ func main() {
 	if err := mgr.Add(&objectstorecontrollers.Collector{Client: mgr.GetClient()}); err != nil {
 		setupLog.Error(err, "unable to add the S3Bucket/ObjectStore collector")
 		os.Exit(1)
+	}
+	if mdsFailover != nil {
+		if err := mdsFailover.SetupWithManager(ctrlMgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "MDSFailover")
+			os.Exit(1)
+		}
 	}
 	if err := (&nodecontroller.StorageDeviceReconciler{
 		Client:   mgr.GetClient(),
@@ -1219,12 +1241,24 @@ func main() {
 	if siteLinkEnabled {
 		driverSiteLink = &driver.SiteLinkConfig{Address: siteLinkAddr, AgentNamespace: siteLinkNamespace}
 	}
+	// The metadata server's state volume and allowed hosts go through the same
+	// control-plane client the data-protection band writes through, since the
+	// API serves every storage cluster and the cluster is part of each call.
+	mdsStateCoordinator := &mdsstate.Coordinator{
+		Client: mgr.GetClient(),
+		APIFor: func(context.Context, string) (mdsstate.VolumeAPI, error) { return backupAPI, nil },
+	}
+	if mdsFailover != nil {
+		mdsStateCoordinator.Switchover = mdsFailover
+	}
 	if err := (&driver.SimplyblockDriverReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		Recorder:  mgr.GetEventRecorder("simplyblockdriver-controller"),
 		Snapshots: &driver.DiscoveredSnapshotAPI{Discovery: operatorOpsDiscovery},
 		SiteLink:  driverSiteLink,
+		MDSState:  mdsStateCoordinator,
+		OnHosts:   mdsHosts.Update,
 	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SimplyblockDriver")
 		os.Exit(1)
