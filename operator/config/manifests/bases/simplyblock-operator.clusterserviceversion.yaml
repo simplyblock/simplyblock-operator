@@ -852,7 +852,7 @@ spec:
   links:
   - name: Simplyblock Operator
     url: https://github.com/simplyblock/simplyblock-operator
-  - name: Simplyblock Documentation
+  - name: Documentation
     url: https://docs.simplyblock.io
   maintainers:
   - email: info@simplyblock.io
