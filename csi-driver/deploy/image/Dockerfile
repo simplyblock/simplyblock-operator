@@ -42,7 +42,9 @@ RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
         dnf install -y https://yum.oracle.com/repo/OracleLinux/OL10/baseos/latest/x86_64/getPackage/oraclelinux-release-el10-1.0-17.el10.x86_64.rpm ; \
     fi
 
-RUN dnf update -y  --nogpgcheck
+# Changes daily, so the update layer below is rebuilt instead of served from the build cache.
+ARG CACHE_KEY
+RUN echo "package cache key: ${CACHE_KEY}" && dnf update -y --nogpgcheck
 
 # lvm2 is what the node plugin's LVM layers shell out to: pvcreate, vgcreate,
 # lvcreate and the rest run in this container rather than through nsenter, so a

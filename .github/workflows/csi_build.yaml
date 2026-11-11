@@ -72,6 +72,10 @@ jobs:
           type=ref,event=tag
           type=sha,prefix=${{ github.ref_name }}-,format=short,enable=${{ github.event_name == 'push' }}
 
+    # Changes daily so the OS update layer is rebuilt, not served from the cache.
+    - name: Set package cache key
+      run: echo "CACHE_KEY=$(date -u +%F)" >> "$GITHUB_ENV"
+
     - name: Build and push
       uses: docker/build-push-action@v6
       with:
@@ -80,5 +84,7 @@ jobs:
         platforms: linux/amd64,linux/arm64
         push: true
         tags: ${{ steps.meta.outputs.tags }}
+        build-args: |
+          CACHE_KEY=${{ env.CACHE_KEY }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
