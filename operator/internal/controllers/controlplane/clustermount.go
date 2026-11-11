@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -35,6 +36,10 @@ func (r *ControlPlaneReconciler) applyManagementAPI(ctx context.Context, cp *sim
 	return applyAll(ctx, r.Client, cp, r.Scheme, objects)
 }
 
+// legacyClusterFileHashAnnotation is the stamp earlier releases rolled the
+// Deployments with.
+const legacyClusterFileHashAnnotation = "storage.simplyblock.io/cluster-file-hash"
+
 // jsonPatchOp is one RFC 6902 operation.
 type jsonPatchOp struct {
 	Op    string `json:"op"`
@@ -60,6 +65,12 @@ func (r *ControlPlaneReconciler) replaceSubPathClusterFileMounts(ctx context.Con
 	ops = append(ops, clusterFileMountOps("initContainers", spec.InitContainers)...)
 	if len(ops) == 0 {
 		return nil
+	}
+	// The stamp earlier releases put on the template goes in the same patch, so
+	// the apply after it changes nothing and the Deployment rolls once.
+	if _, stamped := live.Spec.Template.Annotations[legacyClusterFileHashAnnotation]; stamped {
+		ops = append(ops, jsonPatchOp{Op: "remove", Path: "/spec/template/metadata/annotations/" +
+			strings.ReplaceAll(legacyClusterFileHashAnnotation, "/", "~1")})
 	}
 	patch, err := json.Marshal(ops)
 	if err != nil {

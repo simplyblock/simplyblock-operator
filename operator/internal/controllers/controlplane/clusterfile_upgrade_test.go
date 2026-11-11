@@ -19,6 +19,10 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
+// stampAnnotation is the literal earlier releases stamped, pinned here rather
+// than through the constant that holds it.
+const stampAnnotation = "storage.simplyblock.io/cluster-file-hash"
+
 // legacyClusterFileMounts is the web API Deployment with every cluster-file mount
 // rewritten to the subPath
 // mount the chart and earlier operators wrote.
@@ -56,8 +60,14 @@ func TestAHelmCoOwnedSubPathMountIsReplacedByTheDirectoryMount(t *testing.T) {
 	if err := apiClient.Create(ctx, legacy.DeepCopy(), client.FieldOwner("helm")); err != nil {
 		t.Fatalf("create the chart's Deployment: %v", err)
 	}
+	legacy.Spec.Template.Annotations[stampAnnotation] = "abc"
 	if err := applyOne(ctx, apiClient, cp, scheme.Scheme, legacy); err != nil {
 		t.Fatalf("adopt it as an earlier operator did: %v", err)
+	}
+
+	adopted := &appsv1.Deployment{}
+	if err := apiClient.Get(ctx, client.ObjectKeyFromObject(legacy), adopted); err != nil {
+		t.Fatalf("read the adopted Deployment: %v", err)
 	}
 
 	r := &ControlPlaneReconciler{Client: apiClient, Scheme: scheme.Scheme}
@@ -68,6 +78,13 @@ func TestAHelmCoOwnedSubPathMountIsReplacedByTheDirectoryMount(t *testing.T) {
 	d := &appsv1.Deployment{}
 	if err := apiClient.Get(ctx, client.ObjectKeyFromObject(legacy), d); err != nil {
 		t.Fatalf("read back: %v", err)
+	}
+	if _, stamped := d.Spec.Template.Annotations[stampAnnotation]; stamped {
+		t.Errorf("the template still carries %s", stampAnnotation)
+	}
+	if d.Generation != adopted.Generation+1 {
+		t.Errorf("generation went from %d to %d, want one template change so the pods roll once",
+			adopted.Generation, d.Generation)
 	}
 	for _, c := range d.Spec.Template.Spec.Containers {
 		var mounts []corev1.VolumeMount
