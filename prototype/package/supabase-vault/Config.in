@@ -1,0 +1,7 @@
+config BR2_PACKAGE_SUPABASE_VAULT
+	bool "supabase-vault"
+	depends on BR2_PACKAGE_POSTGRESQL
+	select BR2_PACKAGE_LIBSODIUM
+	select BR2_PACKAGE_LIBSODIUM_FULL
+	help
+	  PostgreSQL extension for storing encrypted secrets in the Vault.

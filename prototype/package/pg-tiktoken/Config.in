@@ -1,0 +1,8 @@
+config BR2_PACKAGE_PG_TIKTOKEN
+	bool "pg-tiktoken"
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	depends on BR2_PACKAGE_POSTGRESQL
+	select HOST_CARGO_PGRX
+	select BR2_PACKAGE_HOST_RUSTC
+	help
+	  Postgres extension that does input tokenization using OpenAI's tiktoken.

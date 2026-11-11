@@ -1,0 +1,7 @@
+config BR2_PACKAGE_TIMESCALEDB_TUNE
+	bool "timescaledb-tune"
+	depends on BR2_PACKAGE_HOST_GO_TARGET_ARCH_SUPPORTS
+	select BR2_PACKAGE_TIMESCALEDB
+	help
+	  timescaledb-tune automatically tunes PostgreSQL configuration
+	  based on system resources.

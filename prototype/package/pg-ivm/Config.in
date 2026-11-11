@@ -1,0 +1,5 @@
+config BR2_PACKAGE_PG_IVM
+	bool "pg-ivm"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  Incremental materialized view extension for PostgreSQL.

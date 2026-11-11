@@ -1,0 +1,34 @@
+[Unit]
+Description=PostgreSQL database server
+After=network.target
+
+[Service]
+Type=notify
+
+# start timeout disabled because initdb may run a little
+# longer (eg. 5 minutes on RaspberryPi)
+TimeoutStartSec=0
+
+User=postgres
+Group=postgres
+
+RuntimeDirectory=postgresql
+RuntimeDirectoryMode=0755
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=postgres
+
+Environment="PGDATA=/var/lib/postgresql/data"
+EnvironmentFile=-/run/neonvm-env/env
+
+ExecStartPre=/bin/sh -c "if [ ! -s ${PGDATA}/PG_VERSION ]; then pg_ctl initdb --options=\"--username=vela --waldir=/var/lib/postgresql/wal/pg_wal\"; fi"
+ExecStartPre=/usr/local/bin/postgres-pitr-setup.sh
+ExecStart=/bin/sh -c "exec postgres -k %t/postgresql -c config_file=/vela/config/postgresql.conf -c hba_file=/vela/config/pg_hba.conf $(cat %t/postgresql/pitr-args)"
+ExecReload=/usr/bin/kill -HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGINT
+TimeoutSec=0
+
+[Install]
+WantedBy=multi-user.target

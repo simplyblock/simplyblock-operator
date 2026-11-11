@@ -1,0 +1,6 @@
+config BR2_PACKAGE_PG_NET
+	bool "pg-net"
+	depends on BR2_PACKAGE_POSTGRESQL
+	select BR2_PACKAGE_LIBCURL
+	help
+	  A PostgreSQL extension that enables asynchronous (non-blocking) HTTP/HTTPS requests with SQL.

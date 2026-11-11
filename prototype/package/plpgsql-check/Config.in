@@ -1,0 +1,5 @@
+config BR2_PACKAGE_PLPGSQL_CHECK
+	bool "plpgsql-check"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  PLPGSQL check extension for PostgreSQL.

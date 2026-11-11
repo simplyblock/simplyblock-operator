@@ -1,0 +1,23 @@
+--- a/CMakeLists.txt	2026-01-07 13:27:14
++++ b/CMakeLists.txt	2026-01-07 13:27:48
+@@ -8,17 +8,17 @@
+ include(GenerateScripts)
+ include(CMakeDependentOption)
+ 
+-option(APACHE_ONLY "only compile apache code" off)
++option(APACHE_ONLY "only compile apache code" ON)
+ # This requires all tests to run. This defaults to OFF but can be enabled to
+ # ensure that no tests are skipped because of missing tools.
+ option(REQUIRE_ALL_TESTS "Require all tests to run." OFF)
+ option(USE_OPENSSL "Enable use of OpenSSL if available" ON)
+ option(SEND_TELEMETRY_DEFAULT "The default value for whether to send telemetry"
+-       ON)
++       OFF)
+ option(
+   USE_TELEMETRY
+   "Include telemetry functionality in the build. Disabling will exclude all telemetry code from the build."
+-  ON)
++  OFF)
+ 
+ option(REGRESS_CHECKS "PostgreSQL regress checks through installcheck" ON)
+ option(

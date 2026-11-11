@@ -1,0 +1,123 @@
+#!/bin/bash
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  echo "Script cannot run on its own, please use the builder script to build the VelaOS"
+  exit 1
+fi
+
+# Check if we can enable kvm
+# Check host networking tap/vmnet-bridged
+if [ "${BUILDER_OS}" == "OSX" ]; then
+  network="vmnet-bridged,id=default,ifname=en0"
+  accelerator=""
+elif [ "${BUILDER_OS}" == "Linux" ]; then
+  network="tap,id=default,ifname=tap-def,queues=4,script=no,downscript=no,vhost=on"
+  accelerator="--enable-kvm"
+else
+  echo "Qemu is not supported on your operating system."
+  exit 1
+fi
+
+# Target architecture and guest contract of the image under ./images, mirrors
+# the runner's QEMU invocation: ./builder qemu [amd64|arm64] [neonvm|pnfs]
+#   neonvm  Vela image, NeonVM runner contract (default)
+#   pnfs    pNFS MDS guest (prototype/boards/pnfs-common/README.md): read-only
+#           root, state disk, static address, NFS forwarded to localhost:2049
+target_arch="${1:-amd64}"
+contract="${2:-neonvm}"
+host_arch="$(uname -m)"
+
+case "${target_arch}" in
+  amd64 )
+    qemu_bin="qemu-system-x86_64"
+    machine_args=(-machine q35)
+    memory_args=(-m "size=1073741824b,slots=255,maxmem=274877906944b")
+    arch_cmdline=""
+    [ "${host_arch}" != "x86_64" ] && accelerator=""
+  ;;
+
+  arm64 )
+    qemu_bin="qemu-system-aarch64"
+    # neonvm-runner boots arm64 through UEFI firmware (for ACPI) and still
+    # passes the kernel directly; the firmware loads it via its EFI stub.
+    if [ -z "${QEMU_EFI}" ]; then
+      for candidate in \
+        "$(brew --prefix qemu 2>/dev/null)/share/qemu/edk2-aarch64-code.fd" \
+        /usr/share/qemu/edk2-aarch64-code.fd \
+        /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
+        /usr/share/AAVMF/AAVMF_CODE.fd; do
+        [ -f "${candidate}" ] && QEMU_EFI="${candidate}" && break
+      done
+    fi
+    if [ ! -f "${QEMU_EFI}" ]; then
+      echo "No aarch64 UEFI firmware found, set QEMU_EFI to a QEMU_EFI.fd / edk2-aarch64-code.fd."
+      exit 1
+    fi
+    machine_args=(-machine virt -bios "${QEMU_EFI}")
+    memory_args=(-m 1G)
+    arch_cmdline="acpi=on"
+    if [ "${host_arch}" != "arm64" ] && [ "${host_arch}" != "aarch64" ]; then
+      accelerator=""
+    elif [ "${BUILDER_OS}" == "OSX" ]; then
+      accelerator="-accel hvf"
+    fi
+  ;;
+
+  * )
+    echo "Unsupported target architecture '${target_arch}', expected amd64 or arm64."
+    exit 1
+  ;;
+esac
+
+root_drive="id=rootdisk,file=./images/disk.qcow2,if=virtio,media=disk,index=0,cache.writeback=on,cache.direct=on,cache.no-flush=on"
+kernel_cmdline="panic=-1 init=/neonvm/bin/init loglevel=6 root=/dev/vda rw memhp_default_state=online memory_hotplug.online_policy=auto-movable memory_hotplug.auto_movable_ratio=401 hostname=vm-example-92twv console=hvc0 ${arch_cmdline}"
+extra_args=()
+net_device="virtio-net-pci,mq=on,vectors=10,netdev=default,mac=26:a6:40:94:6f:40"
+
+case "${contract}" in
+  neonvm )
+  ;;
+
+  pnfs )
+    # QEMU user networking: the guest is 10.0.2.15 behind NAT, can reach the
+    # storage cluster, and NFS is reachable on the host at localhost:2049.
+    network="user,id=default,hostfwd=tcp::2049-:2049"
+    net_device="virtio-net-pci,netdev=default,mac=26:a6:40:94:6f:40"
+    root_drive="id=rootdisk,file=./images/disk.qcow2,if=virtio,media=disk,index=0,readonly=on"
+    if [ ! -f ./images/state.qcow2 ]; then
+      qemu-img create -f qcow2 ./images/state.qcow2 1G
+    fi
+    extra_args=(
+      -drive "id=state,file=./images/state.qcow2,if=none"
+      -device "virtio-blk-pci,drive=state,serial=pnfs-state"
+    )
+    kernel_cmdline="root=/dev/vda ro console=hvc0 panic=-1 ip=10.0.2.15::10.0.2.2:255.255.255.0:pnfs-mds-0:eth0:off ${arch_cmdline}"
+    memory_args=(-m 1G)
+  ;;
+
+  * )
+    echo "Unsupported guest contract '${contract}', expected neonvm or pnfs."
+    exit 1
+  ;;
+esac
+
+${qemu_bin} "${machine_args[@]}" -nographic -no-reboot -nodefaults -only-migratable \
+${accelerator} \
+-audiodev "none,id=noaudio" -serial pty -msg "timestamp=on" \
+-monitor unix:/tmp/qemu-monitor-socket,server,nowait \
+-qmp "tcp:0.0.0.0:20183,server,wait=off" \
+-qmp "tcp:0.0.0.0:20184,server,wait=off" \
+-qmp "unix:/tmp/qmp-sigterm.sock,server,wait=off" \
+-device "virtio-serial" \
+-chardev "socket,path=/tmp/log.sock,server=on,wait=off,id=log" \
+-device "virtserialport,chardev=log,name=tech.neon.log.0" \
+-drive "${root_drive}" \
+"${extra_args[@]}" \
+-chardev "stdio,id=virtio-console" \
+-device "virtconsole,chardev=virtio-console" -cpu max \
+-smp "cpus=1,maxcpus=1,sockets=1,cores=1,threads=1" "${memory_args[@]}" \
+-netdev "${network}" \
+-device "${net_device}" \
+-kernel "./images/vmlinuz" \
+-append "${kernel_cmdline}"
+#-incoming "file:./vmstate-start.bin"

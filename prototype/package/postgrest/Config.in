@@ -1,0 +1,5 @@
+config BR2_PACKAGE_POSTGREST
+	bool "postgrest"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  PostgREST service for PostgreSQL.

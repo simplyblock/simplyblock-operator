@@ -1,0 +1,95 @@
+#!/bin/bash
+
+if [ ${IS_WSL} ]; then
+  echo "Builds with WSL 1 in Windows are not supported..."
+  exit 1
+fi
+
+function hideBaseDirectories() {
+  path="$1"
+  path="${path/$BASEDIR/basedir:}"
+  path="${path/$HOME/home:}"
+  echo "$path"
+}
+
+INTERACTIVE=""
+if [ ! ${AUTOBUILD_MODE} ] && [ -n "${TERM}" ]; then
+    echo "Running in interactive mode"
+    INTERACTIVE="-it"
+else
+    echo "Running in build mode"
+    INTERACTIVE="-i"
+fi
+
+LOCAL_ENV=""
+if [ -f "${ENVIRONMENT_FILE}" ]; then
+    echo "Using local environment: ${ENVIRONMENT_FILE}"
+    LOCAL_ENV="--env-file ${ENVIRONMENT_FILE}"
+fi
+
+args=( "$@" )
+case "${args[0]}" in
+    shell|setup|config|saveconfig|clean|purge|rebuild|build|download|dependencies|buildtimegraph|buildsize|env|makesdk|licenses|ccache )
+        ${DOCKER} stats --no-stream > /dev/null 2>&1
+        if [ "$?" == "1" ]; then
+            echo "Docker daemon is not available, not running?"
+            exit 1
+        fi
+
+        ensureContainerImageExists
+        source scripts/version
+
+        if [ ! -d "${BASEDIR}/images/" ]; then
+            mkdir ${BASEDIR}/images
+        fi
+
+        echo
+        echo "Loading container environment..."
+        echo "Mounting volumes:"
+        echo "  - ${volDevkit} => ${PATH_DEVKIT}"
+        echo "  - basedir:/scripts => ${PATH_SCRIPTS}"
+        echo "  - basedir:/prototype => ${PATH_PROTOTYPE}"
+        echo "  - basedir:/buildroot => ${PATH_BUILDROOT}"
+        echo "  - $(hideBaseDirectories "${volDownloadCache}") => ${PATH_DL_CACHE}"
+        echo "  - ${volOutput} => ${PATH_OUTPUT}"
+        echo "  - basedir:/images => ${PATH_IMAGES}"
+
+        if [ ${AUTOBUILD_MODE} ] || [ "${DISABLE_CCACHE}" == "" ]; then
+            echo "  - home:/ccache => ${PATH_CCACHE}"
+        fi
+
+        echo ""
+        echo "System version: ${VELAOS_VERSION}"
+        echo "Build version: ${VELAOS_BUILD}"
+        echo ""
+        echo "Booting Docker container..."
+
+        unset SED
+        unset AWK
+        unset GIT
+
+        ${DOCKER} run --rm ${dockerVolumes} \
+            --name=${containerName}-task \
+            --privileged \
+            -w /opt/builder \
+            ${LOCAL_ENV} \
+            --env GITHUB_TOKEN=$(cat ~/.vela-github-private-token) \
+            --env VELAOS_VERSION="${VELAOS_VERSION}" \
+            --env VELAOS_BUILD="${VELAOS_BUILD}" \
+            --env VELAOS_VERSION_MAJOR="${VELAOS_VERSION_MAJOR}" \
+            --env VELAOS_VERSION_MINOR="${VELAOS_VERSION_MINOR}" \
+            --env VELAOS_VERSION_BUILD="${VELAOS_VERSION_BUILD}" \
+            --env VELAOS_BUILD_DATE="${VELAOS_BUILD_DATE}" \
+            --env VELAOS_BUILD_REF="${VELAOS_BUILD_REF}" \
+            --env VELAOS_BUILD_DEV="${VELAOS_BUILD_DEV}" \
+            --env BR2_JLEVEL=${BR2_JLEVEL} \
+            --env BR2_USE_CCACHE=${BR2_USE_CCACHE} \
+            --env BR2_CCACHE_DIR="${BR2_CCACHE_DIR}" \
+            --env CCACHE_OPTIONS="${CCACHE_OPTIONS}" \
+            --env HOST_OS=${BUILDER_OS} \
+            --env HOST_ARCH=${BUILDER_ARCH} \
+            ${INTERACTIVE} \
+            ${containerImageName} \
+            scripts/container $@
+    ;;
+esac

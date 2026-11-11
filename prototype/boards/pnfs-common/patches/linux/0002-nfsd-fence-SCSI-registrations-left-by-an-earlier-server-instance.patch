@@ -1,0 +1,144 @@
+From 559db3b3a34dec9afecb5858363d0f7562ac6eda Mon Sep 17 00:00:00 2001
+From: "Christoph Engelbert (noctarius)" <chris@simplyblock.io>
+Date: Thu, 8 Oct 2026 15:48:03 +0200
+Subject: [PATCH] nfsd: fence SCSI registrations left by an earlier server
+ instance
+
+A pNFS SCSI client registers the reservation key it is given on the
+first GETDEVICEINFO, and the key carries the server's boot time. After
+a server restart every client is given a new key, but on NVMe its old
+registration is still on the namespace: the client's pr_register(key,
+0) on releasing the device maps to a Replace with a zero key rather than
+an Unregister, and a host that is still registered cannot Register
+again. The new registration fails, the client marks the device
+unavailable without a message, and its I/O goes through the server.
+
+When the server registers and reserves the device for a GETDEVICEINFO,
+read the registered keys and preempt every one that is neither the
+server's own nor from this boot. Those clients have no state on this
+server, so fencing them is what the restart means; it unregisters their
+hosts, and each can register its new key.
+
+Preempt and Abort is optional in NVMe, and SPDK's target answers it
+with Invalid Field, which fence_client ignored: a client whose recall
+timed out stayed registered. Both now go through one helper that falls
+back to a plain Preempt, which removes the registration all the same,
+and fence_client says when fencing failed.
+---
+ fs/nfsd/blocklayout.c | 85 +++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 82 insertions(+), 3 deletions(-)
+
+diff --git a/fs/nfsd/blocklayout.c b/fs/nfsd/blocklayout.c
+index e9512c3..cea2701 100644
+--- a/fs/nfsd/blocklayout.c
++++ b/fs/nfsd/blocklayout.c
+@@ -227,6 +227,81 @@ static u64 nfsd4_scsi_pr_key(struct nfs4_client *clp)
+ 	return ((u64)clp->cl_clientid.cl_boot << 32) | clp->cl_clientid.cl_id;
+ }
+ 
++/*
++ * Remove a client's registration, aborting its outstanding commands where the
++ * target supports it. Preempt and Abort is optional in NVMe, and a target
++ * without it (SPDK's) answers Invalid Field, which would leave the client
++ * registered and able to write. A plain Preempt removes the registration all
++ * the same; only commands already in flight are not aborted.
++ */
++static int
++nfsd4_scsi_preempt(struct block_device *bdev, const struct pr_ops *ops, u64 key)
++{
++	int ret;
++
++	ret = ops->pr_preempt(bdev, NFSD_MDS_PR_KEY, key,
++			PR_EXCLUSIVE_ACCESS_REG_ONLY, true);
++	if (ret == -EINVAL || ret == -EOPNOTSUPP)
++		ret = ops->pr_preempt(bdev, NFSD_MDS_PR_KEY, key,
++				PR_EXCLUSIVE_ACCESS_REG_ONLY, false);
++	return ret;
++}
++
++/*
++ * Fence the registrations clients of an earlier server instance left on the
++ * device.
++ *
++ * A client registers the key it is given on the first GETDEVICEINFO, and the
++ * key carries the server's boot time. After a restart every client is given a
++ * new key, but on NVMe its old registration is still there: the client's
++ * pr_register(old_key, 0) on releasing the device is a Replace with a zero key
++ * rather than an Unregister, and a host that is still registered cannot
++ * Register again. Its new registration fails, the client marks the device
++ * unavailable, and every byte it moves goes through the server.
++ *
++ * Keys from an earlier boot belong to clients this server has no state for,
++ * so their layouts are gone and fencing them is what a restart means anyway.
++ * Preempting them unregisters those hosts, and each registers its new key.
++ */
++static void
++nfsd4_scsi_fence_stale_keys(struct block_device *bdev,
++		const struct pr_ops *ops, u32 boot)
++{
++	struct pr_keys *keys = NULL;
++	u32 size = 16, i;
++	int ret;
++
++	if (!ops->pr_read_keys || !ops->pr_preempt)
++		return;
++
++	for (;;) {
++		kfree(keys);
++		keys = kzalloc(struct_size(keys, keys, size), GFP_KERNEL);
++		if (!keys)
++			return;
++		keys->num_keys = size;
++		ret = ops->pr_read_keys(bdev, keys);
++		if (ret)
++			goto out;
++		if (keys->num_keys <= size)
++			break;
++		size = keys->num_keys;
++	}
++
++	for (i = 0; i < keys->num_keys; i++) {
++		u64 key = keys->keys[i];
++
++		if (!key || key == NFSD_MDS_PR_KEY || (u32)(key >> 32) == boot)
++			continue;
++		ret = nfsd4_scsi_preempt(bdev, ops, key);
++		if (ret)
++			pr_warn("pNFS: failed to fence stale key 0x%llx on %pg: %d\n",
++				key, bdev, ret);
++	}
++out:
++	kfree(keys);
++}
++
+ static const u8 designator_types[] = {
+ 	PS_DESIGNATOR_EUI64,
+ 	PS_DESIGNATOR_NAA,
+@@ -300,6 +375,7 @@ nfsd4_block_get_device_info_scsi(struct super_block *sb,
+ 		goto out_free_dev;
+ 	}
+ 
++	nfsd4_scsi_fence_stale_keys(sb->s_bdev, ops, clp->cl_clientid.cl_boot);
+ 	return 0;
+ 
+ out_free_dev:
+@@ -342,10 +418,13 @@ nfsd4_scsi_fence_client(struct nfs4_layout_stateid *ls, struct nfsd_file *file)
+ {
+ 	struct nfs4_client *clp = ls->ls_stid.sc_client;
+ 	struct block_device *bdev = file->nf_file->f_path.mnt->mnt_sb->s_bdev;
++	int ret;
+ 
+-	bdev->bd_disk->fops->pr_ops->pr_preempt(bdev, NFSD_MDS_PR_KEY,
+-			nfsd4_scsi_pr_key(clp),
+-			PR_EXCLUSIVE_ACCESS_REG_ONLY, true);
++	ret = nfsd4_scsi_preempt(bdev, bdev->bd_disk->fops->pr_ops,
++			nfsd4_scsi_pr_key(clp));
++	if (ret)
++		pr_warn("pNFS: failed to fence client key 0x%llx on %pg: %d\n",
++			nfsd4_scsi_pr_key(clp), bdev, ret);
+ }
+ 
+ const struct nfsd4_layout_ops scsi_layout_ops = {
+-- 
+2.54.0 (Apple Git-157)
+

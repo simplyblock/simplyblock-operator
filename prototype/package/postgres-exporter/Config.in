@@ -1,0 +1,6 @@
+config BR2_PACKAGE_POSTGRES_EXPORTER
+	bool "postgres-exporter"
+	depends on BR2_PACKAGE_POSTGRESQL
+    depends on BR2_PACKAGE_HOST_GO_TARGET_ARCH_SUPPORTS
+	help
+	  Postgres Exporter for exporting PostgreSQL metrics to Prometheus.

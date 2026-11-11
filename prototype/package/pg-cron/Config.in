@@ -1,0 +1,5 @@
+config BR2_PACKAGE_PG_CRON
+	bool "pg-cron"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  Simple cron-based job scheduler extension for PostgreSQL.

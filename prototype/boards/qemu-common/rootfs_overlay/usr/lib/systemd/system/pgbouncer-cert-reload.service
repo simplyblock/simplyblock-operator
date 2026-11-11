@@ -1,0 +1,7 @@
+[Unit]
+Description=Reload pgbouncer on certificate change
+
+[Service]
+Type=oneshot
+# try-reload-or-restart to safely handle non-running pgbouncer
+ExecStart=/bin/systemctl try-reload-or-restart pgbouncer.service

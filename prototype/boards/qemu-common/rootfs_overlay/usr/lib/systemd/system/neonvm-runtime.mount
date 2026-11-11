@@ -1,0 +1,14 @@
+[Unit]
+Description=Mount NeonVM Runtime ISO
+DefaultDependencies=no
+After=systemd-udev-settle.service
+Before=local-fs-pre.target
+
+[Mount]
+What=/dev/vdb
+Where=/neonvm/runtime
+Type=iso9660
+Options=ro,mode=0644
+
+[Install]
+WantedBy=local-fs-pre.target

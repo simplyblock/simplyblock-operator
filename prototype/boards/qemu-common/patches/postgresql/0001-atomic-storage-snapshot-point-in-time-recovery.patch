@@ -1,0 +1,368 @@
+diff --git a/src/backend/access/transam/xlog.c b/src/backend/access/transam/xlog.c
+index 596d2ca5836..a9dcd0049ae 100644
+--- a/src/backend/access/transam/xlog.c
++++ b/src/backend/access/transam/xlog.c
+@@ -5541,6 +5541,14 @@ StartupXLOG(void)
+ 							 " and you might need to choose an earlier recovery target.")));
+ 			break;
+ 
++		case DB_IN_PITR_RECOVERY:
++			ereport(LOG,
++					(errmsg("database system was interrupted while in PITR recovery at log time %s",
++							str_time(ControlFile->checkPointCopy.time)),
++					 errhint("If this has occurred more than once some data might be corrupted"
++							 " and you might need to choose an earlier recovery target.")));
++			break;
++
+ 		case DB_IN_PRODUCTION:
+ 			ereport(LOG,
+ 					(errmsg("database system was interrupted; last known up at %s",
+@@ -5735,6 +5743,8 @@ StartupXLOG(void)
+ 		SpinLockAcquire(&XLogCtl->info_lck);
+ 		if (InArchiveRecovery)
+ 			XLogCtl->SharedRecoveryState = RECOVERY_STATE_ARCHIVE;
++		else if (InPitrRecovery)
++			XLogCtl->SharedRecoveryState = RECOVERY_STATE_PITR;
+ 		else
+ 			XLogCtl->SharedRecoveryState = RECOVERY_STATE_CRASH;
+ 		SpinLockRelease(&XLogCtl->info_lck);
+@@ -5786,7 +5796,7 @@ StartupXLOG(void)
+ 		 * startup process to think that there are still invalid page
+ 		 * references when checking for data consistency.
+ 		 */
+-		if (InArchiveRecovery)
++		if (InArchiveRecovery || InPitrRecovery)
+ 		{
+ 			LocalMinRecoveryPoint = ControlFile->minRecoveryPoint;
+ 			LocalMinRecoveryPointTLI = ControlFile->minRecoveryPointTLI;
+@@ -5985,7 +5995,7 @@ StartupXLOG(void)
+ 	 * In a normal crash recovery, we can just extend the timeline we were in.
+ 	 */
+ 	newTLI = endOfRecoveryInfo->lastRecTLI;
+-	if (ArchiveRecoveryRequested)
++	if (ArchiveRecoveryRequested || PitrRecoveryRequested)
+ 	{
+ 		newTLI = findNewestTimeLine(recoveryTargetTLI) + 1;
+ 		ereport(LOG,
+@@ -6022,7 +6032,8 @@ StartupXLOG(void)
+ 							 EndOfLog, endOfRecoveryInfo->recoveryStopReason);
+ 
+ 		ereport(LOG,
+-				(errmsg("archive recovery complete")));
++				(errmsg("%s recovery complete",
++					PitrRecoveryRequested ? "point-in-time" : "archive")));
+ 	}
+ 
+ 	/* Save the selected TimeLineID in shared memory, too */
+@@ -7773,7 +7784,7 @@ CreateRestartPoint(int flags)
+ 		 * earlier than this anyway, because redo will begin just after the
+ 		 * checkpoint record.
+ 		 */
+-		if (ControlFile->state == DB_IN_ARCHIVE_RECOVERY)
++		if (ControlFile->state == DB_IN_ARCHIVE_RECOVERY || ControlFile->state == DB_IN_PITR_RECOVERY)
+ 		{
+ 			if (ControlFile->minRecoveryPoint < lastCheckPointEndPtr)
+ 			{
+diff --git a/src/backend/access/transam/xlogrecovery.c b/src/backend/access/transam/xlogrecovery.c
+index a8a9634765c..f0f96747690 100644
+--- a/src/backend/access/transam/xlogrecovery.c
++++ b/src/backend/access/transam/xlogrecovery.c
+@@ -93,6 +93,7 @@ TimestampTz recoveryTargetTime;
+ const char *recoveryTargetName;
+ XLogRecPtr	recoveryTargetLSN;
+ int			recovery_min_apply_delay = 0;
++char	   *snapshot_pitr_target_time_string;
+ 
+ /* options formerly taken from recovery.conf for XLOG streaming */
+ char	   *PrimaryConnInfo = NULL;
+@@ -137,7 +138,9 @@ static TimeLineID curFileTLI;
+  * WAL in pg_wal.
+  */
+ bool		ArchiveRecoveryRequested = false;
++bool		PitrRecoveryRequested = false;
+ bool		InArchiveRecovery = false;
++bool		InPitrRecovery = false;
+ 
+ /*
+  * When StandbyModeRequested is set, standby mode was requested, i.e.
+@@ -395,6 +398,7 @@ static void ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record, Time
+ static void EnableStandbyMode(void);
+ static void readRecoverySignalFile(void);
+ static void validateRecoveryParameters(void);
++static void validateSnapshotPitrParameters(void);
+ static bool read_backup_label(XLogRecPtr *checkPointLoc,
+ 							  TimeLineID *backupLabelTLI,
+ 							  bool *backupEndRequired, bool *backupFromStandby);
+@@ -546,12 +550,13 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
+ 	 */
+ 	readRecoverySignalFile();
+ 	validateRecoveryParameters();
++	validateSnapshotPitrParameters();
+ 
+ 	/*
+ 	 * Take ownership of the wakeup latch if we're going to sleep during
+ 	 * recovery, if required.
+ 	 */
+-	if (ArchiveRecoveryRequested)
++	if (ArchiveRecoveryRequested || PitrRecoveryRequested)
+ 		OwnLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
+ 
+ 	/*
+@@ -767,6 +772,11 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
+ 				EnableStandbyMode();
+ 		}
+ 
++		if (PitrRecoveryRequested)
++		{
++			InPitrRecovery = true;
++		}
++
+ 		/*
+ 		 * For the same reason as when starting up with backup_label present,
+ 		 * emit a log message when we continue initializing from a base
+@@ -835,6 +845,14 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
+ 					(errmsg("starting archive recovery")));
+ 	}
+ 
++	if (PitrRecoveryRequested)
++	{
++		if (recoveryTarget == RECOVERY_TARGET_TIME)
++			ereport(LOG,
++					(errmsg("starting point-in-time recovery to %s",
++							timestamptz_to_str(recoveryTargetTime))));
++	}
++
+ 	/*
+ 	 * If the location of the checkpoint record is not on the expected
+ 	 * timeline in the history of the requested timeline, we cannot proceed:
+@@ -925,6 +943,10 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
+ 		/* force recovery due to presence of recovery signal file */
+ 		InRecovery = true;
+ 	}
++	else if (PitrRecoveryRequested)
++	{
++		InRecovery = true;
++	}
+ 
+ 	/*
+ 	 * If recovery is needed, update our in-memory copy of pg_control to show
+@@ -941,6 +963,10 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
+ 		{
+ 			ControlFile->state = DB_IN_ARCHIVE_RECOVERY;
+ 		}
++		else if (InPitrRecovery)
++		{
++			ControlFile->state = DB_IN_PITR_RECOVERY;
++		}
+ 		else
+ 		{
+ 			ereport(LOG,
+@@ -1194,6 +1220,28 @@ validateRecoveryParameters(void)
+ 	}
+ }
+ 
++static void
++validateSnapshotPitrParameters(void)
++{
++	/*
++	 * Final parsing of snapshot_pitr_target_time string; see also
++	 * check_recovery_target_time().
++	 */
++	if (strcmp(snapshot_pitr_target_time_string, "") != 0)
++	{
++		elog(LOG, "snapshot point-in-time target time requested: %s", snapshot_pitr_target_time_string);
++		recoveryTargetTime = DatumGetTimestampTz(DirectFunctionCall3(timestamptz_in,
++																	 CStringGetDatum(snapshot_pitr_target_time_string),
++																	 ObjectIdGetDatum(InvalidOid),
++																	 Int32GetDatum(-1)));
++		PitrRecoveryRequested = true;
++		recoveryTarget = RECOVERY_TARGET_TIME;
++		recoveryTargetAction = RECOVERY_TARGET_ACTION_PROMOTE;
++		recoveryTargetInclusive = false;
++	}
++	Assert(recoveryTargetTimeLineGoal == RECOVERY_TARGET_TIMELINE_CONTROLFILE);
++}
++
+ /*
+  * read_backup_label: check to see if a backup_label file is present
+  *
+@@ -1562,6 +1610,21 @@ FinishWalRecovery(void)
+ 			readFile = -1;
+ 		}
+ 	}
++	else if (PitrRecoveryRequested)
++	{
++		Assert(InPitrRecovery);
++		InPitrRecovery = false;
++
++		/*
++		 * If the ending log segment is still open, close it (to avoid
++		 * problems on Windows with trying to rename or delete an open file).
++		 */
++		if (readFile >= 0)
++		{
++			close(readFile);
++			readFile = -1;
++		}
++	}
+ 
+ 	/*
+ 	 * Copy the last partial block to the caller, for initializing the WAL
+@@ -1648,7 +1711,7 @@ ShutdownWalRecovery(void)
+ 	 * We don't need the latch anymore. It's not strictly necessary to disown
+ 	 * it, but let's do it for the sake of tidiness.
+ 	 */
+-	if (ArchiveRecoveryRequested)
++	if (ArchiveRecoveryRequested || PitrRecoveryRequested)
+ 		DisownLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
+ }
+ 
+@@ -2192,10 +2255,10 @@ CheckRecoveryConsistency(void)
+ 	 * During crash recovery, we don't reach a consistent state until we've
+ 	 * replayed all the WAL.
+ 	 */
+-	if (XLogRecPtrIsInvalid(minRecoveryPoint))
++	if (!InPitrRecovery && !XLogRecPtrIsValid(minRecoveryPoint))
+ 		return;
+ 
+-	Assert(InArchiveRecovery);
++	Assert(InArchiveRecovery || InPitrRecovery);
+ 
+ 	/*
+ 	 * assume that we are called in the startup process, and hence don't need
+@@ -2594,7 +2657,7 @@ recoveryStopsBefore(XLogReaderState *record)
+ 	 * Ignore recovery target settings when not in archive recovery (meaning
+ 	 * we are in crash recovery).
+ 	 */
+-	if (!ArchiveRecoveryRequested)
++	if (!ArchiveRecoveryRequested && !PitrRecoveryRequested)
+ 		return false;
+ 
+ 	/* Check if we should stop as soon as reaching consistency */
+@@ -2701,6 +2764,17 @@ recoveryStopsBefore(XLogReaderState *record)
+ 			stopsHere = (recordXtime >= recoveryTargetTime);
+ 	}
+ 
++	if (stopsHere && PitrRecoveryRequested)
++	{
++		elog(LOG, "reached point-in-time target time: %s",
++			timestamptz_to_str(recoveryTargetTime)
++		);
++
++		recoveryTargetTime = 0;
++		recoveryTarget = RECOVERY_TARGET_IMMEDIATE;
++		return false;
++	}
++
+ 	if (stopsHere)
+ 	{
+ 		recoveryStopAfter = false;
+@@ -2746,7 +2820,7 @@ recoveryStopsAfter(XLogReaderState *record)
+ 	 * Ignore recovery target settings when not in archive recovery (meaning
+ 	 * we are in crash recovery).
+ 	 */
+-	if (!ArchiveRecoveryRequested)
++	if (!ArchiveRecoveryRequested && !PitrRecoveryRequested)
+ 		return false;
+ 
+ 	info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+@@ -3176,6 +3250,7 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
+ 			 * overwrite contrecord in the wrong place, breaking everything.
+ 			 */
+ 			if (!ArchiveRecoveryRequested &&
++				!PitrRecoveryRequested &&
+ 				!XLogRecPtrIsInvalid(xlogreader->abortedRecPtr))
+ 			{
+ 				abortedRecPtr = xlogreader->abortedRecPtr;
+@@ -3332,7 +3407,7 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
+ 		 * Request a restartpoint if we've replayed too much xlog since the
+ 		 * last one.
+ 		 */
+-		if (ArchiveRecoveryRequested && IsUnderPostmaster)
++		if ((ArchiveRecoveryRequested || PitrRecoveryRequested) && IsUnderPostmaster)
+ 		{
+ 			if (XLogCheckpointNeeded(readSegNo))
+ 			{
+diff --git a/src/backend/utils/misc/guc_tables.c b/src/backend/utils/misc/guc_tables.c
+index d14b1678e7f..95a681e0a37 100644
+--- a/src/backend/utils/misc/guc_tables.c
++++ b/src/backend/utils/misc/guc_tables.c
+@@ -4265,6 +4265,15 @@ struct config_string ConfigureNamesString[] =
+ 		"",
+ 		check_recovery_target_lsn, assign_recovery_target_lsn, NULL
+ 	},
++	{
++		{"snapshot_pitr_target_time", PGC_POSTMASTER, WAL_RECOVERY_TARGET,
++			gettext_noop("Sets the time stamp up to which snapshot point-in-time recovery will proceed."),
++			NULL
++		},
++		&snapshot_pitr_target_time_string,
++		"",
++		check_recovery_target_time, assign_recovery_target_time, NULL
++	},
+ 
+ 	{
+ 		{"primary_conninfo", PGC_SIGHUP, REPLICATION_STANDBY,
+diff --git a/src/bin/pg_controldata/pg_controldata.c b/src/bin/pg_controldata/pg_controldata.c
+index 7bb801bb886..da9927334f0 100644
+--- a/src/bin/pg_controldata/pg_controldata.c
++++ b/src/bin/pg_controldata/pg_controldata.c
+@@ -63,6 +63,8 @@ dbState(DBState state)
+ 			return _("in crash recovery");
+ 		case DB_IN_ARCHIVE_RECOVERY:
+ 			return _("in archive recovery");
++		case DB_IN_PITR_RECOVERY:
++			return _("in snapshot point-in-time recovery");
+ 		case DB_IN_PRODUCTION:
+ 			return _("in production");
+ 	}
+diff --git a/src/include/access/xlog.h b/src/include/access/xlog.h
+index adddac6710e..b7ee88b1156 100644
+--- a/src/include/access/xlog.h
++++ b/src/include/access/xlog.h
+@@ -91,6 +91,7 @@ typedef enum RecoveryState
+ 	RECOVERY_STATE_CRASH = 0,	/* crash recovery */
+ 	RECOVERY_STATE_ARCHIVE,		/* archive recovery */
+ 	RECOVERY_STATE_DONE,		/* currently in production */
++	RECOVERY_STATE_PITR,
+ } RecoveryState;
+ 
+ extern PGDLLIMPORT int wal_level;
+diff --git a/src/include/access/xlog_internal.h b/src/include/access/xlog_internal.h
+index 2cf8d55d706..00713c45d37 100644
+--- a/src/include/access/xlog_internal.h
++++ b/src/include/access/xlog_internal.h
+@@ -398,7 +398,9 @@ extern void XLogRecGetBlockRefInfo(XLogReaderState *record, bool pretty,
+  * in the startup process.
+  */
+ extern PGDLLIMPORT bool ArchiveRecoveryRequested;
++extern PGDLLIMPORT bool PitrRecoveryRequested;
+ extern PGDLLIMPORT bool InArchiveRecovery;
++extern PGDLLIMPORT bool InPitrRecovery;
+ extern PGDLLIMPORT bool StandbyMode;
+ extern PGDLLIMPORT char *recoveryRestoreCommand;
+ 
+diff --git a/src/include/access/xlogrecovery.h b/src/include/access/xlogrecovery.h
+index 91446303024..cac0c807c38 100644
+--- a/src/include/access/xlogrecovery.h
++++ b/src/include/access/xlogrecovery.h
+@@ -69,6 +69,7 @@ extern PGDLLIMPORT bool wal_receiver_create_temp_slot;
+ extern PGDLLIMPORT RecoveryTargetTimeLineGoal recoveryTargetTimeLineGoal;
+ extern PGDLLIMPORT TimeLineID recoveryTargetTLIRequested;
+ extern PGDLLIMPORT TimeLineID recoveryTargetTLI;
++extern PGDLLIMPORT char *snapshot_pitr_target_time_string;
+ 
+ /* Have we already reached a consistent database state? */
+ extern PGDLLIMPORT bool reachedConsistency;
+diff --git a/src/include/catalog/pg_control.h b/src/include/catalog/pg_control.h
+index 63e834a6ce4..d1b394b13e9 100644
+--- a/src/include/catalog/pg_control.h
++++ b/src/include/catalog/pg_control.h
+@@ -94,6 +94,7 @@ typedef enum DBState
+ 	DB_SHUTDOWNING,
+ 	DB_IN_CRASH_RECOVERY,
+ 	DB_IN_ARCHIVE_RECOVERY,
++	DB_IN_PITR_RECOVERY,
+ 	DB_IN_PRODUCTION,
+ } DBState;
+ 

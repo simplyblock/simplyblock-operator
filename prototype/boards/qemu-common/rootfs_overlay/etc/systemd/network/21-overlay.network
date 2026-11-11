@@ -1,0 +1,7 @@
+[Match]
+Name=enp0s4
+
+[Link]
+# Configured by kernel, mark explicitely as unmanaged. This is
+# the default, adding the file for documentation purposes.
+Unmanaged=yes

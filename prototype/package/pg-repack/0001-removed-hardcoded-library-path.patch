@@ -1,0 +1,13 @@
+--- a/bin/Makefile	2025-10-26 17:02:50.000000000 +0000
++++ b/bin/Makefile	2026-01-07 20:39:55.496548004 +0000
+@@ -25,10 +25,6 @@
+ 
+ PG_LIBS = $(libpq)
+ 
+-# libs pgport, pgcommon moved somewhere else in some ubuntu version
+-# see ticket #179
+-PG_LIBS += -L$(shell $(PG_CONFIG) --pkglibdir)
+-
+ USE_PGXS = 1	# use pgxs if not in contrib directory
+ PGXS := $(shell $(PG_CONFIG) --pgxs)
+ include $(PGXS)

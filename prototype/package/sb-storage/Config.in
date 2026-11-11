@@ -1,0 +1,6 @@
+config BR2_PACKAGE_SB_STORAGE
+	bool "sb-storage"
+	select BR2_PACKAGE_NODEJS_SRC
+	select BR2_PACKAGE_HOST_NODEJS
+	help
+	  This is the Supabase-based storage service.

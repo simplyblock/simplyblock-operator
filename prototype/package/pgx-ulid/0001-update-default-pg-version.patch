@@ -1,0 +1,11 @@
+--- a/Cargo.toml	2025-11-10 03:39:52.000000000 +0000
++++ b/Cargo.toml	2026-01-12 21:45:56.890237001 +0000
+@@ -14,7 +14,7 @@
+ path = "./src/bin/pgrx_embed.rs"
+ 
+ [features]
+-default = ["pg15"]
++default = ["pg18"]
+ pg14    = ["pgrx-tests/pg14", "pgrx/pg14"]
+ pg15    = ["pgrx-tests/pg15", "pgrx/pg15"]
+ pg16    = ["pgrx-tests/pg16", "pgrx/pg16"]

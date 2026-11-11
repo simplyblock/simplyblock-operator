@@ -1,0 +1,5 @@
+config BR2_PACKAGE_PG_UUIDV7
+	bool "pg-uuidv7"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  UUIDv7 extension for PostgreSQL (with extended functionality over the native uuidv7() function).

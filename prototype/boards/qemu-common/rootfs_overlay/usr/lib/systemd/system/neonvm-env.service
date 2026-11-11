@@ -1,0 +1,15 @@
+[Unit]
+Description=Prepare NeonVM environment for systemd
+DefaultDependencies=no
+After=neonvm-runtime.mount
+Wants=neonvm-runtime.mount
+Before=local-fs.target
+
+[Service]
+Type=oneshot
+RuntimeDirectory=neonvm-env
+ExecStart=/bin/sh -c "{ [ -f /neonvm/runtime/env.sh ] && sed 's/^export //' /neonvm/runtime/env.sh || true; } > $RUNTIME_DIRECTORY/env"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=local-fs.target

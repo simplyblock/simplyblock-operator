@@ -1,0 +1,30 @@
+[Unit]
+Description=Database Migration Service
+After=postgresql.service
+Requires=postgresql.service
+ConditionPathExists=/vela/migrations/
+ConditionPathExists=/vela/secrets/db/password
+
+[Service]
+Type=oneshot
+User=postgres
+
+ExecStart=/usr/bin/psql -v ON_ERROR_STOP=1 -h /run/postgresql -U vela -d postgres -c "CREATE SCHEMA IF NOT EXISTS _vela; REVOKE CREATE ON SCHEMA _vela FROM PUBLIC;"
+ExecStart=/usr/bin/dbmate --url "postgres://vela@localhost:5432/postgres?sslmode=disable" --migrations-dir "/vela/migrations/" --migrations-table "_vela.schema_migrations" --no-dump-schema up
+ExecStart=/bin/sh -c 'psql -v ON_ERROR_STOP=1 -h /run/postgresql -U vela -d postgres -c "ALTER USER supabase_admin WITH PASSWORD '"'"'$(cat /vela/secrets/db/password)'"'"';"'
+ExecStart=-/usr/bin/psql -h /run/postgresql -U supabase_admin -d postgres -c "SELECT extensions.pg_stat_statements_reset(); SELECT pg_stat_reset();"
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=migrations
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/vela
+
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

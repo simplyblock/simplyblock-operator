@@ -1,0 +1,6 @@
+config BR2_PACKAGE_APACHE_AGE
+	bool "apache-age"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  Apache AGE is a PostgreSQL extension that provides graph database
+	  functionality, supporting the openCypher query language.

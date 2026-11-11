@@ -1,0 +1,6 @@
+config BR2_PACKAGE_PG_STAT_MONITOR
+	bool "pg-stat-monitor"
+	depends on BR2_PACKAGE_POSTGRESQL
+	depends on BR2_PACKAGE_HOST_MESON_TOOLS
+	help
+	  The pg_stat_monitor is a Query Performance Monitoring tool for PostgreSQL.

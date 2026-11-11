@@ -1,0 +1,24 @@
+[Unit]
+Description=Postgres exporter
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Environment="DATA_SOURCE_NAME=postgresql://supabase_admin@localhost:5432/postgres?sslmode=disable"
+
+User=postgres-exporter
+Group=postgres-exporter
+
+ExecStart=/usr/sbin/postgres_exporter
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=postgres-exporter
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

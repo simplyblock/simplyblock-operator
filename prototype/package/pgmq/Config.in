@@ -1,0 +1,5 @@
+config BR2_PACKAGE_PGMQ
+	bool "pgmq"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  A lightweight message queue. Like AWS SQS and RSMQ but on Postgres.

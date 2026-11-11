@@ -1,0 +1,5 @@
+config BR2_PACKAGE_WAL2JSON
+	bool "wal2json"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  JSON output plugin for changeset extraction using PostgreSQL logical decoding.

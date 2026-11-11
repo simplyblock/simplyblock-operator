@@ -1,0 +1,34 @@
+[Unit]
+Description=Postgres meta
+After=postgresql.service
+Requires=postgresql.service
+ConditionPathExists=/vela/secrets/db/pgmeta_crypto_key
+
+[Service]
+Environment="PG_META_PORT=8080"
+Environment="PG_META_DB_HOST=localhost"
+Environment="PG_META_DB_PORT=5432"
+Environment="PG_META_DB_NAME=postgres"
+Environment="PG_META_DB_USER=supabase_admin"
+Environment="PG_META_DB_DRIVER=postgres"
+Environment="PG_META_DB_SSL_MODE=disable"
+Environment="PG_META_DB_URL="
+
+User=postgres-meta
+Group=postgres-meta
+
+WorkingDirectory=/opt/meta
+ExecStart=/bin/sh -c 'PG_META_DB_PASSWORD="$(cat /vela/secrets/db/password)" CRYPTO_KEY="$(cat /vela/secrets/db/pgmeta_crypto_key)" node dist/server/server.js'
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=postgres-meta
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/vela
+
+[Install]
+WantedBy=multi-user.target

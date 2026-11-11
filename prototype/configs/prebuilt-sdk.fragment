@@ -1,0 +1,19 @@
+# Use the prebuilt SDK instead of building the toolchain, merged over a board's
+# defconfig by `./builder setup <board> --prebuilt-sdk`.
+#
+# Architecture independent: SDK_NAME (scripts/container) names the archive for
+# the configured target and the builder host, e.g.
+# aarch64-buildroot-linux-gnu_sdk-buildroot-host-linux-amd64. The archive is
+# what `./builder makesdk` produces from the same board without this fragment,
+# so it carries the toolchain the board would have built: GCC 14, glibc, C++,
+# and kernel headers 6.12.
+# BR2_TOOLCHAIN_BUILDROOT is not set
+BR2_TOOLCHAIN_EXTERNAL=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM=y
+BR2_TOOLCHAIN_EXTERNAL_DOWNLOAD=y
+BR2_TOOLCHAIN_EXTERNAL_URL="https://install.simplyblock.io/sdk/$(SDK_NAME).tar.gz"
+BR2_TOOLCHAIN_EXTERNAL_GCC_14=y
+BR2_TOOLCHAIN_EXTERNAL_HEADERS_6_12=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_GLIBC=y
+# BR2_TOOLCHAIN_EXTERNAL_INET_RPC is not set
+BR2_TOOLCHAIN_EXTERNAL_CXX=y

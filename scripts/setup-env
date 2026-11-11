@@ -1,0 +1,234 @@
+#!/bin/bash
+
+(return 0 2>/dev/null) || {
+  echo "This script must be sourced"
+  exit 1
+}
+
+function insideContainer() {
+  [ -f /.dockerenv ] && echo 0 && exit 0
+  [ "$(env | grep container)" != "" ] && echo 0 && exit 0
+  echo 1
+}
+
+function detectARCH() {
+  uname="$(uname -m)"
+  case ${uname} in
+    x86_64|amd64 )
+      if [ "$(getconf LONG_BIT)" == "64" ]; then
+        echo "amd64"
+      else
+        echo "x86"
+      fi
+    ;;
+
+    i?86|x86 )
+      echo "x86"
+    ;;
+
+    aarch64|arm64 )
+      echo "arm64"
+    ;;
+
+    arm )
+      echo "arm"
+    ;;
+  esac
+}
+
+function detectWSL() {
+  uname="$(uname -a)"
+  test ${IS_LINUX} && version="$(cat /proc/version)"
+  test ${IS_LINUX} && release="$(cat /proc/sys/kernel/osrelease)"
+
+  [[ "${uname}" == *"Microsoft"* ]] || [[ "${uname}" == *"WSL"* ]] || \
+  [[ "${version}" == *"Microsoft"* ]] || [[ "${version}" == *"WSL"* ]] || \
+  [[ "${release}" == *"Microsoft"* ]] || [[ "${release}" == *"WSL"* ]] && echo "0" && exit 0
+  echo "1" && exit 1
+}
+
+function detectWSL2() {
+  uname="$(uname -a)"
+  [[ "${uname}" == *"microsoft-standard"* ]] && echo "0" && exit 0
+  echo "1" && exit 1
+}
+
+function detectOS() {
+  os="$(uname)"
+  case $os in
+    Linux )
+      echo "Linux"
+    ;;
+
+    WindowsNT )
+      echo "Windows"
+    ;;
+
+    Darwin )
+      echo "OSX"
+    ;;
+
+    * )
+      echo "Unsupported OS" >&2
+      exit 1
+    ;;
+  esac
+}
+
+function executable() {
+  local ret="$(command -v ${1})"
+  if ! [ -x "$ret" ]; then
+    echo "Error: executable ${1} not found." 1>&2
+    exit 1
+  fi
+  echo "$ret"
+  exit 0
+}
+
+function resolveVolumes() {
+  if [[ $(insideContainer) == 0 ]]; then
+    if [ -f "${PATH_DEVKIT}/builder.conf" ]; then
+      echo "Loading builder.conf..."
+      . "${PATH_DEVKIT}/builder.conf"
+    fi
+  fi
+}
+
+if [ "${AUTOBUILD_MODE}" == "" ]; then
+  if [ "${GITHUB_ACTIONS}" != "" ]; then
+    echo "Detected Github Actions builder, running non-interactive"
+    AUTOBUILD_MODE=true
+  elif [ "${JOB_NAME}" != "" ]; then
+    echo "Detected Jenkins builder, running non-interactive"
+    AUTOBUILD_MODE=true
+  fi
+fi
+
+export TERM=screen-256color
+export LANGUAGE=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export LC_CTYPE=en_US.UTF-8
+export LANG=en_US.UTF-8
+
+export BUILDER_ARCH=$(detectARCH)
+export BUILDER_OS=$(detectOS)
+
+[ "${BUILDER_OS}" == "Linux" ] && export IS_LINUX=true
+[ "${BUILDER_OS}" == "OSX" ] && export IS_OSX=true
+[ "${BUILDER_OS}" == "Windows" ] || [ "$(detectWSL)" == "0" ] && export IS_WINDOWS=true
+test ${IS_WINDOWS} && [ "$(detectWSL)" == "0" ] && export IS_WSL=true
+test ${IS_LINUX} && [ "$(detectWSL2)" == "0" ] && export IS_WSL2=true
+
+# Basic container name
+containerName=${CONTAINERNAME:-vela-os-builder}
+
+# Executables
+if [[ $(insideContainer) != 0 ]]; then
+  echo "Checking necessary executables..."
+  export DOCKER="$(executable docker)"
+  test $? == 0 || exit 1
+  echo "docker: ${DOCKER}"
+
+  export GIT="$(executable git)"
+  test $? == 0 || exit 1
+  echo "git: ${GIT}"
+
+  export AWK="$(executable awk)"
+  test $? == 0 || exit 1
+  echo "awk: ${AWK}"
+
+  export SHA256SUM="$(executable sha256sum)"
+  test $? == 0 || exit 1
+  echo "sha256sum: ${SHA256SUM}"
+
+  # Exporting SED makes the libtool fail
+  SED="$(executable sed)"
+  test $? == 0 || exit 1
+  echo "sed: ${SED}"
+
+  dockerfileHash="$(${SHA256SUM} scripts/Dockerfile | ${AWK} '{print $1}')"
+  containerImageName="${containerName}-${dockerfileHash}"
+fi
+
+# Directories
+PATH_DEVKIT="/opt/builder"
+PATH_BUILDROOT="${PATH_DEVKIT}/buildroot"
+PATH_OUTPUT="${PATH_DEVKIT}/output"
+PATH_DL_CACHE="${PATH_DEVKIT}/dlcache"
+PATH_IMAGES="${PATH_OUTPUT}/images"
+PATH_SCRIPTS="${PATH_DEVKIT}/scripts"
+PATH_PROTOTYPE="${PATH_DEVKIT}/prototype"
+PATH_CCACHE="${PATH_DEVKIT}/ccache"
+
+# Volumes
+volDevkit="${containerName}-velaos"
+volOutput="${containerName}-output"
+volCompilerCache="${HOME}/ccache"
+volDownloadCache="${HOME}/dlcache"
+
+internalVolumes=($volOutput $volDevkit)
+
+# Configure download cache
+if [ ! "${EXT_DL_CACHE}" = "" ]; then
+  volDownloadCache="${EXT_DL_CACHE}"
+fi
+
+# After setup, the paths are fixed, resolve them now
+resolveVolumes
+
+# Docker Volume Mounts
+dockerVolumes=" --volume=${volDevkit}:${PATH_DEVKIT} \
+    --volume=${BASEDIR}/scripts:${PATH_SCRIPTS} \
+    --volume=${BASEDIR}/prototype:${PATH_PROTOTYPE} \
+    --volume=${BASEDIR}/buildroot:${PATH_BUILDROOT} \
+    --volume=${BASEDIR}/images:${PATH_IMAGES} \
+    --volume=${volOutput}:${PATH_OUTPUT} \
+    --volume=${volDownloadCache}:${PATH_DL_CACHE} \
+    --volume=${HOME}/.ssh/id_rsa.pub:/root/.ssh/id_rsa.pub \
+    --volume=/var/run/docker.sock:/var/run/docker.sock \
+"
+
+# If we have a configuration store, mount it
+if [ -f ./builder.conf ]; then
+    dockerVolumes+="
+    --volume=$(pwd)/builder.conf:${PATH_DEVKIT}/builder.conf \
+"
+fi
+
+# Adding CCACHE features
+if [ ${AUTOBUILD_MODE} ] || [ "${DISABLE_CCACHE}" == "" ]; then
+    dockerVolumes+="
+    --volume=${volCompilerCache}:${PATH_CCACHE} \
+"
+    export BR2_USE_CCACHE=1
+    export BR2_CCACHE_DIR="${PATH_CCACHE}"
+    export CCACHE_OPTIONS="--max-size=5G"
+fi
+
+function containerImageExists() {
+  ${DOCKER} image list 2>&1 | grep -qF ${containerImageName}
+}
+
+function containerImageOutOfDate() {
+  if containerImageExists; then
+    return 0
+  fi
+  if ${DOCKER} image list 2>&1 | grep -qF ${containerName}; then
+    return 1
+  fi
+}
+
+function ensureContainerImageExists() {
+  if ! containerImageExists; then
+    echo "Container image not yet available or out of date. Please run './builder docker setup'."
+    exit 1
+  fi
+}
+
+export BR2_EXTERNAL="${PATH_PROTOTYPE}"
+export BR2_EXTERNAL_CONFIGS="${BR2_EXTERNAL}/configs"
+export BR2_PACKAGE_BUSYBOX_CONFIG="${BR2_EXTERNAL}/boards/common/"
+
+export BUILDROOT_PATH="${PATH_BUILDROOT}"
+export BR2_OUTPUT_PATH="${PATH_OUTPUT}"
+export BR2_DL_DIR="${PATH_DL_CACHE}"

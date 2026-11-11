@@ -1,0 +1,7 @@
+config BR2_PACKAGE_PGX_ULID
+	bool "pgx-ulid"
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	depends on BR2_PACKAGE_POSTGRESQL
+	select BR2_PACKAGE_HOST_RUSTC
+	help
+	  A postgres extension to support ulid.

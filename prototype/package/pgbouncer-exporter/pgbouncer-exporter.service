@@ -1,0 +1,22 @@
+[Unit]
+Description=PgBouncer prometheus exporter
+After=pgbouncer.service
+Requires=pgbouncer.service
+
+[Service]
+User=pgbouncer-exporter
+Group=pgbouncer-exporter
+
+ExecStart=/bin/sh -c 'PGBOUNCER_EXPORTER_CONNECTION_STRING="postgres://pgbouncer_admin:$(cat /vela/secrets/db/pgbouncer_admin_password)@localhost:6432/pgbouncer?sslmode=disable" /usr/sbin/pgbouncer_exporter'
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pgbouncer-exporter
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

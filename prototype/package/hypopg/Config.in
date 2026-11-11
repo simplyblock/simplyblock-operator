@@ -1,0 +1,5 @@
+config BR2_PACKAGE_HYPOPG
+	bool "HypoPG"
+	depends on BR2_PACKAGE_POSTGRESQL
+	help
+	  HypoPG extension for PostgreSQL.
