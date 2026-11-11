@@ -12,18 +12,17 @@ import (
 
 func validGuest(arch Arch) Guest {
 	g := Guest{
-		Arch:          arch,
-		KernelPath:    "/mds/kernel/vmlinuz",
-		RootDiskPath:  "/mds/disk.qcow2",
-		StateDiskPath: "/dev/mds-state",
-		CPUs:          2,
-		MemoryMiB:     2048,
-		TapName:       "mds-tap0",
-		MAC:           net.HardwareAddr{0x02, 0x00, 0x00, 0x00, 0x00, 0x02},
-		Address:       netip.MustParsePrefix("169.254.100.2/30"),
-		Gateway:       netip.MustParseAddr("169.254.100.1"),
-		Hostname:      "pnfs-mds-0",
-		QMPSocket:     "/run/mds/qmp.sock",
+		Arch:         arch,
+		KernelPath:   "/mds/kernel/vmlinuz",
+		RootDiskPath: "/mds/disk.qcow2",
+		CPUs:         2,
+		MemoryMiB:    2048,
+		TapName:      "mds-tap0",
+		MAC:          net.HardwareAddr{0x02, 0x00, 0x00, 0x00, 0x00, 0x02},
+		Address:      netip.MustParsePrefix("169.254.100.2/30"),
+		Gateway:      netip.MustParseAddr("169.254.100.1"),
+		Hostname:     "pnfs-mds",
+		QMPSocket:    "/run/mds/qmp.sock",
 	}
 	if arch == ArchARM64 {
 		g.FirmwarePath = "/mds/firmware/QEMU_EFI.fd"
@@ -116,41 +115,31 @@ func TestUnknownArchitectureIsRefused(t *testing.T) {
 	}
 }
 
-// The guest's fstab mounts / from /dev/vda and the state disk by its serial.
-// PCI enumeration follows command-line order, so the root disk has to be the
-// first block device, and only the state disk is identified by serial.
-func TestRootDiskIsFirstAndReadOnlyStateDiskCarriesItsSerial(t *testing.T) {
+// The guest's fstab mounts / from /dev/vda. A standby holds no state disk: the
+// client-recovery database lives on a volume the agent connects at promotion.
+func TestTheRootDiskIsTheOnlyDisk(t *testing.T) {
 	for _, arch := range []Arch{ArchAMD64, ArchARM64} {
 		args := mustArgs(t, validGuest(arch))
 		drives := values(args, "-drive")
-		if len(drives) != 2 {
-			t.Fatalf("%s: want 2 drives, got %v", arch, drives)
+		if len(drives) != 1 {
+			t.Fatalf("%s: want only the root drive, got %v", arch, drives)
 		}
-		root, state := drives[0], drives[1]
+		root := drives[0]
 		if !strings.Contains(root, "file=/mds/disk.qcow2") || !strings.Contains(root, "format=qcow2") ||
 			!strings.Contains(root, "readonly=on") {
-			t.Errorf("%s: first drive is not the read-only qcow2 root: %q", arch, root)
+			t.Errorf("%s: the drive is not the read-only qcow2 root: %q", arch, root)
 		}
-		if !strings.Contains(state, "file=/dev/mds-state") || !strings.Contains(state, "format=raw") ||
-			strings.Contains(state, "readonly=on") {
-			t.Errorf("%s: second drive is not the writable raw state disk: %q", arch, state)
-		}
-
 		var blk []string
 		for _, d := range values(args, "-device") {
 			if strings.HasPrefix(d, "virtio-blk-pci,") {
 				blk = append(blk, d)
 			}
 		}
-		if len(blk) != 2 {
-			t.Fatalf("%s: want 2 virtio-blk devices, got %v", arch, blk)
+		if len(blk) != 1 || !strings.Contains(blk[0], "drive="+driveID(root)) || strings.Contains(blk[0], "serial=") {
+			t.Errorf("%s: want one virtio-blk device for the root drive and no serial, got %v", arch, blk)
 		}
-		rootID, stateID := driveID(root), driveID(state)
-		if !strings.Contains(blk[0], "drive="+rootID) || !strings.Contains(blk[1], "drive="+stateID) {
-			t.Errorf("%s: virtio-blk order %v does not attach root (%s) before state (%s)", arch, blk, rootID, stateID)
-		}
-		if !strings.Contains(blk[1], "serial="+StateDiskSerial) || strings.Contains(blk[0], "serial=") {
-			t.Errorf("%s: only the state disk carries serial=%s: %v", arch, StateDiskSerial, blk)
+		if strings.Contains(strings.Join(args, " "), "pnfs-state") {
+			t.Errorf("%s: a state disk is still on the command line: %v", arch, args)
 		}
 	}
 }
@@ -171,7 +160,7 @@ func driveID(drive string) string {
 func TestKernelCmdlineCarriesTheStaticAddress(t *testing.T) {
 	want := []string{
 		"root=/dev/vda", "ro", "console=hvc0", "panic=-1",
-		"ip=169.254.100.2::169.254.100.1:255.255.255.252:pnfs-mds-0:eth0:off",
+		"ip=169.254.100.2::169.254.100.1:255.255.255.252:pnfs-mds:eth0:off",
 		"nfsd.pnfs_probe_name=" + export.LayoutProbeName, "nfsd.pnfs_layout_hold=60",
 		"nfsd.pnfs_export_restore=60",
 		"xfs.pnfs_zeroed_layouts=0",
@@ -273,7 +262,6 @@ func TestInvalidInputIsRefused(t *testing.T) {
 	cases := map[string]func(*Guest){
 		"no kernel":             func(g *Guest) { g.KernelPath = "" },
 		"no root disk":          func(g *Guest) { g.RootDiskPath = "" },
-		"no state disk":         func(g *Guest) { g.StateDiskPath = "" },
 		"no tap":                func(g *Guest) { g.TapName = "" },
 		"no QMP socket":         func(g *Guest) { g.QMPSocket = "" },
 		"no CPUs":               func(g *Guest) { g.CPUs = 0 },

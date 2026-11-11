@@ -76,13 +76,14 @@ class FakeCluster:
         return subprocess.CompletedProcess(args, 0, "", "")
 
     def mds(self) -> dict[str, Any]:
-        return self.driver["spec"]["pnfs"]["mds"]
+        mds: dict[str, Any] = self.driver["spec"]["pnfs"]["mds"]  # type: ignore[index]
+        return mds
 
 
 class Pinning(unittest.TestCase):
     def pin_and_restore(self, mds: dict[str, Any]) -> dict[str, Any]:
         cluster = FakeCluster(mds)
-        ctx = SimpleNamespace(namespace=lambda plane: "simplyblock",
+        ctx: Any = SimpleNamespace(namespace=lambda plane: "simplyblock",
                               log=SimpleNamespace(info=lambda m: None, warn=lambda m: None))
         recorder = mds_placement.MdsPlacementRecorder(pin_to_storage_node=True, driver="simplyblock")
         with mock.patch.object(mds_placement.kube, "read", cluster.read), \

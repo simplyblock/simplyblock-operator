@@ -206,6 +206,16 @@ class Gating(unittest.TestCase):
         self.assertIn(f"{metadata.LOGDIR}/go", cmd)
         self.assertIn("--until 1791540000", cmd)
 
+    def test_the_pods_are_pinned_to_the_nodes_full_names(self):
+        # A pod pinned to a name no node has is never scheduled and never says why.
+        w = workload()
+        w._nodes = ["w1.example.local", "w2.example.local"]
+        worker = a_worker()
+        pod = w._worker_pod(context(tempfile.mkdtemp()), worker, 1791540000.0)
+        verifier = w._verifier_pod(context(tempfile.mkdtemp()), worker)
+        self.assertEqual(f"{worker.a.node}.example.local", pod["spec"]["nodeName"])
+        self.assertEqual(f"{worker.a.verifier_node}.example.local", verifier["spec"]["nodeName"])
+
     def test_pods_that_never_become_ready_are_recorded_and_never_released(self):
         w = workload(ready_timeout_s=0.2)
         worker = a_worker()

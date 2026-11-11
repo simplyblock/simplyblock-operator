@@ -311,23 +311,25 @@ spec:
                 properties:
                   mds:
                     description: |-
-                      MDS runs the metadata server: one pod per storage cluster, whose QEMU
-                      guest runs the NFS server with its own kernel, so no node runs nfsd,
-                      mounts an export, or needs nfs-utils. The pod needs a node with
-                      /dev/kvm. Unset, no pNFS volume can be exported: its export waits in
-                      Pending until this is set.
+                      MDS runs the metadata server: per storage cluster, an active pod and,
+                      by default, one standby on another node, each a QEMU guest running the
+                      NFS server with its own kernel, so no node runs nfsd, mounts an
+                      export, or needs nfs-utils. The pods need nodes with /dev/kvm. Unset,
+                      no pNFS volume can be exported: its export waits in Pending until this
+                      is set.
                     properties:
                       dataNetwork:
                         description: |-
                           DataNetwork attaches the metadata server to the storage data network, so
-                          its guest reaches the storage nodes there rather than through the pod
-                          network. The pod gets a macvlan interface on whichever host interface
+                          its guests reach the storage nodes there rather than through the pod
+                          network. Each pod gets a macvlan interface on whichever host interface
                           carries the subnet, and runs only on nodes that have one, preferring
                           nodes that are not storage nodes. It needs Multus and the whereabouts IPAM
-                          plugin, which OpenShift ships. Unset, the guest reaches the storage nodes
-                          through the pod network, which needs the nodes to forward traffic
-                          arriving on their data interfaces. Changing it restarts the metadata
-                          server.
+                          plugin, which OpenShift ships, and a range of at least one address per
+                          pod. Unset, the guests reach the storage nodes through the pod network,
+                          which needs the nodes to forward traffic arriving on their data
+                          interfaces. Changing it rolls every guest onto the new template, the
+                          active last.
                         properties:
                           rangeEnd:
                             description: RangeEnd is the last address the metadata
@@ -380,18 +382,18 @@ spec:
                         additionalProperties:
                           type: string
                         description: |-
-                          NodeSelector is merged with the kvm-capable label the pod always
-                          requires.
+                          NodeSelector is merged with the kvm-capable label the pods always
+                          require. No two of the guests run on one node.
                         type: object
                       resources:
                         description: |-
-                          Resources are the pod's requests and limits. The guest's vCPUs are the
-                          whole cores the CPU limit covers, at least one, and its memory is the
-                          memory limit less 256Mi for QEMU, so the memory limit has to be at
-                          least 512Mi. A CPU or memory limit left unset defaults to 2 and 2Gi,
-                          and a memory request left unset to 512Mi, or the limit when that is
-                          lower. The guest returns the memory it frees to the node, so the pod
-                          uses about what the guest does.
+                          Resources are each pod's requests and limits, so every standby adds
+                          one pod's worth. The guest's vCPUs are the whole cores the CPU limit
+                          covers, at least one, and its memory is the memory limit less 256Mi for
+                          QEMU, so the memory limit has to be at least 512Mi. A CPU or memory
+                          limit left unset defaults to 2 and 2Gi, and a memory request left unset
+                          to 512Mi, or the limit when that is lower. The guest returns the memory
+                          it frees to the node, so each pod uses about what its guest does.
                         properties:
                           claims:
                             description: |-
@@ -449,30 +451,21 @@ spec:
                               More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                         type: object
-                      stateSize:
-                        anyOf:
-                        - type: integer
-                        - type: string
-                        default: 1Gi
+                      standbys:
+                        default: 1
                         description: |-
-                          StateSize is the size of the guest's state disk, which holds the NFS
-                          client-recovery database that lets clients reclaim their state after
-                          the pod restarts.
-                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                        x-kubernetes-int-or-string: true
-                      stateStorageClassName:
-                        description: |-
-                          StateStorageClassName is the storage class of the state disk, which is
-                          always a simplyblock volume so the pod can restart on any worker with
-                          its client-recovery database. A named class must be provisioned by this
-                          driver and must not be a pNFS class. Unset gives each storage cluster a
-                          class of its own, <driver>-<cluster>-pnfs-mds-state, derived from the
-                          cluster's simplyblock class without its QoS caps and reserved for the
-                          state disk by an admission policy. Read only when the metadata server is
-                          first created: a StatefulSet's claim template cannot change afterward.
-                        type: string
+                          Standbys is how many standby guests run beside the active one, each on
+                          its own node. A standby takes over when the active is lost, in about the
+                          time a restart takes. At 0, exports stay unserved after the loss of the
+                          active's node until the lost pod is deleted and started again
+                          elsewhere. Each standby needs another node offering KVM, and one
+                          without such a node stays pending while the active serves.
+                        format: int32
+                        maximum: 4
+                        minimum: 0
+                        type: integer
                       tolerations:
-                        description: Tolerations let the pod schedule onto tainted
+                        description: Tolerations let the pods schedule onto tainted
                           KVM nodes.
                         items:
                           description: |-

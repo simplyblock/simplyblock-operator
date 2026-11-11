@@ -570,6 +570,89 @@ class NvmeIostatAcrossARestart(unittest.TestCase):
         self.assertEqual(calls, ["csi-node-old", "csi-node-new"])
 
 
+class RestartMdsRoles(unittest.TestCase):
+    """The MDS StatefulSet has one active guest and standbys, and the active is named by the
+    `storage.simplyblock.io/mds-active` annotation. Deleting a standby changes nothing about
+    which guest serves, so chaos.restart keeps the two apart: `mds` is the active and
+    `mds-standby` every other pod (pnfs-1792608253 restarted standbys as `mds`)."""
+
+    PREFIX = "simplyblock-pnfs-mds-x-"
+
+    def pods(self) -> list[kube.Pod]:
+        return [kube.Pod(name=f"{self.PREFIX}{i}", namespace="simplyblock", node=f"w{i}",
+                         containers=("mds-runner",), phase="Running") for i in range(3)]
+
+    def sts(self, active: str | None, name: str | None = None) -> str:
+        meta: dict[str, object] = {"name": name or self.PREFIX.rstrip("-")}
+        if active is not None:
+            meta["annotations"] = {"storage.simplyblock.io/mds-active": active}
+        other = {"metadata": {"name": "simplyblock-csi-controller",
+                              "annotations": {"storage.simplyblock.io/mds-active": "decoy"}}}
+        return json.dumps({"items": [other, {"metadata": meta}]})
+
+    def victim(self, target: str, active: str | None, seed: int = 0) -> kube.Pod | None:
+        def read(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            assert "statefulsets" in args, args
+            return subprocess.CompletedProcess(args, 0, self.sts(active), "")
+
+        r = chaos.Restarter(namespace="simplyblock")
+        r._seed = seed
+        with _Ctx() as ctx, mock.patch.object(kube, "list_pods", lambda *a, **k: self.pods()), \
+                mock.patch.object(kube, "read", read):
+            r.bind_namespaces(ctx)
+            return r._victim(ctx, target)
+
+    def test_mds_is_the_active_pod_whatever_the_seed(self):
+        active = f"{self.PREFIX}1"
+        for seed in range(8):
+            got = self.victim("mds", active, seed)
+            assert got is not None
+            self.assertEqual(got.name, active, seed)
+
+    def test_mds_standby_is_a_pod_that_is_not_the_active(self):
+        active = f"{self.PREFIX}1"
+        seen = set()
+        for seed in range(12):
+            got = self.victim("mds-standby", active, seed)
+            assert got is not None
+            seen.add(got.name)
+        self.assertEqual(seen, {f"{self.PREFIX}0", f"{self.PREFIX}2"})
+
+    def test_without_the_annotation_mds_is_any_pod_as_before(self):
+        seen = set()
+        for seed in range(12):
+            got = self.victim("mds", None, seed)
+            assert got is not None
+            seen.add(got.name)
+        self.assertGreater(len(seen), 1)
+
+    def test_without_the_annotation_there_is_no_standby_to_restart(self):
+        self.assertIsNone(self.victim("mds-standby", None))
+
+    def test_an_annotation_naming_no_running_pod_leaves_mds_without_a_victim(self):
+        self.assertIsNone(self.victim("mds", f"{self.PREFIX}9"))
+
+    def test_a_standby_restart_is_recorded_under_its_own_target(self):
+        standby = self.pods()[2]
+
+        def run(args: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        r = chaos.Restarter(ready_timeout_s=5)
+        with _Ctx() as ctx, mock.patch.object(chaos.Restarter, "_victim", lambda *a: standby), \
+                mock.patch.object(chaos.Restarter, "_replacement", lambda *a: (standby.name, "")), \
+                mock.patch.object(chaos.Restarter, "_follow", lambda *a: None), \
+                mock.patch.object(chaos, "_uid", return_value="u1"), \
+                mock.patch.object(kube, "run", run):
+            r.bind_namespaces(ctx)
+            r._restart(ctx, "mds-standby")
+            r.collect(ctx)
+            with open(ctx.path("restarts.json")) as fh:
+                record = json.load(fh)["restarts"][0]
+        self.assertEqual((record["target"], record["pod"]), ("mds-standby", standby.name))
+        self.assertEqual(record["log"], f"restart-1-mds-standby-{standby.name}.txt")
+
+
 class RestartLogs(unittest.TestCase):
     """A restarted pod's log is evidence of the moment that matters, and kubelet deletes it
     with the pod. logs.collect only finds what still exists at the end of the run."""

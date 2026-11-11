@@ -88,8 +88,7 @@ csiConfig:
     # The pool volumes on this cluster are created in. Set, the chart renders a
     # block StorageClass for the cluster and pool, named storageClassName or
     # simplyblock-<pool>. A cluster given here has no StorageCluster or
-    # StoragePool object, so nothing else writes a class for it, and the pNFS
-    # metadata server derives its state disk's class from one.
+    # StoragePool object, so nothing else writes a class for it.
     # -- Storage pool the volumes on this cluster are created in. When set, the chart renders a block
     # StorageClass for the cluster and pool.
     pool:
@@ -581,30 +580,27 @@ driver:
   # pNFS: ReadWriteMany volumes served by an NFS metadata server, whose clients
   # read and write the volume's NVMe-oF namespace directly.
   pnfs:
-    # The metadata server: one pod per storage cluster, running the NFS server in
-    # a QEMU guest on a node with /dev/kvm. On by default, so a ReadWriteMany
-    # volume needs nothing beyond the install. Off, no pNFS volume can be
-    # exported and its export waits in Pending.
+    # The metadata server: per storage cluster, an active pod and standby pods,
+    # each running the NFS server in a QEMU guest on a node with /dev/kvm. On by
+    # default, so a ReadWriteMany volume needs nothing beyond the install. Off,
+    # no pNFS volume can be exported and its export waits in Pending.
     mds:
-      # -- Runs the pNFS metadata server, one pod per storage cluster, which serves ReadWriteMany
+      # -- Runs the pNFS metadata server, an active and standby pods per storage cluster, which serves ReadWriteMany
       # volumes. It requires a node with `/dev/kvm`. With `false`, pNFS volumes stay `Pending`.
       enabled: true
-      # Merged with the kvm-capable label the pod always requires.
-      # -- Node selector of the metadata server, merged with the KVM-capable label the pod always
-      # requires.
+      # -- Node selector of the metadata server pods, merged with the KVM-capable label the pods
+      # always require.
       nodeSelector: {}
       # -- Tolerations of the metadata server.
       tolerations: []
-      # The pod's requests and limits. Empty takes the driver's defaults: 2 CPUs
+      # Each pod's requests and limits. Empty takes the driver's defaults: 2 CPUs
       # and 2Gi of memory as limits.
       # -- Resource requests and limits of the metadata server. Empty uses limits of 2 CPUs and 2Gi of
       # memory.
       resources: {}
-      # The guest's state disk, which holds the NFS client-recovery database.
-      # Empty takes 1Gi.
-      # -- Size of the metadata server's state disk, which holds the NFS client recovery database.
-      # Empty uses `1Gi`.
-      stateSize: ""
+      # -- Standby guests beside the active one, each on its own KVM node, 0 to 4. Unset uses the
+      # driver's default of 1. A standby without a node stays pending while the active serves.
+      # standbys: 1
       # The storage data network the metadata server is attached to, through a
       # Multus macvlan on the host interface carrying the subnet. All three are
       # needed, and the range must hold no address anything else on the network
