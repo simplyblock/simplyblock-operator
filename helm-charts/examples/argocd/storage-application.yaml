@@ -1,6 +1,6 @@
-# ArgoCD Application that syncs the storage plane: the approved
+# Argo CD Application that syncs the storage plane: the approved
 # ClusterDeploymentConfig in storage/. The operator expands it into the
-# StorageCluster and StorageNodeSet, which ArgoCD does not track.
+# StorageCluster and StorageNodeSet, which Argo CD does not track.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
