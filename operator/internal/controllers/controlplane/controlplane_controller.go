@@ -325,7 +325,7 @@ func (r *ControlPlaneReconciler) performInstallStep(
 		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, datastoreObjects(cp))
 
 	case stepApplyingAPI:
-		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, managementAPIObjects(cp))
+		return true, "", r.applyManagementAPI(ctx, cp)
 
 	case stepAwaitingAPI:
 		access, err := localAccess(cp)
@@ -394,13 +394,12 @@ func (r *ControlPlaneReconciler) applyEverything(
 	for _, set := range [][]client.Object{
 		datastoreObjects(cp),
 		foundationDBObjects(cp),
-		managementAPIObjects(cp),
 	} {
 		if err := applyAll(ctx, r.Client, cp, r.Scheme, set); err != nil {
 			return err
 		}
 	}
-	return nil
+	return r.applyManagementAPI(ctx, cp)
 }
 
 // probe performs the readiness read and records what it cost.
