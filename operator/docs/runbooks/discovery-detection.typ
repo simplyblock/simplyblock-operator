@@ -272,7 +272,11 @@ link is the management link, the draft names no data interfaces and data runs on
 The networks are compared by address prefix, not by interface name. A host route (`/32`) names no network and
 is not compared.
 
-- *Management network:* the prefix held by most workers' management interfaces. A worker on another network is
+- *Management network:* a worker whose management interface holds its node address (the `InternalIP` of its
+  Node object) is always kept, whatever its prefix. The cluster reaches it there, so workers on several subnets,
+  such as one subnet for each availability zone, are taken as routed. A worker whose interface was chosen by
+  ranking has to be on one of the prefixes the cluster reaches the other workers on, or, when the cluster
+  reaches none of them on its interface, on the prefix held by most workers. A worker on another network is
   refused.
 - *Data networks:* the largest set of prefixes held by more than half of the workers, compared over at most 8
   data networks per worker. A worker missing one of them is refused. The others keep only the data interfaces

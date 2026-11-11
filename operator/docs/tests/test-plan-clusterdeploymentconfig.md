@@ -295,6 +295,8 @@ and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-241     | A non-Vanilla document stating either flag is refused by the schema, and the same document as Vanilla is not                    | Negative   | `TestTheKubeletAndTopologyFlagsNeedAVanillaEnvironment`           |
 | U-237     | A worker whose taint the run tolerates is inspected (regression 2026-10-24-discovery-ignores-tolerations)                       | Regression | `TestDiscoverInspectsAWorkerWhoseTaintTheRunTolerates`            |
 | U-238     | A worker with a tolerated and an untolerated taint is declined, and the event names the untolerated one                         | Regression | `TestDiscoverDeclinesAWorkerWithATaintTheRunDoesNotTolerate`      |
+| U-242     | Workers on one subnet for each zone are all drafted (regression 2026-11-11-discovery-multi-az-management-subnets)               | Regression | `TestWorkersManagedOnTheirNodeAddressesAreKeptAcrossSubnets`      |
+| U-243     | A worker whose interface was ranked, on no network the cluster reaches the others on, is refused by name                        | Negative   | `TestARankedWorkerOffEveryNetworkTheClusterReachesIsRefused`      |
 | U-202     | A cluster that states no tolerations: the Job placement carries none, which is what it carried before                           | Boundary   | `TestJobPlacementOfAClusterThatTakesNoTaint`                      |
 | U-203     | The latency baseline Job: it tolerates what the storage nodes of its cluster tolerate                                           | Positive   | `TestTheBaselineJobToleratesWhatTheStorageNodesDo`                |
 | U-204     | `spec.cluster.containerResources`: the cluster's storage-node container is sized as the document states                         | Positive   | `TestTheDocumentsContainerResourcesReachTheStorageNodes`          |
@@ -639,11 +641,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 174       | 41      | 133         | 9         |
+| Unit        | 176       | 43      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **244**   | **44**  | **200**     | **12**    |
+| **Total**   | **246**   | **46**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as
