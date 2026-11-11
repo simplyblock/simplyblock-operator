@@ -19,6 +19,9 @@ type StorageNode struct {
 	MaxLvols        int
 	DeviceCount     int
 	SecondaryNodeID string // empty when the node has no secondary
+	// LvolPort is the NVMe/TCP port the node serves its volumes on, zero when
+	// the control plane reports none.
+	LvolPort int
 }
 
 // NIC is a storage node's data network interface.
@@ -40,6 +43,7 @@ func storageNodeFromDTO(d cpapi.StorageNodeDTO) StorageNode {
 		Lvols:       d.Lvols,
 		MaxLvols:    d.LvolsMax,
 		DeviceCount: d.DeviceCount,
+		LvolPort:    d.LvolSubsysPort,
 	}
 	if d.SecondaryNodeId != nil {
 		n.SecondaryNodeID = d.SecondaryNodeId.String()
