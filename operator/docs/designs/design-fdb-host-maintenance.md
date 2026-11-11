@@ -422,9 +422,14 @@ and putting it up touches neither the database nor another window's host.
 seconds. The budget's job is to hold the eviction until the move for this host
 has been attempted, and `Releasing` is what lets it go.
 
-The step completes when the budget reports zero allowed disruptions and a
-drain of the worker has been observed (§5.3). Until then the window waits with
-the budget up, for as long as the pool's maintenance takes to reach this host.
+The step completes when the disruption controller has looked at the budget,
+the budget allows zero disruptions, and a drain of the worker has been observed
+(§5.3). Until then the window waits with the budget up, for as long as the
+pool's maintenance takes to reach this host. The controller never counts these
+pods: their owner, the `FoundationDBCluster`, has no scale subresource, so the
+budget carries a `SyncFailed` condition and no expected-pod count. The
+eviction API refuses evictions under such a budget all the same, which is what
+the hold needs, so the condition's presence is what "looked at" means.
 
 ### 5.3 Observing the drain
 

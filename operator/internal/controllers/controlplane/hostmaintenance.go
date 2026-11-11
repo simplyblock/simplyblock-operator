@@ -145,11 +145,14 @@ func (r *ControlPlaneOpsReconciler) windowHold(
 	}
 
 	// The budget has to have been seen by the disruption controller before an
-	// eviction is refused by it. A budget just created reports nothing, and a
-	// budget that expects fewer pods than are labeled has not caught up.
-	reported := budget.Status.ObservedGeneration >= budget.Generation &&
-		budget.Status.DisruptionsAllowed == 0 &&
-		int(budget.Status.ExpectedPods) >= len(pods)
+	// eviction is refused by it. A budget just created reports nothing. One the
+	// controller has looked at carries a DisruptionAllowed condition, and for
+	// these pods that condition is SyncFailed with no pod count: their owner,
+	// the FoundationDBCluster, has no scale subresource, so the controller
+	// cannot count them. The eviction API refuses evictions under such a budget
+	// all the same, which is what the hold needs, so the condition's presence
+	// and zero allowed disruptions are the whole of "reported".
+	reported := budgetSynced(budget) && budget.Status.DisruptionsAllowed == 0
 	if !reported {
 		return false, fmt.Sprintf(
 			"waiting for the budget over %d FoundationDB pods on %s to report", len(pods), worker), nil
@@ -160,6 +163,15 @@ func (r *ControlPlaneOpsReconciler) windowHold(
 			len(pods), worker, sentinelNote), nil
 	}
 	return true, "", nil
+}
+
+// budgetSynced reports whether the disruption controller has looked at the
+// budget: it has recorded the generation it saw, or written its condition.
+func budgetSynced(budget *policyv1.PodDisruptionBudget) bool {
+	if budget.Generation > 0 && budget.Status.ObservedGeneration >= budget.Generation {
+		return true
+	}
+	return len(budget.Status.Conditions) > 0
 }
 
 // windowRelease is the Releasing step (§5.8). It deletes the budget, removes

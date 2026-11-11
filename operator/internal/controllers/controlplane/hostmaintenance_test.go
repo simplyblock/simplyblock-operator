@@ -232,8 +232,8 @@ func (h *windowHarness) observeDrain() {
 	}
 }
 
-// budgetReports writes what the disruption controller would: the pods it
-// expects and that none may be disrupted.
+// budgetReports writes what the disruption controller would: its condition,
+// the pods it expects, and that none may be disrupted.
 func (h *windowHarness) budgetReports(expected int32) {
 	h.t.Helper()
 	pdb, ok := h.budget()
@@ -244,6 +244,10 @@ func (h *windowHarness) budgetReports(expected int32) {
 	pdb.Status.CurrentHealthy = expected
 	pdb.Status.DisruptionsAllowed = 0
 	pdb.Status.ObservedGeneration = pdb.Generation
+	pdb.Status.Conditions = []metav1.Condition{{
+		Type: "DisruptionAllowed", Status: metav1.ConditionFalse, Reason: "InsufficientPods",
+		LastTransitionTime: metav1.Now(),
+	}}
 	if err := h.c.Status().Update(context.Background(), pdb); err != nil {
 		h.t.Fatal(err)
 	}
@@ -658,4 +662,40 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// The disruption controller cannot count the pods of a budget whose owner has
+// no scale subresource, which the FoundationDBCluster has not: it writes a
+// SyncFailed condition and leaves expectedPods at zero, and the eviction API
+// still refuses evictions under it. Holding has to take that as the budget
+// reporting, or a window on a real cluster never leaves it.
+//
+// Regression: 2026-11-11-holding-waits-for-a-pod-count-the-budget-never-gets.
+func TestHoldingAcceptsABudgetTheControllerCannotCount(t *testing.T) {
+	window := aWindowFor(drainedWorker)
+	h := newWindowHarness(t, newClient(t, append(labWorld(), window)...), window)
+	h.pass()
+	h.pass()
+	h.observeDrain()
+
+	pdb, ok := h.budget()
+	if !ok {
+		t.Fatal("no budget")
+	}
+	pdb.Status.DisruptionsAllowed = 0
+	pdb.Status.ExpectedPods = 0
+	pdb.Status.Conditions = []metav1.Condition{{
+		Type: "DisruptionAllowed", Status: metav1.ConditionFalse, Reason: "SyncFailed",
+		Message:            "foundationdbclusters.apps.foundationdb.org does not implement the scale subresource",
+		LastTransitionTime: metav1.Now(),
+	}}
+	if err := h.c.Status().Update(context.Background(), pdb); err != nil {
+		t.Fatal(err)
+	}
+
+	h.pass()
+	if ops := h.current(); ops.Status.Step.State != string(stepEnteringMaintenance) {
+		t.Errorf("step = %s, want EnteringMaintenance: the budget refuses evictions although it cannot count the pods: %s",
+			ops.Status.Step.State, ops.Status.Message)
+	}
 }

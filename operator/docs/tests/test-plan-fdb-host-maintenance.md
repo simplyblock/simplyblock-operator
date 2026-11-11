@@ -85,7 +85,7 @@ File: `operator/internal/controllers/controlplane/hostmaintenance_test.go`
 |------|----------------------------------------------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------------------|
 | U-23 | `Holding` labels every FoundationDB pod on the worker with the window's label and creates `sb-fdb-maintenance-<hash>` at `maxUnavailable: 0` | Positive | `TestHoldingLabelsTheWorkersFDBPodsAndRaisesTheBudget`            |
 | U-24 | `Holding` does not label a FoundationDB pod on another worker, nor a non-FoundationDB pod on this one                                        | Negative | `TestHoldingLabelsTheWorkersFDBPodsAndRaisesTheBudget`            |
-| U-25 | `Holding` does not complete before the budget reports zero allowed disruptions                                                               | Boundary | `TestHoldingCompletesOnTheBudgetReportAndTheDrainAndTakesTheLock` |
+| U-25 | `Holding` does not complete before the disruption controller has looked at the budget and it allows zero disruptions                         | Boundary | `TestHoldingCompletesOnTheBudgetReportAndTheDrainAndTakesTheLock` |
 | U-26 | `Holding` with no FoundationDB pod on the worker creates the budget over nothing and completes once a drain is observed                      | Boundary | `TestHoldingOnAWorkerWithoutFDBPodsCompletesOnTheDrain`           |
 | U-27 | `Releasing` deletes the budget and removes the window's label, and leaves the storage node's label and budget in place                       | Positive | `TestReleasingTakesOnlyTheWindowsMarkersDown`                     |
 | U-28 | `Releasing` completes only once the budget is gone                                                                                           | Boundary | `TestReleasingWaitsForTheBudgetToGo`                              |
@@ -194,20 +194,21 @@ File: `operator/internal/controllers/controlplane/controlplaneops_test.go`
 
 File: `operator/internal/controllers/controlplane/hostmaintenance_test.go` and `operator/internal/controllers/controlplane/fdbcommand_test.go`
 
-| #    | Scenario                                                                                                                                                                                                          | Type     | Test                                                        |
-|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------------|
-| U-75 | `Holding` creates the sentinel Job `<operation>-sentinel`: `fdbMonitorImage` with `sleep infinity`, `spec.nodeName` set to the worker, `backoffLimit: 0`, owned by the operation, and no label the budget selects | Positive | `TestTheSentinelIsAPinnedPauseJobNothingRecreates`          |
-| U-76 | The sentinel pod's deletion timestamp, or its absence after the Job recorded a pod, writes `drainObservedAt` and `drainObservedBy: Sentinel` on a `Holding` window                                                | Positive | `TestTheSentinelsEvictionIsTheDrain`                        |
-| U-77 | A second signal does not overwrite an observation already recorded                                                                                                                                                | Negative | `TestTheFirstObservationIsNotOverwritten`                   |
-| U-78 | A sentinel deleted while the window is past `Holding` writes nothing, and a sentinel that never got a pod writes nothing                                                                                          | Negative | `TestASignalAfterHoldingWritesNothing`                      |
-| U-79 | A non-FoundationDB pod on the worker carrying `DisruptionTarget` with reason `EvictionByEvictionAPI` writes `drainObservedBy: PodDisruption`                                                                      | Positive | `TestANeighborsEvictionIsTheDrain`                          |
-| U-80 | The same condition on a pod on another worker, or with another reason, writes nothing                                                                                                                             | Negative | `TestADisruptionThatIsNotAnEvictionIsNotTheDrain`           |
-| U-81 | `Holding` completes only when the budget reports zero allowed disruptions and a drain has been observed, in either order                                                                                          | Boundary | `TestHoldingNeedsBothTheReportAndTheDrain`                  |
-| U-82 | `Holding` with no observation waits to its deadline, fails, and the teardown deletes the budget                                                                                                                   | Negative | `TestAHoldingWindowNothingReachesReleasesOnItsDeadline`     |
-| U-94 | A sentinel Job that cannot be created leaves the window `Holding` with the budget up and `EvictionHeld`, and the neighbor signal still completes it                                                               | Negative | `TestASentinelThatCannotBeCreatedStillLeavesTheHoldWorking` |
-| U-96 | The `Holding` deadline is measured from the latest `drainObservedAt` across the windows of the namespace, and from the window's own creation while none exists                                                    | Boundary | `TestTheHoldingDeadlineFollowsTheLastDrainInTheNamespace`   |
-| U-97 | A window older than the deadline keeps holding when another window observed a drain inside it, and fails when none did                                                                                            | Boundary | `TestTheHoldingDeadlineFollowsTheLastDrainInTheNamespace`   |
-| U-98 | A drain observed by one window re-enqueues every other window in `Holding` and re-arms its deadline                                                                                                               | Positive | `TestADrainObservedByOneWindowWakesTheOthers`               |
+| #    | Scenario                                                                                                                                                                                                          | Type       | Test                                                        |
+|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|-------------------------------------------------------------|
+| U-75 | `Holding` creates the sentinel Job `<operation>-sentinel`: `fdbMonitorImage` with `sleep infinity`, `spec.nodeName` set to the worker, `backoffLimit: 0`, owned by the operation, and no label the budget selects | Positive   | `TestTheSentinelIsAPinnedPauseJobNothingRecreates`          |
+| U-76 | The sentinel pod's deletion timestamp, or its absence after the Job recorded a pod, writes `drainObservedAt` and `drainObservedBy: Sentinel` on a `Holding` window                                                | Positive   | `TestTheSentinelsEvictionIsTheDrain`                        |
+| U-77 | A second signal does not overwrite an observation already recorded                                                                                                                                                | Negative   | `TestTheFirstObservationIsNotOverwritten`                   |
+| U-78 | A sentinel deleted while the window is past `Holding` writes nothing, and a sentinel that never got a pod writes nothing                                                                                          | Negative   | `TestASignalAfterHoldingWritesNothing`                      |
+| U-79 | A non-FoundationDB pod on the worker carrying `DisruptionTarget` with reason `EvictionByEvictionAPI` writes `drainObservedBy: PodDisruption`                                                                      | Positive   | `TestANeighborsEvictionIsTheDrain`                          |
+| U-80 | The same condition on a pod on another worker, or with another reason, writes nothing                                                                                                                             | Negative   | `TestADisruptionThatIsNotAnEvictionIsNotTheDrain`           |
+| U-81 | `Holding` completes only when the budget reports zero allowed disruptions and a drain has been observed, in either order                                                                                          | Boundary   | `TestHoldingNeedsBothTheReportAndTheDrain`                  |
+| U-82 | `Holding` with no observation waits to its deadline, fails, and the teardown deletes the budget                                                                                                                   | Negative   | `TestAHoldingWindowNothingReachesReleasesOnItsDeadline`     |
+| U-94 | A sentinel Job that cannot be created leaves the window `Holding` with the budget up and `EvictionHeld`, and the neighbor signal still completes it                                                               | Negative   | `TestASentinelThatCannotBeCreatedStillLeavesTheHoldWorking` |
+| U-96 | The `Holding` deadline is measured from the latest `drainObservedAt` across the windows of the namespace, and from the window's own creation while none exists                                                    | Boundary   | `TestTheHoldingDeadlineFollowsTheLastDrainInTheNamespace`   |
+| U-97 | A window older than the deadline keeps holding when another window observed a drain inside it, and fails when none did                                                                                            | Boundary   | `TestTheHoldingDeadlineFollowsTheLastDrainInTheNamespace`   |
+| U-98 | A drain observed by one window re-enqueues every other window in `Holding` and re-arms its deadline                                                                                                               | Positive   | `TestADrainObservedByOneWindowWakesTheOthers`               |
+| U-99 | A budget whose owner has no scale subresource carries `SyncFailed` and no pod count, and `Holding` still completes on it. Regression: the lab's first cordon on 2026-11-11 sat in `Holding` forever               | Regression | `TestHoldingAcceptsABudgetTheControllerCannotCount`         |
 
 ### Leaving Hosts and the Zone Takeover (design §5.5, §5.7)
 
@@ -384,7 +385,7 @@ Struck rows are not counted.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 94        | 92      | U-45, U-73  |
+| Unit        | 95        | 93      | U-45, U-73  |
 | Integration | 10        | 0       | I-01 … I-10 |
 | E2E         | 13        | 0       | E-01 … E-14 |
 | Manual      | 5         | 0       | M-01 … M-05 |
@@ -397,7 +398,7 @@ Struck rows are not counted.
 |--------------------------|--------------------------------------------------------------|
 | §4 Data model            | U-63, U-64, U-65, U-68                                       |
 | §5.1 Trigger             | U-52 … U-60, U-74, I-01, I-04, I-10                          |
-| §5.2 Holding             | U-23 … U-26, U-81, U-91, I-01                                |
+| §5.2 Holding             | U-23 … U-26, U-81, U-91, I-01, U-99                          |
 | §5.3 Observing the drain | U-75 … U-82, U-94, U-96 … U-98, I-08, E-11, E-12, M-04, M-05 |
 | §5.4 Commands            | U-17 … U-22, U-89, U-90                                      |
 | §5.5 Choosing            | U-01 … U-16, U-43, U-45, U-85, E-01, E-05, E-08, E-13        |
