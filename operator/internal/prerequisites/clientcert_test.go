@@ -127,9 +127,12 @@ func TestTheIssuerChainIssuesTheCSILinkServingCertificate(t *testing.T) {
 	if s, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName"); s != "simplyblock-csi-link-tls" {
 		t.Errorf("secretName = %q, want simplyblock-csi-link-tls", s)
 	}
+	// The same names the chart renders, so the two never overwrite each other
+	// (an ArgoCD-managed release reported the Certificate OutOfSync otherwise).
 	dnsNames, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
-	if !slices.Contains(dnsNames, "simplyblock-csi-link.simplyblock.svc") {
-		t.Errorf("dnsNames = %v, want simplyblock-csi-link.simplyblock.svc", dnsNames)
+	want := []string{"simplyblock-csi-link", "simplyblock-csi-link.simplyblock", "simplyblock-csi-link.simplyblock.svc"}
+	if !slices.Equal(dnsNames, want) {
+		t.Errorf("dnsNames = %v, want %v", dnsNames, want)
 	}
 	usages, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "usages")
 	if !slices.Contains(usages, "server auth") {
