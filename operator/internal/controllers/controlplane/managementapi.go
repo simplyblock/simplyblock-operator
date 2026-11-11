@@ -718,8 +718,7 @@ func fdbExporterDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 				{Name: tmpVolume, MountPath: "/tmp"},
 				{
 					Name:      clusterFileVolume,
-					MountPath: clusterFilePath,
-					SubPath:   clusterFileSubURL,
+					MountPath: clusterFileDir,
 					ReadOnly:  true,
 				},
 			}, peerMountIf(peerTLS)...),

@@ -31,7 +31,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -326,11 +325,7 @@ func (r *ControlPlaneReconciler) performInstallStep(
 		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, datastoreObjects(cp))
 
 	case stepApplyingAPI:
-		objects, err := r.managementAPIStamped(ctx, cp)
-		if err != nil {
-			return false, "", err
-		}
-		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, objects)
+		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, managementAPIObjects(cp))
 
 	case stepAwaitingAPI:
 		access, err := localAccess(cp)
@@ -396,14 +391,10 @@ func (r *ControlPlaneReconciler) steadyState(
 func (r *ControlPlaneReconciler) applyEverything(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) error {
-	api, err := r.managementAPIStamped(ctx, cp)
-	if err != nil {
-		return err
-	}
 	for _, set := range [][]client.Object{
 		datastoreObjects(cp),
 		foundationDBObjects(cp),
-		api,
+		managementAPIObjects(cp),
 	} {
 		if err := applyAll(ctx, r.Client, cp, r.Scheme, set); err != nil {
 			return err
@@ -789,10 +780,6 @@ func (r *ControlPlaneReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&appsv1.DaemonSet{}).
 		Owns(&batchv1.Job{}).
-		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.clusterFileRequests),
-			builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
-				return o.GetName() == clusterFileConfigMapName
-			}))).
 		Named("controlplane").
 		Complete(r)
 }

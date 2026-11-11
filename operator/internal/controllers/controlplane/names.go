@@ -143,10 +143,12 @@ const (
 const (
 	// clusterFileVolume mounts the FoundationDB cluster file at the path the
 	// client library reads by default, so nothing has to set FDB_CLUSTER_FILE.
+	// It is mounted as a directory: the kubelet never refreshes a subPath mount.
 	clusterFileVolume = "fdb-cluster-file"
-	clusterFilePath   = "/etc/foundationdb/fdb.cluster"
+	clusterFileDir    = "/etc/foundationdb"
+	clusterFileName   = "fdb.cluster"
+	clusterFilePath   = clusterFileDir + "/" + clusterFileName
 	clusterFileKey    = "cluster-file"
-	clusterFileSubURL = "fdb.cluster"
 )
 
 // appLabel is the selector key every workload here is matched by. It is `app`

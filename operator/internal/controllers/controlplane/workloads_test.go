@@ -179,7 +179,7 @@ func TestTheIndexJobRunsTheBackfillAgainstTheDatabase(t *testing.T) {
 
 	mountsClusterFile := false
 	for _, mount := range container.VolumeMounts {
-		if mount.MountPath == clusterFilePath {
+		if mount.Name == clusterFileVolume {
 			mountsClusterFile = true
 		}
 	}
@@ -376,9 +376,8 @@ func TestTheExporterDoesNotRunTheControlPlanesImage(t *testing.T) {
 	}
 }
 
-// Every service container reaches the database through the cluster file. The
-// stamp that rolls them when it changes is tested in clusterfile_test.go, and it
-// reaches only the workloads this test finds mounting the file.
+// Every service container reaches the database through the cluster file. How it
+// is mounted is tested in clusterfile_test.go.
 func TestEveryWorkloadThatReachesTheDatabaseMountsTheClusterFile(t *testing.T) {
 	cp := localControlPlane()
 
@@ -391,7 +390,7 @@ func TestEveryWorkloadThatReachesTheDatabaseMountsTheClusterFile(t *testing.T) {
 		mountsClusterFile := false
 		for _, container := range d.Spec.Template.Spec.Containers {
 			for _, mount := range container.VolumeMounts {
-				if mount.MountPath == clusterFilePath {
+				if mount.Name == clusterFileVolume {
 					mountsClusterFile = true
 				}
 			}

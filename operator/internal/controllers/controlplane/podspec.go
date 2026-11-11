@@ -129,15 +129,14 @@ func namespaceEnv() corev1.EnvVar {
 	}
 }
 
-// clusterFileMount is how a container reaches FoundationDB. The ConfigMap behind
-// it is written by the FoundationDB operator and re-written when the
-// coordinators change, which is why the workloads that mount it are annotated
-// for restart on its change.
+// clusterFileMount is how a container reaches FoundationDB. The FoundationDB
+// operator rewrites the ConfigMap when the coordinators move; a running client
+// follows the move on its own, and the directory mount gives a restarted one
+// the current file.
 func clusterFileMount() corev1.VolumeMount {
 	return corev1.VolumeMount{
 		Name:      clusterFileVolume,
-		MountPath: clusterFilePath,
-		SubPath:   clusterFileSubURL,
+		MountPath: clusterFileDir,
 	}
 }
 
@@ -150,7 +149,7 @@ func clusterFileVolumeSource() corev1.Volume {
 			ConfigMap: &corev1.ConfigMapVolumeSource{
 				LocalObjectReference: corev1.LocalObjectReference{Name: clusterFileConfigMapName},
 				Items: []corev1.KeyToPath{
-					{Key: clusterFileKey, Path: clusterFileSubURL},
+					{Key: clusterFileKey, Path: clusterFileName},
 				},
 			},
 		},

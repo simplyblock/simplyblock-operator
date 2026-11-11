@@ -386,7 +386,7 @@ func TestEveryHolderOfTheClusterFileCanReachATLSDatabase(t *testing.T) {
 		}
 		for _, container := range spec.Containers {
 			if !slices.ContainsFunc(container.VolumeMounts, func(m corev1.VolumeMount) bool {
-				return m.MountPath == clusterFilePath
+				return m.Name == clusterFileVolume
 			}) {
 				continue
 			}
