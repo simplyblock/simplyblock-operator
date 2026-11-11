@@ -116,11 +116,13 @@ It carries one thing: SB_TLS_PROVIDER, which selects where the admission
 webhooks' serving certificate comes from. The installation's own TLS is stated by
 the ControlPlane (spec.source.local.tls) and read from it, so nothing else about
 TLS is set here. The webhook certificate has to exist before the manager starts,
-which is before any ControlPlane can be read.
+which is before any ControlPlane can be read. Until cert-manager is served the
+operator signs that certificate itself: it is what installs cert-manager, so it
+cannot wait for it.
 Caller pipes through `nindent N`.
 */}}
 {{- define "simplyblock.tlsEnv" -}}
-{{- if .Values.tls.enabled }}
+{{- if and .Values.tls.enabled (or (ne .Values.tls.provider "cert-manager") (include "simplyblock.certManagerServed" .)) }}
 - name: SB_TLS_PROVIDER
   value: {{ .Values.tls.provider | quote }}
 {{- end }}

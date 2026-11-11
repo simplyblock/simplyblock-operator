@@ -27,7 +27,18 @@ else
   fail "default values without cert-manager.io/v1 did not render: $(tail -1 <<<"$out")"
 fi
 
-# cert-manager served: the chart's certificates are rendered.
+# Without cert-manager the operator must start, to install it: it takes its
+# webhook certificate from its own rotator until cert-manager is served.
+out="$(render || true)"
+grep -A1 'name: SB_TLS_PROVIDER' <<<"$out" | grep -q 'cert-manager' &&
+  fail "without cert-manager.io/v1 the operator is told to take its webhook certificate from cert-manager"
+
+# cert-manager served: the chart's certificates are rendered, and the webhook
+# certificate comes from cert-manager.
+out="$(render --api-versions cert-manager.io/v1 || true)"
+grep -A1 'name: SB_TLS_PROVIDER' <<<"$out" | grep -q 'cert-manager' ||
+  fail "with cert-manager.io/v1 the operator does not take its webhook certificate from cert-manager"
+
 if out="$(render --api-versions cert-manager.io/v1)"; then
   grep -q '^kind: Certificate' <<<"$out" ||
     fail "with cert-manager.io/v1 the chart renders no Certificate"
