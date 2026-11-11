@@ -981,9 +981,9 @@ verified, and it is the event to look for after an upgrade of that operator.
 
 | Metric                                                  | Labels                           | Description                                                                                      |
 |---------------------------------------------------------|----------------------------------|--------------------------------------------------------------------------------------------------|
-| `simplyblock_controlplane_fdb_maintenance_zone_active`  | `namespace`, `worker`            | Gauge, 1 while a window believes it holds the maintenance zone for the worker                    |
+| `simplyblock_controlplane_fdb_maintenance_zone_state`   | `namespace`, `worker`            | Gauge, 1 while a window believes it holds the maintenance zone for the worker                    |
 | `simplyblock_controlplane_fdb_eviction_hold_seconds`    | `namespace`, `signal`            | Histogram of the time between the drain being observed and the budget going down                 |
-| `simplyblock_controlplane_fdb_holding_windows`          | `namespace`                      | Gauge of windows in `Holding`, which after a pool-wide cordon is the number of hosts still to go |
+| `simplyblock_controlplane_fdb_holding_windows_count`    | `namespace`                      | Gauge of windows in `Holding`, which after a pool-wide cordon is the number of hosts still to go |
 | `simplyblock_controlplane_fdb_command_duration_seconds` | `namespace`, `command`, `result` | Histogram of each `fdbcli` Job's duration by command and `Complete` or `Failed`                  |
 | `simplyblock_controlplane_fdb_coordinator_moves_total`  | `namespace`, `placement`         | Windows by placement: `Spread`, `SharedHost`, or `Unchanged`                                     |
 
@@ -994,7 +994,7 @@ drain's way, and an update that fails on a PodDisruptionBudget timeout is one
 whose upper buckets grew first. The `signal` label separates a slow move from a
 slow observation.
 
-**`simplyblock_controlplane_fdb_maintenance_zone_active` is the leak detector.**
+**`simplyblock_controlplane_fdb_maintenance_zone_state` is the leak detector.**
 A gauge at one with no window `Running` is a zone the teardown did not clear,
 and it is the alert that says data distribution is ignoring a zone nobody is
 maintaining.

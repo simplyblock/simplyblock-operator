@@ -30,9 +30,9 @@ func TestTheWindowsSeriesAreRegistered(t *testing.T) {
 		names[f.GetName()] = true
 	}
 	for _, want := range []string{
-		"simplyblock_controlplane_fdb_maintenance_zone_active",
+		"simplyblock_controlplane_fdb_maintenance_zone_state",
 		"simplyblock_controlplane_fdb_eviction_hold_seconds",
-		"simplyblock_controlplane_fdb_holding_windows",
+		"simplyblock_controlplane_fdb_holding_windows_count",
 		"simplyblock_controlplane_fdb_command_duration_seconds",
 		"simplyblock_controlplane_fdb_coordinator_moves_total",
 	} {

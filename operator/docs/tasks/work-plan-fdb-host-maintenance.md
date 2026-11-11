@@ -310,9 +310,9 @@ the terminal record. Emit `HostMaintenanceRaised` on the `ControlPlane`.
 **Size:** S
 
 Add to `operator/internal/controllers/controlplane/metrics.go` the four series
-of design §11: `simplyblock_controlplane_fdb_maintenance_zone_active`,
+of design §11: `simplyblock_controlplane_fdb_maintenance_zone_state`,
 `simplyblock_controlplane_fdb_eviction_hold_seconds` with its `signal` label,
-`simplyblock_controlplane_fdb_holding_windows`,
+`simplyblock_controlplane_fdb_holding_windows_count`,
 `simplyblock_controlplane_fdb_command_duration_seconds`, and
 `simplyblock_controlplane_fdb_coordinator_moves_total`, and set them from the
 steps: the zone gauge from `EnteringMaintenance` to `LeavingMaintenance` and on

@@ -123,7 +123,7 @@ var (
 	// distribution ignoring a zone nobody is maintaining.
 	fdbMaintenanceZoneActive = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "simplyblock_controlplane_fdb_maintenance_zone_active",
+			Name: "simplyblock_controlplane_fdb_maintenance_zone_state",
 			Help: "1 while a HostMaintenance window holds FoundationDB's maintenance zone for the worker.",
 		},
 		[]string{"namespace", "worker"},
@@ -143,7 +143,7 @@ var (
 	// still to go.
 	fdbHoldingWindows = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "simplyblock_controlplane_fdb_holding_windows",
+			Name: "simplyblock_controlplane_fdb_holding_windows_count",
 			Help: "HostMaintenance windows in Holding, waiting for the drain of their worker.",
 		},
 		[]string{"namespace"},
