@@ -6,7 +6,6 @@ package driver
 
 import (
 	"slices"
-	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -28,14 +27,13 @@ func withMDS(d *simplyblockv1alpha2.SimplyblockDriver) *simplyblockv1alpha2.Simp
 			corev1.ResourceCPU:    resource.MustParse("2"),
 			corev1.ResourceMemory: resource.MustParse("2Gi"),
 		}},
-		StateSize: resource.MustParse("2Gi"),
 	}
 	return d
 }
 
 func mdsObjects(t *testing.T, d *simplyblockv1alpha2.SimplyblockDriver) (*corev1.ServiceAccount, *appsv1.StatefulSet) {
 	t.Helper()
-	sa, sts, err := MDSObjects(d, testClusterID, "simplyblock-state", nil)
+	sa, sts, err := MDSObjects(d, testClusterID, nil)
 	if err != nil {
 		t.Fatalf("MDSObjects: %v", err)
 	}
@@ -100,11 +98,8 @@ func TestMDSStatefulSetNameFitsAndIdentifiesTheCluster(t *testing.T) {
 	if other := MDSStatefulSetName(d, "7c3e9a10-0000-4000-8000-000000000000"); other == name {
 		t.Errorf("two storage clusters share the StatefulSet %q", name)
 	}
-	if got := MDSPodName(d, testClusterID); got != name+"-0" {
-		t.Errorf("MDSPodName = %q, want %q", got, name+"-0")
-	}
-	if sts.Spec.Replicas == nil || *sts.Spec.Replicas != 1 {
-		t.Errorf("replicas = %v, want exactly one: two guests must never mount one filesystem", sts.Spec.Replicas)
+	if got := MDSPodName(d, testClusterID, 1); got != name+"-1" {
+		t.Errorf("MDSPodName = %q, want %q", got, name+"-1")
 	}
 }
 
@@ -191,49 +186,6 @@ func TestMDSGuestIsSizedAndNamedFromThePod(t *testing.T) {
 	}
 }
 
-// The state disk is a raw block device the guest formats itself, at the path
-// the runner attaches it from, in the class the caller chose for it.
-func TestMDSStateDiskIsABlockClaimAtTheRunnersPath(t *testing.T) {
-	const class = "simplyblock-state" // what mdsObjects passes as the caller's choice
-	d := withMDS(testDriver("simplyblock"))
-	_, sts := mdsObjects(t, d)
-
-	if len(sts.Spec.VolumeClaimTemplates) != 1 {
-		t.Fatalf("want one claim template, got %d", len(sts.Spec.VolumeClaimTemplates))
-	}
-	claim := sts.Spec.VolumeClaimTemplates[0]
-	if claim.Spec.VolumeMode == nil || *claim.Spec.VolumeMode != corev1.PersistentVolumeBlock {
-		t.Errorf("volumeMode = %v, want Block", claim.Spec.VolumeMode)
-	}
-	if !slices.Equal(claim.Spec.AccessModes, []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}) {
-		t.Errorf("accessModes = %v, want ReadWriteOnce", claim.Spec.AccessModes)
-	}
-	if got := claim.Spec.Resources.Requests[corev1.ResourceStorage]; !got.Equal(resource.MustParse("2Gi")) {
-		t.Errorf("size = %s, want 2Gi", got.String())
-	}
-	if claim.Spec.StorageClassName == nil || *claim.Spec.StorageClassName != class {
-		t.Errorf("storageClassName = %v, want %q", claim.Spec.StorageClassName, class)
-	}
-
-	c := runnerContainer(t, sts)
-	if len(c.VolumeDevices) != 1 || c.VolumeDevices[0].Name != claim.Name ||
-		c.VolumeDevices[0].DevicePath != "/dev/mds-state" {
-		t.Errorf("volumeDevices = %+v, want the claim at /dev/mds-state", c.VolumeDevices)
-	}
-}
-
-// An unset size takes the CRD's default rather than a zero-sized claim, which
-// the API server would refuse.
-func TestMDSStateDiskDefaultsItsSize(t *testing.T) {
-	d := withMDS(testDriver("simplyblock"))
-	d.Spec.PNFS.MDS.StateSize = resource.Quantity{}
-	_, sts := mdsObjects(t, d)
-	got := sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]
-	if !got.Equal(resource.MustParse("1Gi")) {
-		t.Errorf("size = %s, want 1Gi", got.String())
-	}
-}
-
 // Ready only while the guest is healthy, and the termination grace leaves the
 // runner its own shutdown grace to power the guest down in.
 func TestMDSPodReadinessAndShutdownFollowTheGuest(t *testing.T) {
@@ -256,7 +208,7 @@ func TestMDSPodReadinessAndShutdownFollowTheGuest(t *testing.T) {
 }
 
 func TestMDSObjectsNeedTheMDSSpec(t *testing.T) {
-	if _, _, err := MDSObjects(testDriver("simplyblock"), testClusterID, "simplyblock-state", nil); err == nil {
+	if _, _, err := MDSObjects(testDriver("simplyblock"), testClusterID, nil); err == nil {
 		t.Error("MDSObjects rendered a metadata server for a driver without spec.pnfs.mds")
 	}
 }
@@ -303,23 +255,17 @@ func TestMDSPodKeepsTheLimitsItIsGiven(t *testing.T) {
 // Two storage clusters whose IDs share their first segment get two metadata
 // servers. A name taken from that segment alone gave both the same
 // StatefulSet, and the second cluster bound its exports to the first one's
-// pod; the same held for the state disk's class.
+// pod.
 func TestMDSNamesKeepClustersSharingAPrefixApart(t *testing.T) {
 	d := testDriver("simplyblock")
 	a, b := "0f2ac1d3-9b7e-4c21-8a55-6d4e3f1b2c90", "0f2ac1d3-1111-4222-8333-444455556666"
 	if MDSStatefulSetName(d, a) == MDSStatefulSetName(d, b) {
 		t.Errorf("both clusters get StatefulSet %s", MDSStatefulSetName(d, a))
 	}
-	if MDSStateClassName(d, a) == MDSStateClassName(d, b) {
-		t.Errorf("both clusters get state disk class %s", MDSStateClassName(d, a))
-	}
 	// The pod's controller-revision-hash label is the StatefulSet's name plus
 	// eleven characters, and a label value is at most 63.
 	if n := len(MDSStatefulSetName(d, a)); n > 52 {
 		t.Errorf("StatefulSet name %s is %d characters, over 52", MDSStatefulSetName(d, a), n)
-	}
-	if !strings.HasSuffix(MDSStateClassName(d, a), MDSStateClassSuffix) {
-		t.Errorf("state disk class %s does not end in %s", MDSStateClassName(d, a), MDSStateClassSuffix)
 	}
 }
 

@@ -5,11 +5,14 @@
 // node plugin hosts on a node (design-pnfs-mds-vm.md §6.3).
 //
 // It listens on the guest's bridge address, which only the runner reaches,
-// and serves the export service and gRPC's health service there. The health
-// is what the pod's readiness follows: the state disk mounted and nfsd running.
+// and serves the export service, the metadata server's role service, and gRPC's
+// health service there. A guest boots as a standby that mounts and connects
+// nothing and serves health at once. Promote (promote.go) makes it the active
+// one, which then also needs the state volume mounted and nfsd running. The
+// export service refuses CreateExport until then.
 // It also watches nfsd and logs its state to the console (nfsd_watchdog.go),
-// and keeps every export's namespace on all its paths (paths.go).
-// It holds no credentials. The namespace's connection arrives with each call,
+// and keeps every connection on all its paths (paths.go).
+// It holds no credentials. Every volume's connection arrives with the call,
 // resolved by the runner.
 
 package main
@@ -17,8 +20,10 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"net"
 	"os"
+	oexec "os/exec"
 	"os/signal"
 	"strconv"
 	"syscall"
@@ -30,16 +35,24 @@ import (
 	"k8s.io/klog"
 	mountutils "k8s.io/mount-utils"
 
+	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/lvol"
 	atlasexport "github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/nfsexport/nfsexportrpc"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/nvmeof"
+	"github.com/simplyblock/atlas/nvmepr"
 	"github.com/simplyblock/atlas/storage"
 	"github.com/simplyblock/csi-driver/internal/mds/agent"
 	"github.com/simplyblock/csi-driver/internal/mds/netsetup"
 	csimount "github.com/simplyblock/csi-driver/internal/mount"
 	"github.com/simplyblock/csi-driver/internal/nfsexport"
+)
+
+// A connect right after boot sometimes fails and succeeds a moment later.
+const (
+	connectAttempts = 3
+	connectDelay    = 2 * time.Second
 )
 
 // healthInterval is how often the guest's health is re-evaluated. The pod's
@@ -80,6 +93,46 @@ func reconcilePaths(ctx context.Context, conn lvol.Connection, hostNQN string) (
 	return nvmeof.ReconcilePaths(ctx, connector, nil, conn, opts...)
 }
 
+// command runs a command and returns its combined output.
+func command(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return oexec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+// guestConfig wires the role machine to the guest's real connector, reservation
+// device, mounter, nfsd key parameter, and systemd.
+func guestConfig(keeper *agent.PathKeeper, stateDir string) agent.GuestConfig {
+	subs := nvme.NewSysfsSubsystemResolver(nvme.SysfsConfig{})
+	return agent.GuestConfig{
+		Connector: agent.FabricConnector{
+			Connector: nvmeof.NewCLIConnector(subs),
+			Devices:   storage.Local(nvme.SysfsConfig{}).DeviceResolver,
+		},
+		Open:   nvmepr.Open,
+		HostID: agent.HostIDFromNQN,
+		State: agent.FSMounter{
+			Prober: blockdev.NewProber(),
+			FS:     csimount.New().FilesystemOps(),
+		},
+		Key: agent.ParamKeyWriter{
+			Path: agent.NFSDKeyParameter,
+			LoadModule: func(ctx context.Context) error {
+				out, err := command(ctx, "modprobe", "nfsd")
+				if err != nil {
+					return fmt.Errorf("modprobe nfsd: %w (%s)", err, out)
+				}
+				return nil
+			},
+		},
+		Units:    agent.Systemctl{Run: command},
+		Tracker:  keeper,
+		StateDir: stateDir,
+		Log:      agent.KlogLogger{},
+
+		ConnectAttempts: connectAttempts,
+		ConnectDelay:    connectDelay,
+	}
+}
+
 func run(ctx context.Context, listen, stateDir string, watchdog, pathInterval time.Duration) error {
 	// No host NQN function: the identity arrives with every call, decided by
 	// the operator and resolved by the runner.
@@ -89,19 +142,26 @@ func run(ctx context.Context, listen, stateDir string, watchdog, pathInterval ti
 		return err
 	}
 	keeper := &agent.PathKeeper{Reconcile: reconcilePaths, Log: agent.KlogLogger{}}
-	exports, err := nfsexportrpc.NewServer(keeper.Wrap(nfsexport.WithNFSD(assembler)),
+	mounter := mountutils.New("")
+	guest := agent.NewGuest(guestConfig(keeper, stateDir))
+	exports, err := nfsexportrpc.NewServer(guest.Guard(keeper.Wrap(nfsexport.WithNFSD(assembler))),
 		nfsexportrpc.WithExtentReader(&atlasexport.ExtentReader{Root: atlasexport.ExportsRoot}))
+	if err != nil {
+		return err
+	}
+	roles, err := nfsexportrpc.NewMDSServer(guest)
 	if err != nil {
 		return err
 	}
 
 	server := grpc.NewServer()
 	exports.Register(server)
+	roles.Register(server)
 	healthServer := health.NewServer()
 	healthpb.RegisterHealthServer(server, healthServer)
 
-	mounter := mountutils.New("")
 	go agent.Report(ctx, healthServer, agent.Health{
+		Role:     guest.Role,
 		StateDir: stateDir,
 		Mounted:  mounter.IsMountPoint,
 		NFSD:     nfsexport.CheckNFSDThreads,

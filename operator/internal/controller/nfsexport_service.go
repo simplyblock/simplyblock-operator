@@ -52,7 +52,7 @@ func (r *NFSExportReconciler) reconcileExportService(
 // binding won the create and the cache has not seen it yet, is an error: an
 // empty address recorded as the export's is never backfilled.
 func (r *NFSExportReconciler) reconcileMDSServiceObject(ctx context.Context, mdsPod string) (string, error) {
-	svc := utils.BuildMDSService(r.OperatorNamespace, utils.MDSServiceName(mdsPod))
+	svc := utils.BuildMDSService(r.OperatorNamespace, mdsServiceNameOf(mdsPod))
 	svc.OwnerReferences = r.mdsOwner(ctx, mdsPod)
 
 	var existing corev1.Service
@@ -79,7 +79,7 @@ func (r *NFSExportReconciler) reconcileMDSServiceObject(ctx context.Context, mds
 // empty address withdraws it while the pod goes away. A slice keeps the owner
 // it has when the pod, gone by then, names none.
 func (r *NFSExportReconciler) reconcileExportEndpointSlice(ctx context.Context, mdsPod, address string) error {
-	eps := utils.BuildMDSEndpointSlice(r.OperatorNamespace, utils.MDSServiceName(mdsPod), address)
+	eps := utils.BuildMDSEndpointSlice(r.OperatorNamespace, mdsServiceNameOf(mdsPod), address)
 	eps.OwnerReferences = r.mdsOwner(ctx, mdsPod)
 
 	var existing discoveryv1.EndpointSlice
@@ -125,4 +125,13 @@ func (r *NFSExportReconciler) mdsOwner(ctx context.Context, mdsPod string) []met
 	owner := *ref
 	owner.BlockOwnerDeletion = nil
 	return []metav1.OwnerReference{owner}
+}
+
+// mdsServiceNameOf is the Service of the metadata server whose pod is pod. Every
+// ordinal of a StatefulSet shares one, so it is named from the StatefulSet.
+func mdsServiceNameOf(pod string) string {
+	if sts, ok := utils.MDSStatefulSetNameOfPod(pod); ok {
+		return utils.MDSServiceName(sts)
+	}
+	return utils.MDSServiceName(pod)
 }

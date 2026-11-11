@@ -2,10 +2,9 @@
 //
 // The guest is the pnfs-os image (vela-os, prototype/boards/pnfs-common), and
 // the devices, their order, and the kernel command line built here are the
-// contract that image boots against: the read-only root disk is the first
-// virtio disk, the state disk carries the serial its fstab mounts by, and the
-// guest's address arrives as an `ip=` argument because the guest runs no DHCP
-// client. A change on either side is a change to both.
+// contract that image boots against: the read-only root disk is the only
+// disk, and the guest's address arrives as an `ip=` argument because the guest
+// runs no DHCP client. A change on either side is a change to both.
 //
 // It lives apart from the runner so the command line is a pure function of its
 // inputs and can be tested without KVM, a tap device, or a guest. The
@@ -37,10 +36,6 @@ const (
 	ArchARM64 Arch = "arm64"
 )
 
-// StateDiskSerial is the virtio serial of the state disk. The guest mounts
-// /dev/disk/by-id/virtio-pnfs-state at /var/lib/nfs.
-const StateDiskSerial = "pnfs-state"
-
 // MinMemoryMiB is the least memory the guest boots with: systemd, nfsd, and the
 // agent need it.
 const MinMemoryMiB = 256
@@ -58,8 +53,6 @@ type Guest struct {
 
 	// RootDiskPath is the image's qcow2 root filesystem, attached read-only.
 	RootDiskPath string
-	// StateDiskPath is the state PVC's raw block device.
-	StateDiskPath string
 
 	CPUs      int
 	MemoryMiB int
@@ -75,9 +68,9 @@ type Guest struct {
 	// and Gateway the bridge's own address.
 	Address netip.Prefix
 	Gateway netip.Addr
-	// Hostname must be stable across restarts: nfsd derives its server owner
-	// and scope from it, and NFSv4.1 clients only reclaim their state from a
-	// server whose identity did not change.
+	// Hostname is the StatefulSet's name, the same for every pod: nfsd derives
+	// its server owner and scope from it, and NFSv4.1 clients only reclaim
+	// their state from a server whose identity did not change.
 	Hostname string
 
 	// QMPSocket is the Unix socket the runner drives QEMU through.
@@ -139,14 +132,11 @@ func (g Guest) Args() ([]string, error) {
 		"-device", "virtio-serial-pci,id=virtio-serial0",
 		"-device", "virtconsole,chardev=console",
 
-		// Order is the contract: the root disk is the first virtio-blk device
-		// and enumerates as /dev/vda. The root image sits on the container's
-		// filesystem, where O_DIRECT is not guaranteed, so it keeps QEMU's
-		// default cache. The state disk is a block device and bypasses it.
+		// The root disk is the only virtio-blk device and enumerates as /dev/vda.
+		// The image sits on the container's filesystem, where O_DIRECT is not
+		// guaranteed, so it keeps QEMU's default cache.
 		"-drive", "id=root,file="+g.RootDiskPath+",format=qcow2,if=none,readonly=on",
 		"-device", "virtio-blk-pci,drive=root",
-		"-drive", "id=state,file="+g.StateDiskPath+",format=raw,if=none,cache=none",
-		"-device", "virtio-blk-pci,drive=state,serial="+StateDiskSerial,
 
 		"-netdev", g.netdev(),
 		"-device", "virtio-net-pci,netdev=net0,mac="+g.MAC.String(),
@@ -239,8 +229,6 @@ func (g Guest) validate() error {
 		return errors.New("no guest kernel")
 	case g.RootDiskPath == "":
 		return errors.New("no root disk")
-	case g.StateDiskPath == "":
-		return errors.New("no state disk")
 	case g.TapName == "":
 		return errors.New("no tap device")
 	case g.QMPSocket == "":
@@ -264,7 +252,7 @@ func (g Guest) validateAddressing() error {
 	if !g.Gateway.Is4() || !g.Address.Masked().Contains(g.Gateway) || g.Gateway == g.Address.Addr() {
 		return fmt.Errorf("gateway %s is not another address in %s", g.Gateway, g.Address.Masked())
 	}
-	// A pod name is a DNS-1123 subdomain, which carries no colon to break `ip=`.
+	// A StatefulSet name is a DNS-1123 subdomain, which carries no colon to break `ip=`.
 	if errs := validation.IsDNS1123Subdomain(g.Hostname); len(errs) > 0 {
 		return fmt.Errorf("hostname %q: %s", g.Hostname, strings.Join(errs, ", "))
 	}

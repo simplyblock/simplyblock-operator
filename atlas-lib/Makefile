@@ -25,6 +25,7 @@ PROTO_GEN := link/linkv1/link.pb.go link/linkv1/link_grpc.pb.go \
 	link/sitev1/site.pb.go link/sitev1/site_grpc.pb.go \
 	storage/storagerpc/storagev1/nvme.pb.go storage/storagerpc/storagev1/nvme_grpc.pb.go \
 	nfsexport/nfsexportrpc/nfsexportv1/export.pb.go nfsexport/nfsexportrpc/nfsexportv1/export_grpc.pb.go \
+	nfsexport/nfsexportrpc/nfsexportv1/mds.pb.go nfsexport/nfsexportrpc/nfsexportv1/mds_grpc.pb.go \
 	conntrack/conntrackrpc/conntrackv1/flow.pb.go conntrack/conntrackrpc/conntrackv1/flow_grpc.pb.go \
 	placement/placementrpc/placementv1/placement.pb.go placement/placementrpc/placementv1/placement_grpc.pb.go \
 	netcheck/netcheckrpc/netcheckv1/check.pb.go netcheck/netcheckrpc/netcheckv1/check_grpc.pb.go
@@ -74,10 +75,12 @@ storage/storagerpc/storagev1/nvme.pb.go: storage/storagerpc/storagev1/nvme.proto
 
 storage/storagerpc/storagev1/nvme_grpc.pb.go: storage/storagerpc/storagev1/nvme.pb.go
 
-nfsexport/nfsexportrpc/nfsexportv1/export.pb.go: nfsexport/nfsexportrpc/nfsexportv1/export.proto nfsexport/nfsexportrpc/nfsexportv1/buf.gen.yaml nfsexport/nfsexportrpc/nfsexportv1/buf.yaml | buf
+nfsexport/nfsexportrpc/nfsexportv1/export.pb.go: nfsexport/nfsexportrpc/nfsexportv1/export.proto nfsexport/nfsexportrpc/nfsexportv1/mds.proto nfsexport/nfsexportrpc/nfsexportv1/buf.gen.yaml nfsexport/nfsexportrpc/nfsexportv1/buf.yaml | buf
 	cd nfsexport/nfsexportrpc/nfsexportv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
 
 nfsexport/nfsexportrpc/nfsexportv1/export_grpc.pb.go: nfsexport/nfsexportrpc/nfsexportv1/export.pb.go
+
+nfsexport/nfsexportrpc/nfsexportv1/mds.pb.go nfsexport/nfsexportrpc/nfsexportv1/mds_grpc.pb.go: nfsexport/nfsexportrpc/nfsexportv1/export.pb.go
 
 conntrack/conntrackrpc/conntrackv1/flow.pb.go: conntrack/conntrackrpc/conntrackv1/flow.proto conntrack/conntrackrpc/conntrackv1/buf.gen.yaml conntrack/conntrackrpc/conntrackv1/buf.yaml | buf
 	cd conntrack/conntrackrpc/conntrackv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate

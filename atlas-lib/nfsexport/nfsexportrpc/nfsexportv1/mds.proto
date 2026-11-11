@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+// MDSService is the role of one metadata server guest: standby until the
+// operator promotes it, then active. It sits beside ExportService, which
+// assembles the exports a promoted guest serves, and carries the one call that
+// decides whether a guest may serve at all (design-pnfs-mds-standby.md, §8).
+package atlas.nfsexport.v1;
+
+import "export.proto";
+
+option go_package = "github.com/simplyblock/atlas/nfsexport/nfsexportrpc/nfsexportv1;nfsexportv1";
+
+service MDSService {
+  // Describe reports the guest's role, the epoch it accepted, and the key it
+  // registered under. It changes nothing.
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+
+  // Promote makes a standby the active guest: connect every volume, fence every
+  // device, mount the state volume, set the guest's reservation key, and start
+  // nfsd, in that order. A promotion whose fencing fails on any device mounts
+  // nothing and leaves the guest a standby. It is idempotent at the epoch the
+  // guest has accepted, refused below it, and refused at any other epoch once
+  // the guest is active.
+  rpc Promote(PromoteRequest) returns (PromoteResponse);
+}
+
+// Role is what a guest is doing.
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  // ROLE_STANDBY is a guest that has booted and answers, and holds no
+  // connection, no mount, and no running nfsd.
+  ROLE_STANDBY = 1;
+  // ROLE_PROMOTING is a guest in the middle of a Promote.
+  ROLE_PROMOTING = 2;
+  // ROLE_ACTIVE is the guest serving the exports.
+  ROLE_ACTIVE = 3;
+}
+
+message DescribeRequest {}
+
+message DescribeResponse {
+  Role role = 1;
+  // epoch is the promotion the guest accepted, zero for a standby that never
+  // was promoted in this boot.
+  uint64 epoch = 2;
+  // key is the reservation key the guest registers under, zero until promoted.
+  uint64 key = 3;
+}
+
+// Volume is a volume the guest connects itself: its identity, where it is
+// served from, and who it connects as. The state volume is one; an export's
+// namespace is carried by its ExportSpec.
+message Volume {
+  string volume_uuid = 1;
+  string cluster_id = 2;
+  string pool_id = 3;
+  // connection is resolved by the runner for the pod's own host NQN, which the
+  // operator does not send.
+  Connection connection = 4;
+}
+
+message PromoteRequest {
+  // epoch is the record's epoch for this promotion, one or more.
+  uint64 epoch = 1;
+  // key is the reservation key of the epoch, which the guest checks against
+  // its own derivation of it from the StatefulSet's UID and the epoch.
+  uint64 key = 2;
+  // host_nqn is the pod's host identity, stable across the pod's restarts.
+  string host_nqn = 3;
+  // state_volume is the client-recovery database's volume.
+  Volume state_volume = 4;
+  // exports are every export the guest serves once promoted. The runner fills
+  // each one's connection, as for CreateExport.
+  repeated ExportSpec exports = 5;
+  // statefulset_uid is the UID the key's tag derives from, so the guest can
+  // tell a key of its own StatefulSet from another's.
+  string statefulset_uid = 6;
+}
+
+// PromoteOutcome says why a promotion did not happen, for the refusals the
+// operator acts on differently. A transport or internal failure is a gRPC error
+// and not an outcome.
+enum PromoteOutcome {
+  PROMOTE_OUTCOME_UNSPECIFIED = 0;
+  // PROMOTE_OUTCOME_ACTIVE: the guest is active at the requested epoch.
+  PROMOTE_OUTCOME_ACTIVE = 1;
+  // PROMOTE_OUTCOME_COLLISION: another host is registered under the key. The
+  // operator raises the epoch and promotes again.
+  PROMOTE_OUTCOME_COLLISION = 2;
+  // PROMOTE_OUTCOME_SUPERSEDED: a key of the same StatefulSet with a higher
+  // epoch is registered, so a later promotion has already fenced this one.
+  PROMOTE_OUTCOME_SUPERSEDED = 3;
+  // PROMOTE_OUTCOME_FENCE_FAILED: a step failed on a device. Nothing was
+  // mounted. The operator retries with backoff at the same epoch.
+  PROMOTE_OUTCOME_FENCE_FAILED = 4;
+  // PROMOTE_OUTCOME_STALE_EPOCH: the epoch is below the one the guest
+  // accepted, or differs from it while the guest is active.
+  PROMOTE_OUTCOME_STALE_EPOCH = 5;
+}
+
+message PromoteResponse {
+  PromoteOutcome outcome = 1;
+  // device and step name where a fence failed, and message says why.
+  string device = 2;
+  string step = 3;
+  string message = 4;
+}

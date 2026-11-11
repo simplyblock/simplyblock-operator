@@ -25,11 +25,11 @@ import (
 
 	"github.com/simplyblock/atlas/link"
 	exportpkg "github.com/simplyblock/atlas/nfsexport"
-	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/mdsstate"
 )
 
 const (
@@ -602,7 +602,7 @@ func TestPodHostedCallsCarryTheStatefulSetsHostNQN(t *testing.T) {
 
 	reconcileExport(t, r)
 
-	want := nqn.Host(testMDSStatefulSetUID)
+	want, _ := mdsstate.HostNQN(testMDSStatefulSetUID, 0)
 	if len(asm.hostNQNs) != 1 || asm.hostNQNs[0] != want {
 		t.Errorf("host NQNs = %v, want [%s]", asm.hostNQNs, want)
 	}
