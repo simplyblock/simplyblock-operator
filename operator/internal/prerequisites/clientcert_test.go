@@ -111,3 +111,28 @@ func TestTheBundleDeploymentIsRecreatedOnUpgrade(t *testing.T) {
 	}
 	t.Fatal("no Deployment in config/manager/manager.yaml")
 }
+
+// The chain issues the CSI link's serving certificate, which the chart cannot
+// render on a cluster that serves no cert-manager API until the operator has
+// installed it.
+func TestTheIssuerChainIssuesTheCSILinkServingCertificate(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).Build()
+	if err := EnsureCertManagerIssuerChain(context.Background(), c, "simplyblock"); err != nil {
+		t.Fatal(err)
+	}
+	cert := get(t, c, certificateGVK, "simplyblock", "simplyblock-csi-link")
+	if cert == nil {
+		t.Fatal("the CSI link's serving Certificate was not created")
+	}
+	if s, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName"); s != "simplyblock-csi-link-tls" {
+		t.Errorf("secretName = %q, want simplyblock-csi-link-tls", s)
+	}
+	dnsNames, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
+	if !slices.Contains(dnsNames, "simplyblock-csi-link.simplyblock.svc") {
+		t.Errorf("dnsNames = %v, want simplyblock-csi-link.simplyblock.svc", dnsNames)
+	}
+	usages, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "usages")
+	if !slices.Contains(usages, "server auth") {
+		t.Errorf("usages = %v, want server auth", usages)
+	}
+}
