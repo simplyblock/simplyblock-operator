@@ -297,6 +297,10 @@ and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-238     | A worker with a tolerated and an untolerated taint is declined, and the event names the untolerated one                         | Regression | `TestDiscoverDeclinesAWorkerWithATaintTheRunDoesNotTolerate`      |
 | U-242     | Workers on one subnet for each zone are all drafted (regression 2026-11-11-discovery-multi-az-management-subnets)               | Regression | `TestWorkersManagedOnTheirNodeAddressesAreKeptAcrossSubnets`      |
 | U-243     | A worker whose interface was ranked, on no network the cluster reaches the others on, is refused by name                        | Negative   | `TestARankedWorkerOffEveryNetworkTheClusterReachesIsRefused`      |
+| U-244     | `enableFailureDomains` false reads no topology, so a fleet in several zones is one group with no failure domain                 | Positive   | `TestFailureDomainsDisabledGroupsTheFleetAsOne`                   |
+| U-245     | `enableFailureDomains` false states an explicit false on the draft, not an unset value                                          | Positive   | `TestFailureDomainsDisabledWritesFalseOnTheDraft`                 |
+| U-246     | `enableFailureDomains` true reads the topology and proposes the mode on                                                         | Positive   | `TestFailureDomainsForcedOnReadsTheTopology`                      |
+| U-247     | `enableFailureDomains` true on too few domains writes the mode on with a note the control plane will refuse to activate         | Boundary   | `TestFailureDomainsForcedOnWithoutEnoughDomainsIsNoted`           |
 | U-202     | A cluster that states no tolerations: the Job placement carries none, which is what it carried before                           | Boundary   | `TestJobPlacementOfAClusterThatTakesNoTaint`                      |
 | U-203     | The latency baseline Job: it tolerates what the storage nodes of its cluster tolerate                                           | Positive   | `TestTheBaselineJobToleratesWhatTheStorageNodesDo`                |
 | U-204     | `spec.cluster.containerResources`: the cluster's storage-node container is sized as the document states                         | Positive   | `TestTheDocumentsContainerResourcesReachTheStorageNodes`          |
@@ -641,11 +645,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 176       | 43      | 133         | 9         |
+| Unit        | 180       | 47      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **246**   | **46**  | **200**     | **12**    |
+| **Total**   | **250**   | **50**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as

@@ -640,7 +640,12 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 	var misaligned []Refusal
 	plan.Workers, misaligned = alignNetworks(plan.Workers)
 	plan.Refusals = append(plan.Refusals, misaligned...)
-	plan.assignFailureDomains(failureDomainLabelOf(run))
+	// A run that turns failure domains off reads no topology at all, so the
+	// workers carry no domain and the grouping that follows merges them by
+	// hardware rather than splitting them per domain.
+	if run == nil || run.EnableFailureDomains == nil || *run.EnableFailureDomains {
+		plan.assignFailureDomains(failureDomainLabelOf(run))
+	}
 	plan.noteMultipath()
 
 	if len(plan.Workers) > 0 && plan.Workers[0].Attachment == nil {
