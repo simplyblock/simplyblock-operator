@@ -1352,6 +1352,11 @@ func (in *DiscoverSpec) DeepCopyInto(out *DiscoverSpec) {
 		*out = new(NetworkAttachmentSelection)
 		**out = **in
 	}
+	if in.Network != nil {
+		in, out := &in.Network, &out.Network
+		*out = new(StorageNetworkSpec)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.DeviceFilter != nil {
 		in, out := &in.DeviceFilter, &out.DeviceFilter
 		*out = new(DeviceFilter)
