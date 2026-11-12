@@ -14,6 +14,7 @@ package main
 import (
 	"fmt"
 	"maps"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -45,6 +46,43 @@ func unknown(reports ...nodeprobe.Report) Case {
 		nodes = append(nodes, kubeNode(report.Node))
 	}
 	return Case{Family: "net", Reports: reports, Nodes: nodes}
+}
+
+// managed is one worker of a fleet whose management subnets are the case: its
+// only NIC, the address on it, and whether the cluster reaches it there.
+type managed struct {
+	report  nodeprobe.Report
+	address string
+	reached bool
+}
+
+// managedAt is a worker the cluster reaches on the address its only NIC holds,
+// which is given with its prefix length.
+func managedAt(name, address string) managed {
+	return managed{report: netHost(name, slow(address)), address: address, reached: true}
+}
+
+// unreached is a worker whose node object states no address, so its only NIC is
+// named by the ranking.
+func unreached(name, address string) managed {
+	return managed{report: netHost(name, slow(address)), address: address}
+}
+
+// reached is the case of a fleet whose workers each hold their own management
+// address, on whatever subnet the case puts it. It is known with the addresses
+// stated, because kubeFleet puts every worker on one network.
+func reached(workers ...managed) Case {
+	out := Case{Family: "net"}
+	for _, worker := range workers {
+		out.Reports = append(out.Reports, worker.report)
+		if !worker.reached {
+			out.Nodes = append(out.Nodes, kubeNode(worker.report.Node))
+			continue
+		}
+		host, _, _ := strings.Cut(worker.address, "/")
+		out.Nodes = append(out.Nodes, kubeNode(worker.report.Node, reachableAt(host)))
+	}
+	return out
 }
 
 // bonded is the interface list of a host whose management network is a bond
@@ -356,6 +394,23 @@ func netCases() map[string]Case {
 			netHost("worker-02", slow("10.10.10.2/32")),
 			netHost("worker-03", slow("10.10.10.3/32"))),
 
+		"NET-76": reached(
+			managedAt("worker-01", "10.248.192.17/23"),
+			managedAt("worker-02", "10.248.195.56/23"),
+			managedAt("worker-03", "10.248.196.19/23")),
+
+		"NET-77": reached(
+			managedAt("worker-01", "10.10.10.1/24"),
+			managedAt("worker-02", "10.10.10.2/24"),
+			managedAt("worker-03", "10.10.10.3/24"),
+			managedAt("worker-04", "10.10.20.4/24")),
+
+		"NET-78": reached(
+			managedAt("worker-01", "10.248.192.17/23"),
+			managedAt("worker-02", "10.248.195.56/23"),
+			managedAt("worker-03", "10.248.196.19/23"),
+			unreached("worker-04", "172.16.0.4/24")),
+
 		"NET-61": unknown(
 			netHost("worker-01", slow("10.10.10.1"), jumbo("ens5f0", 25000, holding("10.20.0.1"))),
 			netHost("worker-02", slow("10.10.10.2"), jumbo("ens5f0", 25000, holding("10.20.0.2"))),
@@ -500,6 +555,9 @@ func netCases() map[string]Case {
 		"NET-68": "a-host-route-data-nic-beside-a-worker-without-one",
 		"NET-69": "data-nics-sharing-only-a-second-address",
 		"NET-70": "a-data-nic-whose-first-address-is-link-local",
+		"NET-76": "one-management-subnet-for-each-zone",
+		"NET-77": "one-reached-worker-off-the-majority-subnet",
+		"NET-78": "a-ranked-worker-off-every-reached-subnet",
 	}
 	gaps := map[string]string{
 		"NET-04": "G-7", "NET-22": "G-23", "NET-23": "G-24", "NET-27": "G-26",
