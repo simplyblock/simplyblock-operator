@@ -138,7 +138,7 @@ func (r *ReplicationPairReconciler) unregisterPeerWithCSI(
 	return cluster.EditCSICredentials(ctx, r.Client, r.csiNamespace(pair), func(creds *cluster.CSICredentials) {
 		kept := creds.Clusters[:0]
 		for _, e := range creds.Clusters {
-			if !(e.Peer && e.ClusterID == targetUUID) {
+			if !e.Peer || e.ClusterID != targetUUID {
 				kept = append(kept, e)
 			}
 		}
