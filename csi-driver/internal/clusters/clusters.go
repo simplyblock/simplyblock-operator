@@ -122,7 +122,8 @@ func FailoverClusters(clusterID string) ([]string, error) {
 		}
 	}
 	if len(local) == 0 {
-		return nil, fmt.Errorf("cluster %s is on another control plane and the secret marks no cluster of this site local: %w",
+		return nil, fmt.Errorf(
+			"cluster %s is on another control plane and the secret marks no cluster of this site local: %w",
 			clusterID, controlplane.ErrClusterNotFound)
 	}
 	return local, nil

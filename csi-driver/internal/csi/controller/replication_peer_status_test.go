@@ -23,7 +23,7 @@ const (
 // failedOverOnThisSite is site B after the fail-over of the source's group:
 // the clones' group here, replicated last at lastSync, and this site's control
 // plane resolving the source's group handle to it.
-func failedOverOnThisSite(t *testing.T, lastSync int64) (*Server, *mockSBCLI) {
+func failedOverOnThisSite(t *testing.T, lastSync int64) *Server {
 	t.Helper()
 	local := newMockSBCLI()
 	t.Cleanup(local.Close)
@@ -37,11 +37,11 @@ func failedOverOnThisSite(t *testing.T, lastSync int64) (*Server, *mockSBCLI) {
 			"active_handle": siteBClusterID + ":pool:" + cloneHere,
 		}},
 	}
-	return splitSite(t, local, true), local
+	return splitSite(t, local, true)
 }
 
 func TestInfoOfAGroupFailedOverHereComesFromThisSite(t *testing.T) {
-	cs, _ := failedOverOnThisSite(t, 1794490000)
+	cs := failedOverOnThisSite(t, 1794490000)
 
 	resp, err := cs.GetVolumeReplicationInfo(context.Background(),
 		&replication.GetVolumeReplicationInfoRequest{ReplicationSource: groupSource()})
@@ -54,7 +54,7 @@ func TestInfoOfAGroupFailedOverHereComesFromThisSite(t *testing.T) {
 }
 
 func TestDestinationInfoOfAGroupFailedOverHereComesFromThisSite(t *testing.T) {
-	cs, _ := failedOverOnThisSite(t, 1794490000)
+	cs := failedOverOnThisSite(t, 1794490000)
 
 	resp, err := cs.GetReplicationDestinationInfo(context.Background(),
 		&replication.GetReplicationDestinationInfoRequest{ReplicationSource: groupSource()})
