@@ -398,6 +398,27 @@ func (cs *Server) GetVolumeReplicationInfo(
 	return resp, nil
 }
 
+// failOverFromLocalCopies fails the group gh, of a cluster on another control
+// plane, over onto the first of this site's clusters local that holds a
+// complete replicated generation of it. Every cluster is tried in order, and
+// the last error is returned when none succeeds: a 409 (no complete generation
+// yet) stays retryable.
+func failOverFromLocalCopies(ctx context.Context, local []string, gh lvol.GroupHandle) error {
+	var lastErr error
+	for _, cluster := range local {
+		client, err := clusters.ReplicationClient(ctx, cluster)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if lastErr = client.FailoverReplicatedGroup(ctx, cluster, gh); lastErr == nil {
+			return nil
+		}
+		klog.Warningf("fail-over of group %s on cluster %s: %v", gh.Handle(), cluster, lastErr)
+	}
+	return lastErr
+}
+
 // PromoteVolume brings the volume up as primary on this cluster (design
 // §5.2). Force=true is the unplanned path: it clones the last fully
 // replicated generation and ignores demote state entirely, because its whole
@@ -422,6 +443,19 @@ func (cs *Server) PromoteVolume(
 	// replicated generation (sbcli failover_group). Promoting the live group
 	// instead would turn a fail-back into a no-op on the group being left.
 	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
+		// A split control plane: the group's cluster is on another site's
+		// control plane, which may be cut off. This site's control plane fails
+		// the group over from the copies it holds.
+		local, err := clusters.FailoverClusters(gh.ClusterID)
+		if err != nil {
+			return nil, status.Error(codes.Unavailable, err.Error())
+		}
+		if len(local) > 0 {
+			if err := failOverFromLocalCopies(ctx, local, gh); err != nil {
+				return nil, classifyPromoteVolumeError(err)
+			}
+			return &replication.PromoteVolumeResponse{}, nil
+		}
 		client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
 		if err != nil {
 			return nil, status.Error(codes.Unavailable, err.Error())

@@ -89,6 +89,33 @@ func (c *Client) PromoteGroup(ctx context.Context, gh lvol.GroupHandle) error {
 	return nil
 }
 
+// FailoverReplicatedGroup fails the group gh over onto local, a cluster of this
+// control plane, from the replicated copies there. It is the promote for a
+// split control plane, where gh names a cluster on another control plane that
+// may be cut off: this control plane holds no record of that group, only the
+// copies, and each copy carries what its clone needs. A 409 while no
+// generation with a copy of every member is there, or while a member failed,
+// is retryable.
+func (c *Client) FailoverReplicatedGroup(ctx context.Context, local string, gh lvol.GroupHandle) error {
+	localID, err := parseUUID("cluster id", local)
+	if err != nil {
+		return err
+	}
+	source, group, err := groupIDs(gh)
+	if err != nil {
+		return err
+	}
+	resp, err := c.api.ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostWithResponse(
+		ctx, localID, source, group)
+	if err != nil {
+		return fmt.Errorf("fail over replicated group %s on %s: %w", gh.Handle(), local, err)
+	}
+	if code := resp.StatusCode(); code != http.StatusOK {
+		return respError("fail over replicated group "+string(gh.Handle()), code, resp.Body)
+	}
+	return nil
+}
+
 // DemoteGroup demotes the whole group: quiesce every member, ship one final
 // group snapshot, confirm, fence all. Re-drivable, not queued: done=false while
 // any member is still converging, so the caller calls again.

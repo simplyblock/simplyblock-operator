@@ -58,6 +58,12 @@ type mockSBCLI struct {
 	snapshots map[string]*mockSnapshot
 	groups    map[string]*mockGroup
 
+	// replicatedFailovers records each fail-over of another control plane's
+	// group from the copies here, as "<this cluster>/<source cluster>/<group>";
+	// replicatedFailoverStatus, when non-zero, is the status it answers.
+	replicatedFailovers      []string
+	replicatedFailoverStatus int
+
 	// failCreateOnce, when true, makes the next createVolume call respond with
 	// HTTP 500 without persisting the lvol. This mimics the control plane
 	// failing volume creation: the lvol never comes into existence, yet a
@@ -264,6 +270,10 @@ func newMockSBCLI() *mockSBCLI {
 	mux.HandleFunc(
 		"POST /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/replication/failover",
 		m.locked(m.handleGroupFailover),
+	)
+	mux.HandleFunc(
+		"POST /api/v2/clusters/{clusterID}/replication/replicated-groups/{sourceClusterID}/{groupID}/failover",
+		m.locked(m.handleReplicatedGroupFailover),
 	)
 	mux.HandleFunc(
 		"POST /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/replication/demote",
@@ -754,6 +764,16 @@ func (m *mockSBCLI) handleGroupFailover(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	g.Promoted = true
+	writeJSON(w, http.StatusOK, map[string]any{"members": []any{}})
+}
+
+func (m *mockSBCLI) handleReplicatedGroupFailover(w http.ResponseWriter, r *http.Request) {
+	m.replicatedFailovers = append(m.replicatedFailovers,
+		r.PathValue("clusterID")+"/"+r.PathValue("sourceClusterID")+"/"+r.PathValue("groupID"))
+	if m.replicatedFailoverStatus != 0 {
+		writeJSON(w, m.replicatedFailoverStatus, map[string]string{"detail": "no complete replicated generation"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"members": []any{}})
 }
 
