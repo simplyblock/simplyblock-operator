@@ -121,7 +121,9 @@ func CheckInitiator(ctx context.Context, w io.Writer) int {
 
 func checkInitiator(ctx context.Context, ensure func(context.Context) error, w io.Writer) int {
 	if err := ensure(ctx); err != nil {
-		fmt.Fprintln(w, err)
+		// A reason that cannot be written changes nothing about the verdict: the
+		// node still cannot connect a volume, and the exit code says so.
+		_, _ = fmt.Fprintln(w, err)
 		return 1
 	}
 	return 0
