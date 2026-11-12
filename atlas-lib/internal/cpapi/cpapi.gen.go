@@ -5602,6 +5602,20 @@ type ClientInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/failover (the `ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost` operationId).
 	ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost(ctx context.Context, clusterId openapi_types.UUID, sourceClusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGet Clusters:Replication:Replicated-Groups:Resolution
+	//
+	// Where the source cluster's consistency group lives now, from this
+	// control plane's own records (control-plane split): the group a fail-over
+	// made here from the copies, and each protected volume's original handle with
+	// the clone serving it. The same shape as
+	// ``consistency-groups/{id}/replication/resolution``, which needs the group
+	// record and so is answered only by the source's control plane, which may be
+	// cut off. ``active_group_id`` is empty while the group was not failed over
+	// here: the source's control plane still serves it.
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/resolution (the `ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGet` operationId).
+	ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGet(ctx context.Context, clusterId openapi_types.UUID, sourceClusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGet Clusters:Replication:Targets:List
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/replication/targets/ (the `ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGet` operationId).
@@ -8915,6 +8929,30 @@ func (c *Client) ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClus
 // Corresponds with POST /api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/failover (the `ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost` operationId).
 func (c *Client) ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost(ctx context.Context, clusterId openapi_types.UUID, sourceClusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostRequest(c.Server, clusterId, sourceClusterId, groupId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGet Clusters:Replication:Replicated-Groups:Resolution
+//
+// Where the source cluster's consistency group lives now, from this
+// control plane's own records (control-plane split): the group a fail-over
+// made here from the copies, and each protected volume's original handle with
+// the clone serving it. The same shape as
+// “consistency-groups/{id}/replication/resolution“, which needs the group
+// record and so is answered only by the source's control plane, which may be
+// cut off. “active_group_id“ is empty while the group was not failed over
+// here: the source's control plane still serves it.
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/resolution (the `ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGet` operationId).
+func (c *Client) ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGet(ctx context.Context, clusterId openapi_types.UUID, sourceClusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetRequest(c.Server, clusterId, sourceClusterId, groupId)
 	if err != nil {
 		return nil, err
 	}
@@ -15577,6 +15615,54 @@ func NewClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplica
 	}
 
 	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetRequest constructs an http.Request for the ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGet method
+func NewClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetRequest(server string, clusterId openapi_types.UUID, sourceClusterId openapi_types.UUID, groupId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "source_cluster_id", sourceClusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "group_id", groupId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/replication/replicated-groups/%s/%s/resolution", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -22574,6 +22660,22 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/failover (the `ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost` operationId).
 	ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, sourceClusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse, error)
 
+	// ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetWithResponse Clusters:Replication:Replicated-Groups:Resolution
+	//
+	// Where the source cluster's consistency group lives now, from this
+	// control plane's own records (control-plane split): the group a fail-over
+	// made here from the copies, and each protected volume's original handle with
+	// the clone serving it. The same shape as
+	// ``consistency-groups/{id}/replication/resolution``, which needs the group
+	// record and so is answered only by the source's control plane, which may be
+	// cut off. ``active_group_id`` is empty while the group was not failed over
+	// here: the source's control plane still serves it.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/resolution (the `ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGet` operationId).
+	ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, sourceClusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetResponse, error)
+
 	// ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGetWithResponse Clusters:Replication:Targets:List
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -27861,6 +27963,54 @@ func (r ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplica
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ConsistencyGroupResolutionDTO
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetResponse) GetJSON200() *ConsistencyGroupResolutionDTO {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -34287,6 +34437,28 @@ func (c *ClientWithResponses) ClustersReplicationReplicatedGroupsFailoverApiV2Cl
 	return ParseClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse(rsp)
 }
 
+// ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetWithResponse Clusters:Replication:Replicated-Groups:Resolution
+//
+// Where the source cluster's consistency group lives now, from this
+// control plane's own records (control-plane split): the group a fail-over
+// made here from the copies, and each protected volume's original handle with
+// the clone serving it. The same shape as
+// “consistency-groups/{id}/replication/resolution“, which needs the group
+// record and so is answered only by the source's control plane, which may be
+// cut off. “active_group_id“ is empty while the group was not failed over
+// here: the source's control plane still serves it.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/resolution (the `ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGet` operationId).
+func (c *ClientWithResponses) ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, sourceClusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetResponse, error) {
+	rsp, err := c.ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGet(ctx, clusterId, sourceClusterId, groupId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetResponse(rsp)
+}
+
 // ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGetWithResponse Clusters:Replication:Targets:List
 //
 // Returns a wrapper object for the known response body format(s).
@@ -38983,6 +39155,39 @@ func ParseClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdRepli
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetResponse parses an HTTP response from a ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetWithResponse call
+func ParseClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetResponse(rsp *http.Response) (*ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ConsistencyGroupResolutionDTO
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

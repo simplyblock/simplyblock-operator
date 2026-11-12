@@ -4652,6 +4652,9 @@ type ServerInterface interface {
 	// ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost Clusters:Replication:Replicated-Groups:Failover
 	// (POST /api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/failover)
 	ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, sourceClusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGet Clusters:Replication:Replicated-Groups:Resolution
+	// (GET /api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/resolution)
+	ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, sourceClusterId openapi_types.UUID, groupId openapi_types.UUID)
 	// ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGet Clusters:Replication:Targets:List
 	// (GET /api/v2/clusters/{cluster_id}/replication/targets/)
 	ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
@@ -8209,6 +8212,50 @@ func (siw *ServerInterfaceWrapper) ClustersReplicationReplicatedGroupsFailoverAp
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost(w, r, clusterId, sourceClusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "source_cluster_id" -------------
+	var sourceClusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "source_cluster_id", r.PathValue("source_cluster_id"), &sourceClusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "source_cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGet(w, r, clusterId, sourceClusterId, groupId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -12918,6 +12965,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}", wrapper.ClustersReplicationRelationshipsDetailApiV2ClustersClusterIdReplicationRelationshipsLvolIdGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}/latest-snapshot", wrapper.ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/failover", wrapper.ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/resolution", wrapper.ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/targets/{$}", wrapper.ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/targets/{$}", wrapper.ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPost)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/targets/{target_id}/{$}", wrapper.ClustersReplicationTargetsDeleteApiV2ClustersClusterIdReplicationTargetsTargetIdDelete)

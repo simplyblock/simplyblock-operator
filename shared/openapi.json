@@ -9288,6 +9288,75 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/resolution": {
+      "get": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Replication:Replicated-Groups:Resolution",
+        "description": "Where the source cluster's consistency group lives now, from this\ncontrol plane's own records (control-plane split): the group a fail-over\nmade here from the copies, and each protected volume's original handle with\nthe clone serving it. The same shape as\n``consistency-groups/{id}/replication/resolution``, which needs the group\nrecord and so is answered only by the source's control plane, which may be\ncut off. ``active_group_id`` is empty while the group was not failed over\nhere: the source's control plane still serves it.",
+        "operationId": "clusters_replication_replicated_groups_resolution_api_v2_clusters__cluster_id__replication_replicated_groups__source_cluster_id___group_id__resolution_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source_cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsistencyGroupResolutionDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/consistency-groups/": {
       "get": {
         "tags": [
