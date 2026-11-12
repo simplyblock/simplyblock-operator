@@ -9217,6 +9217,77 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/failover": {
+      "post": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Replication:Replicated-Groups:Failover",
+        "description": "Fail the source cluster's consistency group over onto this cluster, from\nthe copies here, with the source cluster cut off (control-plane split).\n\nUnlike ``consistency-groups/{id}/replication/failover`` this needs no record\nof the group, its volumes, or the source cluster in this control plane:\nevery copy carries what its clone needs. The response matches that\nendpoint: ``{\"members\": [...]}``; 409 when no generation with a copy of\nevery member is here, or when a member failed (retryable).",
+        "operationId": "clusters_replication_replicated_groups_failover_api_v2_clusters__cluster_id__replication_replicated_groups__source_cluster_id___group_id__failover_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source_cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Clusters Replication Replicated Groups Failover Api V2 Clusters  Cluster Id  Replication Replicated Groups  Source Cluster Id   Group Id  Failover Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/consistency-groups/": {
       "get": {
         "tags": [
@@ -11336,6 +11407,493 @@
           }
         }
       }
+    },
+    "/api/v2/_peer/clusters/{cluster_id}/info": {
+      "get": {
+        "summary": "Peer:Info",
+        "description": "Identity, peer API version and capabilities of this cluster.",
+        "operationId": "peer_info_api_v2__peer_clusters__cluster_id__info_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/_peer/clusters/{cluster_id}/landing-volumes/{lvol_id}": {
+      "delete": {
+        "summary": "Peer:Landing-Volumes:Delete",
+        "description": "Delete a replication landing volume; one that is already gone is success.",
+        "operationId": "peer_landing_volumes_delete_api_v2__peer_clusters__cluster_id__landing_volumes__lvol_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lvol_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lvol Id"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/_peer/clusters/{cluster_id}/describe": {
+      "post": {
+        "summary": "Peer:Describe",
+        "description": "Read-only answers about this cluster's side of a replication: who leads a\nlanding volume's lvstore, whether copies exist or have dependent clones, and\nwhether copies are chained. POST only because the question has a body.",
+        "operationId": "peer_describe_api_v2__peer_clusters__cluster_id__describe_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DescribeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DescribeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/_peer/clusters/{cluster_id}/landing-volumes": {
+      "post": {
+        "summary": "Peer:Landing-Volumes:Prepare",
+        "description": "Make a replicated snapshot's landing volume ready: adopt one a previous\nrequest made, report a copy of the same data, or create it.",
+        "operationId": "peer_landing_volumes_prepare_api_v2__peer_clusters__cluster_id__landing_volumes_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LandingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LandingResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/_peer/clusters/{cluster_id}/landing-volumes/{lvol_id}/hub": {
+      "post": {
+        "summary": "Peer:Landing-Volumes:Hub",
+        "description": "Get this cluster ready to receive a transfer into a landing volume: its\nsettled leader, the receiving hub's attach address and the volume's map id.",
+        "operationId": "peer_landing_volumes_hub_api_v2__peer_clusters__cluster_id__landing_volumes__lvol_id__hub_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lvol_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lvol Id"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnsureHubResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/_peer/clusters/{cluster_id}/chain": {
+      "post": {
+        "summary": "Peer:Chain",
+        "description": "Chain a landing volume onto the copy of the snapshot before it, on the\nleader and its secondary, so the transfer can ship only the delta.",
+        "operationId": "peer_chain_api_v2__peer_clusters__cluster_id__chain_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChainRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChainResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/_peer/clusters/{cluster_id}/finish": {
+      "post": {
+        "summary": "Peer:Finish",
+        "description": "Make a landing volume the copy of its source snapshot after the transfer:\nchain, merge and convert it, record the copy and retire the landing volume.",
+        "operationId": "peer_finish_api_v2__peer_clusters__cluster_id__finish_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinishRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinishResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/_peer/clusters/{cluster_id}/snapshots/{snapshot_id}": {
+      "delete": {
+        "summary": "Peer:Snapshots:Delete",
+        "description": "Delete a replicated copy (retention); one already gone counts as deleted.",
+        "operationId": "peer_snapshots_delete_api_v2__peer_clusters__cluster_id__snapshots__snapshot_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "snapshot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Snapshot Id"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteSnapshotResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/_peer/clusters/{cluster_id}/place": {
+      "post": {
+        "summary": "Peer:Place",
+        "description": "Pick the member a volume's copies land on when its replication starts.",
+        "operationId": "peer_place_api_v2__peer_clusters__cluster_id__place_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -12125,6 +12683,109 @@
           "size_util"
         ],
         "title": "CapacityStatDTO"
+      },
+      "ChainCheck": {
+        "properties": {
+          "successor_id": {
+            "type": "string",
+            "title": "Successor Id"
+          },
+          "predecessor_id": {
+            "type": "string",
+            "title": "Predecessor Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "successor_id",
+          "predecessor_id"
+        ],
+        "title": "ChainCheck",
+        "description": "Is the copy *successor_id* chained onto the copy *predecessor_id*?"
+      },
+      "ChainRequest": {
+        "properties": {
+          "landing_lvol_id": {
+            "type": "string",
+            "title": "Landing Lvol Id"
+          },
+          "leader_node_id": {
+            "type": "string",
+            "title": "Leader Node Id"
+          },
+          "predecessor_id": {
+            "type": "string",
+            "title": "Predecessor Id"
+          },
+          "chained_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Chained On"
+          }
+        },
+        "type": "object",
+        "required": [
+          "landing_lvol_id",
+          "leader_node_id",
+          "predecessor_id"
+        ],
+        "title": "ChainRequest",
+        "description": "Chain the landing volume onto the copy of the snapshot before it, on the\nleader and its secondary, so the transfer can ship only the delta.\n\nRetry key: ``chained_on`` is what the source recorded from earlier answers;\na member in it is not chained again (add_clone is not idempotent in SPDK)."
+      },
+      "ChainResponse": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "chained",
+              "declined",
+              "unresolvable"
+            ],
+            "title": "State"
+          },
+          "chained_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Chained On"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "title": "ChainResponse"
+      },
+      "ChainState": {
+        "properties": {
+          "successor_id": {
+            "type": "string",
+            "title": "Successor Id"
+          },
+          "predecessor_id": {
+            "type": "string",
+            "title": "Predecessor Id"
+          },
+          "chained": {
+            "type": "boolean",
+            "title": "Chained"
+          }
+        },
+        "type": "object",
+        "required": [
+          "successor_id",
+          "predecessor_id",
+          "chained"
+        ],
+        "title": "ChainState"
       },
       "ClusterDTO": {
         "properties": {
@@ -13177,6 +13838,90 @@
         "title": "ConsistencyGroupResolutionDTO",
         "description": "Where a consistency group's data lives now (replication_policy_controller.\nresolve_group). ``active_*`` are empty when no group holds a live member."
       },
+      "DeleteSnapshotResponse": {
+        "properties": {
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "deleted"
+        ],
+        "title": "DeleteSnapshotResponse"
+      },
+      "DescribeRequest": {
+        "properties": {
+          "landing_lvol_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Landing Lvol Id"
+          },
+          "snapshot_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Snapshot Ids"
+          },
+          "chain_checks": {
+            "items": {
+              "$ref": "#/components/schemas/ChainCheck"
+            },
+            "type": "array",
+            "title": "Chain Checks"
+          }
+        },
+        "type": "object",
+        "title": "DescribeRequest",
+        "description": "Reads about the target side that the source needs mid-transfer and for retention.\n\nEvery part is optional, so a caller asks only for what it needs: the transfer\nstatus check sends just ``landing_lvol_id`` and stays cheap."
+      },
+      "DescribeResponse": {
+        "properties": {
+          "landing_leaders": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Landing Leaders"
+          },
+          "snapshots": {
+            "items": {
+              "$ref": "#/components/schemas/SnapshotState"
+            },
+            "type": "array",
+            "title": "Snapshots"
+          },
+          "chains": {
+            "items": {
+              "$ref": "#/components/schemas/ChainState"
+            },
+            "type": "array",
+            "title": "Chains"
+          }
+        },
+        "type": "object",
+        "title": "DescribeResponse"
+      },
       "DeviceDTO": {
         "properties": {
           "id": {
@@ -13972,6 +14717,74 @@
         "title": "DrainVerification",
         "description": "Whether the node still hosts anything, before its DELETE."
       },
+      "EnsureHubResponse": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "unsettled",
+              "not_leader",
+              "converted",
+              "failed"
+            ],
+            "title": "State"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          },
+          "backoff": {
+            "type": "boolean",
+            "title": "Backoff",
+            "default": true
+          },
+          "leader_node_id": {
+            "type": "string",
+            "title": "Leader Node Id",
+            "default": ""
+          },
+          "map_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Map Id"
+          },
+          "hub": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HubAddress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pair_online": {
+            "type": "boolean",
+            "title": "Pair Online",
+            "default": false
+          },
+          "converted_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Converted On"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "title": "EnsureHubResponse"
+      },
       "FDBKeyDescriptor": {
         "properties": {
           "dek_path": {
@@ -14065,6 +14878,138 @@
           "status"
         ],
         "title": "FailoverResultDTO"
+      },
+      "FinishRequest": {
+        "properties": {
+          "source_cluster_id": {
+            "type": "string",
+            "title": "Source Cluster Id"
+          },
+          "landing_lvol_id": {
+            "type": "string",
+            "title": "Landing Lvol Id"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/SourceSnapshot"
+          },
+          "sent_to": {
+            "type": "string",
+            "title": "Sent To",
+            "default": ""
+          },
+          "predecessor_id": {
+            "type": "string",
+            "title": "Predecessor Id",
+            "default": ""
+          },
+          "partial_base": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Partial Base",
+            "default": 0
+          },
+          "chained_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Chained On"
+          },
+          "converted_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Converted On"
+          },
+          "merged": {
+            "type": "boolean",
+            "title": "Merged",
+            "default": false
+          },
+          "link": {
+            "type": "string",
+            "enum": [
+              "source",
+              "target",
+              "none"
+            ],
+            "title": "Link"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_cluster_id",
+          "landing_lvol_id",
+          "snapshot",
+          "link"
+        ],
+        "title": "FinishRequest",
+        "description": "Make the landing volume the copy of the source snapshot, after its transfer.\n\nRetry key: the copy's record id is derived from (``source_cluster_id``,\n``snapshot.snapshot_id``, ``landing_lvol_id``); ``chained_on``,\n``converted_on`` and ``merged`` are what earlier answers reported."
+      },
+      "FinishResponse": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "done",
+              "pending",
+              "retry",
+              "restart",
+              "gone"
+            ],
+            "title": "State"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          },
+          "leader_node_id": {
+            "type": "string",
+            "title": "Leader Node Id",
+            "default": ""
+          },
+          "waiting_for_leader": {
+            "type": "boolean",
+            "title": "Waiting For Leader",
+            "default": false
+          },
+          "chained_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Chained On"
+          },
+          "converted_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Converted On"
+          },
+          "merged": {
+            "type": "boolean",
+            "title": "Merged",
+            "default": false
+          },
+          "copy_id": {
+            "type": "string",
+            "title": "Copy Id",
+            "default": ""
+          },
+          "record": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Record"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "title": "FinishResponse"
       },
       "GroupBackupDTO": {
         "properties": {
@@ -14436,6 +15381,194 @@
         },
         "type": "object",
         "title": "HashicorpVaultSettings"
+      },
+      "HubAddress": {
+        "properties": {
+          "bdev_name": {
+            "type": "string",
+            "title": "Bdev Name"
+          },
+          "remote_bdev_name": {
+            "type": "string",
+            "title": "Remote Bdev Name"
+          },
+          "nqn": {
+            "type": "string",
+            "title": "Nqn"
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Port"
+          },
+          "paths": {
+            "items": {
+              "$ref": "#/components/schemas/HubPath"
+            },
+            "type": "array",
+            "title": "Paths"
+          }
+        },
+        "type": "object",
+        "required": [
+          "bdev_name",
+          "remote_bdev_name",
+          "nqn",
+          "port"
+        ],
+        "title": "HubAddress",
+        "description": "What the source needs to attach the target's receiving hub over NVMe-oF."
+      },
+      "HubPath": {
+        "properties": {
+          "ip": {
+            "type": "string",
+            "title": "Ip"
+          },
+          "trtype": {
+            "type": "string",
+            "enum": [
+              "TCP",
+              "RDMA"
+            ],
+            "title": "Trtype"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ip",
+          "trtype"
+        ],
+        "title": "HubPath",
+        "description": "One address the source can attach the receiving hub over."
+      },
+      "LandingRequest": {
+        "properties": {
+          "source_cluster_id": {
+            "type": "string",
+            "title": "Source Cluster Id"
+          },
+          "snapshot_id": {
+            "type": "string",
+            "title": "Snapshot Id"
+          },
+          "landing_name": {
+            "type": "string",
+            "pattern": "^REP_.+",
+            "title": "Landing Name"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Size"
+          },
+          "ha_type": {
+            "type": "string",
+            "title": "Ha Type"
+          },
+          "max_namespace_per_subsys": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Max Namespace Per Subsys",
+            "default": 0
+          },
+          "data_uuid": {
+            "type": "string",
+            "title": "Data Uuid",
+            "default": ""
+          },
+          "node_hint": {
+            "type": "string",
+            "title": "Node Hint",
+            "default": ""
+          },
+          "pool_hints": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Pool Hints"
+          },
+          "counterpart_hint": {
+            "type": "string",
+            "title": "Counterpart Hint",
+            "default": ""
+          },
+          "create_only": {
+            "type": "boolean",
+            "title": "Create Only",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_cluster_id",
+          "snapshot_id",
+          "landing_name",
+          "size",
+          "ha_type"
+        ],
+        "title": "LandingRequest",
+        "description": "Make a replicated snapshot's landing volume ready on the target.\n\nRetry key: (``source_cluster_id``, ``snapshot_id``), with the landing\nvolume named after the snapshot (``REP_<name>``). A repeated request adopts\nthe volume the first one made instead of making a second."
+      },
+      "LandingResponse": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "counterpart",
+              "retry",
+              "exists"
+            ],
+            "title": "State"
+          },
+          "lvol_id": {
+            "type": "string",
+            "title": "Lvol Id",
+            "default": ""
+          },
+          "adopted": {
+            "type": "boolean",
+            "title": "Adopted",
+            "default": false
+          },
+          "counterpart_snapshot_id": {
+            "type": "string",
+            "title": "Counterpart Snapshot Id",
+            "default": ""
+          },
+          "lvs_name": {
+            "type": "string",
+            "title": "Lvs Name",
+            "default": ""
+          },
+          "top_bdev": {
+            "type": "string",
+            "title": "Top Bdev",
+            "default": ""
+          },
+          "node_id": {
+            "type": "string",
+            "title": "Node Id",
+            "default": ""
+          },
+          "pool_id": {
+            "type": "string",
+            "title": "Pool Id",
+            "default": ""
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "title": "LandingResponse"
       },
       "LocatedManifests-Input": {
         "properties": {
@@ -15184,6 +16317,90 @@
           "connect"
         ],
         "title": "NvmeConnectEntry"
+      },
+      "PeerInfo": {
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cluster Id"
+          },
+          "api_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Api Version"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Capabilities"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cluster_id",
+          "api_version",
+          "capabilities"
+        ],
+        "title": "PeerInfo",
+        "description": "What a peer control plane reports about one of its clusters."
+      },
+      "PlaceRequest": {
+        "properties": {
+          "size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Size"
+          },
+          "preferred_node": {
+            "type": "string",
+            "title": "Preferred Node",
+            "default": ""
+          },
+          "data_uuids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Data Uuids"
+          },
+          "exclude_copy_id": {
+            "type": "string",
+            "title": "Exclude Copy Id",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "size"
+        ],
+        "title": "PlaceRequest",
+        "description": "Pick the member a volume's copies land on, when replication starts.\n\nThe source applies its co-location rules from its own records and names\nthe node a subsystem sibling or a consistency-group member already\nreplicates to (``preferred_node``); the target keeps it when it is online,\nelse takes the member holding the volume's chain, else the least loaded."
+      },
+      "PlaceResponse": {
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "title": "Node Id"
+          },
+          "rule": {
+            "type": "string",
+            "enum": [
+              "preferred",
+              "chain",
+              "capacity"
+            ],
+            "title": "Rule"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_id",
+          "rule"
+        ],
+        "title": "PlaceResponse"
       },
       "PlanParams": {
         "properties": {
@@ -16047,6 +17264,17 @@
               "inactive"
             ],
             "title": "Status"
+          },
+          "peer_endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peer Endpoint"
           }
         },
         "type": "object",
@@ -16285,6 +17513,239 @@
           "group_seq"
         ],
         "title": "SnapshotDTO"
+      },
+      "SnapshotState": {
+        "properties": {
+          "snapshot_id": {
+            "type": "string",
+            "title": "Snapshot Id"
+          },
+          "exists": {
+            "type": "boolean",
+            "title": "Exists"
+          },
+          "has_dependent_clone": {
+            "type": "boolean",
+            "title": "Has Dependent Clone",
+            "default": false
+          },
+          "in_deletion": {
+            "type": "boolean",
+            "title": "In Deletion",
+            "default": false
+          },
+          "pool_id": {
+            "type": "string",
+            "title": "Pool Id",
+            "default": ""
+          },
+          "lvol_id": {
+            "type": "string",
+            "title": "Lvol Id",
+            "default": ""
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size",
+            "default": 0
+          },
+          "used_size": {
+            "type": "integer",
+            "title": "Used Size",
+            "default": 0
+          },
+          "created_at": {
+            "type": "integer",
+            "title": "Created At",
+            "default": 0
+          },
+          "group_id": {
+            "type": "string",
+            "title": "Group Id",
+            "default": ""
+          },
+          "group_seq": {
+            "type": "integer",
+            "title": "Group Seq",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "snapshot_id",
+          "exists"
+        ],
+        "title": "SnapshotState",
+        "description": "One replicated copy as the target sees it."
+      },
+      "SourceGroup": {
+        "properties": {
+          "group_name": {
+            "type": "string",
+            "title": "Group Name"
+          },
+          "policy_id": {
+            "type": "string",
+            "title": "Policy Id",
+            "default": ""
+          },
+          "members": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Members"
+          }
+        },
+        "type": "object",
+        "required": [
+          "group_name",
+          "members"
+        ],
+        "title": "SourceGroup",
+        "description": "The consistency group a group snapshot belongs to, on the source."
+      },
+      "SourceHostAccess": {
+        "properties": {
+          "nqn": {
+            "type": "string",
+            "title": "Nqn"
+          },
+          "dhchap_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dhchap Key"
+          },
+          "dhchap_ctrlr_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dhchap Ctrlr Key"
+          },
+          "psk": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Psk"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nqn"
+        ],
+        "title": "SourceHostAccess",
+        "description": "A host allowed on the source volume's subsystem, with its keys."
+      },
+      "SourceSnapshot": {
+        "properties": {
+          "snapshot_id": {
+            "type": "string",
+            "title": "Snapshot Id"
+          },
+          "snap_name": {
+            "type": "string",
+            "title": "Snap Name"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Size"
+          },
+          "used_size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Used Size",
+            "default": 0
+          },
+          "data_uuid": {
+            "type": "string",
+            "title": "Data Uuid",
+            "default": ""
+          },
+          "group_id": {
+            "type": "string",
+            "title": "Group Id",
+            "default": ""
+          },
+          "group_seq": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Group Seq",
+            "default": 0
+          },
+          "volume": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceVolume"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "group": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceGroup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "snapshot_id",
+          "snap_name",
+          "size"
+        ],
+        "title": "SourceSnapshot",
+        "description": "What the copy's record carries over from the source snapshot."
+      },
+      "SourceVolume": {
+        "properties": {
+          "record": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Record"
+          },
+          "allowed_hosts": {
+            "items": {
+              "$ref": "#/components/schemas/SourceHostAccess"
+            },
+            "type": "array",
+            "title": "Allowed Hosts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "record"
+        ],
+        "title": "SourceVolume",
+        "description": "The source volume as it was when the snapshot was taken: the template a\nfail-over on the copy's side clones the copy as, keeping its name, NQN,\nnamespace and size. The host keys travel in ``allowed_hosts`` as secrets,\nnever inside ``record``."
       },
       "StorageNodeDTO": {
         "properties": {
@@ -16999,6 +18460,43 @@
               }
             ],
             "title": "Timeout Sec"
+          },
+          "peer_endpoint": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peer Endpoint"
+          },
+          "peer_secret": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peer Secret"
+          },
+          "peer_ca_cert": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peer Ca Cert"
           }
         },
         "type": "object",

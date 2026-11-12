@@ -54,6 +54,27 @@ func (e AlertDTOStatus) Valid() bool {
 	}
 }
 
+// Defines values for ChainResponseState.
+const (
+	Chained      ChainResponseState = "chained"
+	Declined     ChainResponseState = "declined"
+	Unresolvable ChainResponseState = "unresolvable"
+)
+
+// Valid indicates whether the value is a known member of the ChainResponseState enum.
+func (e ChainResponseState) Valid() bool {
+	switch e {
+	case Chained:
+		return true
+	case Declined:
+		return true
+	case Unresolvable:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ClusterDTOStatus.
 const (
 	ClusterDTOStatusActive       ClusterDTOStatus = "active"
@@ -249,6 +270,33 @@ func (e DeviceSmartAssessmentDTOVerdict) Valid() bool {
 	}
 }
 
+// Defines values for EnsureHubResponseState.
+const (
+	EnsureHubResponseStateConverted EnsureHubResponseState = "converted"
+	EnsureHubResponseStateFailed    EnsureHubResponseState = "failed"
+	EnsureHubResponseStateNotLeader EnsureHubResponseState = "not_leader"
+	EnsureHubResponseStateReady     EnsureHubResponseState = "ready"
+	EnsureHubResponseStateUnsettled EnsureHubResponseState = "unsettled"
+)
+
+// Valid indicates whether the value is a known member of the EnsureHubResponseState enum.
+func (e EnsureHubResponseState) Valid() bool {
+	switch e {
+	case EnsureHubResponseStateConverted:
+		return true
+	case EnsureHubResponseStateFailed:
+		return true
+	case EnsureHubResponseStateNotLeader:
+		return true
+	case EnsureHubResponseStateReady:
+		return true
+	case EnsureHubResponseStateUnsettled:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FDBKeyDescriptorType.
 const (
 	Fdb FDBKeyDescriptorType = "fdb"
@@ -279,6 +327,54 @@ func (e FailoverResultDTOStatus) Valid() bool {
 	case FailoverResultDTOStatusFailedOver:
 		return true
 	case FailoverResultDTOStatusSkipped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FinishRequestLink.
+const (
+	FinishRequestLinkNone   FinishRequestLink = "none"
+	FinishRequestLinkSource FinishRequestLink = "source"
+	FinishRequestLinkTarget FinishRequestLink = "target"
+)
+
+// Valid indicates whether the value is a known member of the FinishRequestLink enum.
+func (e FinishRequestLink) Valid() bool {
+	switch e {
+	case FinishRequestLinkNone:
+		return true
+	case FinishRequestLinkSource:
+		return true
+	case FinishRequestLinkTarget:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FinishResponseState.
+const (
+	FinishResponseStateDone    FinishResponseState = "done"
+	FinishResponseStateGone    FinishResponseState = "gone"
+	FinishResponseStatePending FinishResponseState = "pending"
+	FinishResponseStateRestart FinishResponseState = "restart"
+	FinishResponseStateRetry   FinishResponseState = "retry"
+)
+
+// Valid indicates whether the value is a known member of the FinishResponseState enum.
+func (e FinishResponseState) Valid() bool {
+	switch e {
+	case FinishResponseStateDone:
+		return true
+	case FinishResponseStateGone:
+		return true
+	case FinishResponseStatePending:
+		return true
+	case FinishResponseStateRestart:
+		return true
+	case FinishResponseStateRetry:
 		return true
 	default:
 		return false
@@ -321,6 +417,48 @@ func (e HCPKeyDescriptorType) Valid() bool {
 	}
 }
 
+// Defines values for HubPathTrtype.
+const (
+	RDMA HubPathTrtype = "RDMA"
+	TCP  HubPathTrtype = "TCP"
+)
+
+// Valid indicates whether the value is a known member of the HubPathTrtype enum.
+func (e HubPathTrtype) Valid() bool {
+	switch e {
+	case RDMA:
+		return true
+	case TCP:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LandingResponseState.
+const (
+	LandingResponseStateCounterpart LandingResponseState = "counterpart"
+	LandingResponseStateExists      LandingResponseState = "exists"
+	LandingResponseStateReady       LandingResponseState = "ready"
+	LandingResponseStateRetry       LandingResponseState = "retry"
+)
+
+// Valid indicates whether the value is a known member of the LandingResponseState enum.
+func (e LandingResponseState) Valid() bool {
+	switch e {
+	case LandingResponseStateCounterpart:
+		return true
+	case LandingResponseStateExists:
+		return true
+	case LandingResponseStateReady:
+		return true
+	case LandingResponseStateRetry:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ManifestVolumeFabric.
 const (
 	Rdma    ManifestVolumeFabric = "rdma"
@@ -354,6 +492,27 @@ func (e ManifestVolumeHaType) Valid() bool {
 	case ManifestVolumeHaTypeHa:
 		return true
 	case ManifestVolumeHaTypeSingle:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlaceResponseRule.
+const (
+	Capacity  PlaceResponseRule = "capacity"
+	Chain     PlaceResponseRule = "chain"
+	Preferred PlaceResponseRule = "preferred"
+)
+
+// Valid indicates whether the value is a known member of the PlaceResponseRule enum.
+func (e PlaceResponseRule) Valid() bool {
+	switch e {
+	case Capacity:
+		return true
+	case Chain:
+		return true
+	case Preferred:
 		return true
 	default:
 		return false
@@ -1390,6 +1549,41 @@ type CapacityStatDTO struct {
 	SizeUtil  int `json:"size_util"`
 }
 
+// ChainCheck Is the copy *successor_id* chained onto the copy *predecessor_id*?
+type ChainCheck struct {
+	PredecessorId string `json:"predecessor_id"`
+	SuccessorId   string `json:"successor_id"`
+}
+
+// ChainRequest Chain the landing volume onto the copy of the snapshot before it, on the
+// leader and its secondary, so the transfer can ship only the delta.
+//
+// Retry key: “chained_on“ is what the source recorded from earlier answers;
+// a member in it is not chained again (add_clone is not idempotent in SPDK).
+type ChainRequest struct {
+	ChainedOn     *[]string `json:"chained_on,omitempty"`
+	LandingLvolId string    `json:"landing_lvol_id"`
+	LeaderNodeId  string    `json:"leader_node_id"`
+	PredecessorId string    `json:"predecessor_id"`
+}
+
+// ChainResponse defines model for ChainResponse.
+type ChainResponse struct {
+	ChainedOn *[]string          `json:"chained_on,omitempty"`
+	Reason    *string            `json:"reason,omitempty"`
+	State     ChainResponseState `json:"state"`
+}
+
+// ChainResponseState defines model for ChainResponse.State.
+type ChainResponseState string
+
+// ChainState defines model for ChainState.
+type ChainState struct {
+	Chained       bool   `json:"chained"`
+	PredecessorId string `json:"predecessor_id"`
+	SuccessorId   string `json:"successor_id"`
+}
+
 // ClusterDTO defines model for ClusterDTO.
 type ClusterDTO struct {
 	ActiveLvolMigrations        *int               `json:"active_lvol_migrations,omitempty"`
@@ -1643,6 +1837,29 @@ type ConsistencyGroupResolutionDTO struct {
 	Members         *[]ConsistencyGroupLineageMemberDTO `json:"members,omitempty"`
 }
 
+// DeleteSnapshotResponse defines model for DeleteSnapshotResponse.
+type DeleteSnapshotResponse struct {
+	Deleted bool    `json:"deleted"`
+	Reason  *string `json:"reason,omitempty"`
+}
+
+// DescribeRequest Reads about the target side that the source needs mid-transfer and for retention.
+//
+// Every part is optional, so a caller asks only for what it needs: the transfer
+// status check sends just “landing_lvol_id“ and stays cheap.
+type DescribeRequest struct {
+	ChainChecks   *[]ChainCheck `json:"chain_checks,omitempty"`
+	LandingLvolId *string       `json:"landing_lvol_id,omitempty"`
+	SnapshotIds   *[]string     `json:"snapshot_ids,omitempty"`
+}
+
+// DescribeResponse defines model for DescribeResponse.
+type DescribeResponse struct {
+	Chains         *[]ChainState    `json:"chains,omitempty"`
+	LandingLeaders *[]string        `json:"landing_leaders,omitempty"`
+	Snapshots      *[]SnapshotState `json:"snapshots,omitempty"`
+}
+
 // DeviceDTO defines model for DeviceDTO.
 type DeviceDTO struct {
 	BdevType           *string                 `json:"bdev_type,omitempty"`
@@ -1793,6 +2010,21 @@ type DrainVerification struct {
 	Snapshots *[]string `json:"snapshots,omitempty"`
 }
 
+// EnsureHubResponse defines model for EnsureHubResponse.
+type EnsureHubResponse struct {
+	Backoff      *bool                  `json:"backoff,omitempty"`
+	ConvertedOn  *[]string              `json:"converted_on,omitempty"`
+	Hub          *HubAddress            `json:"hub,omitempty"`
+	LeaderNodeId *string                `json:"leader_node_id,omitempty"`
+	MapId        *int                   `json:"map_id,omitempty"`
+	PairOnline   *bool                  `json:"pair_online,omitempty"`
+	Reason       *string                `json:"reason,omitempty"`
+	State        EnsureHubResponseState `json:"state"`
+}
+
+// EnsureHubResponseState defines model for EnsureHubResponse.State.
+type EnsureHubResponseState string
+
 // FDBKeyDescriptor Keys held in the cluster's own FoundationDB, by “LocalKMS“.
 type FDBKeyDescriptor struct {
 	DekPath string                `json:"dek_path"`
@@ -1818,6 +2050,45 @@ type FailoverResultDTO struct {
 
 // FailoverResultDTOStatus defines model for FailoverResultDTO.Status.
 type FailoverResultDTOStatus string
+
+// FinishRequest Make the landing volume the copy of the source snapshot, after its transfer.
+//
+// Retry key: the copy's record id is derived from (“source_cluster_id“,
+// “snapshot.snapshot_id“, “landing_lvol_id“); “chained_on“,
+// “converted_on“ and “merged“ are what earlier answers reported.
+type FinishRequest struct {
+	ChainedOn     *[]string         `json:"chained_on,omitempty"`
+	ConvertedOn   *[]string         `json:"converted_on,omitempty"`
+	LandingLvolId string            `json:"landing_lvol_id"`
+	Link          FinishRequestLink `json:"link"`
+	Merged        *bool             `json:"merged,omitempty"`
+	PartialBase   *int              `json:"partial_base,omitempty"`
+	PredecessorId *string           `json:"predecessor_id,omitempty"`
+	SentTo        *string           `json:"sent_to,omitempty"`
+
+	// Snapshot What the copy's record carries over from the source snapshot.
+	Snapshot        SourceSnapshot `json:"snapshot"`
+	SourceClusterId string         `json:"source_cluster_id"`
+}
+
+// FinishRequestLink defines model for FinishRequest.Link.
+type FinishRequestLink string
+
+// FinishResponse defines model for FinishResponse.
+type FinishResponse struct {
+	ChainedOn        *[]string               `json:"chained_on,omitempty"`
+	ConvertedOn      *[]string               `json:"converted_on,omitempty"`
+	CopyId           *string                 `json:"copy_id,omitempty"`
+	LeaderNodeId     *string                 `json:"leader_node_id,omitempty"`
+	Merged           *bool                   `json:"merged,omitempty"`
+	Reason           *string                 `json:"reason,omitempty"`
+	Record           *map[string]interface{} `json:"record,omitempty"`
+	State            FinishResponseState     `json:"state"`
+	WaitingForLeader *bool                   `json:"waiting_for_leader,omitempty"`
+}
+
+// FinishResponseState defines model for FinishResponse.State.
+type FinishResponseState string
 
 // GroupBackupDTO A consistency-group backup: the member backups of one generation as one
 // all-or-nothing unit.
@@ -1976,6 +2247,59 @@ type HashicorpVaultSettings struct {
 	KvMount      *string `json:"kv_mount,omitempty"`
 	TransitMount *string `json:"transit_mount,omitempty"`
 }
+
+// HubAddress What the source needs to attach the target's receiving hub over NVMe-oF.
+type HubAddress struct {
+	BdevName       string     `json:"bdev_name"`
+	Nqn            string     `json:"nqn"`
+	Paths          *[]HubPath `json:"paths,omitempty"`
+	Port           int        `json:"port"`
+	RemoteBdevName string     `json:"remote_bdev_name"`
+}
+
+// HubPath One address the source can attach the receiving hub over.
+type HubPath struct {
+	Ip     string        `json:"ip"`
+	Trtype HubPathTrtype `json:"trtype"`
+}
+
+// HubPathTrtype defines model for HubPath.Trtype.
+type HubPathTrtype string
+
+// LandingRequest Make a replicated snapshot's landing volume ready on the target.
+//
+// Retry key: (“source_cluster_id“, “snapshot_id“), with the landing
+// volume named after the snapshot (“REP_<name>“). A repeated request adopts
+// the volume the first one made instead of making a second.
+type LandingRequest struct {
+	CounterpartHint       *string   `json:"counterpart_hint,omitempty"`
+	CreateOnly            *bool     `json:"create_only,omitempty"`
+	DataUuid              *string   `json:"data_uuid,omitempty"`
+	HaType                string    `json:"ha_type"`
+	LandingName           string    `json:"landing_name"`
+	MaxNamespacePerSubsys *int      `json:"max_namespace_per_subsys,omitempty"`
+	NodeHint              *string   `json:"node_hint,omitempty"`
+	PoolHints             *[]string `json:"pool_hints,omitempty"`
+	Size                  int       `json:"size"`
+	SnapshotId            string    `json:"snapshot_id"`
+	SourceClusterId       string    `json:"source_cluster_id"`
+}
+
+// LandingResponse defines model for LandingResponse.
+type LandingResponse struct {
+	Adopted               *bool                `json:"adopted,omitempty"`
+	CounterpartSnapshotId *string              `json:"counterpart_snapshot_id,omitempty"`
+	LvolId                *string              `json:"lvol_id,omitempty"`
+	LvsName               *string              `json:"lvs_name,omitempty"`
+	NodeId                *string              `json:"node_id,omitempty"`
+	PoolId                *string              `json:"pool_id,omitempty"`
+	Reason                *string              `json:"reason,omitempty"`
+	State                 LandingResponseState `json:"state"`
+	TopBdev               *string              `json:"top_bdev,omitempty"`
+}
+
+// LandingResponseState defines model for LandingResponse.State.
+type LandingResponseState string
 
 // LocatedManifestsInput Manifests that were read from one location, and that location.
 type LocatedManifestsInput struct {
@@ -2170,6 +2494,35 @@ type NvmeConnectEntry struct {
 	TwoNode        *bool     `json:"two-node,omitempty"`
 }
 
+// PeerInfo What a peer control plane reports about one of its clusters.
+type PeerInfo struct {
+	ApiVersion   int                `json:"api_version"`
+	Capabilities []string           `json:"capabilities"`
+	ClusterId    openapi_types.UUID `json:"cluster_id"`
+}
+
+// PlaceRequest Pick the member a volume's copies land on, when replication starts.
+//
+// The source applies its co-location rules from its own records and names
+// the node a subsystem sibling or a consistency-group member already
+// replicates to (“preferred_node“); the target keeps it when it is online,
+// else takes the member holding the volume's chain, else the least loaded.
+type PlaceRequest struct {
+	DataUuids     *[]string `json:"data_uuids,omitempty"`
+	ExcludeCopyId *string   `json:"exclude_copy_id,omitempty"`
+	PreferredNode *string   `json:"preferred_node,omitempty"`
+	Size          int       `json:"size"`
+}
+
+// PlaceResponse defines model for PlaceResponse.
+type PlaceResponse struct {
+	NodeId string            `json:"node_id"`
+	Rule   PlaceResponseRule `json:"rule"`
+}
+
+// PlaceResponseRule defines model for PlaceResponse.Rule.
+type PlaceResponseRule string
+
 // PlanParams defines model for PlanParams.
 type PlanParams struct {
 	DeleteSource    *bool                 `json:"delete_source,omitempty"`
@@ -2351,6 +2704,7 @@ type ReplicationStatusDTOState string
 type ReplicationTargetDTO struct {
 	ClusterId       openapi_types.UUID         `json:"cluster_id"`
 	Id              openapi_types.UUID         `json:"id"`
+	PeerEndpoint    *string                    `json:"peer_endpoint,omitempty"`
 	Status          ReplicationTargetDTOStatus `json:"status"`
 	TargetClusterId openapi_types.UUID         `json:"target_cluster_id"`
 	TargetName      string                     `json:"target_name"`
@@ -2425,6 +2779,58 @@ type SnapshotDTO struct {
 	Size        int                `json:"size"`
 	Status      string             `json:"status"`
 	UsedSize    int                `json:"used_size"`
+}
+
+// SnapshotState One replicated copy as the target sees it.
+type SnapshotState struct {
+	CreatedAt         *int    `json:"created_at,omitempty"`
+	Exists            bool    `json:"exists"`
+	GroupId           *string `json:"group_id,omitempty"`
+	GroupSeq          *int    `json:"group_seq,omitempty"`
+	HasDependentClone *bool   `json:"has_dependent_clone,omitempty"`
+	InDeletion        *bool   `json:"in_deletion,omitempty"`
+	LvolId            *string `json:"lvol_id,omitempty"`
+	PoolId            *string `json:"pool_id,omitempty"`
+	Size              *int    `json:"size,omitempty"`
+	SnapshotId        string  `json:"snapshot_id"`
+	UsedSize          *int    `json:"used_size,omitempty"`
+}
+
+// SourceGroup The consistency group a group snapshot belongs to, on the source.
+type SourceGroup struct {
+	GroupName string   `json:"group_name"`
+	Members   []string `json:"members"`
+	PolicyId  *string  `json:"policy_id,omitempty"`
+}
+
+// SourceHostAccess A host allowed on the source volume's subsystem, with its keys.
+type SourceHostAccess struct {
+	DhchapCtrlrKey *string `json:"dhchap_ctrlr_key,omitempty"`
+	DhchapKey      *string `json:"dhchap_key,omitempty"`
+	Nqn            string  `json:"nqn"`
+	Psk            *string `json:"psk,omitempty"`
+}
+
+// SourceSnapshot What the copy's record carries over from the source snapshot.
+type SourceSnapshot struct {
+	DataUuid   *string       `json:"data_uuid,omitempty"`
+	Group      *SourceGroup  `json:"group,omitempty"`
+	GroupId    *string       `json:"group_id,omitempty"`
+	GroupSeq   *int          `json:"group_seq,omitempty"`
+	Size       int           `json:"size"`
+	SnapName   string        `json:"snap_name"`
+	SnapshotId string        `json:"snapshot_id"`
+	UsedSize   *int          `json:"used_size,omitempty"`
+	Volume     *SourceVolume `json:"volume,omitempty"`
+}
+
+// SourceVolume The source volume as it was when the snapshot was taken: the template a
+// fail-over on the copy's side clones the copy as, keeping its name, NQN,
+// namespace and size. The host keys travel in “allowed_hosts“ as secrets,
+// never inside “record“.
+type SourceVolume struct {
+	AllowedHosts *[]SourceHostAccess    `json:"allowed_hosts,omitempty"`
+	Record       map[string]interface{} `json:"record"`
 }
 
 // StorageNodeDTO defines model for StorageNodeDTO.
@@ -2558,6 +2964,9 @@ type SyncReplicationStatusDTOState string
 
 // TargetParams defines model for TargetParams.
 type TargetParams struct {
+	PeerCaCert      *string             `json:"peer_ca_cert,omitempty"`
+	PeerEndpoint    *string             `json:"peer_endpoint,omitempty"`
+	PeerSecret      *string             `json:"peer_secret,omitempty"`
 	TargetClusterId openapi_types.UUID  `json:"target_cluster_id"`
 	TargetName      string              `json:"target_name"`
 	TargetPoolId    *openapi_types.UUID `json:"target_pool_id,omitempty"`
@@ -3362,6 +3771,21 @@ type ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetParams struct {
 	ClusterId openapi_types.UUID `form:"cluster_id" json:"cluster_id"`
 }
 
+// PeerChainApiV2PeerClustersClusterIdChainPostJSONRequestBody defines body for PeerChainApiV2PeerClustersClusterIdChainPost for application/json ContentType.
+type PeerChainApiV2PeerClustersClusterIdChainPostJSONRequestBody = ChainRequest
+
+// PeerDescribeApiV2PeerClustersClusterIdDescribePostJSONRequestBody defines body for PeerDescribeApiV2PeerClustersClusterIdDescribePost for application/json ContentType.
+type PeerDescribeApiV2PeerClustersClusterIdDescribePostJSONRequestBody = DescribeRequest
+
+// PeerFinishApiV2PeerClustersClusterIdFinishPostJSONRequestBody defines body for PeerFinishApiV2PeerClustersClusterIdFinishPost for application/json ContentType.
+type PeerFinishApiV2PeerClustersClusterIdFinishPostJSONRequestBody = FinishRequest
+
+// PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostJSONRequestBody defines body for PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPost for application/json ContentType.
+type PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostJSONRequestBody = LandingRequest
+
+// PeerPlaceApiV2PeerClustersClusterIdPlacePostJSONRequestBody defines body for PeerPlaceApiV2PeerClustersClusterIdPlacePost for application/json ContentType.
+type PeerPlaceApiV2PeerClustersClusterIdPlacePostJSONRequestBody = PlaceRequest
+
 // ClustersCreateApiV2ClustersPostJSONRequestBody defines body for ClustersCreateApiV2ClustersPost for application/json ContentType.
 type ClustersCreateApiV2ClustersPostJSONRequestBody = ClusterParams
 
@@ -4032,6 +4456,135 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /api/v2/_meta/ready (the `ReadyApiV2MetaReadyGet` operationId).
 	ReadyApiV2MetaReadyGet(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PeerChainApiV2PeerClustersClusterIdChainPostWithBody Peer:Chain
+	//
+	// Chain a landing volume onto the copy of the snapshot before it, on the
+	// leader and its secondary, so the transfer can ship only the delta.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/chain (the `PeerChainApiV2PeerClustersClusterIdChainPost` operationId).
+	PeerChainApiV2PeerClustersClusterIdChainPostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PeerChainApiV2PeerClustersClusterIdChainPost Peer:Chain
+	//
+	// Chain a landing volume onto the copy of the snapshot before it, on the
+	// leader and its secondary, so the transfer can ship only the delta.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/chain (the `PeerChainApiV2PeerClustersClusterIdChainPost` operationId).
+	PeerChainApiV2PeerClustersClusterIdChainPost(ctx context.Context, clusterId openapi_types.UUID, body PeerChainApiV2PeerClustersClusterIdChainPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PeerDescribeApiV2PeerClustersClusterIdDescribePostWithBody Peer:Describe
+	//
+	// Read-only answers about this cluster's side of a replication: who leads a
+	// landing volume's lvstore, whether copies exist or have dependent clones, and
+	// whether copies are chained. POST only because the question has a body.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/describe (the `PeerDescribeApiV2PeerClustersClusterIdDescribePost` operationId).
+	PeerDescribeApiV2PeerClustersClusterIdDescribePostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PeerDescribeApiV2PeerClustersClusterIdDescribePost Peer:Describe
+	//
+	// Read-only answers about this cluster's side of a replication: who leads a
+	// landing volume's lvstore, whether copies exist or have dependent clones, and
+	// whether copies are chained. POST only because the question has a body.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/describe (the `PeerDescribeApiV2PeerClustersClusterIdDescribePost` operationId).
+	PeerDescribeApiV2PeerClustersClusterIdDescribePost(ctx context.Context, clusterId openapi_types.UUID, body PeerDescribeApiV2PeerClustersClusterIdDescribePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PeerFinishApiV2PeerClustersClusterIdFinishPostWithBody Peer:Finish
+	//
+	// Make a landing volume the copy of its source snapshot after the transfer:
+	// chain, merge and convert it, record the copy and retire the landing volume.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/finish (the `PeerFinishApiV2PeerClustersClusterIdFinishPost` operationId).
+	PeerFinishApiV2PeerClustersClusterIdFinishPostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PeerFinishApiV2PeerClustersClusterIdFinishPost Peer:Finish
+	//
+	// Make a landing volume the copy of its source snapshot after the transfer:
+	// chain, merge and convert it, record the copy and retire the landing volume.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/finish (the `PeerFinishApiV2PeerClustersClusterIdFinishPost` operationId).
+	PeerFinishApiV2PeerClustersClusterIdFinishPost(ctx context.Context, clusterId openapi_types.UUID, body PeerFinishApiV2PeerClustersClusterIdFinishPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PeerInfoApiV2PeerClustersClusterIdInfoGet Peer:Info
+	//
+	// Identity, peer API version and capabilities of this cluster.
+	//
+	// Corresponds with GET /api/v2/_peer/clusters/{cluster_id}/info (the `PeerInfoApiV2PeerClustersClusterIdInfoGet` operationId).
+	PeerInfoApiV2PeerClustersClusterIdInfoGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostWithBody Peer:Landing-Volumes:Prepare
+	//
+	// Make a replicated snapshot's landing volume ready: adopt one a previous
+	// request made, report a copy of the same data, or create it.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/landing-volumes (the `PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPost` operationId).
+	PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPost Peer:Landing-Volumes:Prepare
+	//
+	// Make a replicated snapshot's landing volume ready: adopt one a previous
+	// request made, report a copy of the same data, or create it.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/landing-volumes (the `PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPost` operationId).
+	PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPost(ctx context.Context, clusterId openapi_types.UUID, body PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDelete Peer:Landing-Volumes:Delete
+	//
+	// Delete a replication landing volume; one that is already gone is success.
+	//
+	// Corresponds with DELETE /api/v2/_peer/clusters/{cluster_id}/landing-volumes/{lvol_id} (the `PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDelete` operationId).
+	PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDelete(ctx context.Context, clusterId openapi_types.UUID, lvolId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPost Peer:Landing-Volumes:Hub
+	//
+	// Get this cluster ready to receive a transfer into a landing volume: its
+	// settled leader, the receiving hub's attach address and the volume's map id.
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/landing-volumes/{lvol_id}/hub (the `PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPost` operationId).
+	PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPost(ctx context.Context, clusterId openapi_types.UUID, lvolId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PeerPlaceApiV2PeerClustersClusterIdPlacePostWithBody Peer:Place
+	//
+	// Pick the member a volume's copies land on when its replication starts.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/place (the `PeerPlaceApiV2PeerClustersClusterIdPlacePost` operationId).
+	PeerPlaceApiV2PeerClustersClusterIdPlacePostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PeerPlaceApiV2PeerClustersClusterIdPlacePost Peer:Place
+	//
+	// Pick the member a volume's copies land on when its replication starts.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/place (the `PeerPlaceApiV2PeerClustersClusterIdPlacePost` operationId).
+	PeerPlaceApiV2PeerClustersClusterIdPlacePost(ctx context.Context, clusterId openapi_types.UUID, body PeerPlaceApiV2PeerClustersClusterIdPlacePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDelete Peer:Snapshots:Delete
+	//
+	// Delete a replicated copy (retention); one already gone counts as deleted.
+	//
+	// Corresponds with DELETE /api/v2/_peer/clusters/{cluster_id}/snapshots/{snapshot_id} (the `PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDelete` operationId).
+	PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDelete(ctx context.Context, clusterId openapi_types.UUID, snapshotId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersListApiV2ClustersGet Clusters:List
 	//
@@ -5035,6 +5588,20 @@ type ClientInterface interface {
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}/latest-snapshot (the `ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet` operationId).
 	ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet(ctx context.Context, clusterId openapi_types.UUID, lvolId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost Clusters:Replication:Replicated-Groups:Failover
+	//
+	// Fail the source cluster's consistency group over onto this cluster, from
+	// the copies here, with the source cluster cut off (control-plane split).
+	//
+	// Unlike ``consistency-groups/{id}/replication/failover`` this needs no record
+	// of the group, its volumes, or the source cluster in this control plane:
+	// every copy carries what its clone needs. The response matches that
+	// endpoint: ``{"members": [...]}``; 409 when no generation with a copy of
+	// every member is here, or when a member failed (retryable).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/failover (the `ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost` operationId).
+	ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost(ctx context.Context, clusterId openapi_types.UUID, sourceClusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGet Clusters:Replication:Targets:List
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/replication/targets/ (the `ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGet` operationId).
@@ -5956,6 +6523,275 @@ func (c *Client) HealthApiV2MetaHealthGet(ctx context.Context, reqEditors ...Req
 // Corresponds with GET /api/v2/_meta/ready (the `ReadyApiV2MetaReadyGet` operationId).
 func (c *Client) ReadyApiV2MetaReadyGet(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewReadyApiV2MetaReadyGetRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PeerChainApiV2PeerClustersClusterIdChainPostWithBody Peer:Chain
+//
+// Chain a landing volume onto the copy of the snapshot before it, on the
+// leader and its secondary, so the transfer can ship only the delta.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/chain (the `PeerChainApiV2PeerClustersClusterIdChainPost` operationId).
+func (c *Client) PeerChainApiV2PeerClustersClusterIdChainPostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPeerChainApiV2PeerClustersClusterIdChainPostRequestWithBody(c.Server, clusterId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PeerChainApiV2PeerClustersClusterIdChainPost Peer:Chain
+//
+// Chain a landing volume onto the copy of the snapshot before it, on the
+// leader and its secondary, so the transfer can ship only the delta.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/chain (the `PeerChainApiV2PeerClustersClusterIdChainPost` operationId).
+func (c *Client) PeerChainApiV2PeerClustersClusterIdChainPost(ctx context.Context, clusterId openapi_types.UUID, body PeerChainApiV2PeerClustersClusterIdChainPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPeerChainApiV2PeerClustersClusterIdChainPostRequest(c.Server, clusterId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PeerDescribeApiV2PeerClustersClusterIdDescribePostWithBody Peer:Describe
+//
+// Read-only answers about this cluster's side of a replication: who leads a
+// landing volume's lvstore, whether copies exist or have dependent clones, and
+// whether copies are chained. POST only because the question has a body.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/describe (the `PeerDescribeApiV2PeerClustersClusterIdDescribePost` operationId).
+func (c *Client) PeerDescribeApiV2PeerClustersClusterIdDescribePostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPeerDescribeApiV2PeerClustersClusterIdDescribePostRequestWithBody(c.Server, clusterId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PeerDescribeApiV2PeerClustersClusterIdDescribePost Peer:Describe
+//
+// Read-only answers about this cluster's side of a replication: who leads a
+// landing volume's lvstore, whether copies exist or have dependent clones, and
+// whether copies are chained. POST only because the question has a body.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/describe (the `PeerDescribeApiV2PeerClustersClusterIdDescribePost` operationId).
+func (c *Client) PeerDescribeApiV2PeerClustersClusterIdDescribePost(ctx context.Context, clusterId openapi_types.UUID, body PeerDescribeApiV2PeerClustersClusterIdDescribePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPeerDescribeApiV2PeerClustersClusterIdDescribePostRequest(c.Server, clusterId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PeerFinishApiV2PeerClustersClusterIdFinishPostWithBody Peer:Finish
+//
+// Make a landing volume the copy of its source snapshot after the transfer:
+// chain, merge and convert it, record the copy and retire the landing volume.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/finish (the `PeerFinishApiV2PeerClustersClusterIdFinishPost` operationId).
+func (c *Client) PeerFinishApiV2PeerClustersClusterIdFinishPostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPeerFinishApiV2PeerClustersClusterIdFinishPostRequestWithBody(c.Server, clusterId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PeerFinishApiV2PeerClustersClusterIdFinishPost Peer:Finish
+//
+// Make a landing volume the copy of its source snapshot after the transfer:
+// chain, merge and convert it, record the copy and retire the landing volume.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/finish (the `PeerFinishApiV2PeerClustersClusterIdFinishPost` operationId).
+func (c *Client) PeerFinishApiV2PeerClustersClusterIdFinishPost(ctx context.Context, clusterId openapi_types.UUID, body PeerFinishApiV2PeerClustersClusterIdFinishPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPeerFinishApiV2PeerClustersClusterIdFinishPostRequest(c.Server, clusterId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PeerInfoApiV2PeerClustersClusterIdInfoGet Peer:Info
+//
+// Identity, peer API version and capabilities of this cluster.
+//
+// Corresponds with GET /api/v2/_peer/clusters/{cluster_id}/info (the `PeerInfoApiV2PeerClustersClusterIdInfoGet` operationId).
+func (c *Client) PeerInfoApiV2PeerClustersClusterIdInfoGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPeerInfoApiV2PeerClustersClusterIdInfoGetRequest(c.Server, clusterId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostWithBody Peer:Landing-Volumes:Prepare
+//
+// Make a replicated snapshot's landing volume ready: adopt one a previous
+// request made, report a copy of the same data, or create it.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/landing-volumes (the `PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPost` operationId).
+func (c *Client) PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostRequestWithBody(c.Server, clusterId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPost Peer:Landing-Volumes:Prepare
+//
+// Make a replicated snapshot's landing volume ready: adopt one a previous
+// request made, report a copy of the same data, or create it.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/landing-volumes (the `PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPost` operationId).
+func (c *Client) PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPost(ctx context.Context, clusterId openapi_types.UUID, body PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostRequest(c.Server, clusterId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDelete Peer:Landing-Volumes:Delete
+//
+// Delete a replication landing volume; one that is already gone is success.
+//
+// Corresponds with DELETE /api/v2/_peer/clusters/{cluster_id}/landing-volumes/{lvol_id} (the `PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDelete` operationId).
+func (c *Client) PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDelete(ctx context.Context, clusterId openapi_types.UUID, lvolId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteRequest(c.Server, clusterId, lvolId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPost Peer:Landing-Volumes:Hub
+//
+// Get this cluster ready to receive a transfer into a landing volume: its
+// settled leader, the receiving hub's attach address and the volume's map id.
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/landing-volumes/{lvol_id}/hub (the `PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPost` operationId).
+func (c *Client) PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPost(ctx context.Context, clusterId openapi_types.UUID, lvolId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostRequest(c.Server, clusterId, lvolId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PeerPlaceApiV2PeerClustersClusterIdPlacePostWithBody Peer:Place
+//
+// Pick the member a volume's copies land on when its replication starts.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/place (the `PeerPlaceApiV2PeerClustersClusterIdPlacePost` operationId).
+func (c *Client) PeerPlaceApiV2PeerClustersClusterIdPlacePostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPeerPlaceApiV2PeerClustersClusterIdPlacePostRequestWithBody(c.Server, clusterId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PeerPlaceApiV2PeerClustersClusterIdPlacePost Peer:Place
+//
+// Pick the member a volume's copies land on when its replication starts.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/place (the `PeerPlaceApiV2PeerClustersClusterIdPlacePost` operationId).
+func (c *Client) PeerPlaceApiV2PeerClustersClusterIdPlacePost(ctx context.Context, clusterId openapi_types.UUID, body PeerPlaceApiV2PeerClustersClusterIdPlacePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPeerPlaceApiV2PeerClustersClusterIdPlacePostRequest(c.Server, clusterId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDelete Peer:Snapshots:Delete
+//
+// Delete a replicated copy (retention); one already gone counts as deleted.
+//
+// Corresponds with DELETE /api/v2/_peer/clusters/{cluster_id}/snapshots/{snapshot_id} (the `PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDelete` operationId).
+func (c *Client) PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDelete(ctx context.Context, clusterId openapi_types.UUID, snapshotId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteRequest(c.Server, clusterId, snapshotId)
 	if err != nil {
 		return nil, err
 	}
@@ -8055,6 +8891,30 @@ func (c *Client) ClustersReplicationRelationshipsDetailApiV2ClustersClusterIdRep
 // Corresponds with GET /api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}/latest-snapshot (the `ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet` operationId).
 func (c *Client) ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet(ctx context.Context, clusterId openapi_types.UUID, lvolId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGetRequest(c.Server, clusterId, lvolId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost Clusters:Replication:Replicated-Groups:Failover
+//
+// Fail the source cluster's consistency group over onto this cluster, from
+// the copies here, with the source cluster cut off (control-plane split).
+//
+// Unlike “consistency-groups/{id}/replication/failover“ this needs no record
+// of the group, its volumes, or the source cluster in this control plane:
+// every copy carries what its clone needs. The response matches that
+// endpoint: “{"members": [...]}“; 409 when no generation with a copy of
+// every member is here, or when a member failed (retryable).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/failover (the `ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost` operationId).
+func (c *Client) ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost(ctx context.Context, clusterId openapi_types.UUID, sourceClusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostRequest(c.Server, clusterId, sourceClusterId, groupId)
 	if err != nil {
 		return nil, err
 	}
@@ -10188,6 +11048,398 @@ func NewReadyApiV2MetaReadyGetRequest(server string) (*http.Request, error) {
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewPeerChainApiV2PeerClustersClusterIdChainPostRequest calls the generic PeerChainApiV2PeerClustersClusterIdChainPost builder with application/json body
+func NewPeerChainApiV2PeerClustersClusterIdChainPostRequest(server string, clusterId openapi_types.UUID, body PeerChainApiV2PeerClustersClusterIdChainPostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPeerChainApiV2PeerClustersClusterIdChainPostRequestWithBody(server, clusterId, "application/json", bodyReader)
+}
+
+// NewPeerChainApiV2PeerClustersClusterIdChainPostRequestWithBody constructs an http.Request for the PeerChainApiV2PeerClustersClusterIdChainPost method, with any body, and a specified content type
+func NewPeerChainApiV2PeerClustersClusterIdChainPostRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/_peer/clusters/%s/chain", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewPeerDescribeApiV2PeerClustersClusterIdDescribePostRequest calls the generic PeerDescribeApiV2PeerClustersClusterIdDescribePost builder with application/json body
+func NewPeerDescribeApiV2PeerClustersClusterIdDescribePostRequest(server string, clusterId openapi_types.UUID, body PeerDescribeApiV2PeerClustersClusterIdDescribePostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPeerDescribeApiV2PeerClustersClusterIdDescribePostRequestWithBody(server, clusterId, "application/json", bodyReader)
+}
+
+// NewPeerDescribeApiV2PeerClustersClusterIdDescribePostRequestWithBody constructs an http.Request for the PeerDescribeApiV2PeerClustersClusterIdDescribePost method, with any body, and a specified content type
+func NewPeerDescribeApiV2PeerClustersClusterIdDescribePostRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/_peer/clusters/%s/describe", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewPeerFinishApiV2PeerClustersClusterIdFinishPostRequest calls the generic PeerFinishApiV2PeerClustersClusterIdFinishPost builder with application/json body
+func NewPeerFinishApiV2PeerClustersClusterIdFinishPostRequest(server string, clusterId openapi_types.UUID, body PeerFinishApiV2PeerClustersClusterIdFinishPostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPeerFinishApiV2PeerClustersClusterIdFinishPostRequestWithBody(server, clusterId, "application/json", bodyReader)
+}
+
+// NewPeerFinishApiV2PeerClustersClusterIdFinishPostRequestWithBody constructs an http.Request for the PeerFinishApiV2PeerClustersClusterIdFinishPost method, with any body, and a specified content type
+func NewPeerFinishApiV2PeerClustersClusterIdFinishPostRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/_peer/clusters/%s/finish", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewPeerInfoApiV2PeerClustersClusterIdInfoGetRequest constructs an http.Request for the PeerInfoApiV2PeerClustersClusterIdInfoGet method
+func NewPeerInfoApiV2PeerClustersClusterIdInfoGetRequest(server string, clusterId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/_peer/clusters/%s/info", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewPeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostRequest calls the generic PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPost builder with application/json body
+func NewPeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostRequest(server string, clusterId openapi_types.UUID, body PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostRequestWithBody(server, clusterId, "application/json", bodyReader)
+}
+
+// NewPeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostRequestWithBody constructs an http.Request for the PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPost method, with any body, and a specified content type
+func NewPeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/_peer/clusters/%s/landing-volumes", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewPeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteRequest constructs an http.Request for the PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDelete method
+func NewPeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteRequest(server string, clusterId openapi_types.UUID, lvolId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "lvol_id", lvolId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/_peer/clusters/%s/landing-volumes/%s", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewPeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostRequest constructs an http.Request for the PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPost method
+func NewPeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostRequest(server string, clusterId openapi_types.UUID, lvolId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "lvol_id", lvolId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/_peer/clusters/%s/landing-volumes/%s/hub", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewPeerPlaceApiV2PeerClustersClusterIdPlacePostRequest calls the generic PeerPlaceApiV2PeerClustersClusterIdPlacePost builder with application/json body
+func NewPeerPlaceApiV2PeerClustersClusterIdPlacePostRequest(server string, clusterId openapi_types.UUID, body PeerPlaceApiV2PeerClustersClusterIdPlacePostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPeerPlaceApiV2PeerClustersClusterIdPlacePostRequestWithBody(server, clusterId, "application/json", bodyReader)
+}
+
+// NewPeerPlaceApiV2PeerClustersClusterIdPlacePostRequestWithBody constructs an http.Request for the PeerPlaceApiV2PeerClustersClusterIdPlacePost method, with any body, and a specified content type
+func NewPeerPlaceApiV2PeerClustersClusterIdPlacePostRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/_peer/clusters/%s/place", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewPeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteRequest constructs an http.Request for the PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDelete method
+func NewPeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteRequest(server string, clusterId openapi_types.UUID, snapshotId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "snapshot_id", snapshotId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/_peer/clusters/%s/snapshots/%s", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -14277,6 +15529,54 @@ func NewClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdRepl
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostRequest constructs an http.Request for the ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost method
+func NewClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostRequest(server string, clusterId openapi_types.UUID, sourceClusterId openapi_types.UUID, groupId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "source_cluster_id", sourceClusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "group_id", groupId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/replication/replicated-groups/%s/%s/failover", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -20015,6 +21315,143 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with GET /api/v2/_meta/ready (the `ReadyApiV2MetaReadyGet` operationId).
 	ReadyApiV2MetaReadyGetWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ReadyApiV2MetaReadyGetResponse, error)
 
+	// PeerChainApiV2PeerClustersClusterIdChainPostWithBodyWithResponse Peer:Chain
+	//
+	// Chain a landing volume onto the copy of the snapshot before it, on the
+	// leader and its secondary, so the transfer can ship only the delta.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/chain (the `PeerChainApiV2PeerClustersClusterIdChainPost` operationId).
+	PeerChainApiV2PeerClustersClusterIdChainPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PeerChainApiV2PeerClustersClusterIdChainPostResponse, error)
+
+	// PeerChainApiV2PeerClustersClusterIdChainPostWithResponse Peer:Chain
+	//
+	// Chain a landing volume onto the copy of the snapshot before it, on the
+	// leader and its secondary, so the transfer can ship only the delta.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/chain (the `PeerChainApiV2PeerClustersClusterIdChainPost` operationId).
+	PeerChainApiV2PeerClustersClusterIdChainPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body PeerChainApiV2PeerClustersClusterIdChainPostJSONRequestBody, reqEditors ...RequestEditorFn) (*PeerChainApiV2PeerClustersClusterIdChainPostResponse, error)
+
+	// PeerDescribeApiV2PeerClustersClusterIdDescribePostWithBodyWithResponse Peer:Describe
+	//
+	// Read-only answers about this cluster's side of a replication: who leads a
+	// landing volume's lvstore, whether copies exist or have dependent clones, and
+	// whether copies are chained. POST only because the question has a body.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/describe (the `PeerDescribeApiV2PeerClustersClusterIdDescribePost` operationId).
+	PeerDescribeApiV2PeerClustersClusterIdDescribePostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PeerDescribeApiV2PeerClustersClusterIdDescribePostResponse, error)
+
+	// PeerDescribeApiV2PeerClustersClusterIdDescribePostWithResponse Peer:Describe
+	//
+	// Read-only answers about this cluster's side of a replication: who leads a
+	// landing volume's lvstore, whether copies exist or have dependent clones, and
+	// whether copies are chained. POST only because the question has a body.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/describe (the `PeerDescribeApiV2PeerClustersClusterIdDescribePost` operationId).
+	PeerDescribeApiV2PeerClustersClusterIdDescribePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body PeerDescribeApiV2PeerClustersClusterIdDescribePostJSONRequestBody, reqEditors ...RequestEditorFn) (*PeerDescribeApiV2PeerClustersClusterIdDescribePostResponse, error)
+
+	// PeerFinishApiV2PeerClustersClusterIdFinishPostWithBodyWithResponse Peer:Finish
+	//
+	// Make a landing volume the copy of its source snapshot after the transfer:
+	// chain, merge and convert it, record the copy and retire the landing volume.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/finish (the `PeerFinishApiV2PeerClustersClusterIdFinishPost` operationId).
+	PeerFinishApiV2PeerClustersClusterIdFinishPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PeerFinishApiV2PeerClustersClusterIdFinishPostResponse, error)
+
+	// PeerFinishApiV2PeerClustersClusterIdFinishPostWithResponse Peer:Finish
+	//
+	// Make a landing volume the copy of its source snapshot after the transfer:
+	// chain, merge and convert it, record the copy and retire the landing volume.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/finish (the `PeerFinishApiV2PeerClustersClusterIdFinishPost` operationId).
+	PeerFinishApiV2PeerClustersClusterIdFinishPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body PeerFinishApiV2PeerClustersClusterIdFinishPostJSONRequestBody, reqEditors ...RequestEditorFn) (*PeerFinishApiV2PeerClustersClusterIdFinishPostResponse, error)
+
+	// PeerInfoApiV2PeerClustersClusterIdInfoGetWithResponse Peer:Info
+	//
+	// Identity, peer API version and capabilities of this cluster.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/_peer/clusters/{cluster_id}/info (the `PeerInfoApiV2PeerClustersClusterIdInfoGet` operationId).
+	PeerInfoApiV2PeerClustersClusterIdInfoGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*PeerInfoApiV2PeerClustersClusterIdInfoGetResponse, error)
+
+	// PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostWithBodyWithResponse Peer:Landing-Volumes:Prepare
+	//
+	// Make a replicated snapshot's landing volume ready: adopt one a previous
+	// request made, report a copy of the same data, or create it.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/landing-volumes (the `PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPost` operationId).
+	PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse, error)
+
+	// PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostWithResponse Peer:Landing-Volumes:Prepare
+	//
+	// Make a replicated snapshot's landing volume ready: adopt one a previous
+	// request made, report a copy of the same data, or create it.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/landing-volumes (the `PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPost` operationId).
+	PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostJSONRequestBody, reqEditors ...RequestEditorFn) (*PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse, error)
+
+	// PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteWithResponse Peer:Landing-Volumes:Delete
+	//
+	// Delete a replication landing volume; one that is already gone is success.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with DELETE /api/v2/_peer/clusters/{cluster_id}/landing-volumes/{lvol_id} (the `PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDelete` operationId).
+	PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteWithResponse(ctx context.Context, clusterId openapi_types.UUID, lvolId openapi_types.UUID, reqEditors ...RequestEditorFn) (*PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteResponse, error)
+
+	// PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostWithResponse Peer:Landing-Volumes:Hub
+	//
+	// Get this cluster ready to receive a transfer into a landing volume: its
+	// settled leader, the receiving hub's attach address and the volume's map id.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/landing-volumes/{lvol_id}/hub (the `PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPost` operationId).
+	PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, lvolId openapi_types.UUID, reqEditors ...RequestEditorFn) (*PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostResponse, error)
+
+	// PeerPlaceApiV2PeerClustersClusterIdPlacePostWithBodyWithResponse Peer:Place
+	//
+	// Pick the member a volume's copies land on when its replication starts.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/place (the `PeerPlaceApiV2PeerClustersClusterIdPlacePost` operationId).
+	PeerPlaceApiV2PeerClustersClusterIdPlacePostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PeerPlaceApiV2PeerClustersClusterIdPlacePostResponse, error)
+
+	// PeerPlaceApiV2PeerClustersClusterIdPlacePostWithResponse Peer:Place
+	//
+	// Pick the member a volume's copies land on when its replication starts.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/place (the `PeerPlaceApiV2PeerClustersClusterIdPlacePost` operationId).
+	PeerPlaceApiV2PeerClustersClusterIdPlacePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body PeerPlaceApiV2PeerClustersClusterIdPlacePostJSONRequestBody, reqEditors ...RequestEditorFn) (*PeerPlaceApiV2PeerClustersClusterIdPlacePostResponse, error)
+
+	// PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteWithResponse Peer:Snapshots:Delete
+	//
+	// Delete a replicated copy (retention); one already gone counts as deleted.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with DELETE /api/v2/_peer/clusters/{cluster_id}/snapshots/{snapshot_id} (the `PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDelete` operationId).
+	PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteWithResponse(ctx context.Context, clusterId openapi_types.UUID, snapshotId openapi_types.UUID, reqEditors ...RequestEditorFn) (*PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteResponse, error)
+
 	// ClustersListApiV2ClustersGetWithResponse Clusters:List
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -21120,6 +22557,22 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}/latest-snapshot (the `ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet` operationId).
 	ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, lvolId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGetResponse, error)
+
+	// ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostWithResponse Clusters:Replication:Replicated-Groups:Failover
+	//
+	// Fail the source cluster's consistency group over onto this cluster, from
+	// the copies here, with the source cluster cut off (control-plane split).
+	//
+	// Unlike ``consistency-groups/{id}/replication/failover`` this needs no record
+	// of the group, its volumes, or the source cluster in this control plane:
+	// every copy carries what its clone needs. The response matches that
+	// endpoint: ``{"members": [...]}``; 409 when no generation with a copy of
+	// every member is here, or when a member failed (retryable).
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/failover (the `ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost` operationId).
+	ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, sourceClusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse, error)
 
 	// ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGetWithResponse Clusters:Replication:Targets:List
 	//
@@ -22236,6 +23689,431 @@ func (r ReadyApiV2MetaReadyGetResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ReadyApiV2MetaReadyGetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PeerChainApiV2PeerClustersClusterIdChainPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ChainResponse
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r PeerChainApiV2PeerClustersClusterIdChainPostResponse) GetJSON200() *ChainResponse {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r PeerChainApiV2PeerClustersClusterIdChainPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r PeerChainApiV2PeerClustersClusterIdChainPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r PeerChainApiV2PeerClustersClusterIdChainPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PeerChainApiV2PeerClustersClusterIdChainPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PeerChainApiV2PeerClustersClusterIdChainPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PeerDescribeApiV2PeerClustersClusterIdDescribePostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *DescribeResponse
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r PeerDescribeApiV2PeerClustersClusterIdDescribePostResponse) GetJSON200() *DescribeResponse {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r PeerDescribeApiV2PeerClustersClusterIdDescribePostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r PeerDescribeApiV2PeerClustersClusterIdDescribePostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r PeerDescribeApiV2PeerClustersClusterIdDescribePostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PeerDescribeApiV2PeerClustersClusterIdDescribePostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PeerDescribeApiV2PeerClustersClusterIdDescribePostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PeerFinishApiV2PeerClustersClusterIdFinishPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *FinishResponse
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r PeerFinishApiV2PeerClustersClusterIdFinishPostResponse) GetJSON200() *FinishResponse {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r PeerFinishApiV2PeerClustersClusterIdFinishPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r PeerFinishApiV2PeerClustersClusterIdFinishPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r PeerFinishApiV2PeerClustersClusterIdFinishPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PeerFinishApiV2PeerClustersClusterIdFinishPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PeerFinishApiV2PeerClustersClusterIdFinishPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PeerInfoApiV2PeerClustersClusterIdInfoGetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *PeerInfo
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r PeerInfoApiV2PeerClustersClusterIdInfoGetResponse) GetJSON200() *PeerInfo {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r PeerInfoApiV2PeerClustersClusterIdInfoGetResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r PeerInfoApiV2PeerClustersClusterIdInfoGetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r PeerInfoApiV2PeerClustersClusterIdInfoGetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PeerInfoApiV2PeerClustersClusterIdInfoGetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PeerInfoApiV2PeerClustersClusterIdInfoGetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *LandingResponse
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse) GetJSON200() *LandingResponse {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *EnsureHubResponse
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostResponse) GetJSON200() *EnsureHubResponse {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PeerPlaceApiV2PeerClustersClusterIdPlacePostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *PlaceResponse
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r PeerPlaceApiV2PeerClustersClusterIdPlacePostResponse) GetJSON200() *PlaceResponse {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r PeerPlaceApiV2PeerClustersClusterIdPlacePostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r PeerPlaceApiV2PeerClustersClusterIdPlacePostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r PeerPlaceApiV2PeerClustersClusterIdPlacePostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PeerPlaceApiV2PeerClustersClusterIdPlacePostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PeerPlaceApiV2PeerClustersClusterIdPlacePostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *DeleteSnapshotResponse
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteResponse) GetJSON200() *DeleteSnapshotResponse {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -25935,6 +27813,54 @@ func (r ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdRepl
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *map[string]interface{}
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse) GetJSON200() *map[string]interface{} {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -30353,6 +32279,227 @@ func (c *ClientWithResponses) ReadyApiV2MetaReadyGetWithResponse(ctx context.Con
 	return ParseReadyApiV2MetaReadyGetResponse(rsp)
 }
 
+// PeerChainApiV2PeerClustersClusterIdChainPostWithBodyWithResponse Peer:Chain
+//
+// Chain a landing volume onto the copy of the snapshot before it, on the
+// leader and its secondary, so the transfer can ship only the delta.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/chain (the `PeerChainApiV2PeerClustersClusterIdChainPost` operationId).
+func (c *ClientWithResponses) PeerChainApiV2PeerClustersClusterIdChainPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PeerChainApiV2PeerClustersClusterIdChainPostResponse, error) {
+	rsp, err := c.PeerChainApiV2PeerClustersClusterIdChainPostWithBody(ctx, clusterId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePeerChainApiV2PeerClustersClusterIdChainPostResponse(rsp)
+}
+
+// PeerChainApiV2PeerClustersClusterIdChainPostWithResponse Peer:Chain
+//
+// Chain a landing volume onto the copy of the snapshot before it, on the
+// leader and its secondary, so the transfer can ship only the delta.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/chain (the `PeerChainApiV2PeerClustersClusterIdChainPost` operationId).
+func (c *ClientWithResponses) PeerChainApiV2PeerClustersClusterIdChainPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body PeerChainApiV2PeerClustersClusterIdChainPostJSONRequestBody, reqEditors ...RequestEditorFn) (*PeerChainApiV2PeerClustersClusterIdChainPostResponse, error) {
+	rsp, err := c.PeerChainApiV2PeerClustersClusterIdChainPost(ctx, clusterId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePeerChainApiV2PeerClustersClusterIdChainPostResponse(rsp)
+}
+
+// PeerDescribeApiV2PeerClustersClusterIdDescribePostWithBodyWithResponse Peer:Describe
+//
+// Read-only answers about this cluster's side of a replication: who leads a
+// landing volume's lvstore, whether copies exist or have dependent clones, and
+// whether copies are chained. POST only because the question has a body.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/describe (the `PeerDescribeApiV2PeerClustersClusterIdDescribePost` operationId).
+func (c *ClientWithResponses) PeerDescribeApiV2PeerClustersClusterIdDescribePostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PeerDescribeApiV2PeerClustersClusterIdDescribePostResponse, error) {
+	rsp, err := c.PeerDescribeApiV2PeerClustersClusterIdDescribePostWithBody(ctx, clusterId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePeerDescribeApiV2PeerClustersClusterIdDescribePostResponse(rsp)
+}
+
+// PeerDescribeApiV2PeerClustersClusterIdDescribePostWithResponse Peer:Describe
+//
+// Read-only answers about this cluster's side of a replication: who leads a
+// landing volume's lvstore, whether copies exist or have dependent clones, and
+// whether copies are chained. POST only because the question has a body.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/describe (the `PeerDescribeApiV2PeerClustersClusterIdDescribePost` operationId).
+func (c *ClientWithResponses) PeerDescribeApiV2PeerClustersClusterIdDescribePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body PeerDescribeApiV2PeerClustersClusterIdDescribePostJSONRequestBody, reqEditors ...RequestEditorFn) (*PeerDescribeApiV2PeerClustersClusterIdDescribePostResponse, error) {
+	rsp, err := c.PeerDescribeApiV2PeerClustersClusterIdDescribePost(ctx, clusterId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePeerDescribeApiV2PeerClustersClusterIdDescribePostResponse(rsp)
+}
+
+// PeerFinishApiV2PeerClustersClusterIdFinishPostWithBodyWithResponse Peer:Finish
+//
+// Make a landing volume the copy of its source snapshot after the transfer:
+// chain, merge and convert it, record the copy and retire the landing volume.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/finish (the `PeerFinishApiV2PeerClustersClusterIdFinishPost` operationId).
+func (c *ClientWithResponses) PeerFinishApiV2PeerClustersClusterIdFinishPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PeerFinishApiV2PeerClustersClusterIdFinishPostResponse, error) {
+	rsp, err := c.PeerFinishApiV2PeerClustersClusterIdFinishPostWithBody(ctx, clusterId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePeerFinishApiV2PeerClustersClusterIdFinishPostResponse(rsp)
+}
+
+// PeerFinishApiV2PeerClustersClusterIdFinishPostWithResponse Peer:Finish
+//
+// Make a landing volume the copy of its source snapshot after the transfer:
+// chain, merge and convert it, record the copy and retire the landing volume.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/finish (the `PeerFinishApiV2PeerClustersClusterIdFinishPost` operationId).
+func (c *ClientWithResponses) PeerFinishApiV2PeerClustersClusterIdFinishPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body PeerFinishApiV2PeerClustersClusterIdFinishPostJSONRequestBody, reqEditors ...RequestEditorFn) (*PeerFinishApiV2PeerClustersClusterIdFinishPostResponse, error) {
+	rsp, err := c.PeerFinishApiV2PeerClustersClusterIdFinishPost(ctx, clusterId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePeerFinishApiV2PeerClustersClusterIdFinishPostResponse(rsp)
+}
+
+// PeerInfoApiV2PeerClustersClusterIdInfoGetWithResponse Peer:Info
+//
+// Identity, peer API version and capabilities of this cluster.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/_peer/clusters/{cluster_id}/info (the `PeerInfoApiV2PeerClustersClusterIdInfoGet` operationId).
+func (c *ClientWithResponses) PeerInfoApiV2PeerClustersClusterIdInfoGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*PeerInfoApiV2PeerClustersClusterIdInfoGetResponse, error) {
+	rsp, err := c.PeerInfoApiV2PeerClustersClusterIdInfoGet(ctx, clusterId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePeerInfoApiV2PeerClustersClusterIdInfoGetResponse(rsp)
+}
+
+// PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostWithBodyWithResponse Peer:Landing-Volumes:Prepare
+//
+// Make a replicated snapshot's landing volume ready: adopt one a previous
+// request made, report a copy of the same data, or create it.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/landing-volumes (the `PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPost` operationId).
+func (c *ClientWithResponses) PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse, error) {
+	rsp, err := c.PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostWithBody(ctx, clusterId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse(rsp)
+}
+
+// PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostWithResponse Peer:Landing-Volumes:Prepare
+//
+// Make a replicated snapshot's landing volume ready: adopt one a previous
+// request made, report a copy of the same data, or create it.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/landing-volumes (the `PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPost` operationId).
+func (c *ClientWithResponses) PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostJSONRequestBody, reqEditors ...RequestEditorFn) (*PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse, error) {
+	rsp, err := c.PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPost(ctx, clusterId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse(rsp)
+}
+
+// PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteWithResponse Peer:Landing-Volumes:Delete
+//
+// Delete a replication landing volume; one that is already gone is success.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with DELETE /api/v2/_peer/clusters/{cluster_id}/landing-volumes/{lvol_id} (the `PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDelete` operationId).
+func (c *ClientWithResponses) PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteWithResponse(ctx context.Context, clusterId openapi_types.UUID, lvolId openapi_types.UUID, reqEditors ...RequestEditorFn) (*PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteResponse, error) {
+	rsp, err := c.PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDelete(ctx, clusterId, lvolId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteResponse(rsp)
+}
+
+// PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostWithResponse Peer:Landing-Volumes:Hub
+//
+// Get this cluster ready to receive a transfer into a landing volume: its
+// settled leader, the receiving hub's attach address and the volume's map id.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/landing-volumes/{lvol_id}/hub (the `PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPost` operationId).
+func (c *ClientWithResponses) PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, lvolId openapi_types.UUID, reqEditors ...RequestEditorFn) (*PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostResponse, error) {
+	rsp, err := c.PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPost(ctx, clusterId, lvolId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostResponse(rsp)
+}
+
+// PeerPlaceApiV2PeerClustersClusterIdPlacePostWithBodyWithResponse Peer:Place
+//
+// Pick the member a volume's copies land on when its replication starts.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/place (the `PeerPlaceApiV2PeerClustersClusterIdPlacePost` operationId).
+func (c *ClientWithResponses) PeerPlaceApiV2PeerClustersClusterIdPlacePostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PeerPlaceApiV2PeerClustersClusterIdPlacePostResponse, error) {
+	rsp, err := c.PeerPlaceApiV2PeerClustersClusterIdPlacePostWithBody(ctx, clusterId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePeerPlaceApiV2PeerClustersClusterIdPlacePostResponse(rsp)
+}
+
+// PeerPlaceApiV2PeerClustersClusterIdPlacePostWithResponse Peer:Place
+//
+// Pick the member a volume's copies land on when its replication starts.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/_peer/clusters/{cluster_id}/place (the `PeerPlaceApiV2PeerClustersClusterIdPlacePost` operationId).
+func (c *ClientWithResponses) PeerPlaceApiV2PeerClustersClusterIdPlacePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body PeerPlaceApiV2PeerClustersClusterIdPlacePostJSONRequestBody, reqEditors ...RequestEditorFn) (*PeerPlaceApiV2PeerClustersClusterIdPlacePostResponse, error) {
+	rsp, err := c.PeerPlaceApiV2PeerClustersClusterIdPlacePost(ctx, clusterId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePeerPlaceApiV2PeerClustersClusterIdPlacePostResponse(rsp)
+}
+
+// PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteWithResponse Peer:Snapshots:Delete
+//
+// Delete a replicated copy (retention); one already gone counts as deleted.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with DELETE /api/v2/_peer/clusters/{cluster_id}/snapshots/{snapshot_id} (the `PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDelete` operationId).
+func (c *ClientWithResponses) PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteWithResponse(ctx context.Context, clusterId openapi_types.UUID, snapshotId openapi_types.UUID, reqEditors ...RequestEditorFn) (*PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteResponse, error) {
+	rsp, err := c.PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDelete(ctx, clusterId, snapshotId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteResponse(rsp)
+}
+
 // ClustersListApiV2ClustersGetWithResponse Clusters:List
 //
 // Returns a wrapper object for the known response body format(s).
@@ -32116,6 +34263,28 @@ func (c *ClientWithResponses) ClustersReplicationRelationshipsLatestSnapshotApiV
 		return nil, err
 	}
 	return ParseClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGetResponse(rsp)
+}
+
+// ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostWithResponse Clusters:Replication:Replicated-Groups:Failover
+//
+// Fail the source cluster's consistency group over onto this cluster, from
+// the copies here, with the source cluster cut off (control-plane split).
+//
+// Unlike “consistency-groups/{id}/replication/failover“ this needs no record
+// of the group, its volumes, or the source cluster in this control plane:
+// every copy carries what its clone needs. The response matches that
+// endpoint: “{"members": [...]}“; 409 when no generation with a copy of
+// every member is here, or when a member failed (retryable).
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/replication/replicated-groups/{source_cluster_id}/{group_id}/failover (the `ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost` operationId).
+func (c *ClientWithResponses) ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, sourceClusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse, error) {
+	rsp, err := c.ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPost(ctx, clusterId, sourceClusterId, groupId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse(rsp)
 }
 
 // ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGetWithResponse Clusters:Replication:Targets:List
@@ -33905,6 +36074,299 @@ func ParseReadyApiV2MetaReadyGetResponse(rsp *http.Response) (*ReadyApiV2MetaRea
 	response := &ReadyApiV2MetaReadyGetResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
+	}
+
+	return response, nil
+}
+
+// ParsePeerChainApiV2PeerClustersClusterIdChainPostResponse parses an HTTP response from a PeerChainApiV2PeerClustersClusterIdChainPostWithResponse call
+func ParsePeerChainApiV2PeerClustersClusterIdChainPostResponse(rsp *http.Response) (*PeerChainApiV2PeerClustersClusterIdChainPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PeerChainApiV2PeerClustersClusterIdChainPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ChainResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePeerDescribeApiV2PeerClustersClusterIdDescribePostResponse parses an HTTP response from a PeerDescribeApiV2PeerClustersClusterIdDescribePostWithResponse call
+func ParsePeerDescribeApiV2PeerClustersClusterIdDescribePostResponse(rsp *http.Response) (*PeerDescribeApiV2PeerClustersClusterIdDescribePostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PeerDescribeApiV2PeerClustersClusterIdDescribePostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest DescribeResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePeerFinishApiV2PeerClustersClusterIdFinishPostResponse parses an HTTP response from a PeerFinishApiV2PeerClustersClusterIdFinishPostWithResponse call
+func ParsePeerFinishApiV2PeerClustersClusterIdFinishPostResponse(rsp *http.Response) (*PeerFinishApiV2PeerClustersClusterIdFinishPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PeerFinishApiV2PeerClustersClusterIdFinishPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest FinishResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePeerInfoApiV2PeerClustersClusterIdInfoGetResponse parses an HTTP response from a PeerInfoApiV2PeerClustersClusterIdInfoGetWithResponse call
+func ParsePeerInfoApiV2PeerClustersClusterIdInfoGetResponse(rsp *http.Response) (*PeerInfoApiV2PeerClustersClusterIdInfoGetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PeerInfoApiV2PeerClustersClusterIdInfoGetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest PeerInfo
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse parses an HTTP response from a PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostWithResponse call
+func ParsePeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse(rsp *http.Response) (*PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PeerLandingVolumesPrepareApiV2PeerClustersClusterIdLandingVolumesPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest LandingResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteResponse parses an HTTP response from a PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteWithResponse call
+func ParsePeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteResponse(rsp *http.Response) (*PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PeerLandingVolumesDeleteApiV2PeerClustersClusterIdLandingVolumesLvolIdDeleteResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostResponse parses an HTTP response from a PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostWithResponse call
+func ParsePeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostResponse(rsp *http.Response) (*PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PeerLandingVolumesHubApiV2PeerClustersClusterIdLandingVolumesLvolIdHubPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest EnsureHubResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePeerPlaceApiV2PeerClustersClusterIdPlacePostResponse parses an HTTP response from a PeerPlaceApiV2PeerClustersClusterIdPlacePostWithResponse call
+func ParsePeerPlaceApiV2PeerClustersClusterIdPlacePostResponse(rsp *http.Response) (*PeerPlaceApiV2PeerClustersClusterIdPlacePostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PeerPlaceApiV2PeerClustersClusterIdPlacePostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest PlaceResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteResponse parses an HTTP response from a PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteWithResponse call
+func ParsePeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteResponse(rsp *http.Response) (*PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PeerSnapshotsDeleteApiV2PeerClustersClusterIdSnapshotsSnapshotIdDeleteResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest DeleteSnapshotResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
 	}
 
 	return response, nil
@@ -36488,6 +38950,39 @@ func ParseClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdRe
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest ReplicatedSnapshotDTO
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse parses an HTTP response from a ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostWithResponse call
+func ParseClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse(rsp *http.Response) (*ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersReplicationReplicatedGroupsFailoverApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdFailoverPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest map[string]interface{}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
