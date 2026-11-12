@@ -75,7 +75,10 @@ func TestStageNamesTheMissingNVMeInitiator(t *testing.T) {
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("NodeStageVolume returned %v, want FailedPrecondition: the node cannot connect any volume", err)
 	}
-	for _, want := range []string{"nvme-tcp", "linux-modules-extra-" + awsKernel, "kernel-modules-extra", "not found in directory"} {
+	wantInError := []string{
+		"nvme-tcp", "linux-modules-extra-" + awsKernel, "kernel-modules-extra", "not found in directory",
+	}
+	for _, want := range wantInError {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error reads %q, want it to name %q", err.Error(), want)
 		}
