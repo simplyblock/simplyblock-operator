@@ -163,6 +163,9 @@ const (
 	// thing about it that is the same on every worker.
 	LabelRole          = "role"
 	LabelSpdkProxyRole = "simplyblock-storage-node"
+	// LabelMDSClusterID names the cluster a pNFS metadata server pod serves. Only
+	// metadata server pods carry it.
+	LabelMDSClusterID = "storage.simplyblock.io/cluster-id"
 )
 
 // NodeIsLeaving reports whether a control-plane node status, lowercased, is one

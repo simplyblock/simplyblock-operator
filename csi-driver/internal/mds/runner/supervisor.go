@@ -38,6 +38,11 @@ type Process interface {
 
 // Supervisor runs one guest.
 type Supervisor struct {
+	// StoragePath starts what carries the guest's connections to its storage,
+	// before QEMU, and serves it until ctx ends. Run hands it a context that
+	// outlives Run's own and ends only once QEMU has exited, because a guest
+	// powering down still flushes and unmounts through it. Optional.
+	StoragePath func(ctx context.Context) error
 	// Start starts QEMU.
 	Start func(ctx context.Context) (Process, error)
 	// Probe returns nil while the guest is healthy.
@@ -64,6 +69,13 @@ type Supervisor struct {
 // it down, or until it fails. It returns nil only for a shutdown that was
 // asked for.
 func (s *Supervisor) Run(ctx context.Context) error {
+	if s.StoragePath != nil {
+		storage, stopStorage := context.WithCancel(context.WithoutCancel(ctx))
+		defer stopStorage()
+		if err := s.StoragePath(storage); err != nil {
+			return fmt.Errorf("starting the guest's storage path: %w", err)
+		}
+	}
 	proc, err := s.Start(ctx)
 	if err != nil {
 		return fmt.Errorf("starting QEMU: %w", err)

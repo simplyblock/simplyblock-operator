@@ -283,3 +283,40 @@ func TestAFailedDrainStillPowersDown(t *testing.T) {
 		t.Errorf("Run = %v, want a clean shutdown", err)
 	}
 }
+
+// Regression: 2026-11-11-mds-forwarder-dies-before-guest. The host-path
+// forwarder carries the guest's NVMe/TCP connections, and it was served under
+// the runner's stop-signal context. SIGTERM therefore cut the guest's storage
+// at the moment the power button was pressed: unmounting the exported XFS hung
+// on paths that no longer existed, the guest never powered down, and QEMU was
+// killed after the shutdown grace on every MDS move (about 20 s of client
+// stall each time).
+func TestTheGuestKeepsItsStorageUntilItHasPoweredDown(t *testing.T) {
+	q := newFakeQEMU()
+	s := supervisor(q)
+	var storage context.Context
+	s.StoragePath = func(ctx context.Context) error { storage = ctx; return nil }
+	s.Powerdown = func(context.Context) error {
+		// The guest flushes and unmounts on the way down, through its storage.
+		if storage.Err() != nil {
+			return errors.New("the guest's storage path is gone")
+		}
+		q.stop(nil)
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runAsync(ctx, s)
+
+	waitFor(t, "readiness", s.Ready)
+	cancel()
+
+	if err := result(t, done); err != nil {
+		t.Errorf("Run after a requested shutdown = %v, want nil", err)
+	}
+	if q.killed.Load() {
+		t.Error("QEMU was killed: the guest lost its storage before it could power down")
+	}
+	if storage.Err() == nil {
+		t.Error("the storage path outlived Run")
+	}
+}
