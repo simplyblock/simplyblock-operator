@@ -18,12 +18,15 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
+	"time"
 
 	"k8s.io/klog"
 
 	"github.com/simplyblock/csi-driver/internal/config"
+	"github.com/simplyblock/csi-driver/internal/csi/node"
 	"github.com/simplyblock/csi-driver/internal/driver"
 )
 
@@ -36,12 +39,22 @@ var conf = config.Config{
 	DriverVersion: driverVersion,
 }
 
+// checkInitiator makes this process the node plugin's readiness probe instead of
+// a plugin: it answers whether the node can connect a volume and exits.
+var checkInitiator bool
+
+// checkInitiatorBudget is under the probe's own timeout, so a modprobe that
+// hangs is reported by this process and not as a probe that never answered.
+const checkInitiatorBudget = 8 * time.Second
+
 func init() {
 	flag.StringVar(&conf.DriverName, "drivername", driverName, "Name of the driver")
 	flag.StringVar(&conf.Endpoint, "endpoint", "unix://tmp/spdkcsi.sock", "CSI endpoint")
 	flag.StringVar(&conf.NodeID, "nodeid", "", "node id")
 	flag.BoolVar(&conf.IsControllerServer, "controller", false, "Start controller server")
 	flag.BoolVar(&conf.IsNodeServer, "node", false, "Start node server")
+	flag.BoolVar(&checkInitiator, "check-initiator", false,
+		"Report whether this node has the NVMe/TCP initiator and exit; the node plugin's readiness probe")
 
 	flag.BoolVar(&conf.LinkEnabled, "link", false,
 		"Dial the operator and hold the connection open, so it can query this pod's storage state")
@@ -80,6 +93,13 @@ func init() {
 }
 
 func main() {
+	if checkInitiator {
+		ctx, cancel := context.WithTimeout(context.Background(), checkInitiatorBudget)
+		code := node.CheckInitiator(ctx, os.Stderr)
+		cancel()
+		os.Exit(code)
+	}
+
 	klog.Infof("Starting SPDK-CSI driver: %v version: %v", conf.DriverName, driverVersion)
 
 	driver.Run(&conf)

@@ -160,7 +160,8 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string)
 		Lifecycle: &corev1.Lifecycle{PostStart: &corev1.LifecycleHandler{
 			Exec: &corev1.ExecAction{Command: []string{"/bin/sh", "-c", nodePostStartScript}},
 		}},
-		Resources: d.Spec.NodeResources,
+		ReadinessProbe: nodeReadinessProbe(),
+		Resources:      d.Spec.NodeResources,
 		VolumeMounts: append([]corev1.VolumeMount{
 			{Name: "socket-dir", MountPath: socketDir},
 			{Name: "plugin-dir", MountPath: kubeletPluginsDir, MountPropagation: &bidirectional},
@@ -175,6 +176,30 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string)
 			{Name: "guardian-state", MountPath: "/var/run/simplyblock/guardian"},
 			{Name: "stack-records", MountPath: stackRecordsMountDir},
 		}, slices.Concat(tlsVolumeMount(d), linkVolumeMounts())...),
+	}
+}
+
+// nodePluginBinary is the node plugin's own executable in its image.
+const nodePluginBinary = "/app/spdkcsi"
+
+// nodeReadinessProbe makes the node plugin ready only on a worker that can
+// connect a volume, which needs the kernel's nvme-tcp module. A worker without
+// it shows a pod that is not ready, and the deployment Degraded (phase.go),
+// with what the check printed, the package to install, in the pod's events.
+//
+// It is readiness and not a refusal to start or a liveness probe. A plugin in
+// a restart loop would stop serving the pNFS volumes on the worker, which need
+// no initiator, would answer a stage with a dead socket instead of the refusal
+// that names the package, and would come back only after the restart backoff
+// once the module is installed. The check loads a module that is installed, so
+// a remedied worker turns ready on the next probe.
+func nodeReadinessProbe() *corev1.Probe {
+	return &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			Exec: &corev1.ExecAction{Command: []string{nodePluginBinary, "--check-initiator"}},
+		},
+		PeriodSeconds:  10,
+		TimeoutSeconds: 10,
 	}
 }
 

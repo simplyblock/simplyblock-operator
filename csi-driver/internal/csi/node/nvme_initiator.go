@@ -9,22 +9,19 @@
 // every path, and nothing in it names the package. So the check is made here,
 // where the answer reaches the pod's events, and it says what to install.
 //
-// The same check runs once at plugin start (AdvertiseNVMeTCPCapability): it logs
-// the verdict and publishes an nvme-tcp-capable node label, so a missing module
-// shows up before any volume is asked for and is visible across the cluster,
-// without keeping pods off a node.
+// The same check is the node plugin's readiness probe (CheckInitiator), so a
+// node that cannot connect a volume shows a plugin that is not ready before any
+// volume is asked for.
 package node
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog"
-
-	"github.com/simplyblock/atlas/kube"
 )
 
 // fabricsDevice is what the kernel's NVMe-oF initiator exposes once any of its
@@ -91,37 +88,41 @@ func (c initiatorCheck) ensure(ctx context.Context) error {
 		release, fabricsDevice, said, initiatorModule, extra, initiatorModule)
 }
 
-// AdvertiseNVMeTCPCapability says once, at start, whether this node can connect a
-// volume: as a log line, and as the nvme-tcp-capable node label a reader can see
-// across the cluster.
+// ReportInitiator says once, at start, whether this node can connect a volume.
 //
-// It is not a refusal to start. The plugin still serves the volumes that are
-// staged, and the stage of a new one makes the same check and reports it where a
-// pod's events show it. What this adds is the answer before any volume is asked
-// for, loud in the log and visible on the Node, so a missing module is not
-// something anyone has to go looking for.
-//
-// Runs once at process start, like the VDO and KVM probes. A module installed or
-// removed afterward is not noticed until the plugin restarts; the per-stage check
-// is what catches it in the meantime.
-func AdvertiseNVMeTCPCapability(ctx context.Context, kubeClient kubernetes.Interface, nodeName string) error {
-	return advertiseNVMeTCPCapability(ctx, kubeClient, nodeName, hostInitiatorCheck().ensure)
+// It is a log line and not a refusal to start: the plugin still serves the
+// volumes that need no initiator, and the readiness probe and the stage of a
+// new volume make the same check where a reader sees it. What this adds is the
+// answer in the plugin's own log.
+func ReportInitiator(ctx context.Context, nodeName string) {
+	if err := hostInitiatorCheck().ensure(ctx); err != nil {
+		klog.Errorf("initiator check: node %s: %v", nodeName, err)
+		return
+	}
+	klog.Infof("initiator check: node %s has the NVMe-oF initiator loaded", nodeName)
 }
 
-func advertiseNVMeTCPCapability(
-	ctx context.Context, kubeClient kubernetes.Interface, nodeName string, ensure func(context.Context) error,
-) error {
-	capable := true
+// CheckInitiator is the node plugin's readiness check, run as its own process
+// by the readiness probe (`spdkcsi --check-initiator`). It returns the exit
+// code: 0 when this node can connect a volume, 1 when it cannot, having written
+// why to w.
+//
+// The plugin is not ready rather than not running. A pod that is not ready is
+// as visible as one that restarts, in the pod list and in the deployment's
+// phase, and kubelet records what the probe printed on the pod, so the package
+// to install is there to read. A plugin that refused to start would also stop
+// serving the pNFS volumes on the node, which need no initiator, and would
+// answer a stage with a dead socket instead of the refusal that names the
+// package. The module is asked for on every probe, so a node that was remedied
+// turns ready on the next one.
+func CheckInitiator(ctx context.Context, w io.Writer) int {
+	return checkInitiator(ctx, hostInitiatorCheck().ensure, w)
+}
+
+func checkInitiator(ctx context.Context, ensure func(context.Context) error, w io.Writer) int {
 	if err := ensure(ctx); err != nil {
-		klog.Errorf("initiator check: node %s: %v", nodeName, err)
-		capable = false
-	} else {
-		klog.Infof("initiator check: node %s has the NVMe/TCP initiator loaded", nodeName)
+		fmt.Fprintln(w, err)
+		return 1
 	}
-	return publishCapability(ctx, kubeClient, nodeName, capabilityLabel{
-		probe:        "nvme-tcp",
-		label:        kube.LabelNVMeTCPCapable,
-		managedBy:    kube.AnnoNVMeTCPCapableManagedBy,
-		managedValue: kube.AnnoNVMeTCPCapableManagedByAutoDetect,
-	}, capable)
+	return 0
 }

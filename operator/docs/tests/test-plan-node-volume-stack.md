@@ -249,28 +249,27 @@ kernel still held were reported removed at 08:56:43 because `nvme list` left the
 (`2026-10-04-presence-from-nvme-list`). A FIFO with no writer plays the stuck kernel
 call, and a fake `nvme` first on `PATH` plays the nvme-cli that cannot be reaped.
 
-| #     | Scenario                                                                                                                                  | Type       | Test                                                                |
-|-------|-------------------------------------------------------------------------------------------------------------------------------------------|------------|---------------------------------------------------------------------|
-| U-110 | A sysfs attribute read that never answers returns an error wrapping `context.DeadlineExceeded` within its budget                          | Regression | `TestReadAttrGivesUpOnAnAttributeThatNeverAnswers`                  |
-| U-111 | An Identify against a controller device that never answers returns a timeout within its budget (Linux only)                               | Regression | `TestIdentifyGivesUpOnAControllerThatNeverAnswers`                  |
-| U-112 | Opening a namespace device that never opens returns a timeout within its budget                                                           | Regression | `TestOpenDeviceGivesUpOnADeviceThatNeverOpens`                      |
-| U-113 | An nvme-cli call returns by its deadline when a process it left behind holds the output pipe                                              | Regression | `TestRunCommandReturnsWhenTheProcessDoesNot`                        |
-| U-114 | The monitor's device listing returns by its deadline when nvme-cli never releases its output                                              | Regression | `TestNVMeDevicesReturnsWhenNVMeCLIDoesNot`                          |
-| U-115 | A `list-subsys` query still running after the query budget is given up on                                                                 | Regression | `TestSubsystemsForDeviceGivesUpOnASlowQuery`                        |
-| U-116 | A second call on a key whose earlier call is still stuck fails at once and starts nothing, and the key clears once the stuck call returns | Negative   | `TestCallFailsAtOnceWhileTheSameKeyIsStuck`                         |
-| U-117 | Concurrent calls on one healthy key all succeed, since only abandoned calls count as stuck                                                | Positive   | `TestConcurrentCallsOnAKeyAreNotStuck`                              |
-| U-118 | A recorded device sysfs still has is not reported gone                                                                                    | Regression | `TestPruneKeepsADeviceSysfsStillHas`                                |
-| U-119 | A recorded device sysfs no longer has is reported once, with its lvol                                                                     | Positive   | `TestPruneReportsADeviceSysfsNoLongerHasOnce`                       |
-| U-120 | A sysfs scan that cannot be read reports nothing and keeps the record, so a later readable scan still reports the removal                 | Negative   | `TestPruneReportsNothingWhenSysfsCannotBeRead`                      |
-| U-121 | A command killed at its deadline, or whose output a child still holds, returns an error wrapping `context.DeadlineExceeded`               | Regression | `TestCombinedOutputKillsAProcessAtTheDeadline`                      |
-| U-122 | A device recorded by an attach while the presence scan runs is not reported gone by that scan                                             | Regression | `TestPruneLeavesADeviceRecordedDuringTheScan`                       |
-| U-123 | A monitor tick whose path repair fails still reports the devices the kernel removed                                                       | Regression | `TestTickReportsGoneDevicesWhenPathRepairFails`                     |
-| U-124 | A stage on a node with no NVMe/TCP initiator is refused as a failed precondition naming the package to install                            | Regression | `TestStageNamesTheMissingNVMeInitiator`                             |
-| U-125 | A stage on a node whose initiator module is installed and not loaded loads it and goes on                                                 | Positive   | `TestStageLoadsAnInitiatorThatIsInstalled`                          |
-| U-126 | A node with the NVMe/TCP initiator is labeled nvme-tcp-capable=true, marked as the probe's own                                            | Positive   | `TestAdvertiseNVMeTCPCapabilityLabelsANodeWithTheInitiator`         |
-| U-127 | A node missing the initiator is labeled nvme-tcp-capable=false, so it stands out without reading a log or failing a mount                 | Regression | `TestAdvertiseNVMeTCPCapabilityLabelsANodeWithoutTheInitiatorFalse` |
-| U-128 | A hand-set nvme-tcp-capable label (no managed-by annotation) is left alone                                                                | Positive   | `TestAdvertiseNVMeTCPCapabilityLeavesAnOperatorSetLabelAlone`       |
-| U-129 | A nvme-tcp-capable label the probe wrote is overwritten when the module is gone                                                           | Positive   | `TestAdvertiseNVMeTCPCapabilityOverwritesItsOwnPriorLabel`          |
+| #     | Scenario                                                                                                                                  | Type       | Test                                               |
+|-------|-------------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------|
+| U-110 | A sysfs attribute read that never answers returns an error wrapping `context.DeadlineExceeded` within its budget                          | Regression | `TestReadAttrGivesUpOnAnAttributeThatNeverAnswers` |
+| U-111 | An Identify against a controller device that never answers returns a timeout within its budget (Linux only)                               | Regression | `TestIdentifyGivesUpOnAControllerThatNeverAnswers` |
+| U-112 | Opening a namespace device that never opens returns a timeout within its budget                                                           | Regression | `TestOpenDeviceGivesUpOnADeviceThatNeverOpens`     |
+| U-113 | An nvme-cli call returns by its deadline when a process it left behind holds the output pipe                                              | Regression | `TestRunCommandReturnsWhenTheProcessDoesNot`       |
+| U-114 | The monitor's device listing returns by its deadline when nvme-cli never releases its output                                              | Regression | `TestNVMeDevicesReturnsWhenNVMeCLIDoesNot`         |
+| U-115 | A `list-subsys` query still running after the query budget is given up on                                                                 | Regression | `TestSubsystemsForDeviceGivesUpOnASlowQuery`       |
+| U-116 | A second call on a key whose earlier call is still stuck fails at once and starts nothing, and the key clears once the stuck call returns | Negative   | `TestCallFailsAtOnceWhileTheSameKeyIsStuck`        |
+| U-117 | Concurrent calls on one healthy key all succeed, since only abandoned calls count as stuck                                                | Positive   | `TestConcurrentCallsOnAKeyAreNotStuck`             |
+| U-118 | A recorded device sysfs still has is not reported gone                                                                                    | Regression | `TestPruneKeepsADeviceSysfsStillHas`               |
+| U-119 | A recorded device sysfs no longer has is reported once, with its lvol                                                                     | Positive   | `TestPruneReportsADeviceSysfsNoLongerHasOnce`      |
+| U-120 | A sysfs scan that cannot be read reports nothing and keeps the record, so a later readable scan still reports the removal                 | Negative   | `TestPruneReportsNothingWhenSysfsCannotBeRead`     |
+| U-121 | A command killed at its deadline, or whose output a child still holds, returns an error wrapping `context.DeadlineExceeded`               | Regression | `TestCombinedOutputKillsAProcessAtTheDeadline`     |
+| U-122 | A device recorded by an attach while the presence scan runs is not reported gone by that scan                                             | Regression | `TestPruneLeavesADeviceRecordedDuringTheScan`      |
+| U-123 | A monitor tick whose path repair fails still reports the devices the kernel removed                                                       | Regression | `TestTickReportsGoneDevicesWhenPathRepairFails`    |
+| U-124 | A stage on a node with no NVMe/TCP initiator is refused as a failed precondition naming the package to install                            | Regression | `TestStageNamesTheMissingNVMeInitiator`            |
+| U-125 | A stage on a node whose initiator module is installed and not loaded loads it and goes on                                                 | Positive   | `TestStageLoadsAnInitiatorThatIsInstalled`         |
+| U-126 | The readiness check on a node with no NVMe/TCP initiator exits non-zero and prints the package to install                                 | Negative   | `TestReadinessCheckNamesTheMissingNVMeInitiator`   |
+| U-127 | The readiness check passes once the initiator is loaded, loading a module that is installed                                               | Positive   | `TestReadinessCheckPassesOnceTheInitiatorIsThere`  |
+| U-128 | The node plugin container carries the initiator check as an exec readiness probe and no liveness probe                                    | Positive   | `TestNodePluginIsReadyOnlyWithAnInitiator`         |
 
 ---
 
@@ -510,7 +509,7 @@ nobody will release.
 
 | Class          | Scenarios | Covered | Not covered                           |
 |----------------|-----------|---------|---------------------------------------|
-| Unit           | 115       | 33      | U-01 … U-70, U-73 … U-76, U-78 … U-85 |
+| Unit           | 111       | 29      | U-01 … U-70, U-73 … U-76, U-78 … U-85 |
 | Integration    | 21        | 3       | I-01 … I-18                           |
 | E2E            | 27        | 10      | E-11 … E-27                           |
 | Unit — Phase 4 | 7         | 0       | U-P4-01 … U-P4-07                     |

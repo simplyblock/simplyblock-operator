@@ -27,11 +27,12 @@ sudo dnf install -y kernel-modules-extra                  # RHEL and its derivat
 sudo modprobe nvme-tcp
 ```
 
-A mount failure is not the only signal. The CSI node plugin probes the module at start and publishes the result as a node label, so a missing module is visible before any volume is requested. One command lists every node's state:
+A mount failure is not the only signal. The CSI node plugin's readiness probe makes the same check, so on a worker without the module the plugin's pod is not ready before any volume is requested, and the `SimplyblockDriver` reports `Degraded`. The pod's events carry the same message.
 ```
-kubectl get nodes -L storage.simplyblock.io/nvme-tcp-capable
+kubectl get pods -n <namespace> -o wide | grep csi-node
+kubectl describe pod -n <namespace> <csi-node-pod>
 ```
-A node showing `false` is missing the module and fails to mount a volume until it is installed. The plugin owns the label. A value pinned by hand (for example, on a golden image) is left alone: set the label and remove its `storage.simplyblock.io/nvme-tcp-capable-managed-by` annotation, and the probe no longer overwrites it.
+The plugin keeps running, and the pod turns ready by itself within seconds of the module being loaded.
 
 #### the worker nodes should be able to contact simplyblock storage node
 

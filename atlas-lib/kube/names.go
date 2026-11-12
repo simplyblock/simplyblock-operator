@@ -226,20 +226,6 @@ const (
 	AnnoKVMCapableManagedBy = "storage.simplyblock.io/kvm-capable-managed-by"
 	// AnnoKVMCapableManagedByAutoDetect is AnnoKVMCapableManagedBy's one value.
 	AnnoKVMCapableManagedByAutoDetect = "auto-detect"
-	// LabelNVMeTCPCapable marks a node whose kernel has the nvme-tcp initiator
-	// loadable, self-probed and self-applied by the CSI node plugin the same way
-	// as LabelVDOCapable. Nothing selects on it: a node that mounts simplyblock
-	// volumes needs the module, and this publishes whether it has it so a reader
-	// sees every node's state at once (kubectl get nodes -L), without keeping
-	// pods off a node the scheduler already placed them on. The per-stage check
-	// is what actually refuses a mount when the module is absent.
-	LabelNVMeTCPCapable = "storage.simplyblock.io/nvme-tcp-capable"
-	// AnnoNVMeTCPCapableManagedBy stamps every LabelNVMeTCPCapable value the node
-	// plugin's own probe writes, with AnnoNVMeTCPCapableManagedByAutoDetect. A
-	// label without it is an operator's override, left alone.
-	AnnoNVMeTCPCapableManagedBy = "storage.simplyblock.io/nvme-tcp-capable-managed-by"
-	// AnnoNVMeTCPCapableManagedByAutoDetect is AnnoNVMeTCPCapableManagedBy's one value.
-	AnnoNVMeTCPCapableManagedByAutoDetect = "auto-detect"
 	// AnnoSelectedStorageNode pins a PVC's logical volume to a specific storage
 	// node. It is the canonical placement/pin annotation: the operator's pin
 	// controller, drain, and rebalancer key off it, and the CSI controller reads

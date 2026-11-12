@@ -336,6 +336,28 @@ func TestNodePluginPostStartLoadsTheTransports(t *testing.T) {
 	}
 }
 
+// The node plugin is ready only on a worker that can connect a volume: its
+// readiness probe is the plugin's own initiator check, so a worker without the
+// nvme-tcp module shows a pod that is not ready, and the deployment Degraded,
+// instead of a line in a log. It is a readiness probe and not a liveness probe
+// or a refusal to start, because a restart loop would also take down the pNFS
+// volumes the worker serves without the module.
+func TestNodePluginIsReadyOnlyWithAnInitiator(t *testing.T) {
+	ds := nodeDaemonSet(testDriver("simplyblock"), testImage)
+	node := containerNamed(ds.Spec.Template.Spec.Containers, "csi-node")
+
+	probe := node.ReadinessProbe
+	if probe == nil || probe.Exec == nil {
+		t.Fatal("the node plugin has no exec readiness probe, so a worker without nvme-tcp reports ready")
+	}
+	if got, want := probe.Exec.Command, []string{"/app/spdkcsi", "--check-initiator"}; !slices.Equal(got, want) {
+		t.Errorf("readiness probe runs %v, want %v", got, want)
+	}
+	if node.LivenessProbe != nil {
+		t.Error("the node plugin has a liveness probe, so a worker without nvme-tcp restarts it in a loop")
+	}
+}
+
 // The two plugins mount the configuration and credentials this deployment's own
 // objects hold, not another deployment's.
 func TestBothPluginsMountThisDeploymentsConfiguration(t *testing.T) {

@@ -11,10 +11,6 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	kfake "k8s.io/client-go/kubernetes/fake"
-
-	"github.com/simplyblock/atlas/kube"
 )
 
 const awsKernel = "6.8.0-1044-aws"
@@ -123,67 +119,36 @@ func TestStageAsksNothingOfANodeWithAnInitiator(t *testing.T) {
 	}
 }
 
-func nvmeTCPLabel(t *testing.T, client *kfake.Clientset) (string, bool) {
-	t.Helper()
-	node, err := client.CoreV1().Nodes().Get(context.Background(), "node-a", metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, managed := node.Annotations[kube.AnnoNVMeTCPCapableManagedBy]
-	return node.Labels[kube.LabelNVMeTCPCapable], managed
-}
-
-// A reader sees every node's initiator state at once: a node whose module is
-// loaded says so on the label, and marks the label as the probe's own.
-func TestAdvertiseNVMeTCPCapabilityLabelsANodeWithTheInitiator(t *testing.T) {
-	client := kfake.NewSimpleClientset(testNode(nil, nil))
-	host := &fabricsHost{fabrics: true}
-	if err := advertiseNVMeTCPCapability(context.Background(), client, "node-a", host.check()); err != nil {
-		t.Fatalf("advertiseNVMeTCPCapability: %v", err)
-	}
-	if label, managed := nvmeTCPLabel(t, client); label != vdoCapableTrue || !managed {
-		t.Errorf("label = %q, managed = %t, want true and managed", label, managed)
-	}
-}
-
-// The whole point for this customer: a node missing linux-modules-extra is
-// labeled false, so it stands out in kubectl get nodes without anyone reading a
-// DaemonSet log or waiting for a mount to fail.
-func TestAdvertiseNVMeTCPCapabilityLabelsANodeWithoutTheInitiatorFalse(t *testing.T) {
-	client := kfake.NewSimpleClientset(testNode(nil, nil))
+// The readiness check on a node with no initiator fails and says what to
+// install: what it prints is what kubelet records on the plugin's pod, so the
+// pod that is not ready carries the remedy.
+func TestReadinessCheckNamesTheMissingNVMeInitiator(t *testing.T) {
 	host := &fabricsHost{modprobe: errors.New("exit status 1")}
-	if err := advertiseNVMeTCPCapability(context.Background(), client, "node-a", host.check()); err != nil {
-		t.Fatalf("advertiseNVMeTCPCapability: %v", err)
+	var said strings.Builder
+
+	code := checkInitiator(context.Background(), host.check(), &said)
+
+	if code == 0 {
+		t.Fatal("the check passed on a node that cannot connect a volume, so the plugin reports ready")
 	}
-	if label, _ := nvmeTCPLabel(t, client); label != vdoCapableFalse {
-		t.Errorf("label = %q, want false", label)
+	for _, want := range []string{"nvme-tcp", "linux-modules-extra-" + awsKernel, "kernel-modules-extra"} {
+		if !strings.Contains(said.String(), want) {
+			t.Errorf("the check printed %q, want it to name %q", said.String(), want)
+		}
 	}
 }
 
-// A hand-set label is an operator's override, left alone.
-func TestAdvertiseNVMeTCPCapabilityLeavesAnOperatorSetLabelAlone(t *testing.T) {
-	client := kfake.NewSimpleClientset(testNode(map[string]string{kube.LabelNVMeTCPCapable: vdoCapableTrue}, nil))
-	host := &fabricsHost{modprobe: errors.New("exit status 1")}
-	if err := advertiseNVMeTCPCapability(context.Background(), client, "node-a", host.check()); err != nil {
-		t.Fatalf("advertiseNVMeTCPCapability: %v", err)
-	}
-	if label, managed := nvmeTCPLabel(t, client); label != vdoCapableTrue || managed {
-		t.Errorf("label = %q, managed = %t, want the operator's true left untouched", label, managed)
-	}
-}
-
-// A label the probe wrote is its own to overwrite, which is how a node that lost
-// the module stops claiming it has it.
-func TestAdvertiseNVMeTCPCapabilityOverwritesItsOwnPriorLabel(t *testing.T) {
-	client := kfake.NewSimpleClientset(testNode(
-		map[string]string{kube.LabelNVMeTCPCapable: vdoCapableTrue},
-		map[string]string{kube.AnnoNVMeTCPCapableManagedBy: kube.AnnoNVMeTCPCapableManagedByAutoDetect},
-	))
-	host := &fabricsHost{modprobe: errors.New("exit status 1")}
-	if err := advertiseNVMeTCPCapability(context.Background(), client, "node-a", host.check()); err != nil {
-		t.Fatalf("advertiseNVMeTCPCapability: %v", err)
-	}
-	if label, _ := nvmeTCPLabel(t, client); label != vdoCapableFalse {
-		t.Errorf("label = %q, want the probe's own label overwritten to false", label)
+// The readiness check passes once the initiator is there, loading a module that
+// is installed and not loaded, so a node that was remedied turns ready on the
+// next probe without a restart.
+func TestReadinessCheckPassesOnceTheInitiatorIsThere(t *testing.T) {
+	for name, host := range map[string]*fabricsHost{
+		"loaded":               {fabrics: true},
+		"installed and loaded": {loadsOnAsk: true},
+	} {
+		var said strings.Builder
+		if code := checkInitiator(context.Background(), host.check(), &said); code != 0 {
+			t.Errorf("%s: the check exited %d and printed %q, want 0", name, code, said.String())
+		}
 	}
 }
