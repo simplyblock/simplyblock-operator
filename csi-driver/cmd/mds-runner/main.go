@@ -56,6 +56,7 @@ type config struct {
 	zeroedLayouts          bool
 	debugSSH               bool
 	bootDeadline           time.Duration
+	unhealthyDeadline      time.Duration
 	shutdownGrace          time.Duration
 	drainWait              time.Duration
 
@@ -114,6 +115,8 @@ func parseFlags() config {
 	flag.StringVar(&c.probeAddress, "probe-address", ":8080", "Address serving /readyz and /healthz")
 	flag.DurationVar(&c.bootDeadline, "boot-deadline", 120*time.Second,
 		"Time the guest has to turn healthy before the pod restarts")
+	flag.DurationVar(&c.unhealthyDeadline, "unhealthy-deadline", 90*time.Second,
+		"Time a booted guest may stay unhealthy before the pod restarts; 0 never restarts it")
 	flag.DurationVar(&c.shutdownGrace, "shutdown-grace", 20*time.Second,
 		"Time a powered-down guest has to exit; keep below the pod's termination grace period")
 	flag.DurationVar(&c.drainWait, "drain-wait", 3*time.Second,
@@ -249,9 +252,10 @@ func run(ctx context.Context, c config) error {
 			defer deferrers.Close(client)
 			return client.SystemPowerdown(ctx)
 		},
-		BootDeadline:  c.bootDeadline,
-		ProbeInterval: 2 * time.Second,
-		ShutdownGrace: c.shutdownGrace,
+		BootDeadline:      c.bootDeadline,
+		UnhealthyDeadline: c.unhealthyDeadline,
+		ProbeInterval:     2 * time.Second,
+		ShutdownGrace:     c.shutdownGrace,
 		Drain: func(ctx context.Context) error {
 			return netsetup.EnsureRules(ctx, netsetup.ExecIPTables, []netsetup.Rule{plan.DrainRule()})
 		},

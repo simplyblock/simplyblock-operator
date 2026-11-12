@@ -361,3 +361,29 @@ func TestAGuestWithoutNFSDLogsNothingAlarming(t *testing.T) {
 		t.Errorf("warnings without nfsd: %v", rec.warnings)
 	}
 }
+
+// Regression: 2026-11-12-pnfs-mds-stays-dead-after-state-disk-journal-abort.
+// The watchdog is what the agent's health reads, so how long an episode has
+// lasted has to be visible, and has to end with the episode.
+func TestTheWatchdogReportsHowLongNFSDHasBeenStuck(t *testing.T) {
+	p := newFakeProc(t)
+	p.pool(10, 10, 10)
+	p.thread(101, "nfsd", "D", "submit_bio_wait")
+	now := time.Unix(0, 0)
+	w := newWatchdog(p, &recorder{}, &now)
+
+	for range 3 {
+		w.Tick()
+	}
+	now = now.Add(4 * time.Minute)
+	w.Tick()
+	if got := w.StuckFor(); got != 4*time.Minute {
+		t.Errorf("StuckFor = %v during an episode four minutes old, want 4m", got)
+	}
+
+	p.thread(101, "nfsd", "S", "svc_recv")
+	w.Tick()
+	if got := w.StuckFor(); got != 0 {
+		t.Errorf("StuckFor = %v after the episode ended, want 0", got)
+	}
+}

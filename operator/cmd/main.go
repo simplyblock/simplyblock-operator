@@ -743,6 +743,15 @@ func main() {
 		setupLog.Error(err, "unable to add the management API readiness watchdog")
 		os.Exit(1)
 	}
+	// An MDS pod that stays unready after it has served is recreated, since
+	// only a new pod stages its state volume again (mds_watchdog.go).
+	if err := mgr.Add(&driver.MDSReadinessWatchdog{
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorder("mds-readiness-watchdog"),
+	}); err != nil {
+		setupLog.Error(err, "unable to add the pNFS metadata server readiness watchdog")
+		os.Exit(1)
+	}
 	// The site link is the elected replica's, so it runs as a leader-election
 	// runnable and the StorageCluster controller probes through it.
 	var siteLinkProber clustercontroller.SiteLinkProber

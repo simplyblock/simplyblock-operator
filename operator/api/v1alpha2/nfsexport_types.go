@@ -144,7 +144,32 @@ type NFSExportStatus struct {
 	// ObservedGeneration is the spec generation this status was computed from.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Conditions report what the phase does not. MDSReady is True while the
+	// metadata server answers for this export and its health check passes,
+	// and False while clients cannot be served, with the reason and the
+	// failure in its message. The phase stays Ready meanwhile, so a fault
+	// that clears on its own needs nobody to act.
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
+
+const (
+	// NFSExportConditionMDSReady is True while the export's metadata server
+	// serves it.
+	NFSExportConditionMDSReady = "MDSReady"
+
+	// NFSExportReasonServing: the health check passed.
+	NFSExportReasonServing = "Serving"
+	// NFSExportReasonHealthCheckFailed: the metadata server answered, and the
+	// export failed its health check.
+	NFSExportReasonHealthCheckFailed = "HealthCheckFailed"
+	// NFSExportReasonMDSUnreachable: the operator has no session with the
+	// metadata server, which is down, restarting, or not yet connected.
+	NFSExportReasonMDSUnreachable = "MDSUnreachable"
+)
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
@@ -153,6 +178,7 @@ type NFSExportStatus struct {
 // +kubebuilder:printcolumn:name="MDS",type=string,JSONPath=".status.mdsPodName"
 // +kubebuilder:printcolumn:name="MDSPod",type=string,JSONPath=".status.mdsPodName"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
+// +kubebuilder:printcolumn:name="MDSReady",type=string,JSONPath=".status.conditions[?(@.type==\"MDSReady\")].status"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // NFSExport is one pNFS export: a volume, the host serving it, and the address

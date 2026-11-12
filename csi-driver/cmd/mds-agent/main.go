@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
@@ -47,6 +48,23 @@ import (
 // readiness probe runs every five seconds, so this keeps the answer fresh for
 // each probe.
 const healthInterval = 2 * time.Second
+
+// healthTimeout bounds one health check. A check blocked on a dead state disk
+// or a shut-down export reports the guest unhealthy instead of freezing the
+// last answer.
+const healthTimeout = 5 * time.Second
+
+// nfsdStuckLimit is how long nfsd may look stuck before the guest is
+// unhealthy. A reconnect stalls it for well under this.
+const nfsdStuckLimit = 3 * time.Minute
+
+// statfs answers whether the filesystem mounted at path still responds. A
+// getattr fails with EIO once XFS has shut down on an I/O error, and a statfs
+// may not.
+func statfs(path string) error {
+	var st unix.Stat_t
+	return unix.Stat(path, &st)
+}
 
 func main() {
 	listen := flag.String("listen", ":"+strconv.Itoa(netsetup.AgentPort), "Address serving the export and health services")
@@ -131,12 +149,17 @@ func run(ctx context.Context, listen, stateDir string, watchdog, pathInterval ti
 		Log:         agent.KlogLogger{},
 	}
 	go activation.ActivateUntilDone(ctx, activateRetryInterval)
+	nfsdWatchdog := &agent.NFSDWatchdog{Log: agent.KlogLogger{}}
 	go agent.Report(ctx, healthServer, agent.Health{
-		StateDir: stateDir,
-		Mounted:  mounter.IsMountPoint,
-		NFSD:     nfsexport.CheckNFSDThreads,
-	}.Check, healthInterval)
-	go agent.RunNFSDWatchdog(ctx, &agent.NFSDWatchdog{Log: agent.KlogLogger{}}, watchdog)
+		StateDir:      stateDir,
+		Mounted:       mounter.IsMountPoint,
+		NFSD:          nfsexport.CheckNFSDThreads,
+		StateWritable: agent.WriteProbe(stateDir),
+		Exports:       func() error { return keeper.CheckFilesystems(statfs) },
+		Stuck:         nfsdWatchdog.StuckFor,
+		StuckLimit:    nfsdStuckLimit,
+	}.Check, healthInterval, healthTimeout)
+	go agent.RunNFSDWatchdog(ctx, nfsdWatchdog, watchdog)
 	go keeper.Run(ctx, pathInterval)
 
 	lis, err := net.Listen("tcp", listen)
