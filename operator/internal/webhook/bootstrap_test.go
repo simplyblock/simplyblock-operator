@@ -65,7 +65,7 @@ func TestBootstrapMakesTheConversionWebhookTrustedBeforeAnyManagerRuns(t *testin
 	}
 
 	b := newBootstrapper(t, crd)
-	if err := b.run(context.Background()); err != nil {
+	if _, err := b.run(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -96,7 +96,7 @@ func TestBootstrapMakesTheConversionWebhookTrustedBeforeAnyManagerRuns(t *testin
 // the manager starts rather than shortly after.
 func TestBootstrapWritesTheServingCertToDisk(t *testing.T) {
 	b := newBootstrapper(t)
-	if err := b.run(context.Background()); err != nil {
+	if _, err := b.run(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -117,7 +117,7 @@ func TestBootstrapWritesTheServingCertToDisk(t *testing.T) {
 // a second CA and re-injecting.
 func TestBootstrapStoresMaterialTheRotatorCanAdopt(t *testing.T) {
 	b := newBootstrapper(t)
-	if err := b.run(context.Background()); err != nil {
+	if _, err := b.run(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -139,7 +139,7 @@ func TestBootstrapStoresMaterialTheRotatorCanAdopt(t *testing.T) {
 // CA.
 func TestBootstrapIssuesACertForTheWebhookServiceName(t *testing.T) {
 	b := newBootstrapper(t)
-	if err := b.run(context.Background()); err != nil {
+	if _, err := b.run(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -166,7 +166,7 @@ func TestBootstrapIssuesACertForTheWebhookServiceName(t *testing.T) {
 // where the API server rejects the webhook it was just told to trust.
 func TestBootstrapReusesExistingMaterial(t *testing.T) {
 	b := newBootstrapper(t)
-	if err := b.run(context.Background()); err != nil {
+	if _, err := b.run(context.Background()); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 
@@ -175,7 +175,7 @@ func TestBootstrapReusesExistingMaterial(t *testing.T) {
 		t.Fatalf("read serving cert: %v", err)
 	}
 
-	if err := b.run(context.Background()); err != nil {
+	if _, err := b.run(context.Background()); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
 	second, err := os.ReadFile(filepath.Join(b.certDir, tlsCertFileName))
@@ -192,7 +192,7 @@ func TestBootstrapReusesExistingMaterial(t *testing.T) {
 // cannot start before its CRDs exist — which is one of the two apply orders.
 func TestBootstrapToleratesMissingCRDs(t *testing.T) {
 	b := newBootstrapper(t)
-	if err := b.run(context.Background()); err != nil {
+	if _, err := b.run(context.Background()); err != nil {
 		t.Fatalf("run with no CRDs present: %v", err)
 	}
 }

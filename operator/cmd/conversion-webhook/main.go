@@ -91,9 +91,10 @@ func main() {
 	// before the manager starts. The ordering matters even here, where no cache
 	// syncs: the webhook server's certwatcher fails outright on a missing
 	// certificate file, so the material has to be on disk first.
-	if err := internalwebhook.BootstrapConversionTrust(
+	ca, err := internalwebhook.BootstrapConversionTrust(
 		context.Background(), cfg, scheme, namespace, tlsProvider,
-	); err != nil {
+	)
+	if err != nil {
 		setupLog.Error(err, "unable to bootstrap the conversion webhook's trust")
 		os.Exit(1)
 	}
@@ -137,8 +138,9 @@ func main() {
 	// The service reference the shipped CRDs carry names the default install's
 	// namespace, and this process is the only party that knows where it actually
 	// runs. It also has to be re-applied, because re-applying the CRDs during an
-	// upgrade puts the shipped value back.
-	if err := internalwebhook.SetupConversionServiceReference(mgr, namespace); err != nil {
+	// upgrade puts the shipped value back, along with a stanza that has no CA, so
+	// the CA this process issued is kept on the CRDs as well.
+	if err := internalwebhook.SetupConversionServiceReference(mgr, namespace, ca); err != nil {
 		setupLog.Error(err, "unable to keep the conversion service reference correct")
 		os.Exit(1)
 	}
