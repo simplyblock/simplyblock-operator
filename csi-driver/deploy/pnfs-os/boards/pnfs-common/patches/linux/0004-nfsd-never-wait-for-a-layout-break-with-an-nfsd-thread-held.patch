@@ -1,0 +1,96 @@
+From 9ec7e1e17b4fb85f710fee659d507d9bdea2d7b3 Mon Sep 17 00:00:00 2001
+From: "Christoph Engelbert (noctarius)" <chris@simplyblock.io>
+Date: Sat, 10 Oct 2026 10:32:31 +0200
+Subject: [PATCH] nfsd: never wait for a layout break with an nfsd thread held
+
+A write through the metadata server, a size change, and an fallocate
+each make the filesystem break the pNFS layouts other clients hold on
+the file. XFS does that in xfs_break_leased_layouts() and, while layouts
+are out, waits for them with the calling nfsd thread held. A client
+gives a layout back with LAYOUTRETURN, which itself needs an nfsd
+thread. Once every thread waits in __break_lease, no LAYOUTRETURN is
+served: nfsd re-sends each recall until two lease periods have passed
+and then fences the client, and nothing else is served meanwhile.
+
+Seen on a pNFS metadata server with 8 threads: all of them in
+__break_lease for minutes,
+
+    __break_lease
+    xfs_break_leased_layouts
+    xfs_break_layouts
+    xfs_file_write_checks
+    xfs_file_buffered_write
+    nfsd_vfs_write
+    nfsd4_write
+
+while clients reconnected every 30 s and their connections sat in
+CLOSE_WAIT on the server.
+
+Start the break without waiting before handing the operation to the
+filesystem, and answer NFS4ERR_DELAY (or NFS3ERR_JUKEBOX) while layouts
+are still out, as nfsd_open_break_lease() already does for delegations.
+The thread is free to take the LAYOUTRETURN, and the client's retry
+finds the layouts gone. A layout granted between the check and the
+write is still waited for by the filesystem, so the window narrows
+rather than closes.
+---
+ fs/nfsd/vfs.c | 29 +++++++++++++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/fs/nfsd/vfs.c b/fs/nfsd/vfs.c
+index 53b55ee..b148bc0 100644
+--- a/fs/nfsd/vfs.c
++++ b/fs/nfsd/vfs.c
+@@ -554,6 +554,20 @@ nfsd_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp,
+ 
+ 	nfsd_sanitize_attrs(inode, iap);
+ 
++	/*
++	 * A size change breaks the pNFS layouts on the file, and the
++	 * filesystem would wait for them with this thread held. The clients
++	 * return them with LAYOUTRETURN, which needs a free nfsd thread, so
++	 * enough such waits stop nfsd until each recall times out and its
++	 * client is fenced. Start the break without waiting and have the
++	 * client retry while layouts are still out.
++	 */
++	if (size_change) {
++		host_err = break_layout(inode, false);
++		if (host_err)
++			goto out;
++	}
++
+ 	/*
+ 	 * The size case is special, it changes the file in addition to the
+ 	 * attributes, and file systems don't expect it to be mixed with
+@@ -745,6 +759,11 @@ __be32 nfsd4_vfs_fallocate(struct svc_rqst *rqstp, struct svc_fh *fhp,
+ 	if (!S_ISREG(file_inode(file)->i_mode))
+ 		return nfserr_inval;
+ 
++	/* Breaks layouts like a write does: see nfsd_vfs_write. */
++	error = break_layout(file_inode(file), false);
++	if (error)
++		return nfserrno(error);
++
+ 	error = vfs_fallocate(file, flags, offset, len);
+ 	if (!error)
+ 		error = commit_metadata(fhp);
+@@ -1233,6 +1252,16 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
+ 
+ 	exp = fhp->fh_export;
+ 
++	/*
++	 * A write through the metadata server breaks the pNFS layouts other
++	 * clients hold on the file, which the filesystem would wait for with
++	 * this thread held. See nfsd_setattr: start the break without waiting
++	 * and have the client retry while layouts are still out.
++	 */
++	host_err = break_layout(file_inode(file), false);
++	if (host_err)
++		goto out_nfserr;
++
+ 	if (!EX_ISSYNC(exp))
+ 		stable = NFS_UNSTABLE;
+ 	init_sync_kiocb(&kiocb, file);
+-- 
+2.54.0 (Apple Git-157)
+

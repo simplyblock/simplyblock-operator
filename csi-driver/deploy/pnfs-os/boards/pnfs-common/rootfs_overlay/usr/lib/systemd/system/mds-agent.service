@@ -1,0 +1,16 @@
+[Unit]
+Description=pNFS MDS guest agent
+Documentation=https://github.com/simplyblock/simplyblock-operator
+# The agent answers the runner's health call from boot, as a standby. On a
+# promotion it connects and fences the volumes, mounts the state volume, and
+# starts nfsd, so it depends on neither.
+ConditionFileIsExecutable=/usr/bin/mds-agent
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/mds-agent
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,49 @@
+From e97b0a68e836e3e2e444d318f16e29a4cde62ad2 Mon Sep 17 00:00:00 2001
+From: "Christoph Engelbert (noctarius)" <chris@simplyblock.io>
+Date: Thu, 8 Oct 2026 16:27:00 +0200
+Subject: [PATCH] nfsd: ask clients to retry a file handle of an export not
+ back yet
+
+After a server restart, nfsd starts and its grace period begins before
+whatever exports its filesystems has exported all of them again.
+Clients reconnect and reclaim at once, and a reclaim naming a file on an
+export not yet back is answered NFS4ERR_STALE. The client then drops the
+reclaimed open for good, and the application's I/O on it fails with
+EBADF.
+
+Seen on a restarted server: one client reclaimed at 11.8s, the export
+its two open files were on came back at 12.7s, and both opens were lost
+with "state recovery failed for open file ..., error = -116".
+
+During grace, answer an unknown export with NFS4ERR_DELAY, which
+clients retry. Once grace has ended, an unknown export is stale as
+before.
+---
+ fs/nfsd/nfsfh.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/fs/nfsd/nfsfh.c b/fs/nfsd/nfsfh.c
+index 3ab4b1b..eab8d2c 100644
+--- a/fs/nfsd/nfsfh.c
++++ b/fs/nfsd/nfsfh.c
+@@ -197,8 +197,16 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct net *net,
+ 	if (IS_ERR(exp)) {
+ 		trace_nfsd_set_fh_dentry_badexport(rqstp, fhp, PTR_ERR(exp));
+ 
++		/*
++		 * During grace an export a client still holds state on may
++		 * not have been exported again yet: the server restarted, and
++		 * whatever exports its filesystems is still at it. STALE ends
++		 * that state for good (the client drops a reclaimed open and
++		 * fails the application's I/O with EBADF), so ask the client
++		 * to retry. Once grace is over, an unknown export is stale.
++		 */
+ 		if (PTR_ERR(exp) == -ENOENT)
+-			return error;
++			return locks_in_grace(net) ? nfserr_jukebox : error;
+ 
+ 		return nfserrno(PTR_ERR(exp));
+ 	}
+-- 
+2.54.0 (Apple Git-157)
+
