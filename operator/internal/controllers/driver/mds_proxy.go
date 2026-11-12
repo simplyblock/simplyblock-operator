@@ -95,9 +95,14 @@ func MDSProxyPortsConfigMap(d *simplyblockv1alpha2.SimplyblockDriver, ports []in
 	}
 }
 
-// storageListenerPorts is every StorageNode's LVS port: the ports the guest's
-// volumes are served on.
-func (r *SimplyblockDriverReconciler) storageListenerPorts(ctx context.Context) ([]int32, error) {
+// storageListenerPorts is every storage node's LVS port: the ports the guest's
+// volumes are served on. Those of this cluster's StorageNodes are read from
+// them, and those of a remote storage cluster from its control plane
+// (remoteListenerPorts). When a control plane does not answer, the ports
+// already published are kept.
+func (r *SimplyblockDriverReconciler) storageListenerPorts(
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
+) ([]int32, error) {
 	var nodes simplyblockv1alpha2.StorageNodeList
 	if err := r.List(ctx, &nodes); err != nil {
 		return nil, fmt.Errorf("listing StorageNodes for the mds-proxy's ports: %w", err)
@@ -107,6 +112,18 @@ func (r *SimplyblockDriverReconciler) storageListenerPorts(ctx context.Context) 
 		if n.Status.Ports != nil && n.Status.Ports.Lvol != nil && *n.Status.Ports.Lvol > 0 {
 			ports = append(ports, *n.Status.Ports.Lvol)
 		}
+	}
+
+	remote, err := r.remoteListenerPorts(ctx, d.Namespace)
+	ports = append(ports, remote...)
+	if err != nil {
+		r.event(d, corev1.EventTypeWarning, reasonListenerPortsUnknown,
+			fmt.Sprintf("keeping the published mds-proxy ports: %v", err))
+		published, perr := r.publishedListenerPorts(ctx, d)
+		if perr != nil {
+			return nil, perr
+		}
+		ports = append(ports, published...)
 	}
 	return ports, nil
 }
@@ -279,7 +296,7 @@ func (r *SimplyblockDriverReconciler) ensureMDSProxy(ctx context.Context, d *sim
 	}
 	// The ServiceAccount and its SCC first: a DaemonSet whose pods would be
 	// refused backs off before it tries again.
-	ports, err := r.storageListenerPorts(ctx)
+	ports, err := r.storageListenerPorts(ctx, d)
 	if err != nil {
 		return err
 	}

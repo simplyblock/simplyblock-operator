@@ -13,7 +13,7 @@ func TestClientListStorageNodes(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`[{"id":"` + testNode + `","cluster_id":"` + testCluster + `","hostname":"node1",` +
 			`"status":"online","mgmt_ip":"10.0.0.5","lvols":3,"lvols_max":100,"device_count":4,` +
-			`"capacity":{},"secondary_node_id":null}]`))
+			`"capacity":{},"secondary_node_id":null,"lvol_subsys_port":4428}]`))
 	})
 	nodes, err := c.ListStorageNodes(context.Background(), testCluster)
 	if err != nil {
@@ -29,6 +29,9 @@ func TestClientListStorageNodes(t *testing.T) {
 	}
 	if n.SecondaryNodeID != "" {
 		t.Errorf("SecondaryNodeID = %q, want empty", n.SecondaryNodeID)
+	}
+	if n.LvolPort != 4428 {
+		t.Errorf("LvolPort = %d, want 4428", n.LvolPort)
 	}
 }
 
