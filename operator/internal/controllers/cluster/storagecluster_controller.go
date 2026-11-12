@@ -109,6 +109,11 @@ type StorageClusterReconciler struct {
 	// the site link, for status.stretched.siteLink. Nil runs no check.
 	SiteLink SiteLinkProber
 
+	// Stretch answers which site of a stretched control plane this operator's
+	// control plane is (controlplane.NewStretchResolver), nil when it is an
+	// ordinary one. Nil, which a test passes, means never stretched.
+	Stretch func(ctx context.Context) *simplyblockv1alpha2.StretchedControlPlaneSpec
+
 	// Clusters is the cluster stream's cache, which is where every
 	// steady-state reading comes from (§4.4). It is root-scoped, so no
 	// reconciler opens it; it is optional, and a deployment without the
@@ -562,10 +567,12 @@ func (r *StorageClusterReconciler) adopt(
 	if err != nil {
 		return ctrl.Result{RequeueAfter: clusterRetry}, err
 	}
-	if !ok && cluster.IsStretchedFollower() {
+	stretch := r.stretchedControlPlane(ctx)
+	if !ok && cluster.IsStretchedFollower() && stretch == nil {
 		// The credentials were withdrawn after the step was entered. A follower
 		// has no other way in: adoption by name carries no cluster secret, and
-		// restarting creation would post one.
+		// restarting creation would post one. (A follower on a stretched
+		// control plane shares the leader's database and adopts by name.)
 		return ctrl.Result{RequeueAfter: clusterRetry}, r.noteOnce(ctx, cluster,
 			corev1.EventTypeNormal, PeerClusterMissing, fmt.Sprintf(
 				"follower site: waiting for the hub to deliver the credentials to adopt backend cluster %s in Secret %s",
@@ -586,10 +593,15 @@ func (r *StorageClusterReconciler) adopt(
 			// cluster behind it recovers.
 			return ctrl.Result{RequeueAfter: clusterRetry}, r.restartCreation(ctx, cluster)
 		}
-		found = adoption{
-			UUID: entry.ID, Secret: entry.Secret, NQN: entry.NQN,
-			Status: entry.Status, NDCS: entry.NDCS, NPCS: entry.NPCS,
-			Names: entry.WorkloadNames,
+		found = adoptionOf(entry)
+		if refusal := refuseFollowerAdoption(cluster, found); refusal != "" {
+			return ctrl.Result{RequeueAfter: clusterRetry}, r.noteOnce(ctx, cluster,
+				corev1.EventTypeWarning, SyncReplicationMismatch, refusal)
+		}
+	}
+	if stretch != nil && cluster.IsStretchedFollower() {
+		if err := r.registerSite(ctx, cluster, found, stretch); err != nil {
+			return ctrl.Result{RequeueAfter: clusterRetry}, r.note(ctx, cluster, err.Error())
 		}
 	}
 
@@ -600,6 +612,17 @@ func (r *StorageClusterReconciler) adopt(
 		}
 	}
 	return r.persist(ctx, cluster, found, true)
+}
+
+// adoptionOf is the cluster as the control plane lists it, in the shape the
+// adoption step takes.
+func adoptionOf(entry atlascp.Cluster) adoption {
+	return adoption{
+		UUID: entry.ID, Secret: entry.Secret, NQN: entry.NQN,
+		Status: entry.Status, NDCS: entry.NDCS, NPCS: entry.NPCS,
+		FTT: entry.MaxFaultTolerance, Names: entry.WorkloadNames,
+		SyncReplication: entry.SyncReplication, LeaderSite: entry.LeaderSite,
+	}
 }
 
 // upgradeClaim reads the Secret that migrates a Helm deployment into a managed
@@ -1125,36 +1148,46 @@ func (r *StorageClusterReconciler) creationParams(
 		hugePages = utils.ParseSize(raw, "si/iec", "", false)
 	}
 
+	stretch := r.stretchedControlPlane(ctx)
+	if err := checkStretchedSite(cluster, stretch); err != nil {
+		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
+			StretchedSiteMismatch, StretchedSiteMismatch, "%s", err.Error())
+		return atlascp.CreateClusterParams{}, err
+	}
+
 	return atlascp.CreateClusterParams{
-		WorkloadNames:       backendWorkloadNamesOf(cluster),
-		Name:                cluster.Name,
-		CapWarn:             capacityThreshold(cluster.Spec.WarningThreshold),
-		CapCrit:             capacityThreshold(cluster.Spec.CriticalThreshold),
-		ProvCapWarn:         provisionedCapacityThreshold(cluster.Spec.WarningThreshold),
-		ProvCapCrit:         provisionedCapacityThreshold(cluster.Spec.CriticalThreshold),
-		NDCS:                stripeDataChunks(cluster.Spec.Stripe),
-		NPCS:                StripeParityChunks(cluster.Spec.Stripe),
-		SpdkVCPUCount:       ptr.IntFrom(cluster.Spec.VCPUCount, 8),
-		HugepagesMemBytes:   ptr.Int64From(hugePages, 0),
-		MaxSubsys:           ptr.IntFrom(cluster.Spec.MaxSubsystemCount, 10),
-		EnableNodeAffinity:  ptr.BoolFromOrFalse(cluster.Spec.EnableNodeAffinity),
-		Fabric:              cluster.Spec.FabricType,
-		CRName:              cluster.Name,
-		CRNamespace:         cluster.Namespace,
-		CRPlural:            "storageclusters",
-		ClientDataNIC:       cluster.Spec.ClientDataIfname,
-		NvmfBasePort:        ptr.IntFrom(cluster.Spec.NvmfBasePort, 4420),
-		RPCBasePort:         ptr.IntFrom(cluster.Spec.RpcBasePort, 8080),
-		SnodeAPIPort:        ptr.IntFrom(cluster.Spec.SnodeApiPort, 50001),
-		Backup:              backup,
-		VaultBaseURL:        vault,
-		EnableFailureDomain: ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains),
-		InlineChecksum:      ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
-		Atomic4K:            ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
-		DeviceMode:          deviceMode(cluster.Spec.DeviceClass),
-		SingleNode:          cluster.Spec.ClusterMode == simplyblockv1alpha2.ClusterModeSingle,
-		SyncReplication:     ptr.BoolFromOrFalse(cluster.Spec.EnableSyncReplication),
-		LeaderSite:          creatingLeaderSite(cluster),
+		StretchedControlPlane: stretch != nil,
+		Site:                  stretchedSiteOf(stretch),
+		SiteAPIEndpoint:       stretchedEndpointOf(stretch),
+		WorkloadNames:         backendWorkloadNamesOf(cluster),
+		Name:                  cluster.Name,
+		CapWarn:               capacityThreshold(cluster.Spec.WarningThreshold),
+		CapCrit:               capacityThreshold(cluster.Spec.CriticalThreshold),
+		ProvCapWarn:           provisionedCapacityThreshold(cluster.Spec.WarningThreshold),
+		ProvCapCrit:           provisionedCapacityThreshold(cluster.Spec.CriticalThreshold),
+		NDCS:                  stripeDataChunks(cluster.Spec.Stripe),
+		NPCS:                  StripeParityChunks(cluster.Spec.Stripe),
+		SpdkVCPUCount:         ptr.IntFrom(cluster.Spec.VCPUCount, 8),
+		HugepagesMemBytes:     ptr.Int64From(hugePages, 0),
+		MaxSubsys:             ptr.IntFrom(cluster.Spec.MaxSubsystemCount, 10),
+		EnableNodeAffinity:    ptr.BoolFromOrFalse(cluster.Spec.EnableNodeAffinity),
+		Fabric:                cluster.Spec.FabricType,
+		CRName:                cluster.Name,
+		CRNamespace:           cluster.Namespace,
+		CRPlural:              "storageclusters",
+		ClientDataNIC:         cluster.Spec.ClientDataIfname,
+		NvmfBasePort:          ptr.IntFrom(cluster.Spec.NvmfBasePort, 4420),
+		RPCBasePort:           ptr.IntFrom(cluster.Spec.RpcBasePort, 8080),
+		SnodeAPIPort:          ptr.IntFrom(cluster.Spec.SnodeApiPort, 50001),
+		Backup:                backup,
+		VaultBaseURL:          vault,
+		EnableFailureDomain:   ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains),
+		InlineChecksum:        ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
+		Atomic4K:              ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
+		DeviceMode:            deviceMode(cluster.Spec.DeviceClass),
+		SingleNode:            cluster.Spec.ClusterMode == simplyblockv1alpha2.ClusterModeSingle,
+		SyncReplication:       ptr.BoolFromOrFalse(cluster.Spec.EnableSyncReplication),
+		LeaderSite:            creatingLeaderSite(cluster),
 	}, nil
 }
 

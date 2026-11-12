@@ -10894,6 +10894,185 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/control-plane/": {
+      "get": {
+        "tags": [
+          "control-plane"
+        ],
+        "summary": "Clusters:Control-Plane:Status",
+        "description": "The control plane's mode on this site, the lease, and the readiness\nof every site (``failback_ready`` per site: what a planned move gates\non).",
+        "operationId": "clusters_control_plane_status_api_v2_clusters__cluster_id__control_plane__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlPlaneStatusDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/control-plane/leader-site": {
+      "post": {
+        "tags": [
+          "control-plane"
+        ],
+        "summary": "Clusters:Control-Plane:Leader-Site",
+        "description": "The planned move: refused while a readiness gate of the site is red\nunless ``force``; the lease then drains on the holder and moves within\na few seconds.",
+        "operationId": "clusters_control_plane_leader_site_api_v2_clusters__cluster_id__control_plane_leader_site_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeaderSiteParams"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteReadinessDTO"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a stretched cluster, or no control plane on the site"
+          },
+          "409": {
+            "description": "The site is not ready (detail.problems); pass force"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/control-plane/takeover": {
+      "post": {
+        "tags": [
+          "control-plane"
+        ],
+        "summary": "Clusters:Control-Plane:Takeover",
+        "description": "The unplanned move after the leading site is down. FoundationDB must\nanswer on the surviving site: when the coordinator majority was lost\nwith the leader, the FDB recovery comes first.",
+        "operationId": "clusters_control_plane_takeover_api_v2_clusters__cluster_id__control_plane_takeover_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TakeoverParams"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlPlaneStatusDTO"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a stretched cluster, a wrong site, or a confirmation that does not name the leading site"
+          },
+          "409": {
+            "description": "The confirmed site still answers (detail.alive)"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/migration-plans/": {
       "get": {
         "tags": [
@@ -11256,6 +11435,79 @@
             }
           }
         }
+      },
+      "post": {
+        "summary": "Management Nodes:Create",
+        "description": "Register a management node of ``cluster``: the second site's control\nplane of a stretched cluster announces itself with its ``site`` and the\nAPI endpoint the other site redirects to.",
+        "operationId": "management_nodes_create_api_v2_management_nodes__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "response-format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "empty",
+                "full",
+                "identifier"
+              ],
+              "type": "string",
+              "default": "full",
+              "title": "Response-Format"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagementNodeParams"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "The site is missing, not allowed or malformed (detail.message)"
+          },
+          "409": {
+            "description": "A management node with that address already exists"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v2/management-nodes/{management_node_id}/": {
@@ -11564,7 +11816,14 @@
             "title": "Region"
           },
           "endpoint": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ],
             "title": "Endpoint"
           },
           "secondary_target": {
@@ -11858,7 +12117,14 @@
             "title": "Region"
           },
           "endpoint": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ],
             "title": "Endpoint"
           },
           "secondary_target": {
@@ -12302,6 +12568,11 @@
             "title": "Leader Site",
             "default": ""
           },
+          "stretched_control_plane": {
+            "type": "boolean",
+            "title": "Stretched Control Plane",
+            "default": false
+          },
           "capacity": {
             "$ref": "#/components/schemas/CapacityStatDTO"
           },
@@ -12617,6 +12888,21 @@
           "leader_site": {
             "type": "string",
             "title": "Leader Site",
+            "default": ""
+          },
+          "stretched_control_plane": {
+            "type": "boolean",
+            "title": "Stretched Control Plane",
+            "default": false
+          },
+          "site": {
+            "type": "string",
+            "title": "Site",
+            "default": ""
+          },
+          "site_api_endpoint": {
+            "type": "string",
+            "title": "Site Api Endpoint",
             "default": ""
           },
           "max_subsys": {
@@ -13186,6 +13472,124 @@
         ],
         "title": "ConsistencyGroupResolutionDTO",
         "description": "Where a consistency group's data lives now (replication_policy_controller.\nresolve_group). ``active_*`` are empty when no group holds a live member."
+      },
+      "ControlPlaneLeaseDTO": {
+        "properties": {
+          "holder_site": {
+            "type": "string",
+            "title": "Holder Site"
+          },
+          "holder_host": {
+            "type": "string",
+            "title": "Holder Host"
+          },
+          "epoch": {
+            "type": "integer",
+            "title": "Epoch"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "expires_at": {
+            "type": "string",
+            "title": "Expires At"
+          },
+          "state_since": {
+            "type": "string",
+            "title": "State Since"
+          },
+          "released_by": {
+            "type": "string",
+            "title": "Released By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "holder_site",
+          "holder_host",
+          "epoch",
+          "state",
+          "expires_at",
+          "state_since",
+          "released_by"
+        ],
+        "title": "ControlPlaneLeaseDTO"
+      },
+      "ControlPlaneStatusDTO": {
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cluster Id"
+          },
+          "stretched_control_plane": {
+            "type": "boolean",
+            "title": "Stretched Control Plane"
+          },
+          "local_site": {
+            "type": "string",
+            "title": "Local Site"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "mode_reason": {
+            "type": "string",
+            "title": "Mode Reason"
+          },
+          "leader_site": {
+            "type": "string",
+            "title": "Leader Site"
+          },
+          "lease": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ControlPlaneLeaseDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fdb_region_lag_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fdb Region Lag Seconds"
+          },
+          "fdb_data_state": {
+            "type": "string",
+            "title": "Fdb Data State"
+          },
+          "sites": {
+            "items": {
+              "$ref": "#/components/schemas/SiteReadinessDTO"
+            },
+            "type": "array",
+            "title": "Sites"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cluster_id",
+          "stretched_control_plane",
+          "local_site",
+          "mode",
+          "mode_reason",
+          "leader_site",
+          "lease",
+          "fdb_region_lag_seconds",
+          "fdb_data_state",
+          "sites"
+        ],
+        "title": "ControlPlaneStatusDTO"
       },
       "DeviceDTO": {
         "properties": {
@@ -14447,6 +14851,25 @@
         "type": "object",
         "title": "HashicorpVaultSettings"
       },
+      "LeaderSiteParams": {
+        "properties": {
+          "site": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Site"
+          },
+          "force": {
+            "type": "boolean",
+            "title": "Force",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "site"
+        ],
+        "title": "LeaderSiteParams"
+      },
       "LocatedManifests-Input": {
         "properties": {
           "location": {
@@ -14510,6 +14933,11 @@
             "type": "string",
             "format": "ipv4",
             "title": "Ip"
+          },
+          "site": {
+            "type": "string",
+            "title": "Site",
+            "default": ""
           }
         },
         "type": "object",
@@ -14520,6 +14948,34 @@
           "ip"
         ],
         "title": "ManagementNodeDTO"
+      },
+      "ManagementNodeParams": {
+        "properties": {
+          "site": {
+            "type": "string",
+            "title": "Site",
+            "default": ""
+          },
+          "api_endpoint": {
+            "type": "string",
+            "title": "Api Endpoint",
+            "default": ""
+          },
+          "mgmt_ip": {
+            "type": "string",
+            "title": "Mgmt Ip",
+            "default": "0.0.0.0"
+          },
+          "mode": {
+            "type": "string",
+            "pattern": "^(kubernetes|docker)$",
+            "title": "Mode",
+            "default": "kubernetes"
+          }
+        },
+        "type": "object",
+        "title": "ManagementNodeParams",
+        "description": "A control plane registering itself (docs/stretched-control-plane.md):\non Kubernetes the operator calls this from the joining site, where no\nhost exists to run ``control-plane add`` on."
       },
       "ManifestDataPlane": {
         "properties": {
@@ -16171,6 +16627,79 @@
         "title": "SiteNodeDTO",
         "description": "A node of a site, as the site record lists it. ``id`` is the storage\nnode's id (``StorageNodeDTO.id``)."
       },
+      "SiteReadinessDTO": {
+        "properties": {
+          "site": {
+            "type": "string",
+            "title": "Site"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "holds_lease": {
+            "type": "boolean",
+            "title": "Holds Lease"
+          },
+          "mgmt_nodes_online": {
+            "type": "integer",
+            "title": "Mgmt Nodes Online"
+          },
+          "mgmt_nodes_total": {
+            "type": "integer",
+            "title": "Mgmt Nodes Total"
+          },
+          "storage_nodes_online": {
+            "type": "integer",
+            "title": "Storage Nodes Online"
+          },
+          "storage_nodes_total": {
+            "type": "integer",
+            "title": "Storage Nodes Total"
+          },
+          "fdb_lag_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fdb Lag Seconds"
+          },
+          "fdb_data_state": {
+            "type": "string",
+            "title": "Fdb Data State"
+          },
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Problems"
+          },
+          "failback_ready": {
+            "type": "boolean",
+            "title": "Failback Ready"
+          }
+        },
+        "type": "object",
+        "required": [
+          "site",
+          "role",
+          "holds_lease",
+          "mgmt_nodes_online",
+          "mgmt_nodes_total",
+          "storage_nodes_online",
+          "storage_nodes_total",
+          "fdb_lag_seconds",
+          "fdb_data_state",
+          "problems",
+          "failback_ready"
+        ],
+        "title": "SiteReadinessDTO"
+      },
       "SiteRecordDTO": {
         "properties": {
           "site": {
@@ -16974,6 +17503,31 @@
         ],
         "title": "SyncReplicationStatusDTO",
         "description": "The sync-replication status of a volume or consistency group seen from\none site (``GET .../replication/sync-status?site=``).\n\nEverything but ``role`` is cluster-wide (the worst over every LVS), so\nevery volume and group answers the same: csi-addons' GetReplicationStatus\n(``state``, ``last_replicated_at``, ``lag_seconds``, ``bytes_behind``,\n``diverged``) and GetSecondaryReadiness (``peer_ready = completed and not\ndegraded and not resyncing``)."
+      },
+      "TakeoverParams": {
+        "properties": {
+          "site": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Site"
+          },
+          "confirm_site_down": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Confirm Site Down"
+          },
+          "operator": {
+            "type": "string",
+            "title": "Operator",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "site",
+          "confirm_site_down"
+        ],
+        "title": "TakeoverParams"
       },
       "TargetParams": {
         "properties": {

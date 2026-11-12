@@ -18,6 +18,7 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -307,19 +308,30 @@ func (r *ControlPlaneReconciler) performInstallStep(
 ) (done bool, held string, err error) {
 	switch current {
 	case stepApplyingFoundationDB:
-		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, foundationDBObjects(cp))
+		seed, err := r.seedConnectionString(ctx, cp)
+		if err != nil {
+			return false, err.Error(), nil
+		}
+		// The management API is not up during the install, so the peer cannot
+		// be observed yet: a site installs with its own region alone.
+		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, foundationDBObjects(cp, seed, r.peerJoined(cp), r.witnessJoined(cp)))
 
 	case stepAwaitingFoundationDB:
 		health, err := readFoundationDB(ctx, r.Client, cp.Namespace)
 		if err != nil {
 			return false, "", err
 		}
-		if waiting := health.waitingOn(); waiting != "" {
+		if waiting := health.waitingOn(stretchOf(cp) != nil); waiting != "" {
 			return false, waiting, nil
 		}
 		return true, "", nil
 
 	case stepBuildingIndices:
+		if stretchOf(cp).IsJoin() {
+			// The database, and its indices, are the Bootstrap site's: a
+			// Join site shares them and has nothing to backfill.
+			return true, "", nil
+		}
 		return r.buildIndices(ctx, cp)
 
 	case stepApplyingDatastore:
@@ -348,6 +360,77 @@ func (r *ControlPlaneReconciler) performInstallStep(
 	}
 }
 
+// peerJoined is whether this site of a stretched control plane has seen the
+// other site's region in the database (status.stretch.peerJoined). False on an
+// ordinary control plane, where it decides nothing.
+func (r *ControlPlaneReconciler) peerJoined(cp *simplyblockv1alpha2.ControlPlane) bool {
+	return stretchOf(cp) != nil && cp.Status.Stretch != nil && cp.Status.Stretch.PeerJoined
+}
+
+// witnessJoined is whether this site has seen the witness site's processes in
+// the database (status.stretch.witnessJoined).
+func (r *ControlPlaneReconciler) witnessJoined(cp *simplyblockv1alpha2.ControlPlane) bool {
+	return stretchOf(cp) != nil && cp.Status.Stretch != nil && cp.Status.Stretch.WitnessJoined
+}
+
+// observePeerRegion asks the management API which FoundationDB data centers
+// have processes in the database and records, once and for good, that the
+// peer site's region has joined. A read that fails is not an error: the API
+// may be rolling, and the next pass asks again. Recorded on the object so the
+// render that follows in the same pass sees it.
+func (r *ControlPlaneReconciler) observePeerRegion(
+	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane, access managedAccess,
+) error {
+	stretch := stretchOf(cp)
+	if stretch == nil {
+		return nil
+	}
+	wantPeer := !r.peerJoined(cp)
+	wantWitness := stretch.WitnessSite != "" && !r.witnessJoined(cp)
+	if !wantPeer && !wantWitness {
+		return nil
+	}
+	prober := r.Prober
+	if prober == nil {
+		prober = &HTTPProber{Token: access.token, Client: access.client}
+	}
+	datacenters, err := prober.Datacenters(ctx, access.endpoint)
+	if err != nil {
+		logf.FromContext(ctx).V(1).Info("the FoundationDB data centers could not be read", "error", err.Error())
+		return nil
+	}
+	peer := wantPeer && slices.Contains(datacenters, stretch.PeerSite)
+	witness := wantWitness && slices.Contains(datacenters, stretch.WitnessSite)
+	if !peer && !witness {
+		return nil
+	}
+	now := metav1.Now()
+	if err := r.writeStatus(ctx, cp, func(status *simplyblockv1alpha2.ControlPlaneStatus) {
+		if status.Stretch == nil {
+			status.Stretch = &simplyblockv1alpha2.StretchedControlPlaneStatus{}
+		}
+		if peer {
+			status.Stretch.PeerJoined, status.Stretch.PeerJoinedAt = true, &now
+		}
+		if witness {
+			status.Stretch.WitnessJoined, status.Stretch.WitnessJoinedAt = true, &now
+		}
+	}); err != nil {
+		return err
+	}
+	if peer {
+		r.emit(cp, corev1.EventTypeNormal, PeerRegionJoined, fmt.Sprintf(
+			"The FoundationDB processes of site %s have joined the database; configuring both regions as usable",
+			stretch.PeerSite))
+	}
+	if witness {
+		r.emit(cp, corev1.EventTypeNormal, WitnessRegionJoined, fmt.Sprintf(
+			"The FoundationDB processes of witness site %s have joined the database; it becomes both regions' satellite",
+			stretch.WitnessSite))
+	}
+	return nil
+}
+
 // steadyState re-applies what the install created, probes readiness, and
 // republishes the endpoint, the version, and the component counts.
 //
@@ -356,10 +439,6 @@ func (r *ControlPlaneReconciler) performInstallStep(
 func (r *ControlPlaneReconciler) steadyState(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) (ctrl.Result, error) {
-	if err := r.applyEverything(ctx, cp); err != nil {
-		return ctrl.Result{}, err
-	}
-
 	// An installed control plane is reached on the Service this install created,
 	// so there is no token to present -- and, where it serves TLS, the CA this
 	// deployment minted, which no system trust store holds.
@@ -367,6 +446,14 @@ func (r *ControlPlaneReconciler) steadyState(
 	if err != nil {
 		r.announce(cp, simplyblockv1alpha2.ControlPlanePhaseDegraded, err.Error())
 		return ctrl.Result{RequeueAfter: steadyStateInterval}, nil
+	}
+	// Before the re-apply, so that the pass that sees the peer's region
+	// renders the database with it.
+	if err := r.observePeerRegion(ctx, cp, access); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.applyEverything(ctx, cp); err != nil {
+		return ctrl.Result{}, err
 	}
 	ok, message := r.probe(ctx, cp.Namespace, access)
 
@@ -400,9 +487,13 @@ func (r *ControlPlaneReconciler) applyEverything(
 	if err != nil {
 		return err
 	}
+	seed, err := r.seedConnectionString(ctx, cp)
+	if err != nil {
+		return err
+	}
 	for _, set := range [][]client.Object{
 		datastoreObjects(cp),
-		foundationDBObjects(cp),
+		foundationDBObjects(cp, seed, r.peerJoined(cp), r.witnessJoined(cp)),
 		api,
 	} {
 		if err := applyAll(ctx, r.Client, cp, r.Scheme, set); err != nil {

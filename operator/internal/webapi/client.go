@@ -3,6 +3,7 @@
 package webapi
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -100,6 +101,8 @@ func NewClient(baseURL ...string) *Client {
 		}
 	}
 
+	httpClient.CheckRedirect = followWithCredentials
+
 	c := &Client{
 		BaseURL:    url,
 		HttpClient: httpClient,
@@ -140,4 +143,20 @@ func NewStreamClient(baseURL ...string) (*StreamClient, error) {
 		BaseURL: base.BaseURL,
 		Client:  &http.Client{Transport: transport},
 	}, nil
+}
+
+// followWithCredentials is the redirect policy. A stretched control plane's
+// standby site answers a mutating call with a 307 to the leader's endpoint
+// (docs/designs/design-stretched-control-plane.md), which is on another host, and Go
+// drops the Authorization header on a redirect to another host, so the call
+// would arrive there unauthenticated. The header the first request carried is
+// put back, and the chain is capped as Go caps it.
+func followWithCredentials(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after %d redirects", len(via))
+	}
+	if auth := via[0].Header.Get("Authorization"); auth != "" && req.Header.Get("Authorization") == "" {
+		req.Header.Set("Authorization", auth)
+	}
+	return nil
 }

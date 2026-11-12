@@ -305,6 +305,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 	env = append(env, prometheusEnv()...)
 	env = append(env, monitoringSecretEnv(managed)...)
 	env = append(env, tlsEnv(managed)...)
+	env = append(env, siteEnv(managed)...)
 
 	spec := corev1.PodSpec{
 		ServiceAccountName: serviceAccountName,
@@ -610,6 +611,7 @@ func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploy
 	env = append(env, prometheusEnv()...)
 	env = append(env, monitoringSecretEnv(managed)...)
 	env = append(env, tlsEnv(managed)...)
+	env = append(env, siteEnv(managed)...)
 
 	spec := corev1.PodSpec{
 		ServiceAccountName: serviceAccountName,
@@ -801,4 +803,19 @@ func adminServiceAccounts(namespace string) string {
 		}
 	}
 	return strings.Join(accounts, ",")
+}
+
+// controlPlaneSiteEnv is the variable every control-plane process reads its
+// site from (sbcli constants.CONTROL_PLANE_SITE_ENV): the lease agent, the
+// service gate and the API's redirect verdict all key on it.
+const controlPlaneSiteEnv = "SB_CONTROL_PLANE_SITE"
+
+// siteEnv names the site on every control-plane workload of a stretched
+// control plane, and nothing on an ordinary one, whose processes then run as
+// a single site.
+func siteEnv(managed *simplyblockv1alpha2.LocalControlPlane) []corev1.EnvVar {
+	if managed == nil || managed.Stretch == nil {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: controlPlaneSiteEnv, Value: managed.Stretch.Site}}
 }

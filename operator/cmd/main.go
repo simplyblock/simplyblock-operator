@@ -298,6 +298,11 @@ func main() {
 		"The ClusterIssuer the CA Certificate is minted from.")
 	flag.BoolVar(&caCreateRoot, "cert-manager-create-root-issuer", true,
 		"Create the root ClusterIssuer as a self-signed issuer.")
+	var caSecret string
+	flag.StringVar(&caSecret, "cert-manager-ca-secret", "",
+		"An existing CA Secret in cert-manager's cluster resource namespace for the CA ClusterIssuer to "+
+			"sign with, instead of minting a CA: the Join site of a stretched control plane names a copy "+
+			"of the Bootstrap site's CA, so both sites' FoundationDB processes trust each other.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -557,7 +562,7 @@ func main() {
 	if caChain {
 		if err := mgr.Add(&prerequisites.CAChainKeeper{
 			Client:   mgr.GetClient(),
-			Chain:    prerequisites.CAChain{RootIssuer: caRootIssuer, CreateRoot: caCreateRoot},
+			Chain:    prerequisites.CAChain{RootIssuer: caRootIssuer, CreateRoot: caCreateRoot, CASecret: caSecret},
 			Interval: time.Minute,
 		}); err != nil {
 			setupLog.Error(err, "unable to add the CA chain keeper")
@@ -790,6 +795,7 @@ func main() {
 
 	if err := (&clustercontroller.StorageClusterReconciler{
 		SiteLink:     siteLinkProber,
+		Stretch:      controlplanecontroller.NewStretchResolver(mgr.GetClient(), operatorNamespace),
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Recorder:     mgr.GetEventRecorder("storagecluster-controller"),

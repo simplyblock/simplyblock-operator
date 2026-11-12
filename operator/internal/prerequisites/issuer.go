@@ -42,10 +42,15 @@ const (
 )
 
 // CAChain names the root the CA Certificate is minted from, and whether the
-// operator creates that root as a self-signed ClusterIssuer.
+// operator creates that root as a self-signed ClusterIssuer. CASecret, when
+// set, names a CA Secret that already exists in cert-manager's cluster
+// resource namespace: no root and no CA Certificate are made, and the CA
+// ClusterIssuer signs with it. The two sites of a stretched control plane
+// share one CA this way.
 type CAChain struct {
 	RootIssuer string
 	CreateRoot bool
+	CASecret   string
 }
 
 // DefaultCAChain is the chain of an install that configured none.
@@ -61,6 +66,10 @@ func EnsureCAChain(ctx context.Context, c client.Client, chain CAChain) error {
 	}
 	if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("reading ClusterIssuer %s: %w", CAIssuerName, err)
+	}
+	if chain.CASecret != "" {
+		return apply(ctx, c, []*unstructured.Unstructured{certManagerObject("ClusterIssuer", "", CAIssuerName,
+			map[string]any{"ca": map[string]any{"secretName": chain.CASecret}})})
 	}
 	cmNamespace, err := certManagerNamespace(ctx, c)
 	if err != nil {

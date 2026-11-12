@@ -60,6 +60,12 @@ const (
 
 	// LeaderSiteRecorded says the leader wrote its site to the cluster record.
 	LeaderSiteRecorded = "LeaderSiteRecorded"
+	// SiteRegistered says a follower on a stretched control plane registered
+	// its site's control plane with the cluster it adopted.
+	SiteRegistered = "SiteRegistered"
+	// StretchedSiteMismatch says the StorageCluster does not name the site
+	// its control plane is of a stretched control plane.
+	StretchedSiteMismatch = "StretchedSiteMismatch"
 
 	// WorkerUnreachable holds a follower one of whose workers the control plane
 	// cannot reach.

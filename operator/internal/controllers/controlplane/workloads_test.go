@@ -30,7 +30,7 @@ import (
 func TestEveryWatchedComponentIsOneTheInstallApplies(t *testing.T) {
 	cp := localControlPlane()
 	applied := map[string]bool{}
-	for _, obj := range append(foundationDBObjects(cp),
+	for _, obj := range append(foundationDBObjects(cp, "", false, false),
 		append(datastoreObjects(cp), managementAPIObjects(cp)...)...) {
 		applied[obj.GetName()] = true
 	}
@@ -588,7 +588,7 @@ func TestTheObjectStoreTakesTheSameStorageClassAsTheDatabase(t *testing.T) {
 func TestNoWorkloadWaitsOnASecretTheInstallDoesNotCreate(t *testing.T) {
 	cp := localControlPlane()
 
-	objects := append(foundationDBObjects(cp),
+	objects := append(foundationDBObjects(cp, "", false, false),
 		append(datastoreObjects(cp), managementAPIObjects(cp)...)...)
 	issued := secretsTheInstallIssues(objects)
 
