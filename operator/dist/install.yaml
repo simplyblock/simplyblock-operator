@@ -3707,6 +3707,20 @@ spec:
                       with disks in its infra nodes meant those disks to be the storage, so a draft
                       proposes them ahead of the workers rather than leaving them out.
                     type: boolean
+                  enableFailureDomains:
+                    description: |-
+                      EnableFailureDomains overrides whether the draft proposes failure-domain
+                      mode, which a run otherwise decides from the workers' topology: on when
+                      every worker carries a failure-domain label in a layout the control plane
+                      accepts, and off otherwise.
+
+                      false turns the mode off and reads no failure domains at all, so a fleet
+                      spread over zones it does not want treated as failure domains is grouped by
+                      hardware alone, into one cluster the draft marks enableFailureDomains false.
+                      true proposes the mode on; the layout still has to pass the control plane's
+                      activation rules, which approval checks. Unset leaves the decision to the
+                      run, and is the usual first run.
+                    type: boolean
                   enableLogicalBlockDevices:
                     description: |-
                       EnableLogicalBlockDevices scans a worker's available logical block devices
