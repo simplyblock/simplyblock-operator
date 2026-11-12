@@ -78,9 +78,10 @@ func Run(conf *config.Config) {
 			// csi.ControllerServiceCapability_RPC_LIST_VOLUMES,
 			csi.ControllerServiceCapability_RPC_VOLUME_CONDITION,
 		}
-		// A ReadWriteMany claim needs this advertised or it cannot bind. It is
-		// served by a pNFS export, and CreateVolume refuses it on any other
-		// fsType. The other multi-node modes are deliberately absent.
+		// A ReadWriteMany claim needs this advertised or it cannot bind. A
+		// filesystem one is served by a pNFS export, and CreateVolume refuses it
+		// on any other fsType. A raw-block one takes the block path. The other
+		// multi-node modes are deliberately absent.
 		volumeModes = []csi.VolumeCapability_AccessMode_Mode{
 			csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
 			csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
