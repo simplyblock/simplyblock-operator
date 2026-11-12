@@ -1,6 +1,6 @@
 // Backend makes S3 CreateBucket and DeleteBucket drive an S3Bucket's
 // lifecycle instead of a directory's: each bucket is its own volume
-// (docs/adr/0002-bucket-per-volume-via-bucketlinks.md), which only the
+// (README.md "Why bucket-per-volume"), which only the
 // operator can provision, so CreateBucket creates the S3Bucket and waits for
 // its volume to be mounted under the gateway's root, and DeleteBucket deletes
 // the S3Bucket and waits for it to be gone. Every other call goes to the

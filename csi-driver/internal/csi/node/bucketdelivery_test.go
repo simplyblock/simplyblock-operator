@@ -91,7 +91,7 @@ func TestBucketStagingPathDoesNotCollideWithTheGatewayRoot(t *testing.T) {
 	}
 }
 
-// 0004-direct-csi-mount-spike-result.md's own finding: a path outside the
+// design-bucket-provisioning.md §5.4's own finding: a path outside the
 // three Bidirectional roots stays invisible to every other pod while still
 // looking like it succeeded. validateDeliveryPath is the guard against this
 // file's own derivation ever producing one.

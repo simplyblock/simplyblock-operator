@@ -27,7 +27,7 @@ package bucketdelivery
 //
 // It is a subdirectory of /var/lib/kubelet/plugins, one of the three
 // hostPath roots the CSI node plugin's own DaemonSet pod template mounts
-// Bidirectional (0004-direct-csi-mount-spike-result.md): a path outside
+// Bidirectional (design-bucket-provisioning.md §5.4): a path outside
 // those three stays inside the node plugin's own mount namespace and
 // reaches neither the host nor any other pod.
 const GatewayMountRoot = "/var/lib/kubelet/plugins/csi.simplyblock.io/s3-gateway-mounts"

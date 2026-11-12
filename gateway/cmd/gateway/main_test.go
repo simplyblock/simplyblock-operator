@@ -3,7 +3,7 @@
 // directory and a fake Kubernetes client, creates a bucket through the
 // S3Bucket it provisions and round-trips an object byte-for-byte, and
 // separately proves
-// --bucketlinks (docs/adr/0002-bucket-per-volume-via-bucketlinks.md) — the
+// --bucketlinks (README.md "Why bucket-per-volume") — the
 // shape this project's buckets actually take, a volume symlinked in rather
 // than created through CreateBucket — by symlinking a directory in and
 // listing it back as a bucket nothing here ever created through the API.
