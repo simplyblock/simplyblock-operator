@@ -1557,7 +1557,8 @@ where four routes take two resources to one derived name (§19.8), and the targe
 model closes three of them by construction: every kind but
 `PersistentVolumeOps` is namespaced, and the names they derive are unique within
 the namespace their inputs are unique in. What is left is the default
-`StorageClass`, which is cluster-scoped and named `simplyblock-<ns>-<cluster>`.
+`StorageClass`, which is cluster-scoped and named `simplyblock-<ns>-<cluster>`
+(simplyblock said once, design-storagepool.md §4.4).
 The pool's reconcile already answers that one the way this row prescribes — it
 adopts the name only when the occupant is recognizably the class it would have
 written, and otherwise emits `StorageClassNameTaken` and leaves the pool without

@@ -452,6 +452,14 @@ the pool. A class whose `parameters` are immutable cannot gain the key later, so
 it is written when the key can be stated. A claim made in the window before that
 fails at provision time and succeeds afterward.
 
+**The class is named `simplyblock-<namespace>-<cluster>`, with simplyblock said
+once.** A `StorageClass` is cluster-scoped, so the namespace is in the name. The
+operator's own namespace is `simplyblock`, and a namespace or cluster name may open
+with the word too, so the leading repetitions collapse: namespace `simplyblock` with
+cluster `production` derives `simplyblock-production`, as in the example below. A
+class written under an earlier, repeated name keeps it, because
+`status.defaultStorageClassName` records it and the class is never written again.
+
 **The class is written once, and a name already taken is reported rather than
 overwritten.** A `StorageClass` is cluster-scoped, so an existing object under the
 name may have nothing to do with this pool, and recording it as the pool's default
