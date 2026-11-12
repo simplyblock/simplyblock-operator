@@ -725,3 +725,45 @@ func TestAMaintenanceWindowSendsNothingToANodeLeavingTheCluster(t *testing.T) {
 		})
 	}
 }
+
+// anMDSPod is the pNFS metadata server's pod, labeled as its StatefulSet labels
+// it: by its per-cluster name and the cluster it serves.
+func anMDSPod(worker string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-pnfs-mds-2b201eb1-0",
+			Namespace: opsNamespace,
+			Labels: map[string]string{
+				"app":                               "simplyblock-pnfs-mds-2b201eb1",
+				"storage.simplyblock.io/cluster-id": "2b201eb1-15b6-4bb6-a341-23acde78bb6c",
+			},
+		},
+		Spec:   corev1.PodSpec{NodeName: worker},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+// Regression: 2026-11-11-pnfs-mds-not-in-eviction-targets. The window's budget
+// held the SPDK pod, the management API, and FoundationDB, and nothing else, so
+// a drain of the worker evicted the pNFS metadata server at once, even while
+// the control plane refused or deferred the maintenance it was drained for.
+// Every pNFS client in the cluster stalled until a new metadata server had
+// booted and ended its grace period, three times in a day for maintenance that
+// never ran.
+func TestTheWindowHoldsThePNFSMetadataServer(t *testing.T) {
+	mds := anMDSPod(opsWorker)
+	elsewhere := anMDSPod("another-worker")
+	elsewhere.Name = "simplyblock-pnfs-mds-other-0"
+	r, apiClient := anOpsWorld(t, aControlPlane(), anSpdkPod(opsWorker, "4420"), mds, elsewhere)
+
+	if err := r.Workload.BlockEviction(
+		context.Background(), opsNamespace, opsCluster, opsWorker); err != nil {
+		t.Fatalf("holding the eviction: %v", err)
+	}
+	if !guarded(t, apiClient, mds.Name) {
+		t.Error("the metadata server on the drained worker is not held by the window's budget")
+	}
+	if guarded(t, apiClient, elsewhere.Name) {
+		t.Error("a metadata server on another worker was held by this worker's window")
+	}
+}

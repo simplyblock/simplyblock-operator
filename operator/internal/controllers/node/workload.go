@@ -39,6 +39,8 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -399,24 +401,48 @@ func (w *Workload) agentPodOn(
 // the window with nothing to ask, which is what the operator saw on 2026-09-29
 // when its shutdown took a connection refused from the webAPI mid-flight.
 //
+// The pNFS metadata server is here because every pNFS client in the cluster goes
+// through it: evicting it stalls them all until a new one has booted and ended
+// its grace period, which a drain must not cost while the control plane has not
+// yet agreed to the maintenance.
+//
 // The node agent's DaemonSet pod is deliberately absent. A budget over it holds
 // no drain, and the agent is what the window needs answering in AwaitingHost.
-var evictionTargets = []map[string]string{
-	{utils.LabelRole: utils.LabelSpdkProxyRole},
-	{atlaskube.LabelApp: controlplane.ComponentWebAPI},
-	{utils.LabelFDBClusterName: controlplane.ComponentFDBCluster},
+var evictionTargets = []labels.Selector{
+	labels.SelectorFromSet(labels.Set{utils.LabelRole: utils.LabelSpdkProxyRole}),
+	labels.SelectorFromSet(labels.Set{atlaskube.LabelApp: controlplane.ComponentWebAPI}),
+	labels.SelectorFromSet(labels.Set{utils.LabelFDBClusterName: controlplane.ComponentFDBCluster}),
+	mdsPods,
 }
+
+// mdsPods selects every pNFS metadata server pod, by the cluster label only they
+// carry.
+var mdsPods = func() labels.Selector {
+	req, err := labels.NewRequirement(utils.LabelMDSClusterID, selection.Exists, nil)
+	if err != nil {
+		panic(err)
+	}
+	return labels.NewSelector().Add(*req)
+}()
 
 // podsMatching lists the pods on one worker that carry every given label,
 // skipping any that is already on its way out.
 func (w *Workload) podsMatching(
-	ctx context.Context, namespace, worker string, labels map[string]string,
+	ctx context.Context, namespace, worker string, set map[string]string,
+) ([]corev1.Pod, error) {
+	return w.podsSelected(ctx, namespace, worker, labels.SelectorFromSet(set))
+}
+
+// podsSelected lists the pods on one worker that the selector matches, skipping
+// any that is already on its way out.
+func (w *Workload) podsSelected(
+	ctx context.Context, namespace, worker string, selector labels.Selector,
 ) ([]corev1.Pod, error) {
 	var pods corev1.PodList
 	err := w.List(ctx, &pods,
-		client.InNamespace(namespace), client.MatchingLabels(labels))
+		client.InNamespace(namespace), client.MatchingLabelsSelector{Selector: selector})
 	if err != nil {
-		return nil, fmt.Errorf("list the pods matching %v: %w", labels, err)
+		return nil, fmt.Errorf("list the pods matching %v: %w", selector, err)
 	}
 	on := make([]corev1.Pod, 0, len(pods.Items))
 	for i := range pods.Items {
@@ -509,7 +535,7 @@ func (w *Workload) BlockEviction(
 	ctx context.Context, namespace, cluster, worker string,
 ) error {
 	for _, selector := range evictionTargets {
-		pods, err := w.podsMatching(ctx, namespace, worker, selector)
+		pods, err := w.podsSelected(ctx, namespace, worker, selector)
 		if err != nil {
 			return err
 		}

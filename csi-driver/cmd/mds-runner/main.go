@@ -185,12 +185,6 @@ func run(ctx context.Context, c config) error {
 	if err := netsetup.Apply(ctx, plan, netsetup.ExecIPTables); err != nil {
 		return err
 	}
-	if plan.HostPath {
-		if err := startHostPath(ctx, plan, c.hostProxy); err != nil {
-			return err
-		}
-	}
-
 	if err := os.MkdirAll(c.runDir, 0o700); err != nil {
 		return err
 	}
@@ -239,6 +233,12 @@ func run(ctx context.Context, c config) error {
 		guest.Arch, guest.Hostname, guest.CPUs, guest.MemoryMiB, guest.Address, uplink)
 
 	sup := &runner.Supervisor{
+		StoragePath: func(ctx context.Context) error {
+			if !plan.HostPath {
+				return nil
+			}
+			return startHostPath(ctx, plan, c.hostProxy)
+		},
 		Start: runner.StartProcess(binary, args, os.Stdout, os.Stderr),
 		Probe: runner.GRPCHealthProbe(agentAddress),
 		Powerdown: func(ctx context.Context) error {
