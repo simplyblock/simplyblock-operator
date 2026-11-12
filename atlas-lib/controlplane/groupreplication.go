@@ -249,6 +249,37 @@ func (c *Client) ResolveGroup(ctx context.Context, gh lvol.GroupHandle) (GroupRe
 	if err != nil {
 		return GroupResolution{}, err
 	}
+	return groupResolution(d), nil
+}
+
+// ResolveReplicatedGroup is ResolveGroup for a group of a cluster on another
+// control plane (a split control plane), answered by this site's cluster local
+// from its own records: the group a fail-over made there from the copies, and
+// each member's clone. Active is nil while the group was not failed over
+// there, and the group's own control plane is the one to ask.
+func (c *Client) ResolveReplicatedGroup(ctx context.Context, local string, gh lvol.GroupHandle) (GroupResolution, error) {
+	localID, err := parseUUID("cluster id", local)
+	if err != nil {
+		return GroupResolution{}, err
+	}
+	source, group, err := groupIDs(gh)
+	if err != nil {
+		return GroupResolution{}, err
+	}
+	resp, err := c.api.ClustersReplicationReplicatedGroupsResolutionApiV2ClustersClusterIdReplicationReplicatedGroupsSourceClusterIdGroupIdResolutionGetWithResponse(
+		ctx, localID, source, group)
+	if err != nil {
+		return GroupResolution{}, fmt.Errorf("resolve replicated group %s on %s: %w", gh.Handle(), local, err)
+	}
+	d, err := payload("resolve replicated group "+string(gh.Handle()), resp.JSON200, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return GroupResolution{}, err
+	}
+	return groupResolution(d), nil
+}
+
+// groupResolution decodes the answer of either resolution endpoint.
+func groupResolution(d *cpapi.ConsistencyGroupResolutionDTO) GroupResolution {
 	out := GroupResolution{}
 	if d.ActiveGroupId != nil && *d.ActiveGroupId != "" && d.ActiveClusterId != nil && *d.ActiveClusterId != "" {
 		out.Active = &lvol.GroupHandle{ClusterID: *d.ActiveClusterId, GroupID: *d.ActiveGroupId}
@@ -259,7 +290,7 @@ func (c *Client) ResolveGroup(ctx context.Context, gh lvol.GroupHandle) (GroupRe
 				Origin: lvol.VolumeHandle(m.OriginHandle), Active: lvol.VolumeHandle(m.ActiveHandle)})
 		}
 	}
-	return out, nil
+	return out
 }
 
 // groupNotFound tells the group-level 404 ("ConsistencyGroup <id> not found",

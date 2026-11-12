@@ -182,6 +182,12 @@ type mockSBCLI struct {
 	// a control plane that predates the endpoint (a route-level 404), so the
 	// driver keeps its pre-resolution behavior.
 	groupResolution map[string]map[string]any
+
+	// replicatedGroupResolution, keyed by "<source cluster>/<group>", is the
+	// body GET .../replication/replicated-groups/{source}/{group}/resolution
+	// serves: another control plane's group, failed over here. Absent means
+	// no fail-over here, which sbcli answers with an empty active group.
+	replicatedGroupResolution map[string]map[string]any
 }
 
 func newMockSBCLI() *mockSBCLI {
@@ -192,6 +198,8 @@ func newMockSBCLI() *mockSBCLI {
 		replicationStatus:       make(map[string]map[string]any),
 		replicationRelationship: make(map[string]map[string]any),
 		groupResolution:         make(map[string]map[string]any),
+
+		replicatedGroupResolution: make(map[string]map[string]any),
 	}
 
 	mux := http.NewServeMux()
@@ -290,6 +298,10 @@ func newMockSBCLI() *mockSBCLI {
 	mux.HandleFunc(
 		"GET /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/replication/resolution",
 		m.locked(m.handleGroupResolution),
+	)
+	mux.HandleFunc(
+		"GET /api/v2/clusters/{clusterID}/replication/replicated-groups/{sourceClusterID}/{groupID}/resolution",
+		m.locked(m.handleReplicatedGroupResolution),
 	)
 	mux.HandleFunc(
 		"POST /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/snapshots",
@@ -825,6 +837,16 @@ func (m *mockSBCLI) handleGroupResolution(w http.ResponseWriter, r *http.Request
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "Not Found"})
 		return
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+func (m *mockSBCLI) handleReplicatedGroupResolution(w http.ResponseWriter, r *http.Request) {
+	source, group := r.PathValue("sourceClusterID"), r.PathValue("groupID")
+	body, ok := m.replicatedGroupResolution[source+"/"+group]
+	if !ok {
+		body = map[string]any{"cluster_id": source, "group_id": group,
+			"active_cluster_id": "", "active_group_id": "", "members": []any{}}
 	}
 	writeJSON(w, http.StatusOK, body)
 }
