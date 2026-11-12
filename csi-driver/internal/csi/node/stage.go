@@ -696,6 +696,16 @@ func (ns *Server) refreshVolumeContext(ctx context.Context, volumeID string, vc 
 	}
 	vc["poolID"] = spdkVol.PoolRef
 
+	// On a split control plane, a volume of the other site's cluster that was
+	// failed over here is served by its clone on this site, and that site's
+	// control plane may be cut off: resolve through this site's own first.
+	if connInfo := redirectThroughLocalCluster(ctx, spdkVol.ClusterID, spdkVol.VolumeID, volumeID, vc); connInfo != nil {
+		for k, v := range connInfo {
+			vc[k] = v
+		}
+		return
+	}
+
 	sbcClient, clientErr := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef)
 	if clientErr != nil {
 		return
