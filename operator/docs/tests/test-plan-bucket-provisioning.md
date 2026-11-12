@@ -112,7 +112,7 @@ The other four events in design §10's table each already have a dedicated scena
 
 ## 3. E2E Tests
 
-Run against a live simplyblock cluster with the pNFS path actually deployed (`design-pnfs-rwx.md`, `design-pnfs-mds-vm.md`, Phase 0 P0-1). `0004-direct-csi-mount-spike-result.md` already settled Phase 0 P0-2's raw mechanism. This class proves the production `DeliverBucket`/`WithdrawBucket` path built on top of it, which unit and integration tests fake at exactly this boundary.
+Run against a live simplyblock cluster with the pNFS path actually deployed (`design-pnfs-rwx.md`, `design-pnfs-mds-vm.md`, Phase 0 P0-1). `design-bucket-provisioning.md` §5.4 already settled Phase 0 P0-2's raw mechanism. This class proves the production `DeliverBucket`/`WithdrawBucket` path built on top of it, which unit and integration tests fake at exactly this boundary.
 
 ### `DeliverBucket`/`WithdrawBucket` End to End (§5.4)
 
@@ -149,7 +149,7 @@ Run against a live simplyblock cluster with the pNFS path actually deployed (`de
 
 **What was verified:** `HostToContainer` propagation on the gateway pod's `hostPath` volume is sufficient on its own. No `Bidirectional` mount is needed anywhere, on any pod: the bind mount originates inside the CSI node plugin's own container, which already carries `Bidirectional` on the specific host paths its `DaemonSet` mounts, and that is what makes it visible to the host and to `HostToContainer` pods.
 
-**Confirmed behavior:** `0004-direct-csi-mount-spike-result.md`. A direct `NodeStageVolume`/`NodePublishVolume` call, with `target_path` under the node plugin's own `hostPath`, appeared live inside an already-running pod whose only configuration was `HostToContainer`.
+**Confirmed behavior:** a direct `NodeStageVolume`/`NodePublishVolume` call, with `target_path` under the node plugin's own `hostPath`, appeared live inside an already-running pod whose only configuration was `HostToContainer`.
 
 **Historical test concept** (as run during the spike):
 1. Deploy a pod with the `hostPath` + `HostToContainer` volume as designed, no `Bidirectional` anywhere.
@@ -162,7 +162,7 @@ Run against a live simplyblock cluster with the pNFS path actually deployed (`de
 
 **What was verified:** the shared `hostPath` cannot be chosen independently of the CSI node plugin's own `DaemonSet` manifest. It must be a subdirectory of one of the three paths that manifest already mounts `Bidirectional` (`/var/lib/kubelet/plugins/…`, `/var/lib/kubelet/pods/…`, `/var/lib/nvme/…`). A path outside those three stays inside the node plugin's own container and reaches neither the host nor any other pod.
 
-**Confirmed behavior:** `0004-direct-csi-mount-spike-result.md`, tested directly: an arbitrary path outside the three produced a mount visible only inside the node plugin's own container, confirmed by `exec`.
+**Confirmed behavior:** tested directly, an arbitrary path outside the three produced a mount visible only inside the node plugin's own container, confirmed by `exec`.
 
 **Historical test concept** (as run during the spike):
 1. Call `NodeStageVolume`/`NodePublishVolume` with `target_path` at an arbitrary host path, not under any of the node plugin's `Bidirectional` mounts.

@@ -2,7 +2,7 @@
 // mounted inside an already-running gateway pod, by calling this node
 // plugin's own NodeStageVolume/NodePublishVolume family in-process instead
 // of through kubelet (design-bucket-provisioning.md §5.2,
-// 0004-direct-csi-mount-spike-result.md). No new mount capability and no new
+// §5.4). No new mount capability and no new
 // persistence: both read and write the same staged-volume bookkeeping a
 // kubelet-driven stage already would, so the plugin's existing restart
 // recovery covers a bucket this way too.
@@ -37,7 +37,7 @@ const s3BucketStagingRoot = "/var/lib/kubelet/plugins/csi.simplyblock.io/s3-gate
 
 // bidirectionalRoots are the only three host paths this DaemonSet's pod
 // template mounts Bidirectional, confirmed empirically rather than assumed
-// (0004-direct-csi-mount-spike-result.md). Any delivery path this plugin
+// (design-bucket-provisioning.md §5.4). Any delivery path this plugin
 // derives must fall under one of them, or the resulting mount is invisible
 // to every other pod while still looking like it succeeded.
 var bidirectionalRoots = []string{
@@ -49,7 +49,7 @@ var bidirectionalRoots = []string{
 // validateDeliveryPath rejects a path outside every Bidirectional root
 // before any mount is attempted, rather than mounting it invisibly inside
 // this container's own namespace and reporting success
-// (0004-direct-csi-mount-spike-result.md's finding). This is a guard against
+// (design-bucket-provisioning.md §5.4's finding). This is a guard against
 // this file's own derivation ever drifting from bucketdelivery.GatewayMountRoot,
 // not a check on caller input: bucket_name never reaches a path on its own.
 func validateDeliveryPath(path string) error {

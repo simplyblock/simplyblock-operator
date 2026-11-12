@@ -41,7 +41,7 @@ type Config struct {
 	RootSecretAccessKey string
 
 	// BucketLinks enables bucket-per-volume via directory symlinks
-	// (docs/adr/0002-bucket-per-volume-via-bucketlinks.md), the shape every
+	// (README.md "Why bucket-per-volume"), the shape every
 	// bucket this gateway serves takes: an S3Bucket's own volume, never a
 	// directory this gateway created itself. Defaults to true, since a
 	// gateway that silently ran with this off would list no buckets at all
@@ -51,9 +51,9 @@ type Config struct {
 	// Fsync flushes an object's data, metadata, and directory entry to
 	// stable storage before PutObject acknowledges it. Defaults to true:
 	// durability is the reason this project chose versitygw's posix
-	// backend's --fsync flag over its off-by-default posture
-	// (notes/versitygw-put-durability.md), so a bad env value here falls
-	// back to the safe default rather than the library's unsafe one.
+	// backend's --fsync flag over its off-by-default posture, so a bad
+	// env value here falls back to the safe default rather than the
+	// library's unsafe one.
 	Fsync bool
 
 	// ObjectStore and Namespace identify the ObjectStore this gateway
@@ -74,7 +74,7 @@ type Config struct {
 	BucketTimeout time.Duration
 
 	// Vault configures versitygw's built-in HashiCorp Vault IAM backend
-	// (docs/adr/0007-gateway-iam-is-versitygw-vault-backend.md). An empty
+	// (README.md "Why no backend or IAM code lives here"). An empty
 	// Vault.EndpointURL leaves the gateway in single-account mode, holding
 	// only the root account.
 	Vault Vault

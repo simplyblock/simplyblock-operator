@@ -63,6 +63,11 @@ The gateway itself needs nothing from the control plane (`sbcli`) or from `atlas
 - **A dedicated node pool for gateways.** `spec.nodeSelector`/`spec.tolerations` are plain passthrough to the pod spec, the same pattern `SimplyblockDriverSpec` already uses for the CSI node plugin. No node-pool concept, no gateway-specific scheduling.
 - **Horizontal autoscaling.** `spec.replicas` is a fixed count. Scaling an `ObjectStore` in response to load is a decision the deployer makes (directly, or by pointing an HPA at the Deployment this design creates), not something this CRD wires up itself.
 - **Credential or secret rotation mechanics beyond what `envFrom` already gives Kubernetes.** This CRD names which `Secret`s and `ConfigMap`s feed the gateway container's environment. Whatever rotates their contents is out of scope here.
+- **Bucket (object) versioning.** Deliberately deferred, not merely unbuilt. Enabling versioning on a bucket is irreversible in S3 (never-versioned → `Enabled` → `Suspended`, never back), so it has to be right before it ships rather than added as a quick follow-up. Two separate blockers, neither solved by deferring the decision:
+  - **Placement.** `versitygw`'s own POSIX backend hard-rejects any `VersioningDir` placed under its `rootdir` (`isDirBelowRoot`/`validateSubDir`) — not an integration gap this operator could close, `versitygw`'s own code. The gateway also runs one `posix.New(cfg.RootDir, ...)` per process, and `cfg.RootDir` is an `ObjectStore`-scoped subdirectory of the shared mount with every one of that store's buckets bind-mounted under it (`design-bucket-provisioning.md` §5.1), not a per-bucket root. There is nowhere to place a version directory that `versitygw` will accept and that this operator's volume/capacity accounting would actually see.
+  - **Data path.** Every object a server-side copy produces (every multipart-assembled object today, every `CopyObject` once wired, every object version if this ever ships) becomes an XFS reflinked inode, and the kernel pNFS server explicitly refuses a block layout for a reflinked inode (`fs/xfs/xfs_pnfs.c`, `-ENXIO`, "the Linux pNFS server doesn't implement it yet"). That object is then served through the metadata server for the rest of its life, never over direct NVMe-oF — not a capacity or write-amplification cost, a permanent loss of this design's own direct data path for exactly the objects versioning would multiply.
+
+  Both need solving, not just one, before versioning is safe to expose as an `S3Bucket`/`ObjectStore` field. `CreateBucket`/`PutBucketVersioning` against this gateway today returns `VersioningNotConfigured`, `versitygw`'s own answer for a backend that never set `PosixOpts.VersioningDir`.
 
 ---
 
@@ -101,15 +106,14 @@ The gateway itself needs nothing from the control plane (`sbcli`) or from `atlas
 
 ### 4.1 `ObjectStore` Spec
 
-`Image` carries no default. Unlike `SimplyblockDriverSpec.Image`, which defaults to the operator's own release because the two are built and tested as a pair, the gateway is a separate repository with no tagged releases yet (`0003-embedgw-spike-result.md`), so there is no "the same release" to default to.
+`Image` carries no default. Unlike `SimplyblockDriverSpec.Image`, which defaults to the operator's own release because the two are built and tested as a pair, the gateway is a separate repository with no tagged releases yet (confirmed by a feasibility spike that embedded `versitygw` as a library with no forking needed), so there is no "the same release" to default to. `Image` is `crdtypes.ImageReference`, the same shared type every other image field on this operator's CRDs now uses, rather than a field-specific registry allowlist regex — the CRD briefly carried a three-registry pattern of its own, from before `ObjectStore` existed, and was brought in line with the rest once it did.
 
 ```go
 // Image is the gateway image: embedgw plus the simplyblock POSIX backend.
-// Required — unlike the CSI driver and the operator, this repository and the
+// Required: unlike the CSI driver and the operator, this repository and the
 // gateway's are not released together, so there is no sensible default.
 // +kubebuilder:validation:Required
-// +kubebuilder:validation:Pattern=`^(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?$`
-Image string `json:"image"`
+Image crdtypes.ImageReference `json:"image"`
 
 // Port is the gateway's listening port, passed to the container and used
 // as both the container port and the Service's port. Required rather than
@@ -258,7 +262,9 @@ Reaching this Service from outside the cluster is not this design's concern (§2
 
 ### 7.1 Location
 
-The existing `kubernetes/operator` manager, the same process `design-bucket-provisioning.md`'s `S3BucketReconciler` registers into (`0005-s3bucket-joins-the-main-operator-manager.md`). Both are new kinds in `storage.simplyblock.io/v1alpha2`, the group and version every other kind this manager reconciles already uses.
+The existing `kubernetes/operator` manager, the same process `design-bucket-provisioning.md`'s `S3BucketReconciler` registers into (`design-bucket-provisioning.md` §7.1): its own `DeliverBucket`/`WithdrawBucket` calls need the main operator's in-process `PeerRegistry`, which only exists in that manager, so a separate manager for either kind would need a new cross-process channel to reach it for no other benefit.
+
+Both are kinds of `storage.simplyblock.io/v1alpha2`, the group and version every other kind this manager reconciles already uses, rather than a group of their own (`objectstore.simplyblock.io`, which an earlier draft of this design used). Reconsidered once drafted: controller-runtime starts a watch for every registered kind at manager startup, and a watch whose cache cannot sync fails `mgr.Start` once the cache-sync timeout expires, which exits the process. A cluster carrying the storage CRDs but not this separate group's CRDs would therefore crash-loop the *entire* operator — every reconciler in it, not just these two kinds — roughly two minutes after start, reporting a cache-sync timeout rather than a missing CRD; reachable by any upgrade that rolls the Deployment before applying new CRDs. A shared group has no such failure mode: its CRDs ship and version together, as they already do for every other kind. The independence a separate group would have bought was never exercised either — neither kind had shipped yet, so there was no stored data, no conversion, and no migration for the move to break.
 
 ### 7.2 Reconciliation Trigger
 
@@ -335,11 +341,11 @@ Full scenario matrix, coverage status, and hand-off test concepts: [`tests/test-
 
 ## 12. Open Questions
 
-| #   | Question                                                                                                                                                                                                                                                                                                                                                          | Owner                                  |
-|-----|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------|
-| 1   | **The gateway's own default port:** `spec.port` is required here rather than defaulted because this repository does not know `embedgw`'s own default. Once the gateway repository documents one, revisit whether `spec.port` should default to it.                                                                                                                | Gateway repository                     |
-| 2   | **Readiness and graceful shutdown during a scale-down or rolling update:** §6's failure table notes this design adds no draining beyond kubelet's ordinary pod-restart behavior. Whether the gateway binary's own readiness/liveness probes are enough to avoid dropping in-flight S3 requests during a rollout is that repository's question, not designed here. | Gateway repository                     |
-| 3   | **Richer credential injection:** `spec.envFrom` (§4.1, §2 Non-Goals) covers environment variables only. If the gateway's Vault integration needs a projected volume (a Vault Agent sidecar, a Kubernetes-auth service-account token) rather than env vars, this CRD has no field for it yet.                                                                      | Resolved by ADR 0007: env vars suffice |
+| #   | Question                                                                                                                                                                                                                                                                                                                                                          | Owner                                                                                                                                                                                                                                                                                                                              |
+|-----|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 1   | **The gateway's own default port:** `spec.port` is required here rather than defaulted because this repository does not know `embedgw`'s own default. Once the gateway repository documents one, revisit whether `spec.port` should default to it.                                                                                                                | Gateway repository                                                                                                                                                                                                                                                                                                                 |
+| 2   | **Readiness and graceful shutdown during a scale-down or rolling update:** §6's failure table notes this design adds no draining beyond kubelet's ordinary pod-restart behavior. Whether the gateway binary's own readiness/liveness probes are enough to avoid dropping in-flight S3 requests during a rollout is that repository's question, not designed here. | Gateway repository                                                                                                                                                                                                                                                                                                                 |
+| 3   | **Richer credential injection:** `spec.envFrom` (§4.1, §2 Non-Goals) covers environment variables only. If the gateway's Vault integration needs a projected volume (a Vault Agent sidecar, a Kubernetes-auth service-account token) rather than env vars, this CRD has no field for it yet.                                                                      | Resolved: env vars suffice. The gateway authenticates to Vault with a token or AppRole (`gateway/README.md` "Why no backend or IAM code lives here"), both plain strings `VGW_IAM_VAULT_*` carries, and `embedgw.Config`'s Vault fields take PEM contents directly rather than file paths — nothing here needs a projected volume. |
 
 ---
 
@@ -348,11 +354,13 @@ Full scenario matrix, coverage status, and hand-off test concepts: [`tests/test-
 ```go
 // Package v1alpha2 of the storage.simplyblock.io API group.
 
-package v1alpha1
+package v1alpha2
 
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/simplyblock/atlas/crdtypes"
 )
 
 // ObjectStorePhase is the lifecycle phase of a gateway's provisioning.
@@ -369,12 +377,11 @@ const (
 // ObjectStoreSpec is the desired state of one S3 gateway's workload.
 type ObjectStoreSpec struct {
 	// Image is the gateway image: embedgw plus the simplyblock POSIX backend.
-	// Required -- unlike the CSI driver and the operator, this repository and
+	// Required: unlike the CSI driver and the operator, this repository and
 	// the gateway's are not released together, so there is no sensible
 	// default.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Pattern=`^(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?$`
-	Image string `json:"image"`
+	Image crdtypes.ImageReference `json:"image"`
 
 	// ImagePullPolicy controls when that image is pulled. Defaults to Always
 	// for the same reason SimplyblockDriverSpec's does: the default tag is a
@@ -393,6 +400,14 @@ type ObjectStoreSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
 	Port int32 `json:"port"`
+
+	// Region is the AWS region string this gateway's S3 API answers to.
+	// Every client must sign its requests for exactly this region; the
+	// gateway rejects any other with AuthorizationHeaderMalformed. Also
+	// reported by GetBucketLocation.
+	// +kubebuilder:default=us-east-1
+	// +optional
+	Region string `json:"region,omitempty"`
 
 	// Replicas is the gateway Deployment's replica count.
 	// +kubebuilder:validation:Minimum=1
@@ -430,6 +445,27 @@ type ObjectStoreSpec struct {
 	// +kubebuilder:default=OpenShift
 	// +optional
 	TLSProvider string `json:"tlsProvider,omitempty"`
+
+	// Buckets is what every S3Bucket the gateway creates for an S3
+	// CreateBucket request is provisioned with: the request itself carries
+	// no size or storage class.
+	// +kubebuilder:validation:Required
+	Buckets ObjectStoreBuckets `json:"buckets"`
+}
+
+// ObjectStoreBuckets is the backing-volume shape of a bucket created through
+// the gateway's S3 API.
+type ObjectStoreBuckets struct {
+	// StorageClassName becomes each S3Bucket's spec.storageClassName. It
+	// must select the pnfs fstype, the same requirement S3Bucket states.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	StorageClassName string `json:"storageClassName"`
+
+	// CapacityBytes becomes each S3Bucket's spec.capacityBytes.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=1
+	CapacityBytes int64 `json:"capacityBytes"`
 }
 
 // ObjectStoreStatus is what the gateway's provisioning currently is.

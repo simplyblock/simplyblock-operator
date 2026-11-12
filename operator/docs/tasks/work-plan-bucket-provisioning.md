@@ -5,7 +5,7 @@ Test plan: [`tests/test-plan-bucket-provisioning.md`](../tests/test-plan-bucket-
 
 **Author:** Max Schettler
 **Date:** 2026-10-12 (last updated 2026-10-14)
-**Design status at split:** Draft — the section citations may be stale. Open Questions 1, 2, and 7 from the original split are all resolved (`0004-direct-csi-mount-spike-result.md`, `design-objectstore.md`, `0005-s3bucket-joins-the-main-operator-manager.md`). No blocking open questions remain in the sense §0 of the `work-plan` skill describes.
+**Design status at split:** Draft — the section citations may be stale. Open Questions 1, 2, and 7 from the original split are all resolved (`design-bucket-provisioning.md` §5.4, §7.1; `design-objectstore.md`). No blocking open questions remain in the sense §0 of the `work-plan` skill describes.
 **Issues:** not yet filed
 
 Work item IDs (`W-01`) are permanent and are cited from issue bodies and commit messages, so they are never renumbered. Each item below is one GitHub issue: the description and acceptance criteria are the issue body verbatim.
@@ -63,7 +63,7 @@ An item blocked only on an external prerequisite is still filed. It carries the 
 **Scenarios:** M-01, M-02, E-01, E-02, E-03
 **Size:** M
 
-Resolved by a live-cluster spike, recorded in `0004-direct-csi-mount-spike-result.md`: `HostToContainer` propagation alone is sufficient, no `Bidirectional` mount is needed anywhere, and the delivery path must be a subdirectory of one of the three paths the CSI node plugin's own `DaemonSet` already mounts `Bidirectional`. Design §5.4 and §12 Open Question 1 were updated to reflect this. No further work item needed for the finding itself; W-10/W-11/W-12 build the production mechanism on top of it.
+Resolved by a live-cluster spike: `HostToContainer` propagation alone is sufficient, no `Bidirectional` mount is needed anywhere, and the delivery path must be a subdirectory of one of the three paths the CSI node plugin's own `DaemonSet` already mounts `Bidirectional`. Design §5.4 and §12 Open Question 1 were updated to reflect this. No further work item needed for the finding itself; W-10/W-11/W-12 build the production mechanism on top of it.
 
 **Acceptance criteria**
 
@@ -123,7 +123,7 @@ A `MountDeliveryChecker` seam (`mountDeliveryComplete`, always `true` today) is 
 **Scenarios:** —
 **Size:** M
 
-Superseded by W-10, W-11, and W-12. The mount-holder-pod mechanism this item described is rejected in the current design (§5.4, `0004-direct-csi-mount-spike-result.md`): a privileged pod per `(bucket, node)` pair, replaced by `DeliverBucket`/`WithdrawBucket` on the CSI node plugin's existing `csi-link` session. This item is not filed.
+Superseded by W-10, W-11, and W-12. The mount-holder-pod mechanism this item described is rejected in the current design (§5.4): a privileged pod per `(bucket, node)` pair, replaced by `DeliverBucket`/`WithdrawBucket` on the CSI node plugin's existing `csi-link` session. This item is not filed.
 
 **Acceptance criteria**
 
@@ -228,7 +228,7 @@ Register `bucketdeliveryrpc`'s service on the `csilink.Agent` the node plugin al
 
 - [ ] `DeliverBucket` stages and publishes a real pNFS volume at the derived path, verified against a live cluster — **not done this pass**: implemented (`csi-driver/internal/csi/node/bucketdelivery.go`), but live-cluster verification needs explicit access this session did not have. `ns.stagePNFSVolume`/`ns.publishPNFSVolume` also have no test seam for `attachBacking`/`namespaceIdentity` (real NVMe-oF/sysfs calls), the same pre-existing limitation the rest of the pNFS stage/publish path already has, so this is W-09's E2E class to close, not a unit test.
 - [ ] `WithdrawBucket` reverses it, idempotent on a second call — implemented with an explicit guard (`Withdraw` checks the staging mount directly before calling `NodeUnstageVolume`, since its pNFS-detection reads a stash file the first successful unstage deletes, which would otherwise mis-route a second call). Not live-verified, same reason as above.
-- [x] A `target_path` outside the three documented subtrees is rejected before any mount is attempted, rather than silently succeeding invisibly (`0004-direct-csi-mount-spike-result.md`'s finding): `validateDeliveryPath`, unit tested
+- [x] A `target_path` outside the three documented subtrees is rejected before any mount is attempted, rather than silently succeeding invisibly (§5.4's finding): `validateDeliveryPath`, unit tested
 - [ ] The plugin's own restart recovery (`ns.stack.store`) covers a bucket `DeliverBucket` staged, with no new persistence mechanism added — true by construction (`Deliver`/`Withdraw` call the same `NodeStageVolume`/`NodePublishVolume`/`NodeUnpublishVolume`/`NodeUnstageVolume` every other volume does, writing the same stash/stack-record files), but not independently exercised by a restart test; folds into the same live-cluster verification as the first two rows
 
 ### W-12 — Reconcile bucket delivery to the gateway's node set

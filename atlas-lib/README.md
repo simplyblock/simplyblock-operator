@@ -1574,7 +1574,7 @@ if err == nil {
 The bind mount `NodePublishVolume` makes under the plugin's own `Bidirectional`
 `hostPath` subtree reaches every gateway pod on that node via `HostToContainer`
 propagation, already confirmed on a live cluster
-(`0004-direct-csi-mount-spike-result.md`). `Withdraw` reverses it the same way,
+(`operator/docs/designs/design-bucket-provisioning.md` §5.4). `Withdraw` reverses it the same way,
 and both read and write the plugin's existing stack record, so its own
 restart-recovery path covers a delivered bucket with no new persistence.
 

@@ -5,11 +5,10 @@
 //
 // No backend or auth.IAMService of this project's own beyond that wrapper:
 // backend/posix.New already does bucket-per-volume POSIX storage with
-// --bucketlinks and --fsync (docs/adr/0002-bucket-per-volume-via-
-// bucketlinks.md, notes/versitygw-put-durability.md), and IAM is
-// versitygw's own Vault backend, selected by embedgw.Config's Vault fields
-// (docs/adr/0007-gateway-iam-is-versitygw-vault-backend.md). Without
-// VGW_IAM_VAULT_ENDPOINT_URL, embedgw.RunVersityGW falls back to a
+// --bucketlinks and --fsync (README.md, "Why bucket-per-volume" and "Why
+// no backend or IAM code lives here"), and IAM is versitygw's own Vault
+// backend, selected by embedgw.Config's Vault fields (same README section).
+// Without VGW_IAM_VAULT_ENDPOINT_URL, embedgw.RunVersityGW falls back to a
 // single-account IAM service holding only the root account. Writing either a
 // backend or an IAM service again here would be the second copy the
 // new-files skill's search-before-writing rule exists to catch.
@@ -40,7 +39,9 @@ import (
 // numbers forever, so these three are read from its source directly rather
 // than left at embedgw.Config's zero value: a zero MaxConnections/
 // MaxRequests/MultipartMaxParts rejects every connection, request, and
-// multipart upload at runtime (docs/adr/0003-embedgw-spike-result.md).
+// multipart upload at runtime (confirmed by a feasibility spike that
+// embedded versitygw as a library with no forking needed; it has no tagged
+// release to pin a dependency on, so this reads the live source instead).
 const (
 	maxConnections    = 250000
 	maxRequests       = 100000
