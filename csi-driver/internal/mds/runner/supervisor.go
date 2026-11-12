@@ -3,7 +3,8 @@
 // down when the pod is told to stop.
 //
 // The pod is the unit of recovery. Whatever ends the guest (a panic, a power
-// off from inside, a missed boot deadline) ends Run with an error, the runner
+// off from inside, a missed boot deadline, a booted guest unhealthy past
+// UnhealthyDeadline) ends Run with an error, the runner
 // exits, and kubelet restarts the pod into a cold boot that the operator then
 // resyncs. The supervisor therefore never restarts QEMU itself. QEMU, the
 // health probe, and the power button are injected, so the lifecycle is tested
@@ -25,6 +26,10 @@ import (
 
 // ErrBootDeadline is returned when the guest did not turn healthy in time.
 var ErrBootDeadline = errors.New("guest did not turn healthy within the boot deadline")
+
+// ErrGuestUnhealthy is returned when a booted guest stayed unhealthy past
+// UnhealthyDeadline.
+var ErrGuestUnhealthy = errors.New("guest stayed unhealthy past the unhealthy deadline")
 
 // ErrGuestExited is returned when QEMU ended without being asked to.
 var ErrGuestExited = errors.New("guest exited")
@@ -56,8 +61,11 @@ type Supervisor struct {
 	// after Drain.
 	DrainWait time.Duration
 
-	BootDeadline  time.Duration
-	ProbeInterval time.Duration
+	BootDeadline time.Duration
+	// UnhealthyDeadline is how long a guest that has booted may stay unhealthy
+	// before QEMU is killed and Run fails. Zero never gives up.
+	UnhealthyDeadline time.Duration
+	ProbeInterval     time.Duration
 	// ShutdownGrace is how long a powered-down guest gets to exit before
 	// QEMU is killed. It has to fit in the pod's termination grace period.
 	ShutdownGrace time.Duration
@@ -89,6 +97,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	probe := time.NewTicker(s.ProbeInterval)
 	defer probe.Stop()
 	booted := false
+	var unhealthySince time.Time
 
 	for {
 		select {
@@ -109,6 +118,17 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			if healthy && !booted {
 				booted = true
 				boot.Stop()
+			}
+			if !booted || healthy {
+				unhealthySince = time.Time{}
+				continue
+			}
+			if unhealthySince.IsZero() {
+				unhealthySince = time.Now()
+			}
+			if s.UnhealthyDeadline > 0 && time.Since(unhealthySince) >= s.UnhealthyDeadline {
+				kill(proc, exited)
+				return fmt.Errorf("%w (%s)", ErrGuestUnhealthy, s.UnhealthyDeadline)
 			}
 		}
 	}
