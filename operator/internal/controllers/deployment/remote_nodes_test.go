@@ -20,7 +20,7 @@ func TestExistingFootprintExcludesRemoteNodes(t *testing.T) {
 	remote.Spec.Config.Site = "site-b"
 	r := reconcilerFor(t, aNode("node-1", "worker-1"), remote)
 
-	held, err := existingFootprint(context.Background(), r.Client, theNamespace, theCluster)
+	held, _, err := existingFootprint(context.Background(), r.Client, theNamespace, theCluster)
 	if err != nil {
 		t.Fatalf("read the footprint: %v", err)
 	}

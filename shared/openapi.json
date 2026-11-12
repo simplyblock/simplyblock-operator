@@ -12539,6 +12539,11 @@
             "title": "Is Single Node",
             "default": false
           },
+          "raid_devices": {
+            "type": "boolean",
+            "title": "Raid Devices",
+            "default": false
+          },
           "fabric": {
             "type": "string",
             "title": "Fabric",

@@ -145,8 +145,13 @@ plane serve an erasure-coded volume's I/O from the local node's own devices
 before crossing the network, and is not Kubernetes affinity
 ([`design-primary-node-placement.md`](../design-primary-node-placement.md)
 §`EnableNodeAffinity` is unrelated to Tier 1). `deviceClass` names the one class
-of backend storage the cluster is built out of. All nine are enforced immutable, in
-two spellings that mean the same thing (§3.2).
+of backend storage the cluster is built out of. `raidDevices` declares that every
+data device is protected below simplyblock, by a hardware RAID LUN or an md or dm
+array, so that a disk failure is absorbed under the device and never costs a
+stripe a chunk; it lowers the data-device floor the stripe needs from
+`ndcs+2*npcs` to `ndcs+npcs` and is sent to the control plane as `raid_devices`
+on the create. All ten are enforced immutable, in two spellings that mean the
+same thing (§3.2).
 
 **`stripe` is one of seven schemes, and the schema is what says so.** simplyblock
 supports 1+0, 1+1, 2+1, 4+1, 1+2, 2+2, and 4+2, which is the set the control
@@ -171,6 +176,17 @@ objects of their own and a cluster is created before any of them exists, so
 The hold is placed after the "already active" check, so a re-activation of a
 cluster that is already serving is never held: the gate exists to stop a layout
 being brought up wrong, and a live cluster's layout is already a fact.
+
+The node count is one of five floors a scheme sets, and the other four are
+answered against the deployment document that produces the cluster
+([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §5.1):
+every storage node hands over at least one data device; the cluster has
+`ndcs+2*npcs` data devices, or `ndcs+npcs` when `raidDevices` is set; where the
+nodes declare failure domains there are `ndcs+npcs` distinct ones; and a device
+dedicated to the journal counts toward none of these. The rules themselves live
+in `internal/erasurecoding` (`MinimumNodes`, `MinimumDevicesPerNode`,
+`MinimumDataDevices`, `MinimumFailureDomains`), so the document's validation,
+its approval webhook, and this gate cannot disagree about them.
 
 **A cluster is built out of one class of device, and `deviceClass` is which.**
 NVMe devices are the class simplyblock has always accepted and logical block
@@ -390,10 +406,10 @@ Eleven spec fields are enforced immutable. Ten of them are optional, and the
 enforcement is immutable once set: the field may be filled in later, and from that
 point it can be neither changed nor removed.
 
-| Spelling                                         | Fields                                                                                                                   |
-|--------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
-| `+k8s:immutable` on the field                    | `enableNodeAffinity`, `enableFailureDomains`, `deviceClass`, `storageNodes.mgmtInterface`, `storageNodes.dataInterfaces` |
-| Type-level `+kubebuilder:validation:XValidation` | `fabricType`, `kms`, `stripe`, `nvmfBasePort`, `rpcBasePort`, `snodeApiPort`                                             |
+| Spelling                                         | Fields                                                                                                                                  |
+|--------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| `+k8s:immutable` on the field                    | `enableNodeAffinity`, `enableFailureDomains`, `deviceClass`, `raidDevices`, `storageNodes.mgmtInterface`, `storageNodes.dataInterfaces` |
+| Type-level `+kubebuilder:validation:XValidation` | `fabricType`, `kms`, `stripe`, `nvmfBasePort`, `rpcBasePort`, `snodeApiPort`                                                            |
 
 **The two node-facing interface fields are immutable because the control plane
 spends them once.** `storageNodes.mgmtInterface` and `storageNodes.dataInterfaces`
@@ -2024,6 +2040,16 @@ type StorageClusterSpec struct {
 	// +optional
 	// +k8s:immutable
 	Stripe *StripeSpec `json:"stripe,omitempty"`
+
+	// RaidDevices declares that every data device of the cluster is protected
+	// below simplyblock (a hardware RAID LUN, or an md or dm RAID array), so a
+	// disk failure never costs a stripe a chunk. The cluster then needs
+	// dataChunks+parityChunks data devices rather than dataChunks+2*parityChunks.
+	// Sent to the control plane as raid_devices at creation; immutable.
+	// +kubebuilder:default=false
+	// +optional
+	// +k8s:immutable
+	RaidDevices *bool `json:"raidDevices,omitempty"`
 
 	// FabricType is the storage fabric the cluster serves volumes over. It
 	// describes on-wire layout, so it cannot change under a live cluster.

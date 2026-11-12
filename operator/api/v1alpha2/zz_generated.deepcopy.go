@@ -588,6 +588,11 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 		*out = new(StripeSpec)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.RaidDevices != nil {
+		in, out := &in.RaidDevices, &out.RaidDevices
+		*out = new(bool)
+		**out = **in
+	}
 	if in.EnableArbitration != nil {
 		in, out := &in.EnableArbitration, &out.EnableArbitration
 		*out = new(bool)
@@ -3591,6 +3596,11 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 		in, out := &in.Stripe, &out.Stripe
 		*out = new(StripeSpec)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.RaidDevices != nil {
+		in, out := &in.RaidDevices, &out.RaidDevices
+		*out = new(bool)
+		**out = **in
 	}
 	if in.NvmfBasePort != nil {
 		in, out := &in.NvmfBasePort, &out.NvmfBasePort

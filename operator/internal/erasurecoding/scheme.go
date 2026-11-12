@@ -134,15 +134,60 @@ func TopologyOf(mode simplyblockv1alpha2.ClusterMode) Topology {
 	}
 }
 
-// MinimumDevicesPerNode is how many storage devices each node of a declared
-// single-node cluster needs for the scheme: one per chunk of a stripe, since
-// every chunk lands on a different device of the one node. Zero means the
-// control plane counts devices across nodes and this rule does not apply.
+// MinimumDevicesPerNode is how many data devices every storage node of a
+// cluster hands over for the scheme, after the device a journal takes.
+//
+// It is one in every topology: a node without a data device is a node the
+// stripe cannot place a chunk on, so it is counted toward the node minimum
+// while buying none of what that minimum is for. A declared single-node
+// cluster needs more, one device per chunk of a stripe, since every chunk
+// lands on a different device of the one node.
 func (s Scheme) MinimumDevicesPerNode(topology Topology) int {
 	if topology.SingleNode {
 		return s.DataChunks + s.ParityChunks
 	}
-	return 0
+	return 1
+}
+
+// MinimumDataDevices is how many data devices a cluster needs across its
+// storage nodes before it may be built with this scheme, after the devices
+// its journals take.
+//
+// It is ndcs+npcs devices to place a stripe across, plus one spare device per
+// tolerated failure for the rebuild to land on, for the reason MinimumNodes
+// adds its spares: a device lost with no device left to reconstruct onto is
+// a stripe one failure from unprotected. raidDevices is the cluster's
+// declaration that every data device is protected below simplyblock (a
+// hardware RAID LUN, md, or dm RAID), so that a disk failure is absorbed under
+// the device rather than costing the stripe a chunk. The spares are then not
+// needed, and the floor is the stripe's width.
+func (s Scheme) MinimumDataDevices(raidDevices bool) int {
+	if raidDevices {
+		return s.DataChunks + s.ParityChunks
+	}
+	return s.DataChunks + 2*s.ParityChunks
+}
+
+// MinimumDataDevicesFor is MinimumDataDevices, except for a declared
+// single-node cluster, which keeps its own rule: one device per chunk of a
+// stripe on the one node (MinimumDevicesPerNode), with no spare because the
+// control plane activates it with exactly the stripe's width (sbcli
+// cluster_ops.activation_minimum_devices). raidDevices lowers nothing there,
+// since the floor is already the width.
+func (s Scheme) MinimumDataDevicesFor(topology Topology, raidDevices bool) int {
+	if topology.SingleNode {
+		return s.MinimumDevicesPerNode(topology)
+	}
+	return s.MinimumDataDevices(raidDevices)
+}
+
+// MinimumFailureDomains is how many distinct failure domains a cluster whose
+// nodes declare them needs for this scheme: one per chunk of a stripe, so
+// that the loss of any one domain costs a stripe one chunk and never two. A
+// cluster with fewer domains than chunks places two chunks of some stripe in
+// one domain, and a failure the scheme was configured to survive takes both.
+func (s Scheme) MinimumFailureDomains() int {
+	return s.DataChunks + s.ParityChunks
 }
 
 // String is the k+m notation the documentation, the control plane's Mod column,

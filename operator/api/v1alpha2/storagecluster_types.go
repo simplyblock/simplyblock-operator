@@ -881,6 +881,18 @@ type StorageClusterSpec struct {
 	// +k8s:immutable
 	Stripe *StripeSpec `json:"stripe,omitempty"`
 
+	// RaidDevices declares that every data device of the cluster is protected
+	// below simplyblock: a hardware RAID LUN, or an md or dm RAID array, so
+	// that a disk failure is absorbed under the device and never costs a
+	// stripe a chunk. The cluster then needs dataChunks+parityChunks data
+	// devices rather than dataChunks+2*parityChunks, since the spare devices a
+	// rebuild would land on are not needed. It is sent to the control plane as
+	// raid_devices when the cluster is created and cannot change afterward.
+	// +kubebuilder:default=false
+	// +optional
+	// +k8s:immutable
+	RaidDevices *bool `json:"raidDevices,omitempty"`
+
 	// FabricType is the storage fabric the cluster serves volumes over. It
 	// describes on-wire layout, so it cannot change under a live cluster.
 	// +optional

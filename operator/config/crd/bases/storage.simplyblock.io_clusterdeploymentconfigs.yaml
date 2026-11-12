@@ -764,6 +764,16 @@ spec:
                         minimum: 1024
                         type: integer
                     type: object
+                  raidDevices:
+                    description: |-
+                      RaidDevices declares that every data device of this deployment is
+                      protected below simplyblock (a hardware RAID LUN, or an md or dm RAID
+                      array), which lowers the cluster's data-device floor from
+                      dataChunks+2*parityChunks to dataChunks+parityChunks: a disk failure is
+                      absorbed under the device, so no spare device is kept for a rebuild. It
+                      is carried to the cluster's spec.raidDevices, which is immutable, and
+                      unstated it is false.
+                    type: boolean
                   socketsToUse:
                     description: |-
                       SocketsToUse restricts the deployment to selected NUMA sockets, and empty
