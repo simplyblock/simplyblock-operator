@@ -25,6 +25,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	storagev1 "k8s.io/api/storage/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -79,14 +80,33 @@ func AssignmentLabels(p *simplyblockv1alpha2.StoragePool) map[string]string {
 // production, and a name derived from the cluster alone would have the second
 // default pool collide with the first one's class instead of getting its own.
 //
+// The name says simplyblock once. The operator's own namespace is simplyblock,
+// and a namespace or a cluster name may open with it too, so the leading
+// repetitions are collapsed: namespace simplyblock with cluster production
+// derives simplyblock-production, not simplyblock-simplyblock-production. Only
+// the leading run is collapsed, because a repetition later in the name is part
+// of a name somebody chose.
+//
 // It is a derived name only because the operator has to choose one, and nothing
 // reads it back: the pool records what was written in
 // status.defaultStorageClassName, and every other question about which classes a
 // pool has is answered by AssignmentLabels. An authored class is called whatever
-// its author wants.
+// its author wants. A class written under the old, repeated name keeps it,
+// because status.defaultStorageClassName already records it and the class is
+// never written again.
 func DefaultStorageClassName(namespace, clusterName string) string {
-	return "simplyblock-" + namespace + "-" + clusterName
+	rest := namespace + "-" + clusterName
+	for strings.HasPrefix(rest, classNamePrefix+"-") {
+		rest = strings.TrimPrefix(rest, classNamePrefix+"-")
+	}
+	if rest == classNamePrefix {
+		return rest
+	}
+	return classNamePrefix + "-" + rest
 }
+
+// classNamePrefix opens the name of every class the operator writes.
+const classNamePrefix = "simplyblock"
 
 // DefaultPoolName is the name of the pool created alongside a cluster, so that a
 // cluster can hold volumes without anybody authoring a pool first.
