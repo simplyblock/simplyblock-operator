@@ -99,6 +99,12 @@ type TemplateOptions struct {
 	// spec.discover.network. It overrides both the seed's and the one the plan
 	// would propose.
 	Network *simplyblockv1alpha2.StorageNetworkSpec
+
+	// EnableFailureDomains is the run's spec.discover.enableFailureDomains, which
+	// overrides the run's own decision whether to propose failure-domain mode:
+	// false off, true on, nil the auto decision. It takes precedence over the
+	// seed's value.
+	EnableFailureDomains *bool
 }
 
 // ClusterTemplateFor proposes the cluster for a plan.
@@ -235,10 +241,30 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 		out.Template.NodesPerSocket = seed.NodesPerSocket
 		out.Notes = append(out.Notes, statedNote("nodesPerSocket", fmt.Sprintf("%d", *seed.NodesPerSocket)))
 	}
-	if seed.EnableFailureDomains != nil {
-		out.Template.EnableFailureDomains = seed.EnableFailureDomains
-		out.Notes = append(out.Notes, statedNote("enableFailureDomains", enabled(*seed.EnableFailureDomains)))
-	} else if plan.FailureDomains {
+	// The run's own flag wins over the installation's seed, and either is a
+	// statement the auto decision gives way to.
+	forced := opts.EnableFailureDomains
+	if forced == nil {
+		forced = seed.EnableFailureDomains
+	}
+	switch {
+	case forced != nil && !*forced:
+		out.Template.EnableFailureDomains = ptr.To(false)
+		out.Notes = append(out.Notes, statedNote("enableFailureDomains", enabled(false))+
+			" No failure domains are read, so the fleet is grouped by hardware alone.")
+	case forced != nil && *forced:
+		// Stated on, but the layout still has to be one the control plane
+		// activates: a run that forces the mode onto a topology too flat for it
+		// (one shared zone is one domain) gets the mode and a note that it will
+		// not activate until the topology provides enough domains.
+		out.Template.EnableFailureDomains = ptr.To(true)
+		if refused := failureDomainLayoutRefusal(plan, erasurecoding.SchemeOf(out.Template.Stripe)); refused != "" {
+			out.Notes = append(out.Notes, "enableFailureDomains is on as the run states, but the control "+
+				"plane will refuse to activate the cluster until the topology provides enough domains: "+refused)
+		} else {
+			out.Notes = append(out.Notes, statedNote("enableFailureDomains", enabled(true)))
+		}
+	case plan.FailureDomains:
 		if refused := failureDomainLayoutRefusal(plan, erasurecoding.SchemeOf(out.Template.Stripe)); refused != "" {
 			out.Notes = append(out.Notes, "enableFailureDomains is off although every worker carries "+
 				"a failure domain, because the control plane would refuse to activate the cluster: "+

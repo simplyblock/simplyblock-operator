@@ -1327,6 +1327,11 @@ func (in *DiscoverSpec) DeepCopyInto(out *DiscoverSpec) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.EnableFailureDomains != nil {
+		in, out := &in.EnableFailureDomains, &out.EnableFailureDomains
+		*out = new(bool)
+		**out = **in
+	}
 	if in.EnableLogicalBlockDevices != nil {
 		in, out := &in.EnableLogicalBlockDevices, &out.EnableLogicalBlockDevices
 		*out = new(bool)

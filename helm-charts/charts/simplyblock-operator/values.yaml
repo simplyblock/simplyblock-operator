@@ -289,6 +289,19 @@ discovery:
   # fails. The draft notes which disk was taken.
   forceJournalDevice: false
 
+  # Override whether the draft proposes failure-domain mode, which the run
+  # otherwise decides from the workers' topology: on when every worker carries a
+  # failure-domain label in a layout the control plane accepts, off otherwise.
+  #
+  # Set false to turn the mode off and read no failure domains at all, so a fleet
+  # spread over zones it does not want treated as failure domains is grouped by
+  # hardware alone into one cluster. Set true to propose the mode on; the layout
+  # must still pass the control plane's activation rules. Left out (the default),
+  # the run decides.
+  #   enableFailureDomains: false
+  # -- Overrides whether the draft proposes failure-domain mode. `false` reads no failure domains and
+  # groups the fleet as one cluster; `true` proposes the mode on. Omitted leaves the decision to the run.
+
   # The cluster network the draft proposes. With neither set, the SPDK pods run on
   # the host network. The two are exclusive.
   network:

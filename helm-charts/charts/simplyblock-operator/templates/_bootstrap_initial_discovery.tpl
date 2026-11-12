@@ -36,6 +36,10 @@ spec:
     # they are at their default, which keeps an empty PCI filter from reaching a
     # logical-block-device run that refuses one.
     enablePartitionedDevices: {{ if hasKey $d "enablePartitionedDevices" }}{{ $d.enablePartitionedDevices }}{{ else }}true{{ end }}
+    {{- /* Tri-state: rendered only when stated, so an unset value leaves the run's own auto decision. */}}
+    {{- if hasKey $d "enableFailureDomains" }}
+    enableFailureDomains: {{ $d.enableFailureDomains }}
+    {{- end }}
     {{- with $d.nodeSelector }}
     nodeSelector:
       {{- toYaml . | nindent 6 }}
