@@ -1,0 +1,28 @@
+# Argo CD Application that installs the simplyblock operator chart, its control
+# plane (standalone profile), and the CSI driver. The operator installs missing
+# prerequisites itself, cert-manager included, so nothing has to be synced first.
+# The chart's discovery run leaves a draft ClusterDeploymentConfig, which is
+# reviewed and approved in the cluster, not synced from git.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: simplyblock
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://install.simplyblock.io/helm
+    chart: simplyblock-operator
+    # The first chart release with the fixes in this directory's pull request.
+    targetRevision: <chart-version>
+    helm:
+      releaseName: simplyblock-operator
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: simplyblock
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

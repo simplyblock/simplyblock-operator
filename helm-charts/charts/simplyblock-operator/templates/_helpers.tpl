@@ -116,11 +116,13 @@ It carries one thing: SB_TLS_PROVIDER, which selects where the admission
 webhooks' serving certificate comes from. The installation's own TLS is stated by
 the ControlPlane (spec.source.local.tls) and read from it, so nothing else about
 TLS is set here. The webhook certificate has to exist before the manager starts,
-which is before any ControlPlane can be read.
+which is before any ControlPlane can be read. Until cert-manager is served the
+operator signs that certificate itself: it is what installs cert-manager, so it
+cannot wait for it.
 Caller pipes through `nindent N`.
 */}}
 {{- define "simplyblock.tlsEnv" -}}
-{{- if .Values.tls.enabled }}
+{{- if and .Values.tls.enabled (or (ne .Values.tls.provider "cert-manager") (include "simplyblock.certManagerServed" .)) }}
 - name: SB_TLS_PROVIDER
   value: {{ .Values.tls.provider | quote }}
 {{- end }}
@@ -166,5 +168,22 @@ serving-cert annotation).
 {{ .Values.csiLink.certSecret }}
 {{- else if .Values.tls.enabled -}}
 simplyblock-csi-link-tls
+{{- end -}}
+{{- end -}}
+
+{{/* Whether the operator installs cert-manager: a standalone ControlPlane does,
+     unless controlplane.local.prerequisites.installCertManager is false. */}}
+{{- define "simplyblock.operatorInstallsCertManager" -}}
+{{- if and (eq .Values.deployment.profile "standalone") (ne .Values.controlplane.local.prerequisites.installCertManager false) -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* Whether cert-manager objects can be applied now. Until the operator has
+     installed cert-manager they are left out; it issues the ones the install
+     needs, and the next render (an Argo CD refresh, a helm upgrade) adds them. */}}
+{{- define "simplyblock.certManagerServed" -}}
+{{- if .Capabilities.APIVersions.Has "cert-manager.io/v1" -}}
+true
 {{- end -}}
 {{- end -}}

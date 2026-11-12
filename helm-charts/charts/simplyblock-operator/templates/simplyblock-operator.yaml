@@ -238,7 +238,7 @@ spec:
             optional: true
         {{- end }}
         - name: webhook-certs
-          {{- if and .Values.tls.enabled (eq .Values.tls.provider "cert-manager") }}
+          {{- if and .Values.tls.enabled (eq .Values.tls.provider "cert-manager") (include "simplyblock.certManagerServed" .) }}
           emptyDir: {}
           {{- else }}
           secret:
