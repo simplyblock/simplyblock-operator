@@ -19,6 +19,7 @@ import (
 	"flag"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"syscall"
@@ -80,6 +81,22 @@ func reconcilePaths(ctx context.Context, conn lvol.Connection, hostNQN string) (
 	return nvmeof.ReconcilePaths(ctx, connector, nil, conn, opts...)
 }
 
+const (
+	// stateDevice is the state disk QEMU attaches with serial pnfs-state.
+	stateDevice = "/dev/disk/by-id/virtio-pnfs-state"
+	// gateFile lets the image's nfsd units start.
+	gateFile = "/run/mds/active"
+	// stateTmpfiles recreates what the state mount hides.
+	stateTmpfiles = "/usr/lib/tmpfiles.d/pnfs.conf"
+
+	activateRetryInterval = 2 * time.Second
+)
+
+// runCommand runs one command in the guest and returns its combined output.
+func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
 func run(ctx context.Context, listen, stateDir string, watchdog, pathInterval time.Duration) error {
 	// No host NQN function: the identity arrives with every call, decided by
 	// the operator and resolved by the runner.
@@ -101,6 +118,19 @@ func run(ctx context.Context, listen, stateDir string, watchdog, pathInterval ti
 	healthpb.RegisterHealthServer(server, healthServer)
 
 	mounter := mountutils.New("")
+	// A guest image built for the warm standby leaves the state disk unmounted
+	// and nfsd stopped until it is promoted. Nothing promotes the only metadata
+	// server, so it activates itself.
+	activation := agent.Activation{
+		StateDevice: stateDevice,
+		StateDir:    stateDir,
+		GateFile:    gateFile,
+		Tmpfiles:    stateTmpfiles,
+		Mounted:     mounter.IsMountPoint,
+		Run:         runCommand,
+		Log:         agent.KlogLogger{},
+	}
+	go activation.ActivateUntilDone(ctx, activateRetryInterval)
 	go agent.Report(ctx, healthServer, agent.Health{
 		StateDir: stateDir,
 		Mounted:  mounter.IsMountPoint,
