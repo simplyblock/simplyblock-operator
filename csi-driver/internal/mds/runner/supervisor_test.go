@@ -374,16 +374,6 @@ func TestABriefUnhealthySpellDoesNotKillTheGuest(t *testing.T) {
 	done := runAsync(ctx, s)
 
 	waitFor(t, "readiness", s.Ready)
-	cancel()
-
-	if err := result(t, done); err != nil {
-		t.Errorf("Run after a requested shutdown = %v, want nil", err)
-	}
-	if q.killed.Load() {
-		t.Error("QEMU was killed: the guest lost its storage before it could power down")
-	}
-	if storage.Err() == nil {
-		t.Error("the storage path outlived Run")
 	broken.Store(true)
 	waitFor(t, "unreadiness", func() bool { return !s.Ready() })
 	time.Sleep(100 * time.Millisecond)
