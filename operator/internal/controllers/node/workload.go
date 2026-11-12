@@ -174,21 +174,30 @@ func (w *Workload) LabelWorker(ctx context.Context, namespace, cluster, worker s
 // is why the emptiness check is here rather than at the call site: a relocation
 // off a two-socket host leaves the second socket behind.
 func (w *Workload) ReleaseWorker(
-	ctx context.Context, namespace, cluster, movedNode string,
+	ctx context.Context, namespace, cluster string, moved *simplyblockv1alpha2.StorageNode,
 ) error {
 	var nodes simplyblockv1alpha2.StorageNodeList
 	if err := w.List(ctx, &nodes, client.InNamespace(namespace)); err != nil {
 		return fmt.Errorf("list the cluster's nodes: %w", err)
 	}
 
-	// The moved node's object already names the worker it went to, so the worker
-	// it left is simply one that carries the cluster's label and that no node of
-	// the cluster is on any more. Counting the occupied workers and stripping the
-	// rest finds it without having to remember where the node used to be.
-	occupied := map[string]struct{}{}
+	// The worker the node left is simply one that carries the cluster's label
+	// and that no node of the cluster is on any more. Counting the occupied
+	// workers and stripping the rest finds it without having to remember where
+	// the node used to be.
+	//
+	// The moved node is taken from the caller, who has just re-pointed it, and
+	// not from the list: the list answers from the informer cache, which may
+	// still hold the node as it was before the re-point. Decided from that copy,
+	// the release strips the worker the node went to, which unschedules the
+	// agent pod the DaemonSet runs there, and leaves the worker it left labeled.
+	// Talos lab, 2026-11-12: the target's agent pod was deleted and recreated at
+	// every promote, and the node read unreachable for the ~50 s its init
+	// containers took to bring the new pod up.
+	occupied := map[string]struct{}{moved.Spec.WorkerNode: {}}
 	for i := range nodes.Items {
 		node := &nodes.Items[i]
-		if node.Spec.ClusterRef != cluster {
+		if node.Spec.ClusterRef != cluster || node.Name == moved.Name {
 			continue
 		}
 		occupied[node.Spec.WorkerNode] = struct{}{}
