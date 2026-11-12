@@ -19,6 +19,12 @@ out=/out
 buildroot=/opt/buildroot
 output=/work/output
 
+# /out is a bind mount, so build.log survives even if the container is torn
+# down before the CI log capture catches the last of its output.
+mkdir -p "${out}"
+exec > >(tee -a "${out}/build.log") 2>&1
+set -x
+
 case "${arch}" in
     amd64) defconfig=pnfs_qemu_x64_defconfig tuple=x86_64-buildroot-linux-gnu ;;
     arm64) defconfig=pnfs_qemu_arm64_defconfig tuple=aarch64-buildroot-linux-gnu ;;
@@ -77,6 +83,5 @@ else
     "${make[@]}"
 fi
 
-mkdir -p "${out}"
 cp -L "${output}/images/vmlinuz" "${output}/images/disk.qcow2" "${out}/"
 echo "Guest for ${arch} written to ${out}"
