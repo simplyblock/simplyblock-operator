@@ -560,6 +560,12 @@ type NFSExportStatus struct {
     Message string `json:"message,omitempty"`
     // +optional
     ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+    // MDSReady: True while the metadata server serves this export. The phase
+    // stays Ready while it is False.
+    // +optional
+    // +listType=map
+    // +listMapKey=type
+    Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -1258,6 +1264,13 @@ log alone. Member connect and disconnect keep the existing initiator logging, an
 the client's layout probe is logged on stage and after each reconnect. The export record surfaces
 `state`, `generation`, the bound MDS, and member health, which is what a
 `kubectl describe` has to answer without reading a node log.
+
+A Ready export carries an `MDSReady` condition. It is False with reason
+`MDSUnreachable` while the operator has no session with the metadata server,
+False with `HealthCheckFailed` while the export fails its health check, and True
+with `Serving` otherwise, with an event on every change of its status. The phase
+does not move on it: a fault that clears on its own needs nobody to act, and an
+MDS that stays unready is recreated by the operator's MDS watchdog.
 
 ## 18. Open Questions
 
