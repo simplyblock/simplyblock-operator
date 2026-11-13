@@ -80,6 +80,11 @@ func (cs *Server) ControllerGetVolume(
 		return nil, err
 	}
 
+	// A peer cluster's volume that failed over onto this site is read from
+	// its clone here, not from the other site, which may be cut off.
+	if moved, ok := movedOnThisSite(ctx, volumeID, spdkVol); ok {
+		spdkVol = moved
+	}
 	sbclient, err := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef)
 	if err != nil {
 		klog.Errorf("failed to create spdk client: %v", err)

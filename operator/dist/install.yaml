@@ -5145,6 +5145,33 @@ spec:
             description: ReplicationPairSpec defines the source and target clusters
               for a replication relationship.
             properties:
+              peer:
+                description: |-
+                  Peer names the control plane that manages TargetCluster when it is not
+                  this site's own: each site runs its own control plane and the two share no
+                  database (the control-plane split). The backend target is then created with
+                  the peer's endpoint and credential, and the CSI driver gets an entry for
+                  TargetCluster through the peer, so a volume handle naming it resolves.
+                  Unset: TargetCluster is in this site's control plane, as before.
+                properties:
+                  credentialsSecretRef:
+                    description: |-
+                      CredentialsSecretRef names a Secret in the pair's namespace. Its key
+                      "secret" holds the bearer credential the peer accepts for TargetCluster;
+                      its optional key "ca.crt" holds the PEM bundle that signs the peer's
+                      certificate (without it, the system trust store).
+                    minLength: 1
+                    type: string
+                  endpoint:
+                    description: |-
+                      Endpoint is the root URL of the peer control plane's API, e.g.
+                      http://10.70.3.21:15000.
+                    pattern: ^https?://
+                    type: string
+                required:
+                - credentialsSecretRef
+                - endpoint
+                type: object
               sourceCluster:
                 description: SourceCluster is the name of the local StorageCluster
                   (the replication source).

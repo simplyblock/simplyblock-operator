@@ -224,6 +224,11 @@ type CSIClusterEntry struct {
 	// set for a sync cluster that is one site of a stretched cluster, so a node
 	// plugin knows its site without reading its Node.
 	Site string `json:"site,omitempty"`
+	// Peer marks an entry a ReplicationPair registered for its target cluster
+	// on another control plane (ReplicationPair.spec.peer): ClusterEndpoint is
+	// that control plane's. This site's control plane does not list the
+	// cluster, so the prune of unlisted entries keeps it; the pair removes it.
+	Peer bool `json:"peer,omitempty"`
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch;create;update;patch;delete
@@ -1389,7 +1394,7 @@ func mergeCSICredentials(creds *CSICredentials, own CSIClusterEntry, peers []atl
 	}
 	kept := creds.Clusters[:0]
 	for _, e := range creds.Clusters {
-		if e.Local || known[e.ClusterID] {
+		if e.Local || e.Peer || known[e.ClusterID] {
 			kept = append(kept, e)
 		}
 	}
@@ -1411,17 +1416,25 @@ func (r *StorageClusterReconciler) removeCSICredentials(
 	})
 }
 
-// editCSICredentials applies one change to the aggregate Secret. It retries on
-// conflict because every cluster in the deployment writes the same object.
+// editCSICredentials applies one change to the aggregate Secret.
 func (r *StorageClusterReconciler) editCSICredentials(
 	ctx context.Context, edit func(*CSICredentials),
+) error {
+	return EditCSICredentials(ctx, r.Client, r.Namespace, edit)
+}
+
+// EditCSICredentials applies one change to the aggregate Secret the CSI driver
+// reads, in namespace. It retries on conflict because every cluster in the
+// deployment, and every ReplicationPair with a peer, writes the same object.
+func EditCSICredentials(
+	ctx context.Context, c client.Client, namespace string, edit func(*CSICredentials),
 ) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 			Name:      csiCredentialsSecret,
-			Namespace: r.Namespace,
+			Namespace: namespace,
 		}}
-		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		_, err := controllerutil.CreateOrUpdate(ctx, c, secret, func() error {
 			var creds CSICredentials
 			if data, ok := secret.Data["secret.json"]; ok {
 				_ = json.Unmarshal(data, &creds)

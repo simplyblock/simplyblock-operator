@@ -31,6 +31,32 @@ type ReplicationPairSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="targetCluster is immutable"
 	TargetCluster string `json:"targetCluster"`
+
+	// Peer names the control plane that manages TargetCluster when it is not
+	// this site's own: each site runs its own control plane and the two share no
+	// database (the control-plane split). The backend target is then created with
+	// the peer's endpoint and credential, and the CSI driver gets an entry for
+	// TargetCluster through the peer, so a volume handle naming it resolves.
+	// Unset: TargetCluster is in this site's control plane, as before.
+	// +optional
+	Peer *ReplicationPeer `json:"peer,omitempty"`
+}
+
+// ReplicationPeer is the control plane that manages a pair's target cluster.
+type ReplicationPeer struct {
+	// Endpoint is the root URL of the peer control plane's API, e.g.
+	// http://10.70.3.21:15000.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^https?://`
+	Endpoint string `json:"endpoint"`
+
+	// CredentialsSecretRef names a Secret in the pair's namespace. Its key
+	// "secret" holds the bearer credential the peer accepts for TargetCluster;
+	// its optional key "ca.crt" holds the PEM bundle that signs the peer's
+	// certificate (without it, the system trust store).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	CredentialsSecretRef string `json:"credentialsSecretRef"`
 }
 
 // ReplicationPairStatus holds the observed state of a ReplicationPair.

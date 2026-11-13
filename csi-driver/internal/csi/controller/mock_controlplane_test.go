@@ -58,6 +58,12 @@ type mockSBCLI struct {
 	snapshots map[string]*mockSnapshot
 	groups    map[string]*mockGroup
 
+	// replicatedFailovers records each fail-over of another control plane's
+	// group from the copies here, as "<this cluster>/<source cluster>/<group>";
+	// replicatedFailoverStatus, when non-zero, is the status it answers.
+	replicatedFailovers      []string
+	replicatedFailoverStatus int
+
 	// failCreateOnce, when true, makes the next createVolume call respond with
 	// HTTP 500 without persisting the lvol. This mimics the control plane
 	// failing volume creation: the lvol never comes into existence, yet a
@@ -176,6 +182,12 @@ type mockSBCLI struct {
 	// a control plane that predates the endpoint (a route-level 404), so the
 	// driver keeps its pre-resolution behavior.
 	groupResolution map[string]map[string]any
+
+	// replicatedGroupResolution, keyed by "<source cluster>/<group>", is the
+	// body GET .../replication/replicated-groups/{source}/{group}/resolution
+	// serves: another control plane's group, failed over here. Absent means
+	// no fail-over here, which sbcli answers with an empty active group.
+	replicatedGroupResolution map[string]map[string]any
 }
 
 func newMockSBCLI() *mockSBCLI {
@@ -186,6 +198,8 @@ func newMockSBCLI() *mockSBCLI {
 		replicationStatus:       make(map[string]map[string]any),
 		replicationRelationship: make(map[string]map[string]any),
 		groupResolution:         make(map[string]map[string]any),
+
+		replicatedGroupResolution: make(map[string]map[string]any),
 	}
 
 	mux := http.NewServeMux()
@@ -266,6 +280,10 @@ func newMockSBCLI() *mockSBCLI {
 		m.locked(m.handleGroupFailover),
 	)
 	mux.HandleFunc(
+		"POST /api/v2/clusters/{clusterID}/replication/replicated-groups/{sourceClusterID}/{groupID}/failover",
+		m.locked(m.handleReplicatedGroupFailover),
+	)
+	mux.HandleFunc(
 		"POST /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/replication/demote",
 		m.locked(m.handleGroupDemote),
 	)
@@ -280,6 +298,10 @@ func newMockSBCLI() *mockSBCLI {
 	mux.HandleFunc(
 		"GET /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/replication/resolution",
 		m.locked(m.handleGroupResolution),
+	)
+	mux.HandleFunc(
+		"GET /api/v2/clusters/{clusterID}/replication/replicated-groups/{sourceClusterID}/{groupID}/resolution",
+		m.locked(m.handleReplicatedGroupResolution),
 	)
 	mux.HandleFunc(
 		"POST /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/snapshots",
@@ -697,7 +719,8 @@ type mockGroup struct {
 	Demoted          bool
 	DemoteConverging bool // when set, /demote answers 202 (still converging)
 	FailbackSource   string
-	LastReplicatedAt int64 // Unix seconds surfaced by /replication/status
+	LastReplicatedAt int64  // Unix seconds surfaced by /replication/status
+	ReplState        string // the state /replication/status serves, in_sync when empty
 }
 
 // seedGroup registers a group with the given member lvol UUIDs and stamps each
@@ -757,6 +780,16 @@ func (m *mockSBCLI) handleGroupFailover(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"members": []any{}})
 }
 
+func (m *mockSBCLI) handleReplicatedGroupFailover(w http.ResponseWriter, r *http.Request) {
+	m.replicatedFailovers = append(m.replicatedFailovers,
+		r.PathValue("clusterID")+"/"+r.PathValue("sourceClusterID")+"/"+r.PathValue("groupID"))
+	if m.replicatedFailoverStatus != 0 {
+		writeJSON(w, m.replicatedFailoverStatus, map[string]string{"detail": "no complete replicated generation"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"members": []any{}})
+}
+
 func (m *mockSBCLI) handleGroupDemote(w http.ResponseWriter, r *http.Request) {
 	g := m.groups[r.PathValue("groupID")]
 	if g == nil {
@@ -794,6 +827,9 @@ func (m *mockSBCLI) handleGroupReplicationStatus(w http.ResponseWriter, r *http.
 		return
 	}
 	out := map[string]any{"role": "source", "state": "in_sync", "member_count": len(g.Members)}
+	if g.ReplState != "" {
+		out["state"] = g.ReplState
+	}
 	if g.LastReplicatedAt != 0 {
 		out["last_replicated_at"] = time.Unix(g.LastReplicatedAt, 0).UTC().Format(time.RFC3339)
 	}
@@ -805,6 +841,16 @@ func (m *mockSBCLI) handleGroupResolution(w http.ResponseWriter, r *http.Request
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "Not Found"})
 		return
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+func (m *mockSBCLI) handleReplicatedGroupResolution(w http.ResponseWriter, r *http.Request) {
+	source, group := r.PathValue("sourceClusterID"), r.PathValue("groupID")
+	body, ok := m.replicatedGroupResolution[source+"/"+group]
+	if !ok {
+		body = map[string]any{"cluster_id": source, "group_id": group,
+			"active_cluster_id": "", "active_group_id": "", "members": []any{}}
 	}
 	writeJSON(w, http.StatusOK, body)
 }

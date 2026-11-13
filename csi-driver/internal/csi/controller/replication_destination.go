@@ -87,6 +87,11 @@ func groupPVHandles(ctx context.Context, client *atlascp.Client, gh lvol.GroupHa
 	if res.Legacy {
 		return client.ConsistencyGroupMemberHandles(ctx, gh)
 	}
+	return originHandles(gh, res)
+}
+
+// originHandles is the handle each PersistentVolume of a resolved group carries.
+func originHandles(gh lvol.GroupHandle, res atlascp.GroupResolution) ([]lvol.VolumeHandle, error) {
 	if len(res.Members) == 0 {
 		return nil, fmt.Errorf("consistency group %s has no live member", gh.Handle())
 	}
@@ -109,11 +114,19 @@ func groupDestinationInfo(
 	if !ok {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume group handle %q", groupID)
 	}
-	client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
-	if err != nil {
-		return nil, status.Error(codes.Unavailable, err.Error())
+	var members []lvol.VolumeHandle
+	var err error
+	if res, ok := resolveOnThisSite(ctx, gh); ok {
+		// Failed over onto this site; the group's own control plane is on
+		// another site and may be cut off.
+		members, err = originHandles(gh, res)
+	} else {
+		client, cerr := clusters.ReplicationClient(ctx, gh.ClusterID)
+		if cerr != nil {
+			return nil, status.Error(codes.Unavailable, cerr.Error())
+		}
+		members, err = groupPVHandles(ctx, client, gh)
 	}
-	members, err := groupPVHandles(ctx, client, gh)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "members of %s: %v", groupID, err)
 	}
