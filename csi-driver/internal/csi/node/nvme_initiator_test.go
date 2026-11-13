@@ -5,19 +5,26 @@ package node
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
 const awsKernel = "6.8.0-1044-aws"
 
-// fabricsHost is a host whose fabrics device is there or not, and whose modprobe
-// either loads the initiator or says why it cannot.
+// fabricsHost is a host whose nvme_tcp module is loaded or not, whose fabrics
+// device is there or not, and whose modprobe either loads the initiator or says
+// why it cannot. The two are separate facts: nvme_fabrics ships in the base
+// kernel package and brings the device with it, without the transport.
 type fabricsHost struct {
+	loaded     bool
 	fabrics    bool
 	modprobe   error
 	modprobed  int
@@ -33,13 +40,18 @@ func (k *fabricsHost) run(_ context.Context, name string, args ...string) (strin
 		if k.modprobe != nil {
 			return "modprobe: FATAL: Module " + args[0] + " not found in directory /lib/modules/" + awsKernel, k.modprobe
 		}
-		k.fabrics = k.fabrics || k.loadsOnAsk
+		k.loaded = k.loaded || k.loadsOnAsk
 		return "", nil
 	}
 	return "", errors.New("unexpected command " + name)
 }
 
-func (k *fabricsHost) present(string) bool { return k.fabrics }
+func (k *fabricsHost) present(path string) bool {
+	if path == fabricsDevice {
+		return k.fabrics
+	}
+	return k.loaded
+}
 
 func (k *fabricsHost) check() func(context.Context) error {
 	return initiatorCheck{run: k.run, present: k.present}.ensure
@@ -72,7 +84,7 @@ func TestStageNamesTheMissingNVMeInitiator(t *testing.T) {
 		t.Fatalf("NodeStageVolume returned %v, want FailedPrecondition: the node cannot connect any volume", err)
 	}
 	wantInError := []string{
-		"nvme-tcp", "linux-modules-extra-" + awsKernel, "kernel-modules-extra", "not found in directory",
+		"nvme-tcp", "linux-modules-extra-" + awsKernel, "not found in directory",
 	}
 	for _, want := range wantInError {
 		if !strings.Contains(err.Error(), want) {
@@ -108,7 +120,7 @@ func TestStageLoadsAnInitiatorThatIsInstalled(t *testing.T) {
 func TestStageAsksNothingOfANodeWithAnInitiator(t *testing.T) {
 	runner := newRecordingRunner()
 	ns, _ := newStackedServer(t, runner)
-	host := &fabricsHost{fabrics: true, modprobe: errors.New("exit status 1")}
+	host := &fabricsHost{loaded: true, modprobe: errors.New("exit status 1")}
 	ns.ensureInitiator = host.check()
 
 	if _, err := ns.NodeStageVolume(context.Background(), stageRequest(t)); err != nil {
@@ -119,36 +131,90 @@ func TestStageAsksNothingOfANodeWithAnInitiator(t *testing.T) {
 	}
 }
 
-// The readiness check on a node with no initiator fails and says what to
-// install: what it prints is what kubelet records on the plugin's pod, so the
-// pod that is not ready carries the remedy.
-func TestReadinessCheckNamesTheMissingNVMeInitiator(t *testing.T) {
-	host := &fabricsHost{modprobe: errors.New("exit status 1")}
-	var said strings.Builder
+// A node whose fabrics device is there and whose nvme_tcp module is not cannot
+// connect a volume either: nvme_fabrics ships in the base kernel package and
+// brings /dev/nvme-fabrics with it. Seen on the EKS test cluster, where the
+// stage went on and failed with what nvme-cli prints for a transport the
+// kernel does not have, which names nothing to install.
+func TestFabricsDeviceAloneIsNotAnInitiator(t *testing.T) {
+	host := &fabricsHost{fabrics: true, modprobe: errors.New("exit status 1")}
 
-	code := checkInitiator(context.Background(), host.check(), &said)
+	err := host.check()(context.Background())
 
-	if code == 0 {
-		t.Fatal("the check passed on a node that cannot connect a volume, so the plugin reports ready")
+	if err == nil {
+		t.Fatal("the check passed on a node with /dev/nvme-fabrics and no nvme_tcp module")
 	}
-	for _, want := range []string{"nvme-tcp", "linux-modules-extra-" + awsKernel, "kernel-modules-extra"} {
-		if !strings.Contains(said.String(), want) {
-			t.Errorf("the check printed %q, want it to name %q", said.String(), want)
+	if !strings.Contains(err.Error(), "linux-modules-extra-"+awsKernel) {
+		t.Errorf("the error reads %q, want it to name the package", err.Error())
+	}
+}
+
+// A modprobe that succeeds is believed even when the module shows no sysfs
+// entry: a kernel with the transport built in may have none, and refusing such
+// a node would stop a plugin that works.
+func TestInitiatorCheckBelievesAModprobeThatSucceeds(t *testing.T) {
+	host := &fabricsHost{}
+
+	if err := host.check()(context.Background()); err != nil {
+		t.Fatalf("the check failed after modprobe succeeded: %v", err)
+	}
+}
+
+// A pNFS volume is refused the same way. Its client connects the backing
+// namespace over NVMe/TCP and reads and writes it directly, so it needs the
+// initiator as much as a block volume does, and its own stage path would
+// otherwise fail with what nvme-cli printed.
+func TestPNFSStageNamesTheMissingNVMeInitiator(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+	host := &fabricsHost{modprobe: errors.New("exit status 1")}
+	ns.ensureInitiator = host.check()
+	req := stageRequest(t)
+	req.VolumeContext[csicommon.CtxAccessProtocol] = csicommon.AccessProtocolNFS
+
+	_, err := ns.NodeStageVolume(context.Background(), req)
+
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("NodeStageVolume returned %v, want FailedPrecondition", err)
+	}
+	if !strings.Contains(err.Error(), "linux-modules-extra-"+awsKernel) {
+		t.Errorf("the error reads %q, want it to name the package", err.Error())
+	}
+}
+
+// The node plugin refuses to start on a node that cannot connect a volume, and
+// leaves the reason where the pod shows it: the container's termination
+// message, which `kubectl describe pod` prints under the last state of a
+// container in a restart loop.
+func TestStartRefusesANodeWithoutTheNVMeInitiator(t *testing.T) {
+	host := &fabricsHost{modprobe: errors.New("exit status 1")}
+	message := filepath.Join(t.TempDir(), "termination-log")
+
+	err := requireInitiator(context.Background(), host.check(), message)
+
+	if err == nil {
+		t.Fatal("the plugin starts on a node that cannot connect a volume")
+	}
+	written, readErr := os.ReadFile(message)
+	if readErr != nil {
+		t.Fatalf("no termination message was written: %v", readErr)
+	}
+	for _, want := range []string{"nvme-tcp", "linux-modules-extra-" + awsKernel} {
+		if !strings.Contains(string(written), want) {
+			t.Errorf("the termination message reads %q, want it to name %q", written, want)
 		}
 	}
 }
 
-// The readiness check passes once the initiator is there, loading a module that
-// is installed and not loaded, so a node that was remedied turns ready on the
-// next probe without a restart.
-func TestReadinessCheckPassesOnceTheInitiatorIsThere(t *testing.T) {
-	for name, host := range map[string]*fabricsHost{
-		"loaded":               {fabrics: true},
-		"installed and loaded": {loadsOnAsk: true},
-	} {
-		var said strings.Builder
-		if code := checkInitiator(context.Background(), host.check(), &said); code != 0 {
-			t.Errorf("%s: the check exited %d and printed %q, want 0", name, code, said.String())
-		}
+// A node with the initiator starts, and no termination message is written.
+func TestStartAcceptsANodeWithTheNVMeInitiator(t *testing.T) {
+	host := &fabricsHost{loadsOnAsk: true}
+	message := filepath.Join(t.TempDir(), "termination-log")
+
+	if err := requireInitiator(context.Background(), host.check(), message); err != nil {
+		t.Fatalf("the plugin refused a node whose initiator loads: %v", err)
+	}
+	if _, err := os.Stat(message); err == nil {
+		t.Error("a termination message was written for a node that starts")
 	}
 }

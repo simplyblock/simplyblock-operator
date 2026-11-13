@@ -267,9 +267,11 @@ call, and a fake `nvme` first on `PATH` plays the nvme-cli that cannot be reaped
 | U-123 | A monitor tick whose path repair fails still reports the devices the kernel removed                                                       | Regression | `TestTickReportsGoneDevicesWhenPathRepairFails`    |
 | U-124 | A stage on a node with no NVMe/TCP initiator is refused as a failed precondition naming the package to install                            | Regression | `TestStageNamesTheMissingNVMeInitiator`            |
 | U-125 | A stage on a node whose initiator module is installed and not loaded loads it and goes on                                                 | Positive   | `TestStageLoadsAnInitiatorThatIsInstalled`         |
-| U-126 | The readiness check on a node with no NVMe/TCP initiator exits non-zero and prints the package to install                                 | Negative   | `TestReadinessCheckNamesTheMissingNVMeInitiator`   |
-| U-127 | The readiness check passes once the initiator is loaded, loading a module that is installed                                               | Positive   | `TestReadinessCheckPassesOnceTheInitiatorIsThere`  |
-| U-128 | The node plugin container carries the initiator check as an exec readiness probe and no liveness probe                                    | Positive   | `TestNodePluginIsReadyOnlyWithAnInitiator`         |
+| U-126 | A stage of a pNFS volume on a node with no NVMe/TCP initiator is refused the same way, before its own path                                | Negative   | `TestPNFSStageNamesTheMissingNVMeInitiator`        |
+| U-127 | A node with `/dev/nvme-fabrics` and no `nvme_tcp` module is not taken for one that can connect a volume                                   | Regression | `TestFabricsDeviceAloneIsNotAnInitiator`           |
+| U-128 | A `modprobe` that succeeds is believed when the module shows no sysfs entry, as a built-in transport may not                              | Positive   | `TestInitiatorCheckBelievesAModprobeThatSucceeds`  |
+| U-129 | The node plugin refuses to start on a node with no NVMe/TCP initiator and leaves the reason as its termination message                    | Negative   | `TestStartRefusesANodeWithoutTheNVMeInitiator`     |
+| U-130 | The node plugin starts on a node whose initiator loads, and writes no termination message                                                 | Positive   | `TestStartAcceptsANodeWithTheNVMeInitiator`        |
 
 ---
 

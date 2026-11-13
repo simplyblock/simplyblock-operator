@@ -304,6 +304,13 @@ func startLink(ctx context.Context, conf *config.Config) (*link.Agent, error) {
 // watch. It serves reads from cache once synced and falls back to the API until
 // then, so neither consumer needs a fallback of its own.
 func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*node.Server, error) {
+	// Before anything is started: a node whose kernel has no NVMe/TCP initiator
+	// can stage no volume, so the plugin exits and says why, in its log and in
+	// the container's termination message, instead of serving refusals.
+	if err := node.RequireInitiator(context.Background()); err != nil {
+		return nil, err
+	}
+
 	manager := sbkube.NewManager(kubeClient)
 	manager.Start(context.Background())
 
@@ -325,7 +332,6 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	go reconnect.MonitorConnection(markBroken(podGuardian), manager, cd.GetName(), nodeName)
 	go node.KeepLayoutsPrimed(context.Background(), cd.GetName())
 
-	go node.ReportInitiator(context.Background(), nodeName)
 	go advertiseVDOCapability(kubeClient, nodeName)
 	go advertiseKVMCapability(kubeClient, nodeName)
 	go advertiseSubnets(kubeClient, nodeName)

@@ -68,8 +68,9 @@ storage node:
 sudo apt-get install -y linux-modules-extra-$(uname -r)
 ```
 
-The node plugin loads the module when it is installed. When it is not, the node plugin's pod on that
-node is not ready, and a volume mount fails with a `FailedPrecondition` error. Both name the package.
+The node plugin loads the module when it is installed. When it is not, the node plugin does not start
+on that node: its pod is in `CrashLoopBackOff`, and the container's termination message names the
+package.
 
 ### 2. Install via Helm (Recommended)
 

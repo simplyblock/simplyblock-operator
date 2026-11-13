@@ -1,35 +1,41 @@
-// Whether this node's kernel can connect a volume at all: the check a stage
-// makes before it brings anything up.
+// Whether this node's kernel can connect a volume at all: the check the node
+// plugin makes before it starts, and again before a stage brings anything up.
 //
 // A volume reaches the node over NVMe/TCP, which needs the kernel's nvme-tcp
 // module. Ubuntu ships it in linux-modules-extra, a package its cloud images
 // leave out, and the DaemonSet's postStart hook only printed that the modprobe
 // had failed, to output nobody can read. The first sign was then a mount that
 // failed with what nvme-cli says when /dev/nvme-fabrics is not there, once for
-// every path, and nothing in it names the package. So the check is made here,
-// where the answer reaches the pod's events, and it says what to install.
+// every path, and nothing in it names the package.
 //
-// The same check is the node plugin's readiness probe (CheckInitiator), so a
-// node that cannot connect a volume shows a plugin that is not ready before any
-// volume is asked for.
+// So the plugin refuses to start on such a node (RequireInitiator). Every
+// volume it stages is connected over NVMe/TCP, a pNFS volume included, whose
+// client reads and writes the backing namespace directly, so there is nothing
+// it could serve. A container in a restart loop is the signal a missing
+// prerequisite gets everywhere else, and the reason is left in the container's
+// termination message, where the pod shows it. The stage makes the same check
+// for a module that went away under a running plugin.
 package node
 
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"strings"
-
-	"k8s.io/klog"
 )
-
-// fabricsDevice is what the kernel's NVMe-oF initiator exposes once any of its
-// transports is loaded, and what every connect opens.
-const fabricsDevice = "/dev/nvme-fabrics"
 
 // initiatorModule is the transport a volume is connected over.
 const initiatorModule = "nvme-tcp"
+
+// initiatorModuleDir is where the kernel shows the transport once it is loaded,
+// or built in. It is the transport that is asked for and not /dev/nvme-fabrics:
+// that device comes with nvme_fabrics, which ships in the base kernel package,
+// so it can be there on a node that has no transport to connect over.
+const initiatorModuleDir = "/sys/module/nvme_tcp"
+
+// TerminationMessagePath is where a container leaves the reason it exited, the
+// default terminationMessagePath of a pod.
+const TerminationMessagePath = "/dev/termination-log"
 
 // initiatorCheck asks the host whether the NVMe-oF initiator is there. Both
 // halves are seams, so a test can be a kernel it does not have.
@@ -50,27 +56,25 @@ func pathExists(path string) bool {
 
 // ensure reports why this node cannot connect a volume, or nil when it can.
 //
-// The device being there is the whole answer and costs a stat, which matters
-// because this runs on every stage. Only when it is absent is the module asked
+// The module being loaded is the whole answer and costs a stat, which matters
+// because this runs on every stage. Only when it is not is the module asked
 // for: one that is installed and not loaded is loaded here, so a node that
-// needs nothing done to it does not fail a stage. It is asked again on every
-// stage rather than once at start, because the remedy is applied to a running
-// node and the next retry should find it.
+// needs nothing done to it is not refused. A modprobe that succeeds is
+// believed without looking again, because a kernel with the transport built
+// in need not show it in sysfs, and refusing such a node would stop a plugin
+// that works.
 func (c initiatorCheck) ensure(ctx context.Context) error {
-	if c.present(fabricsDevice) {
+	if c.present(initiatorModuleDir) {
 		return nil
 	}
 	out, err := c.run(ctx, "modprobe", initiatorModule)
-	if c.present(fabricsDevice) {
+	if err == nil {
 		return nil
 	}
 
-	said := "modprobe " + initiatorModule + " succeeded and the device did not appear"
-	switch {
-	case err != nil && out != "":
+	said := "modprobe " + initiatorModule + " failed: " + err.Error()
+	if out != "" {
 		said = "modprobe " + initiatorModule + " said: " + out
-	case err != nil:
-		said = "modprobe " + initiatorModule + " failed: " + err.Error()
 	}
 
 	release := "the running kernel"
@@ -81,50 +85,31 @@ func (c initiatorCheck) ensure(ctx context.Context) error {
 	}
 
 	return fmt.Errorf(
-		"this node cannot connect a volume: %s has no NVMe/TCP initiator loaded (%s is absent, and %s). "+
-			"Install the package that carries the %s module on the node (%s on Ubuntu, "+
-			"kernel-modules-extra on RHEL and its derivatives) and run `modprobe %s`. "+
-			"The mount is retried and needs no restart",
-		release, fabricsDevice, said, initiatorModule, extra, initiatorModule)
+		"this node cannot connect a volume: %s has no NVMe/TCP initiator (the %s module is not loaded, and %s). "+
+			"Install the package that carries the module on the node (%s on Ubuntu) and run `modprobe %s`",
+		release, initiatorModule, said, extra, initiatorModule)
 }
 
-// ReportInitiator says once, at start, whether this node can connect a volume.
+// RequireInitiator is the node plugin's precondition for starting: it returns
+// why this node cannot connect a volume, having left that reason as the
+// container's termination message, or nil when it can.
 //
-// It is a log line and not a refusal to start: the plugin still serves the
-// volumes that need no initiator, and the readiness probe and the stage of a
-// new volume make the same check where a reader sees it. What this adds is the
-// answer in the plugin's own log.
-func ReportInitiator(ctx context.Context, nodeName string) {
-	if err := hostInitiatorCheck().ensure(ctx); err != nil {
-		klog.Errorf("initiator check: node %s: %v", nodeName, err)
-		return
-	}
-	klog.Infof("initiator check: node %s has the NVMe-oF initiator loaded", nodeName)
+// The caller exits on an error. kubelet restarts the container with its usual
+// backoff, so a node that was remedied is picked up by the next restart, and
+// until then `kubectl describe pod` shows the reason under the last state.
+func RequireInitiator(ctx context.Context) error {
+	return requireInitiator(ctx, hostInitiatorCheck().ensure, TerminationMessagePath)
 }
 
-// CheckInitiator is the node plugin's readiness check, run as its own process
-// by the readiness probe (`spdkcsi --check-initiator`). It returns the exit
-// code: 0 when this node can connect a volume, 1 when it cannot, having written
-// why to w.
-//
-// The plugin is not ready rather than not running. A pod that is not ready is
-// as visible as one that restarts, in the pod list and in the deployment's
-// phase, and kubelet records what the probe printed on the pod, so the package
-// to install is there to read. A plugin that refused to start would also stop
-// serving the pNFS volumes on the node, which need no initiator, and would
-// answer a stage with a dead socket instead of the refusal that names the
-// package. The module is asked for on every probe, so a node that was remedied
-// turns ready on the next one.
-func CheckInitiator(ctx context.Context, w io.Writer) int {
-	return checkInitiator(ctx, hostInitiatorCheck().ensure, w)
-}
-
-func checkInitiator(ctx context.Context, ensure func(context.Context) error, w io.Writer) int {
-	if err := ensure(ctx); err != nil {
-		// A reason that cannot be written changes nothing about the verdict: the
-		// node still cannot connect a volume, and the exit code says so.
-		_, _ = fmt.Fprintln(w, err)
-		return 1
+func requireInitiator(ctx context.Context, ensure func(context.Context) error, messagePath string) error {
+	err := ensure(ctx)
+	if err == nil {
+		return nil
 	}
-	return 0
+	// The message is the convenience and the error is the verdict: one that
+	// cannot be written is still returned, and still logged by the caller.
+	if writeErr := os.WriteFile(messagePath, []byte(err.Error()+"\n"), 0o600); writeErr != nil {
+		return fmt.Errorf("%w (and the termination message could not be written: %v)", err, writeErr)
+	}
+	return err
 }

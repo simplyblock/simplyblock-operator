@@ -15,24 +15,22 @@ sudo modprobe nvme-tcp
 
 #### the worker node needs the kernel NVMe/TCP module
 
-If the worker's kernel has no `nvme-tcp` module, the volume mount fails with an error like this.
-```
-  Warning  FailedMount  kubelet  MountVolume.MountDevice failed for volume "pvc-..." : rpc error: code = FailedPrecondition desc = this node cannot connect a volume: kernel 6.8.0-1044-aws has no NVMe/TCP initiator loaded (/dev/nvme-fabrics is absent, and modprobe nvme-tcp said: modprobe: FATAL: Module nvme-tcp not found in directory /lib/modules/6.8.0-1044-aws). ...
-```
-
-Install the package that carries the module on the worker and load it. The mount is retried and needs no restart.
-```
-sudo apt-get install -y linux-modules-extra-$(uname -r)   # Ubuntu
-sudo dnf install -y kernel-modules-extra                  # RHEL and its derivatives
-sudo modprobe nvme-tcp
-```
-
-A mount failure is not the only signal. The CSI node plugin's readiness probe makes the same check, so on a worker without the module the plugin's pod is not ready before any volume is requested, and the `SimplyblockDriver` reports `Degraded`. The pod's events carry the same message.
+If the worker's kernel has no `nvme-tcp` module, the CSI node plugin does not start on that worker. Its pod is in `CrashLoopBackOff`, the `SimplyblockDriver` reports `Degraded`, and a pod that mounts a simplyblock volume on that worker stays in `ContainerCreating`.
 ```
 kubectl get pods -n <namespace> -o wide | grep csi-node
 kubectl describe pod -n <namespace> <csi-node-pod>
 ```
-The plugin keeps running, and the pod turns ready by itself within seconds of the module being loaded.
+The reason is the termination message of the `csi-node` container, shown under `Last State`, and the last line of its log.
+```
+this node cannot connect a volume: kernel 6.8.0-1040-aws has no NVMe/TCP initiator (the nvme-tcp module is not loaded, and modprobe nvme-tcp said: modprobe: FATAL: Module nvme-tcp not found in directory /lib/modules/6.8.0-1040-aws). Install the package that carries the module on the node (linux-modules-extra-6.8.0-1040-aws on Ubuntu) and run `modprobe nvme-tcp`
+```
+
+Install the package that carries the module on the worker and load it. On Ubuntu, that is the `linux-modules-extra` package of the running kernel.
+```
+sudo apt-get install -y linux-modules-extra-$(uname -r)
+sudo modprobe nvme-tcp
+```
+The plugin starts on its next restart, which kubelet delays by up to five minutes. Deleting the plugin's pod on that worker starts it at once.
 
 #### the worker nodes should be able to contact simplyblock storage node
 

@@ -97,13 +97,6 @@ spec:
           value: /var/run/secrets/kubernetes.io/serviceaccount/token
         {{- end }}
         {{- include "simplyblock.tlsEnv" . | nindent 8 }}
-        # Ready only on a node that can connect a volume: the check fails, naming
-        # the package to install, while the kernel has no nvme-tcp module.
-        readinessProbe:
-          exec:
-            command: ["/app/spdkcsi", "--check-initiator"]
-          periodSeconds: 10
-          timeoutSeconds: 10
         lifecycle:
           postStart:
             exec:

@@ -60,6 +60,19 @@ func (ns *Server) NodeStageVolume(
 	stagingParentPath := req.GetStagingTargetPath() // where the volume context is stashed
 	stagingTargetPath := getStagingTargetPath(req)
 
+	// A node without the initiator fails every connect the same way, and what
+	// the connect says about it names nothing to do. It is refused here with
+	// the remedy, as a precondition rather than as a fault of this volume, and
+	// before the paths part: a pNFS volume's client connects its backing
+	// namespace too. The plugin does not start on such a node, so this is for a
+	// module that went away under it.
+	if ns.ensureInitiator != nil {
+		if err := ns.ensureInitiator(ctx); err != nil {
+			klog.Errorf("volume %s cannot be staged: %v", volumeID, err)
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+	}
+
 	// A pNFS volume is mounted from an export rather than a local device, so it
 	// takes its own path. The namespace is still attached, because the client
 	// reads and writes it directly.
@@ -124,16 +137,6 @@ func (ns *Server) NodeStageVolume(
 	if err != nil {
 		klog.Errorf("failed to build the stack plan, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	// A node without the initiator fails every connect the same way, and what
-	// the connect says about it names nothing to do. It is refused here with
-	// the remedy, as a precondition rather than as a fault of this volume.
-	if ns.ensureInitiator != nil && vc["nqn"] != "" {
-		if err := ns.ensureInitiator(ctx); err != nil {
-			klog.Errorf("volume %s cannot be staged: %v", volumeID, err)
-			return nil, status.Error(codes.FailedPrecondition, err.Error())
-		}
 	}
 
 	artifact, err := ns.bringUp(ctx, volumeID, plan, vc)
