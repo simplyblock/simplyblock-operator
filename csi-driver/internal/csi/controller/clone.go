@@ -26,6 +26,9 @@ func (cs *Server) handleVolumeContentSource(
 	sizeBytes int64,
 ) (*csi.Volume, error) {
 	volumeSource := req.GetVolumeContentSource()
+	if err := refuseStripedSourceForPlainClass(volumeSource); err != nil {
+		return nil, err
+	}
 	switch volumeSource.GetType().(type) {
 	case *csi.VolumeContentSource_Snapshot:
 		return cs.handleSnapshotSource(ctx, volumeSource.GetSnapshot(), req, poolName, vol, sizeBytes)

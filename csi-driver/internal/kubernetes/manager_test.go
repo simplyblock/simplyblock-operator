@@ -212,3 +212,25 @@ func TestManagerReflectsWatchUpdates(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// TestAStripedVolumeIsFoundByItsFirstMember holds the PersistentVolume lookup to
+// a striped handle, whose fourth segment names its width. Missing it would read
+// as the volume having no PersistentVolume, which the node service takes for a
+// deletion and destroys the volume's LVM stack on the next unstage.
+func TestAStripedVolumeIsFoundByItsFirstMember(t *testing.T) {
+	striped := testPV("pv-striped", testDriver, handle(lvolZ)+":s3")
+	for _, synced := range []bool{false, true} {
+		client := fake.NewSimpleClientset(striped.DeepCopy())
+		m := sbkube.NewManager(client)
+		ctx, cancel := context.WithCancel(context.Background())
+		if synced {
+			m.Start(ctx)
+			waitForSync(t, m)
+		}
+		pv, err := m.PersistentVolumeByLogicalVolumeID(ctx, lvolZ)
+		cancel()
+		if err != nil || pv.Name != "pv-striped" {
+			t.Errorf("synced=%v: PersistentVolumeByLogicalVolumeID(%s) = %v, %v; want pv-striped", synced, lvolZ, pv, err)
+		}
+	}
+}

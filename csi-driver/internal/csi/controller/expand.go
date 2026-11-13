@@ -39,6 +39,9 @@ func (cs *Server) ControllerExpandVolume(
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID %q: %v", volumeID, err)
 	}
+	if width := csicommon.StripeWidth(volumeID); width > 1 {
+		return cs.expandStripedVolume(ctx, volumeID, spdkVol, width, updatedSize)
+	}
 
 	sbclient, err := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef)
 	if err != nil {

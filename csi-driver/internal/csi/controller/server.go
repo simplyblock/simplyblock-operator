@@ -3,8 +3,11 @@
 package controller
 
 import (
+	"context"
+
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/csi-addons/spec/lib/go/replication"
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"k8s.io/client-go/kubernetes"
 
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
@@ -39,6 +42,10 @@ type Server struct {
 	// placer asks the operator which member of a supercluster a volume goes
 	// to, over the link. Nil when the link is not enabled.
 	placer Placer
+	// storageNodes lists a cluster's storage nodes, which a striped volume's
+	// members are spread across. Nil reads them from the cluster's control
+	// plane (listStorageNodes); a test sets it.
+	storageNodes func(ctx context.Context, clusterID string) ([]atlascp.StorageNode, error)
 }
 
 //nolint:unparam // error return kept for constructor symmetry / future use

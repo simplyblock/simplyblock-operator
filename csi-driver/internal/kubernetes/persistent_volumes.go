@@ -28,7 +28,7 @@ func indexPersistentVolumeByLvolID(obj interface{}) ([]string, error) {
 	if !ok || pv.Spec.CSI == nil {
 		return nil, nil
 	}
-	vh, ok := lvol.ParseHandle(lvol.VolumeHandle(pv.Spec.CSI.VolumeHandle))
+	vh, _, ok := lvol.ParseStripedHandle(lvol.VolumeHandle(pv.Spec.CSI.VolumeHandle))
 	if !ok {
 		return nil, nil
 	}
@@ -134,7 +134,7 @@ func (m *Manager) PersistentVolumeByLogicalVolumeID(
 		if pv.Spec.CSI == nil {
 			continue
 		}
-		if vh, ok := lvol.ParseHandle(lvol.VolumeHandle(pv.Spec.CSI.VolumeHandle)); ok && vh.VolumeID == lvolID {
+		if vh, _, ok := lvol.ParseStripedHandle(lvol.VolumeHandle(pv.Spec.CSI.VolumeHandle)); ok && vh.VolumeID == lvolID {
 			return pv, nil
 		}
 	}
