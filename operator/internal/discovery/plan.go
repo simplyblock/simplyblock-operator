@@ -119,6 +119,10 @@ const (
 	// native NVMe multipath, which can host a storage node and cannot mount a
 	// volume over more than one path.
 	NVMeMultipathUnavailable = "NVMeMultipathUnavailable"
+
+	// StorageMTUMismatch names a worker whose storage interface MTU differs
+	// from the rest of the fleet's.
+	StorageMTUMismatch = "StorageMTUMismatch"
 )
 
 // PlacementGroupLabel assigns a worker to a member: workers carrying one value
@@ -128,9 +132,22 @@ const PlacementGroupLabel = "storage.simplyblock.io/placement-group"
 // Finding is one thing the draft leaves for a reviewer, under the reason its
 // event is raised with.
 type Finding struct {
-	Reason  string
-	Message string
+	// Node is the worker the finding is about, empty for a fleet-wide one.
+	Node     string
+	Severity Severity
+	Reason   string
+	Message  string
+	// Remedy is what to change to clear the finding.
+	Remedy string
 }
+
+// Severity is how much a finding weighs: Fail blocks approval of the draft.
+type Severity string
+
+const (
+	SeverityFail Severity = "Fail"
+	SeverityWarn Severity = "Warn"
+)
 
 // Summary is the sentence a run's status carries.
 func (p Plan) Summary() string {
@@ -647,6 +664,7 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 		plan.assignFailureDomains(failureDomainLabelOf(run))
 	}
 	plan.noteMultipath()
+	plan.noteStorageMTU()
 
 	if len(plan.Workers) > 0 && plan.Workers[0].Attachment == nil {
 		plan.Unattached = true

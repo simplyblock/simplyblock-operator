@@ -41,6 +41,8 @@ func (p *Plan) noteMultipath() {
 		default:
 			continue
 		}
-		p.Findings = append(p.Findings, Finding{Reason: NVMeMultipathUnavailable, Message: message})
+		p.Findings = append(p.Findings, Finding{
+			Node: worker.Name, Severity: SeverityWarn, Reason: NVMeMultipathUnavailable, Message: message,
+		})
 	}
 }

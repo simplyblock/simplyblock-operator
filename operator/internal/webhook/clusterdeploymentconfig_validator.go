@@ -57,6 +57,7 @@ import (
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=clusterdeploymentconfigs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=operatorops,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 
@@ -188,7 +189,10 @@ func withoutStretchedRole(spec simplyblockv1alpha2.ClusterDeploymentConfigSpec) 
 func (v *ClusterDeploymentConfigValidator) checkApproval(
 	ctx context.Context, namespace string, config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) ([]problem, error) {
-	var problems []problem
+	problems, err := v.preflightProblems(ctx, namespace, config)
+	if err != nil {
+		return nil, err
+	}
 
 	missing, err := v.missingWorkers(ctx, config)
 	if err != nil {
