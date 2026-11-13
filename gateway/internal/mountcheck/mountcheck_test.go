@@ -58,3 +58,27 @@ func TestUnmountedErrorsWhenTheRootDoesNotExist(t *testing.T) {
 		t.Error("Unmounted = nil error, want one: the root does not exist")
 	}
 }
+
+// Regression: 2026-11-13-mountcheck-vgwlocks-false-positive -- versitygw's
+// posix backend creates `.vgwlocks` directly under the gateway root at
+// startup (backend/posix/objlock.go), before any bucket is ever delivered.
+// Unmounted treated it like any other subdirectory sharing the root's
+// device, so a gateway with zero buckets failed its own readiness probe
+// forever: confirmed live on cluster91, ObjectStore/simplyblock-s3 stuck
+// Degraded with the gateway pod's /readyz returning 503 indefinitely. No
+// valid S3 bucket name can start with a dot (buckets.go's CreateBucket
+// enforces DNS-1123), so a hidden entry is never a bucket to report.
+func TestUnmountedIgnoresHiddenBackendDirectories(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".vgwlocks"), 0o755); err != nil {
+		t.Fatalf("creating .vgwlocks: %v", err)
+	}
+
+	got, err := Unmounted(root)
+	if err != nil {
+		t.Fatalf("Unmounted: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("Unmounted = %v, want none: .vgwlocks is versitygw's own bookkeeping, not a bucket", got)
+	}
+}
