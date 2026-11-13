@@ -2239,8 +2239,8 @@
     },
     "/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote": {
       "post": {
-        "summary": "Clusters:Storage-Nodes:Start",
-        "operationId": "clusters_storage_nodes_start_api_v2_clusters__cluster_id__storage_nodes__storage_node_id__promote_post",
+        "summary": "Clusters:Storage-Nodes:Promote",
+        "operationId": "clusters_storage_nodes_promote_api_v2_clusters__cluster_id__storage_nodes__storage_node_id__promote_post",
         "security": [
           {
             "HTTPBearer": []
@@ -2271,6 +2271,9 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "409": {
+            "description": "The promote did not finish: a device is still new or still removed; call again"
           },
           "422": {
             "description": "Validation Error",
