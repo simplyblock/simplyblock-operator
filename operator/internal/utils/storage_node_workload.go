@@ -19,6 +19,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
+// The two values a boolean reaches the agent's environment as. It reads them
+// as strings, so they are spelled once here.
+const (
+	envTrue  = "true"
+	envFalse = "false"
+)
+
 // defaultInitContainerResources are applied when the cluster states no
 // initContainerResources. The init containers write one env file and run
 // node_configure.py once, so both are sized for a short, small job.
@@ -92,14 +99,15 @@ func BuildStorageNodeDaemonSet(
 	}
 
 	mainEnv := []corev1.EnvVar{
-		{Name: "UBUNTU_HOST", Value: ptr.StringOrDefault(wl.UbuntuHost, "false")},
+		{Name: "UBUNTU_HOST", Value: ptr.StringOrDefault(wl.UbuntuHost, envFalse)},
 		{Name: "OPENSHIFT_CLUSTER", Value: strconv.FormatBool(wl.OpenShift != nil)},
+		{Name: "TALOS_CLUSTER", Value: ptr.StringOrDefault(wl.Talos, envFalse)},
 		{Name: "SKIP_KUBELET_CONFIGURATION", Value: skipKubeletConfiguration(wl)},
 		{Name: "SIMPLY_BLOCK_DOCKER_IMAGE", Value: image},
 		{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
 			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
 		}},
-		{Name: "CPU_TOPOLOGY_ENABLED", Value: ptr.StringOrDefault(wl.EnableCpuTopology, "false")},
+		{Name: "CPU_TOPOLOGY_ENABLED", Value: ptr.StringOrDefault(wl.EnableCpuTopology, envFalse)},
 	}
 	// The agent is in the pod network, where its interfaces are not the host's, so
 	// the control plane takes the worker's address from here.
@@ -122,16 +130,22 @@ func BuildStorageNodeDaemonSet(
 	if wl.ReservedSystemCPU != "" {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "RESERVED_SYSTEM_CPUS", Value: wl.ReservedSystemCPU})
 	}
+	if wl.TalosctlImage != "" {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "TALOSCTL_IMAGE", Value: wl.TalosctlImage})
+	}
+	if wl.Talos != nil && *wl.Talos {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "TALOS_MACHINE_CONFIG", Value: talosMachineConfigEnv(wl.TalosMachineConfig)})
+	}
 	if tlsMutualEnabled {
 		mainEnv = append(mainEnv,
-			corev1.EnvVar{Name: "SB_TLS_SERVE", Value: "true"},
+			corev1.EnvVar{Name: "SB_TLS_SERVE", Value: envTrue},
 			corev1.EnvVar{Name: "SB_TLS_CONNECT", Value: "authenticated"},
 			corev1.EnvVar{Name: "SB_TLS_CLIENT_AUTH", Value: "required"},
 			corev1.EnvVar{Name: "SB_TLS_PROVIDER", Value: NormalizeTLSProvider(tlsProvider)},
 		)
 	} else if tlsEnabled {
 		mainEnv = append(mainEnv,
-			corev1.EnvVar{Name: "SB_TLS_SERVE", Value: "true"},
+			corev1.EnvVar{Name: "SB_TLS_SERVE", Value: envTrue},
 			corev1.EnvVar{Name: "SB_TLS_CONNECT", Value: "anonymous"},
 			corev1.EnvVar{Name: "SB_TLS_CLIENT_AUTH", Value: "optional"},
 			corev1.EnvVar{Name: "SB_TLS_PROVIDER", Value: NormalizeTLSProvider(tlsProvider)},
@@ -282,7 +296,7 @@ func BuildStorageNodeDaemonSet(
 		mainMounts = append(mainMounts, tlsMounts...)
 	}
 
-	podAnnotations := map[string]string{AnnotationLogCollector: "true"}
+	podAnnotations := map[string]string{AnnotationLogCollector: envTrue}
 	if tlsEnabled && tlsSecretResourceVersion != "" {
 		podAnnotations[AnnotationTLSSecretRevision] = tlsSecretResourceVersion
 	}
@@ -531,6 +545,16 @@ func BuildStorageNodeSetServiceAccount(namespace, eksRoleARN string) *corev1.Ser
 	return sa
 }
 
+// talosMachineConfigEnv is the mode as the agent reads it: lowercase, and
+// preprovisioned when the cluster states none, which is the agent's own
+// default said out loud so the DaemonSet shows what the node will do.
+func talosMachineConfigEnv(mode simplyblockv1alpha2.TalosMachineConfigMode) string {
+	if mode == simplyblockv1alpha2.TalosMachineConfigManaged {
+		return "managed"
+	}
+	return "preprovisioned"
+}
+
 func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 	baseRules := []rbacv1.PolicyRule{
 		{
@@ -545,6 +569,32 @@ func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 			APIGroups: []string{""},
 			Resources: []string{"services"},
 			Verbs:     []string{"get", "create", "update", "delete"},
+		},
+		{
+			// The agent copies a finished Job's pod log into its own log before
+			// it deletes the Job: on Talos the talosctl Job is the only record
+			// of what happened on the host side.
+			APIGroups: []string{""},
+			Resources: []string{"pods/log"},
+			Verbs:     []string{"get"},
+		},
+		{
+			// Read-only, for the pre-flight check that the Talos API
+			// credentials Secret exists before a Job is created to mount it;
+			// without it a missing Secret shows up as a Job pod stuck in
+			// ContainerCreating for the whole Job timeout.
+			APIGroups: []string{""},
+			Resources: []string{"secrets"},
+			Verbs:     []string{"get"},
+		},
+		{
+			// The kubelet's live configuration (nodes/<name>/proxy/configz), read
+			// before the Talos kubelet CPU-topology patch so that a node whose
+			// kubelet already runs with the settings is left alone: Talos
+			// restarts the kubelet on every machine-config change.
+			APIGroups: []string{""},
+			Resources: []string{"nodes/proxy"},
+			Verbs:     []string{"get"},
 		},
 		{
 			APIGroups: []string{"apps"},
@@ -808,9 +858,9 @@ func storageNodesOf(cluster *simplyblockv1alpha2.StorageCluster) *simplyblockv1a
 // (design-storagenode.md §15.1).
 func skipKubeletConfiguration(wl *simplyblockv1alpha2.StorageNodesSpec) string {
 	if ptr.BoolFromOrFalse(wl.EnableKubeletConfiguration) {
-		return "false"
+		return envFalse
 	}
-	return "true"
+	return envTrue
 }
 
 // storageNodeAgentTolerations is what the storage-node agent tolerates: the
