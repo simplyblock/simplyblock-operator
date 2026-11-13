@@ -454,6 +454,9 @@
         "tolerations": {
           "type": "array"
         },
+        "enableUbuntuNVMeTCPModule": {
+          "type": "boolean"
+        },
         "controllerNodeSelector": {
           "type": "object"
         },

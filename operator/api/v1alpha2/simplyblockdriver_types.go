@@ -339,6 +339,20 @@ type SimplyblockDriverSpec struct {
 	// +optional
 	EnableCSIAddons *bool `json:"enableCSIAddons,omitempty"`
 
+	// EnableUbuntuNVMeTCPModule makes sure the nvme-tcp kernel module is
+	// loaded on every worker that runs the node plugin, for workers running
+	// Ubuntu. A privileged init container enters the host's namespaces, loads
+	// nvme-tcp, and installs linux-modules-extra for the running kernel with
+	// apt when the module is not present yet. It also adds nvme-tcp to
+	// /etc/modules-load.d so the module loads again after a reboot. The pod
+	// then shares the host's PID namespace. The worker needs to reach its apt
+	// mirrors when the package is missing. Leave it false on any other
+	// distribution, and on hosts that already load nvme-tcp. Changing it
+	// restarts every node plugin.
+	// +kubebuilder:default=false
+	// +optional
+	EnableUbuntuNVMeTCPModule *bool `json:"enableUbuntuNVMeTCPModule,omitempty"`
+
 	// TLS configures whether both plugins reach the control plane over TLS.
 	// Unset is plaintext, the shape every deployment ran before this field
 	// existed. Adopting a deployment that already runs TLS requires this to

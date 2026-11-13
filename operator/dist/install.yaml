@@ -5829,6 +5829,20 @@ spec:
                   SB_K8S_ADMIN_SERVICE_ACCOUNTS for it to work, which is why this is a
                   deployment-wide switch rather than a per-plugin one.
                 type: boolean
+              enableUbuntuNVMeTCPModule:
+                default: false
+                description: |-
+                  EnableUbuntuNVMeTCPModule makes sure the nvme-tcp kernel module is
+                  loaded on every worker that runs the node plugin, for workers running
+                  Ubuntu. A privileged init container enters the host's namespaces, loads
+                  nvme-tcp, and installs linux-modules-extra for the running kernel with
+                  apt when the module is not present yet. It also adds nvme-tcp to
+                  /etc/modules-load.d so the module loads again after a reboot. The pod
+                  then shares the host's PID namespace. The worker needs to reach its apt
+                  mirrors when the package is missing. Leave it false on any other
+                  distribution, and on hosts that already load nvme-tcp. Changing it
+                  restarts every node plugin.
+                type: boolean
               enableVolumeSnapshots:
                 default: true
                 description: |-

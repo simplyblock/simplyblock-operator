@@ -371,6 +371,17 @@ than a separate `livenessprobe` sidecar. Each is addressed to this
 driver's own socket and acts on the objects naming `spec.driverName`, so a cluster
 running a second CSI driver runs a second set of its own.
 
+**On Ubuntu workers the node plugin can load its own transport.** An Ubuntu
+cloud kernel ships `nvme-tcp` in `linux-modules-extra`, which a minimal image
+leaves out, and a node plugin without it fails its first connect.
+`spec.enableUbuntuNVMeTCPModule` adds an init container, `nvme-tcp-module`, that
+enters the host's namespaces through PID 1, loads the module, installs
+`linux-modules-extra-$(uname -r)` with apt only when the module is missing, and
+writes `/etc/modules-load.d/nvme-tcp.conf` so a reboot loads it again. The pod
+shares the host's PID namespace only while the field is true. It is off by
+default, so the pod spec of a deployment that never set it is the one the chart
+rendered, and adoption restarts nothing.
+
 **Snapshot support is one component for the whole cluster, and the operator
 supplies it where the cluster has none.** A `snapshot-controller` turns a
 `VolumeSnapshot` into a `VolumeSnapshotContent` for whichever driver its class
@@ -1206,6 +1217,20 @@ type SimplyblockDriverSpec struct {
 	// +kubebuilder:default=false
 	// +optional
 	EnableCSIAddons *bool `json:"enableCSIAddons,omitempty"`
+
+	// EnableUbuntuNVMeTCPModule makes sure the nvme-tcp kernel module is
+	// loaded on every worker that runs the node plugin, for workers running
+	// Ubuntu. A privileged init container enters the host's namespaces, loads
+	// nvme-tcp, and installs linux-modules-extra for the running kernel with
+	// apt when the module is not present yet. It also adds nvme-tcp to
+	// /etc/modules-load.d so the module loads again after a reboot. The pod
+	// then shares the host's PID namespace. The worker needs to reach its apt
+	// mirrors when the package is missing. Leave it false on any other
+	// distribution, and on hosts that already load nvme-tcp. Changing it
+	// restarts every node plugin.
+	// +kubebuilder:default=false
+	// +optional
+	EnableUbuntuNVMeTCPModule *bool `json:"enableUbuntuNVMeTCPModule,omitempty"`
 
 	// TLS configures whether both plugins reach the control plane over TLS.
 	// Unset is plaintext, the shape every deployment ran before this field

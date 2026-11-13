@@ -3043,6 +3043,11 @@ func (in *SimplyblockDriverSpec) DeepCopyInto(out *SimplyblockDriverSpec) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.EnableUbuntuNVMeTCPModule != nil {
+		in, out := &in.EnableUbuntuNVMeTCPModule, &out.EnableUbuntuNVMeTCPModule
+		*out = new(bool)
+		**out = **in
+	}
 	in.TLS.DeepCopyInto(&out.TLS)
 	in.PNFS.DeepCopyInto(&out.PNFS)
 }

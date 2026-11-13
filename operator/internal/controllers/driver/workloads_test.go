@@ -430,3 +430,58 @@ func TestNodePostStartScriptWritesTheDefaultHostNQN(t *testing.T) {
 			nqn.PersistedHostIDFile, nodePostStartScript)
 	}
 }
+
+// enableUbuntuNVMeTCPModule adds the init container that loads nvme-tcp from
+// the host's namespaces, and the host PID namespace nsenter needs to reach
+// them. Off, the pod has neither, so a deployment that never set the field is
+// not restarted by the release that added it.
+func TestUbuntuNVMeTCPModuleInitContainerFollowsTheFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		enable *bool
+		want   bool
+	}{
+		{"unset", nil, false},
+		{"false", ptr.To(false), false},
+		{"true", ptr.To(true), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDriver("simplyblock")
+			d.Spec.EnableUbuntuNVMeTCPModule = tc.enable
+
+			pod := nodeDaemonSet(d, "img").Spec.Template.Spec
+			init := containerNamed(pod.InitContainers, "nvme-tcp-module")
+
+			if !tc.want {
+				if len(pod.InitContainers) != 0 || pod.HostPID {
+					t.Fatalf("initContainers = %d, hostPID = %v, want none and false",
+						len(pod.InitContainers), pod.HostPID)
+				}
+				return
+			}
+			if init == nil {
+				t.Fatal("no nvme-tcp-module init container")
+			}
+			if !pod.HostPID {
+				t.Error("hostPID = false, nsenter --target=1 cannot reach the host's namespaces")
+			}
+			if init.SecurityContext == nil || init.SecurityContext.Privileged == nil ||
+				!*init.SecurityContext.Privileged {
+				t.Error("init container is not privileged")
+			}
+			if !slices.Contains(init.Command, "nsenter") || !slices.Contains(init.Command, "--target=1") {
+				t.Errorf("command = %v, want nsenter into PID 1", init.Command)
+			}
+			script := init.Command[len(init.Command)-1]
+			for _, want := range []string{
+				"modprobe nvme-tcp",
+				"linux-modules-extra-$(uname -r)",
+				"/etc/modules-load.d/nvme-tcp.conf",
+			} {
+				if !strings.Contains(script, want) {
+					t.Errorf("script lacks %q", want)
+				}
+			}
+		})
+	}
+}

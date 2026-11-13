@@ -76,6 +76,13 @@ func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *apps
 	}
 	volumes = append(volumes, linkVolumes()...)
 
+	var initContainers []corev1.Container
+	hostPID := false
+	if ubuntuNVMeTCPModule(d) {
+		initContainers = append(initContainers, nvmeTCPModuleContainer())
+		hostPID = true
+	}
+
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{Name: n.nodeDaemonSet, Namespace: d.Namespace},
 		Spec: appsv1.DaemonSetSpec{
@@ -95,6 +102,10 @@ func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *apps
 					// first reset. The plugin also reads the host's interfaces.
 					HostNetwork: true,
 					DNSPolicy:   corev1.DNSClusterFirstWithHostNet,
+					// Set only with the nvme-tcp init container, which reaches
+					// the host's namespaces through PID 1.
+					HostPID:        hostPID,
+					InitContainers: initContainers,
 					Containers: []corev1.Container{
 						nodeRegistrarContainer(d, s, driver),
 						nodePluginContainer(d, image),
@@ -102,6 +113,48 @@ func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *apps
 					Volumes: volumes,
 				},
 			},
+		},
+	}
+}
+
+// nvmeTCPModuleImage runs the init container. Only its nsenter is used: the
+// script runs in the host's namespaces, with the host's bash, apt, and
+// modprobe.
+const nvmeTCPModuleImage = "ubuntu:22.04"
+
+// nvmeTCPModuleScript loads nvme-tcp and keeps it loaded across reboots. A
+// host whose kernel already ships the module never reaches apt, so a restart
+// of the node plugin does not depend on the package mirrors.
+const nvmeTCPModuleScript = `set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+if ! modprobe nvme-tcp 2>/dev/null; then
+  apt-get update
+  apt-get install -y "linux-modules-extra-$(uname -r)"
+  modprobe nvme-tcp
+fi
+
+if [ ! -f /etc/modules-load.d/nvme-tcp.conf ]; then
+  echo nvme-tcp > /etc/modules-load.d/nvme-tcp.conf
+fi
+echo "nvme-tcp loaded and persisted"
+`
+
+func ubuntuNVMeTCPModule(d *simplyblockv1alpha2.SimplyblockDriver) bool {
+	return d.Spec.EnableUbuntuNVMeTCPModule != nil && *d.Spec.EnableUbuntuNVMeTCPModule
+}
+
+// nvmeTCPModuleContainer loads nvme-tcp on an Ubuntu worker before the node
+// plugin starts, so the plugin's first connect finds the transport.
+func nvmeTCPModuleContainer() corev1.Container {
+	return corev1.Container{
+		Name:            "nvme-tcp-module",
+		Image:           nvmeTCPModuleImage,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true)},
+		Command: []string{
+			"nsenter", "--target=1", "--mount", "--uts", "--ipc", "--net", "--pid",
+			"--", "/bin/bash", "-c", nvmeTCPModuleScript,
 		},
 	}
 }
