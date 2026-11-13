@@ -139,6 +139,15 @@ type DeviceFilter struct {
 // +kubebuilder:validation:XValidation:rule="!(has(self.workers) && size(self.workers) > 0 && has(self.nodeSelector) && size(self.nodeSelector) > 0)",message="spec.discover names workers and also carries a nodeSelector; state one or the other"
 // +kubebuilder:validation:XValidation:rule="!has(self.network) || !has(self.network.spdkOnHostNetwork) || !self.network.spdkOnHostNetwork || !has(self.networkAttachment)",message="network.spdkOnHostNetwork cannot be combined with networkAttachment, which attaches the storage nodes through Multus"
 type DiscoverSpec struct {
+	// IgnoreFindings waives preflight findings by reason. A waived Fail finding
+	// stays in status.findings, marked waived, and no longer blocks approval of
+	// the draft. It may be set after the run has finished.
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:MaxLength=128
+	// +listType=set
+	// +optional
+	IgnoreFindings []string `json:"ignoreFindings,omitempty"`
+
 	// ConfigName is the ClusterDeploymentConfig to write. Absent generates one
 	// from the run's timestamp, so that a second discovery never overwrites the
 	// first, which may have been reviewed and corrected.
@@ -348,6 +357,43 @@ type OperatorOpsSpec struct {
 }
 
 // OperatorOpsStatus is the observed state of one operator operation.
+// PreflightSeverity is how much a preflight finding weighs: Fail blocks
+// approval of the draft, Warn does not.
+// +kubebuilder:validation:Enum=Fail;Warn
+type PreflightSeverity string
+
+const (
+	PreflightSeverityFail PreflightSeverity = "Fail"
+	PreflightSeverityWarn PreflightSeverity = "Warn"
+)
+
+// OperatorOpsConditionPreflight is True when a discovery run has no unwaived
+// Fail finding.
+const OperatorOpsConditionPreflight = "Preflight"
+
+// PreflightFinding is one problem a discovery run found before anything was
+// deployed.
+type PreflightFinding struct {
+	// Node is the worker the finding is about, empty for a fleet-wide one.
+	// +optional
+	Node string `json:"node,omitempty"`
+
+	Severity PreflightSeverity `json:"severity"`
+
+	// Reason is the finding's kind, which spec.discover.ignoreFindings names.
+	Reason string `json:"reason"`
+
+	Message string `json:"message"`
+
+	// Remedy is what to change to clear the finding.
+	// +optional
+	Remedy string `json:"remedy,omitempty"`
+
+	// Waived reports that spec.discover.ignoreFindings names the reason.
+	// +optional
+	Waived bool `json:"waived,omitempty"`
+}
+
 type OperatorOpsStatus struct {
 	// Phase is the operation's own progress.
 	// +optional
@@ -375,6 +421,23 @@ type OperatorOpsStatus struct {
 	// +optional
 	Environment KubernetesEnvironment `json:"environment,omitempty"`
 
+	// Findings are the preflight findings of a Discover run, Fail before Warn.
+	// They are the record, since the events raised alongside them expire.
+	// +kubebuilder:validation:MaxItems=512
+	// +listType=atomic
+	// +optional
+	Findings []PreflightFinding `json:"findings,omitempty"`
+
+	// FailCount is how many findings are Fail and not waived.
+	// +optional
+	FailCount int32 `json:"failCount,omitempty"`
+
+	// Conditions carries Preflight for a Discover run.
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
 	// Message is the reason the phase is what it is: one sentence, replaced as
 	// the operation moves, and never a log.
 	// +optional
@@ -401,6 +464,7 @@ type OperatorOpsStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Step",type=string,JSONPath=".status.step.state"
 // +kubebuilder:printcolumn:name="Config",type=string,JSONPath=".status.configRef"
+// +kubebuilder:printcolumn:name="Fails",type=integer,JSONPath=".status.failCount"
 // +kubebuilder:printcolumn:name="Message",type=string,JSONPath=".status.message",priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
