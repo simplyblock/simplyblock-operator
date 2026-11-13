@@ -719,7 +719,8 @@ type mockGroup struct {
 	Demoted          bool
 	DemoteConverging bool // when set, /demote answers 202 (still converging)
 	FailbackSource   string
-	LastReplicatedAt int64 // Unix seconds surfaced by /replication/status
+	LastReplicatedAt int64  // Unix seconds surfaced by /replication/status
+	ReplState        string // the state /replication/status serves, in_sync when empty
 }
 
 // seedGroup registers a group with the given member lvol UUIDs and stamps each
@@ -826,6 +827,9 @@ func (m *mockSBCLI) handleGroupReplicationStatus(w http.ResponseWriter, r *http.
 		return
 	}
 	out := map[string]any{"role": "source", "state": "in_sync", "member_count": len(g.Members)}
+	if g.ReplState != "" {
+		out["state"] = g.ReplState
+	}
 	if g.LastReplicatedAt != 0 {
 		out["last_replicated_at"] = time.Unix(g.LastReplicatedAt, 0).UTC().Format(time.RFC3339)
 	}

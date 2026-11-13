@@ -10,10 +10,12 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"time"
 
 	"github.com/csi-addons/spec/lib/go/replication"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/klog"
 
@@ -344,12 +346,6 @@ func (cs *Server) DisableVolumeReplication(
 // resolved to the local replica first for the same reason as every other
 // verb: Ramen polls this with the S3-restored, foreign volumeHandle, whose
 // own lvol record may already be reaped (see ResyncVolume).
-//
-// The spec's response carries only LastSyncTime in this version
-// (github.com/csi-addons/spec v0.2.0); lastSyncBytes/lastSyncDuration are not
-// yet part of the wire contract this driver builds against, so they cannot
-// be set even though the backend status read already computes them (design
-// §6.1). Ramen's condition derivation (§6.2) does not depend on them.
 func (cs *Server) GetVolumeReplicationInfo(
 	ctx context.Context,
 	req *replication.GetVolumeReplicationInfoRequest,
@@ -363,11 +359,7 @@ func (cs *Server) GetVolumeReplicationInfo(
 		if err != nil {
 			return nil, classifyGetVolumeReplicationInfoError(err)
 		}
-		resp := &replication.GetVolumeReplicationInfoResponse{}
-		if info.LastReplicatedAt != nil {
-			resp.LastSyncTime = timestamppb.New(*info.LastReplicatedAt)
-		}
-		return resp, nil
+		return replicationInfoResponse(info), nil
 	}
 	h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
 	if err != nil {
@@ -391,11 +383,45 @@ func (cs *Server) GetVolumeReplicationInfo(
 	if err != nil {
 		return nil, classifyGetVolumeReplicationInfoError(err)
 	}
-	resp := &replication.GetVolumeReplicationInfoResponse{}
+	return replicationInfoResponse(info), nil
+}
+
+// replicationInfoResponse maps the control plane's status of a volume or a
+// group onto the csi-addons answer. csi-addons sets the Replicating condition
+// from Status (HEALTHY is True, DEGRADED and ERROR are False), and Ramen copies
+// that condition onto the VRG as ReplicationHealthy.
+func replicationInfoResponse(info atlascp.ReplicationStatus) *replication.GetVolumeReplicationInfoResponse {
+	resp := &replication.GetVolumeReplicationInfoResponse{
+		Status:        replicationHealth(info.State),
+		StatusMessage: "replication state " + info.State,
+	}
 	if info.LastReplicatedAt != nil {
 		resp.LastSyncTime = timestamppb.New(*info.LastReplicatedAt)
 	}
-	return resp, nil
+	if info.LastCycleSeconds != nil {
+		resp.LastSyncDuration = durationpb.New(time.Duration(*info.LastCycleSeconds) * time.Second)
+	}
+	if info.LastCycleBytes != nil {
+		resp.LastSyncBytes = int64(*info.LastCycleBytes)
+	}
+	return resp
+}
+
+// replicationHealth follows sbcli's own verdict (lvol_controller's "healthy"
+// is in_sync or replicating). A volume or group with no replication attached
+// reports not_replicating. On a primary that is a protection gap, so it is
+// DEGRADED rather than UNKNOWN. A state this driver does not know is UNKNOWN.
+func replicationHealth(state string) replication.GetVolumeReplicationInfoResponse_Status {
+	switch state {
+	case "in_sync", "replicating":
+		return replication.GetVolumeReplicationInfoResponse_HEALTHY
+	case "lagging", "degraded", "not_replicating":
+		return replication.GetVolumeReplicationInfoResponse_DEGRADED
+	case "error":
+		return replication.GetVolumeReplicationInfoResponse_ERROR
+	default:
+		return replication.GetVolumeReplicationInfoResponse_UNKNOWN
+	}
 }
 
 // failOverFromLocalCopies fails the group gh, of a cluster on another control
