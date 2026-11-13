@@ -42,12 +42,23 @@ const (
 	ReplicationOpsResultPending ReplicationOpsResultStatus = "pending"
 )
 
-// ReplicationOpsResult holds the outcome for a single volume in a ReplicationOps.
+// ReplicationOpsResult holds the outcome for a single volume in a ReplicationOps,
+// or for a single policy's consistency group in a snapshot.
 type ReplicationOpsResult struct {
 	// SlotRef is the name of the ReplicationSlot CR, as "<namespace>/<name>"
 	// when it lives outside this operation's namespace. It is empty for a
-	// PersistentVolumeClaim that a cluster-scoped migration did not enroll.
-	SlotRef string `json:"slotRef"`
+	// PersistentVolumeClaim that a cluster-scoped migration did not enroll,
+	// and on a snapshot's result, which is a policy's.
+	// +optional
+	SlotRef string `json:"slotRef,omitempty"`
+
+	// PolicyRef is the name of the ReplicationPolicy a snapshot's result is for.
+	// +optional
+	PolicyRef string `json:"policyRef,omitempty"`
+
+	// Generation is the consistency-group generation a snapshot took.
+	// +optional
+	Generation int64 `json:"generation,omitempty"`
 
 	// PVCRef is the name of the PersistentVolumeClaim, when the operation
 	// resolved one, as "<namespace>/<name>" when it lives outside this
@@ -137,17 +148,21 @@ type ReplicationOpsForecast struct {
 }
 
 // ReplicationOpsSpec defines the desired state of a ReplicationOps.
+// +kubebuilder:validation:XValidation:rule="self.action != 'snapshot' || self.scope != 'volume'",message="snapshot takes a consistency-group generation of a policy: use scope policy or target"
 type ReplicationOpsSpec struct {
 	// Action is the operation to perform. Immutable.
-	// failover: unplanned. Promotes the target clone; the source may be down.
-	// failback: restores the source as primary after a prior failover.
-	// migration: planned online cutover to the target cluster. Both clusters stay up.
-	//            Every affected volume goes into one migration plan, which copies
-	//            the data, then cuts the volumes over one at a time per source
-	//            lvstore so each I/O freeze stays short. The operation runs until
-	//            every volume has cut over, and reports progress and a forecast.
-	//            Slot state progression: replicating → cutover_pending → cutover_done.
-	// +kubebuilder:validation:Enum=failover;failback;migration
+	// failover is unplanned: it promotes the target's copy, and the source may be
+	// down. failback restores the source as primary after a failover. migration is
+	// a planned online cutover to the target cluster with both clusters up: every
+	// affected volume goes into one migration plan, which copies the data, then
+	// cuts the volumes over one at a time per source lvstore so each I/O freeze
+	// stays short. The operation runs until every volume has cut over, and reports
+	// progress and a forecast. Each slot moves through replicating,
+	// cutover_pending, and cutover_done. trigger takes a snapshot of each volume
+	// now and replicates it, outside the policy's interval. snapshot takes one
+	// crash-consistent generation of a consistency-group policy's volumes now,
+	// and takes scope policy or target only.
+	// +kubebuilder:validation:Enum=failover;failback;migration;trigger;snapshot
 	// +kubebuilder:validation:Required
 	Action string `json:"action"`
 
@@ -207,7 +222,7 @@ type ReplicationOpsStatus struct {
 	Phase string `json:"phase,omitempty"`
 
 	// Subphase describes what the operation is currently doing within the phase
-	// (e.g., "TriggeringFailover", "UpdatingSlotStatuses", "ReleasingLock").
+	// (for example, TriggeringFailover, UpdatingSlotStatuses, or ReleasingLock).
 	// +optional
 	Subphase string `json:"subphase,omitempty"`
 
