@@ -8,9 +8,16 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/record"
+
+	"github.com/simplyblock/csi-driver/internal/controlplane"
 )
 
 // failedOverVolume is this site after the fail-over of movedSourceID: the
@@ -81,6 +88,78 @@ func TestCallsOnAPeerVolumeFailedOverHereReachTheClone(t *testing.T) {
 			t.Errorf("cloned from %q, want the clone", local.lastCloneSource)
 		}
 	})
+}
+
+// The volume health check (ControllerGetVolume, polled by the external
+// health monitor) reports the clone here as healthy. Asking the cut-off
+// source instead reported every failed-over PV abnormal until the heal (run
+// 20261112-1712-ebs-splitdr).
+func TestHealthOfAPeerVolumeFailedOverHereIsTheClones(t *testing.T) {
+	local := newMockSBCLI()
+	defer local.Close()
+	cs := splitSite(t, local, true)
+	failedOverVolume(local)
+
+	resp, err := cs.ControllerGetVolume(context.Background(), &csi.ControllerGetVolumeRequest{VolumeId: movedHandle})
+
+	if err != nil {
+		t.Fatalf("ControllerGetVolume: %v", err)
+	}
+	if c := resp.GetStatus().GetVolumeCondition(); c.GetAbnormal() {
+		t.Fatalf("volume reported abnormal: %s (asked the cut-off source's control plane?)", c.GetMessage())
+	}
+	if id := resp.GetVolume().GetVolumeId(); id != movedHandle {
+		t.Errorf("volume id = %q, want the handle asked about, %q", id, movedHandle)
+	}
+}
+
+// The membership watcher reads a failed-over volume's group from the clone
+// here. It used to ask the cut-off source once a minute and fail each time
+// until the heal (run 20261112-1712-ebs-splitdr).
+func TestMembershipOfAPeerVolumeFailedOverHereIsReadFromTheClone(t *testing.T) {
+	local := newMockSBCLI()
+	defer local.Close()
+	splitSite(t, local, true)
+	failedOverVolume(local)
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "data", Namespace: "gitea", Labels: map[string]string{consistencyGroupLabel: "gitea-cg"},
+		},
+		Spec:   corev1.PersistentVolumeClaimSpec{VolumeName: "pv-data"},
+		Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pv-data"},
+		Spec: corev1.PersistentVolumeSpec{PersistentVolumeSource: corev1.PersistentVolumeSource{
+			CSI: &corev1.CSIPersistentVolumeSource{Driver: testDriver, VolumeHandle: movedHandle},
+		}},
+	}
+	group := &controlplane.ConsistencyGroupSummary{ID: "gid-here", Name: "gitea-cg"}
+	membership := &fakeMembership{
+		groupIDByLvol: map[string]string{movedTargetID: group.ID},
+		groupsByID:    map[string]*controlplane.ConsistencyGroupSummary{group.ID: group},
+	}
+	var asked []string
+	watcher := &cgMembershipWatcher{
+		kube:       fake.NewSimpleClientset(pvc, pv),
+		driverName: testDriver,
+		clientFor: func(_ context.Context, clusterID, _ string) (membershipClient, error) {
+			asked = append(asked, clusterID)
+			if clusterID != siteBClusterID {
+				return nil, errors.New("cluster " + clusterID + " is cut off")
+			}
+			return membership, nil
+		},
+		recorder: record.NewFakeRecorder(16),
+	}
+
+	if err := watcher.reconcile(context.Background(), pvc); err != nil {
+		t.Fatalf("reconcile: %v (clusters asked: %v)", err, asked)
+	}
+	if len(membership.joined) != 0 || len(membership.detached) != 0 {
+		t.Errorf("the clone is already in group %s; joined %v, detached %v", group.ID, membership.joined, membership.detached)
+	}
 }
 
 func TestAPeerVolumeNotFailedOverHereIsLeftToItsControlPlane(t *testing.T) {

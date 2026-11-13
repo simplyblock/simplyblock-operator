@@ -161,6 +161,12 @@ func (w *cgMembershipWatcher) reconcile(ctx context.Context, pvc *corev1.Persist
 	if err != nil {
 		return nil // not a volume this driver can address; nothing to reconcile
 	}
+	// A peer cluster's volume that failed over onto this site lives on as its
+	// clone here, a member of the group the fail-over made; the other site,
+	// which may be cut off, is not asked.
+	if moved, ok := movedOnThisSite(ctx, pv.Spec.CSI.VolumeHandle, handle); ok {
+		handle = moved
+	}
 	client, err := w.clientFor(ctx, handle.ClusterID, handle.PoolRef)
 	if err != nil {
 		return fmt.Errorf("control-plane client for cluster %s: %w", handle.ClusterID, err)
