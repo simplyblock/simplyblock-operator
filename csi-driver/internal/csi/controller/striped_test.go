@@ -50,6 +50,8 @@ func stripedServer(t *testing.T, mock *mockSBCLI, nodes []atlascp.StorageNode) *
 	t.Helper()
 	cs := newTestControllerServer(t, mock)
 	cs.storageNodes = func(context.Context, string) ([]atlascp.StorageNode, error) { return nodes, nil }
+	// Attached nowhere unless a test says otherwise, so nothing needs a freeze.
+	cs.attachedNodes = func(context.Context, string) ([]string, error) { return nil, nil }
 	return cs
 }
 

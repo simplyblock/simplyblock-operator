@@ -43,6 +43,7 @@ import (
 	"github.com/simplyblock/atlas/bucketdelivery/bucketdeliveryrpc"
 	"github.com/simplyblock/atlas/conntrack"
 	"github.com/simplyblock/atlas/conntrack/conntrackrpc"
+	"github.com/simplyblock/atlas/freeze/freezerpc"
 	"github.com/simplyblock/atlas/inventory"
 	"github.com/simplyblock/atlas/link"
 	"github.com/simplyblock/atlas/netcheck"
@@ -174,6 +175,9 @@ func Run(conf *config.Config) {
 		// supercluster a volume goes to (design-superclusters.md §7.2).
 		if cs != nil {
 			cs.SetPlacer(csilink.Placement{Agent: agent})
+			// And has the operator relay a striped volume's freeze to the node
+			// that stages it, for a crash-consistent snapshot.
+			cs.SetFreezer(csilink.Freezer{Agent: agent})
 		}
 	}
 
@@ -282,6 +286,12 @@ func startLink(ctx context.Context, conf *config.Config, ns *node.Server) (*link
 		if err != nil {
 			return nil, fmt.Errorf("node bucket delivery: %w", err)
 		}
+		// Freeze/Thaw: the controller suspends a striped volume staged here
+		// while it snapshots the members, through the operator's relay.
+		freezes, err := freezerpc.NewServer(ns)
+		if err != nil {
+			return nil, fmt.Errorf("node freeze: %w", err)
+		}
 		// No export service: exports are assembled in the metadata server's
 		// guest, never on a node.
 		cfg.ID = link.NodePeer(conf.NodeID)
@@ -290,10 +300,12 @@ func startLink(ctx context.Context, conf *config.Config, ns *node.Server) (*link
 			flows.Register(r)
 			checks.Register(r)
 			bucketDelivery.Register(r)
+			freezes.Register(r)
 		}
 		cfg.Capabilities = append(storagerpc.Capabilities(), conntrackrpc.Capabilities()...)
 		cfg.Capabilities = append(cfg.Capabilities, netcheckrpc.Capabilities()...)
 		cfg.Capabilities = append(cfg.Capabilities, bucketdeliveryrpc.Capabilities()...)
+		cfg.Capabilities = append(cfg.Capabilities, freezerpc.Capabilities()...)
 
 	case conf.IsControllerServer:
 		if conf.PodName == "" {
@@ -354,6 +366,10 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	if err != nil {
 		return nil, err
 	}
+	// A striped volume left suspended by a previous run, mid-snapshot, is
+	// resumed before anything else: the deadline that would have resumed it
+	// went with that run.
+	ns.RecoverFreezes(context.Background())
 
 	nodeName := cd.GetNodeID()
 	podGuardian, err := guardian.Start(context.Background(), guardian.NewDefaultConfig(nodeName), manager)

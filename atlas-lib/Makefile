@@ -19,7 +19,7 @@ CPAPI_GEN := internal/cpapi/cpapi.gen.go internal/cpapi/validation.gen.go
 # when absent without a phony target forcing a regeneration on every make run.
 PROTO_DIRS := link/linkv1 link/sitev1 storage/storagerpc/storagev1 nfsexport/nfsexportrpc/nfsexportv1 \
 	conntrack/conntrackrpc/conntrackv1 placement/placementrpc/placementv1 netcheck/netcheckrpc/netcheckv1 \
-	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1
+	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1 freeze/freezerpc/freezev1
 PROTO_GEN := link/linkv1/link.pb.go link/linkv1/link_grpc.pb.go \
 	link/sitev1/relay.pb.go link/sitev1/relay_grpc.pb.go \
 	link/sitev1/switchover.pb.go link/sitev1/switchover_grpc.pb.go \
@@ -30,7 +30,7 @@ PROTO_GEN := link/linkv1/link.pb.go link/linkv1/link_grpc.pb.go \
 	placement/placementrpc/placementv1/placement.pb.go placement/placementrpc/placementv1/placement_grpc.pb.go \
 	netcheck/netcheckrpc/netcheckv1/check.pb.go netcheck/netcheckrpc/netcheckv1/check_grpc.pb.go \
 	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.pb.go \
-	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery_grpc.pb.go
+	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery_grpc.pb.go 	freeze/freezerpc/freezev1/freeze.pb.go freeze/freezerpc/freezev1/freeze_grpc.pb.go
 
 GENERATED := $(CPAPI_GEN) $(PROTO_GEN)
 
@@ -101,6 +101,11 @@ bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.pb.go: bucketde
 	cd bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
 
 bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery_grpc.pb.go: bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.pb.go
+
+freeze/freezerpc/freezev1/freeze.pb.go: freeze/freezerpc/freezev1/freeze.proto freeze/freezerpc/freezev1/buf.gen.yaml freeze/freezerpc/freezev1/buf.yaml | buf
+	cd freeze/freezerpc/freezev1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
+
+freeze/freezerpc/freezev1/freeze_grpc.pb.go: freeze/freezerpc/freezev1/freeze.pb.go
 
 build: $(GENERATED) ## Build all packages.
 	go build ./...

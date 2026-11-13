@@ -134,9 +134,9 @@ controller sets them to the stripe: `su = stripe_size`, `sw = stripe_width`.
 | `DeleteVolume`                        | Deletes every member, the first one last, so an interrupted delete is retried with the first member still there to find the rest. Members already gone are skipped.                                   |
 | `ControllerExpandVolume`              | Resizes every member to `ceil(new size / width)`, skipping members already there. Node expansion is required.                                                                                         |
 | `NodeExpandVolume`                    | `pvresize` of every member, `lvextend -l+100%FREE` of the striped logical volume (which keeps its stripes), then the filesystem grow.                                                                 |
-| `CreateSnapshot`                      | Snapshots every member concurrently. If any member fails, the member snapshots already taken are deleted. See the limitation below.                                                                   |
+| `CreateSnapshot`                      | Freezes the volume on its node, snapshots every member concurrently, and thaws (see below). Anything short of a freeze that held for every member deletes the member snapshots and is retried.        |
 | `DeleteSnapshot`                      | Deletes every member snapshot, the first one last.                                                                                                                                                    |
-| `CreateVolume` from snapshot / volume | Clones member *i* into member *i*. The source must have the same width as the class. A clone lands on its source's node, so the members stay on distinct nodes.                                       |
+| `CreateVolume` from snapshot / volume | Clones member *i* into member *i*, a live source volume under its freeze. The source must have the same width as the class. A clone lands on its source's node, so members stay on distinct nodes.    |
 | `NodeStageVolume`                     | Attaches every member (`members` → `lvmPhysicalVolume` → `lvmVolumeGroup` → `lvmLogicalVolume` → `filesystem`). The raw block variant stops at the logical volume.                                    |
 | `NodeUnstageVolume`                   | Releases the stack recorded at stage time, with the members in the recorded order.                                                                                                                    |
 
@@ -146,18 +146,65 @@ stack record are used to find namespaces that are already attached. The
 path-loss watch is given the members' namespace devices, under the volume's ID,
 rather than the striped device-mapper node.
 
-### Snapshot limitation
+### Crash-consistent snapshots: the freeze
 
-**Snapshots of a striped volume are not atomic across its members.** Each member
-snapshot is taken on its own storage node, and there is no point in time they
-share: a consistency group, which would provide one, is confined to a single
-node's volume store. The member snapshots are taken concurrently to keep the
-window small, but a write that lands inside it reaches some members' snapshots
-and not others, and a filesystem striped across them can be torn by that.
+The control plane snapshots each member on its own storage node, and has no
+snapshot that is atomic across nodes: a consistency group is confined to one
+node's volume store. The consistency comes from the host instead. For the length
+of a snapshot, the node that stages the volume suspends the stripe's
+device-mapper device (`dmsetup suspend` on the striped logical volume): in-flight
+I/O drains, new I/O waits, and a mounted filesystem is frozen and flushed first
+(dmsetup's default lockfs). Every member then holds the same moment, and the
+member snapshots taken while it lasts are one crash-consistent image of the
+volume. A raw block volume gets the same drain and hold, without a filesystem to
+freeze.
 
-A crash-consistent snapshot of a striped volume requires the application to be
-quiesced, or the filesystem frozen (`fsfreeze --freeze`), while the snapshot is
-taken.
+The protocol, as `CreateSnapshot` runs it:
+
+1. The controller finds where the volume is staged, from its VolumeAttachments.
+   Attached nowhere, nothing writes to it, and the members are snapshotted
+   without a freeze. Attached to more than one node is refused
+   (`FailedPrecondition`).
+2. `Freeze(node, volume, token, deadline)` goes to the operator over the CSI
+   link (`atlas-lib/freeze/freezerpc`), and the operator relays it down the
+   node's link. The controller has no link to a node, and both link to the
+   operator. The token is a fresh UUID per attempt. The node suspends the device,
+   holds the volume's lock (nothing stages, unstages, publishes, or grows it
+   meanwhile), records the freeze on disk, and starts the deadline. A node that has
+   the volume attached and not staged answers that it froze nothing, and the
+   members are taken without a freeze.
+3. The controller snapshots every member concurrently, under a context that ends
+   at 80% of the deadline.
+4. `Thaw(node, volume, token)`. The node resumes the device and answers whether
+   it stayed suspended from `Freeze` until now.
+5. Only a freeze that held for every member snapshot is a snapshot. A freeze that
+   could not be taken (`Unavailable`), a member that failed, or a freeze the
+   deadline ended first (`Aborted`) deletes the member snapshots, and the
+   snapshotter retries.
+
+**The deadline.** 10 seconds by default, set on the controller with
+`SPDKCSI_STRIPE_FREEZE_DEADLINE` (a Go duration). The node resumes the device at
+the deadline by itself, whether or not the controller, the operator, or the link
+is still there, and caps any deadline at 30 seconds. The freeze is recorded under
+the stack-record directory while it lasts, so a node plugin that restarts in the
+middle resumes the device at start rather than leaving it suspended. In practice
+the freeze lasts as long as the slowest member snapshot.
+
+**Retries and tokens.** A `Freeze` repeated under its token is the same freeze. A
+`Thaw` under another token leaves the freeze alone. Member snapshots an earlier
+attempt left are deleted rather than reused, since they were not taken under this
+freeze.
+
+**Clones of a live volume** are taken the same way: the members are cloned
+concurrently under the source's freeze. A restore from a striped snapshot needs
+no freeze, because the snapshot is already consistent.
+
+**Without the CSI link** (the operator's link is off, or down), a striped volume
+that is attached somewhere is not snapshotted or cloned: the request fails with
+`Unavailable` rather than producing a torn image. An unattached one is.
+
+**While a volume is frozen**, LVM commands on its node that scan devices may wait
+on the suspended device until it is resumed, for at most the deadline.
 
 ### Not supported
 
@@ -192,4 +239,5 @@ already device-mapper.
 - Striped pNFS exports (`operator/docs/designs/design-pnfs-striped.md`) use the
   same parameter, member naming, and handle marker. They differ on snapshots:
   that design refuses them for exports, because pNFS clients write to the
-  members directly and a freeze on the metadata server does not stop them.
+  members directly, and suspending the device on the metadata server does not
+  stop them unless every client's layout is recalled first.

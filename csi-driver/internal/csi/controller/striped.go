@@ -714,26 +714,36 @@ func (cs *Server) expandStripedVolume(
 	}, nil
 }
 
-// memberSnapshot is one member's snapshot as a striped snapshot holds it.
+// memberSnapshot is one member's snapshot as a striped snapshot holds it. A
+// snapshot found rather than taken, which a crash or a timed-out call left, has
+// its UUID and an error: it is removed with the rest and never used.
 type memberSnapshot struct {
 	csiID string
 	uuid  string
 	err   error
 }
 
-// createStripedSnapshot snapshots every member of a striped volume, all at once.
+// createStripedSnapshot snapshots every member of a striped volume at one point
+// in its write stream.
 //
-// The member snapshots are not atomic across the members. Each is taken on its
-// own storage node, and there is no point in time they share: a consistency
-// group, which would give one, is confined to a single node's volume store.
-// Taking them concurrently narrows the window between the first and the last to
-// the spread of a few control-plane calls, but a write landing inside it reaches
-// some members' snapshots and not others, and a filesystem striped across them
-// can be torn by that. A crash-consistent snapshot of a striped volume needs the
-// application quiesced, or the filesystem frozen (fsfreeze), while it is taken.
+// The members are on different storage nodes, and the control plane has no
+// snapshot that is atomic across them: a consistency group is confined to one
+// node's volume store. So the consistency comes from the host instead. The node
+// that stages the volume suspends the stripe's device for the length of the
+// snapshot (underFreeze): I/O in flight drains, new I/O waits, and a mounted
+// filesystem is frozen and flushed. Every member then holds the same moment, and
+// the member snapshots, taken concurrently while it lasts, are a crash-consistent
+// image of the whole volume. A volume staged nowhere has no writer and needs no
+// freeze.
 //
-// If any member's snapshot fails, the ones taken are deleted before the error is
-// returned, so a failed snapshot leaves no part of itself behind.
+// Anything short of that is not returned as a snapshot. If the freeze cannot be
+// taken, if a member's snapshot fails, or if the freeze ended before every
+// member was snapshotted, the member snapshots are deleted and the error is one
+// the snapshotter retries.
+//
+// Every attempt takes every member afresh. Member snapshots an earlier attempt
+// left behind were not necessarily taken under the same freeze, so they are
+// deleted first rather than reused.
 func (cs *Server) createStripedSnapshot(
 	ctx context.Context, req *csi.CreateSnapshotRequest, handle *lvol.Handle, width int,
 ) (*csi.CreateSnapshotResponse, error) {
@@ -749,41 +759,31 @@ func (cs *Server) createStripedSnapshot(
 	if err := requireAllMembers(volumeID, members); err != nil {
 		return nil, err
 	}
+	if err := clearMemberSnapshots(ctx, sbclient, req.GetName(), members); err != nil {
+		return nil, err
+	}
 
 	taken := make([]memberSnapshot, width)
-	var wg sync.WaitGroup
-	for i, m := range members {
-		wg.Go(func() {
-			name := stripeMemberName(req.GetName(), i)
-			id, err := sbclient.CreateSnapshot(ctx, m.UUID, name)
-			if err != nil && classifyCreateSnapshotError(err).IsIdempotent() {
-				id, err = existingMemberSnapshot(ctx, sbclient, m.UUID, name)
-			}
-			taken[i] = memberSnapshot{csiID: id, err: err}
-			if err == nil {
-				if parsed, perr := parseSnapshotID(id); perr == nil {
-					taken[i].uuid = parsed.snapshotID
-				}
-			}
-		})
-	}
-	wg.Wait()
-
-	var failed error
-	for i, t := range taken {
-		if t.err != nil {
-			klog.Errorf("striped snapshot %s: member %d of %s: %v", req.GetName(), i, volumeID, t.err)
-			if failed == nil {
-				failed = t.err
+	err = cs.underFreeze(ctx, volumeID, func(ctx context.Context) error {
+		var wg sync.WaitGroup
+		for i, m := range members {
+			wg.Go(func() { taken[i] = takeMemberSnapshot(ctx, sbclient, m.UUID, stripeMemberName(req.GetName(), i)) })
+		}
+		wg.Wait()
+		for i, t := range taken {
+			if t.err != nil {
+				return fmt.Errorf("member %d of %s: %w", i, volumeID, t.err)
 			}
 		}
-	}
-	if failed != nil {
+		return nil
+	})
+	if err != nil {
+		klog.Errorf("striped snapshot %s of %s: %v", req.GetName(), volumeID, err)
 		cs.removeMemberSnapshots(sbclient, req.GetName(), taken)
-		if _, isStatus := status.FromError(failed); isStatus {
-			return nil, failed
+		if _, isStatus := status.FromError(err); isStatus {
+			return nil, err
 		}
-		return nil, classifyCreateSnapshotError(failed)
+		return nil, classifyCreateSnapshotError(err)
 	}
 
 	var size int64
@@ -801,9 +801,65 @@ func (cs *Server) createStripedSnapshot(
 	}, nil
 }
 
-// existingMemberSnapshot is the snapshot named name of member lvolID that an
-// earlier attempt took, which the control plane answered a conflict for. One of
-// that name taken of anything else is a real conflict.
+// takeMemberSnapshot snapshots one member. A conflict on the name means a
+// snapshot of that name appeared after clearMemberSnapshots ran, which only a
+// call from an earlier attempt that completed late does: it was not taken under
+// this freeze, so it is recorded for removal and the attempt fails.
+func takeMemberSnapshot(ctx context.Context, sbclient controlplane.ClusterAPI, lvolID, name string) memberSnapshot {
+	id, err := sbclient.CreateSnapshot(ctx, lvolID, name)
+	if err != nil {
+		if !classifyCreateSnapshotError(err).IsIdempotent() {
+			return memberSnapshot{err: err}
+		}
+		existing, lerr := existingMemberSnapshot(ctx, sbclient, lvolID, name)
+		if lerr != nil {
+			return memberSnapshot{err: lerr}
+		}
+		ms := memberSnapshot{err: status.Errorf(codes.Aborted,
+			"snapshot %q appeared during the snapshot, from an earlier attempt", name)}
+		if parsed, perr := parseSnapshotID(existing); perr == nil {
+			ms.uuid = parsed.snapshotID
+		}
+		return ms
+	}
+	ms := memberSnapshot{csiID: id}
+	if parsed, perr := parseSnapshotID(id); perr == nil {
+		ms.uuid = parsed.snapshotID
+	}
+	return ms
+}
+
+// clearMemberSnapshots deletes the member snapshots of this name an earlier
+// attempt left. One of that name taken of anything else is a real conflict.
+func clearMemberSnapshots(
+	ctx context.Context, sbclient controlplane.ClusterAPI, name string, members []*controlplane.LvolResp,
+) error {
+	snaps, err := sbclient.ListSnapshots(ctx)
+	if err != nil {
+		return classifyCreateSnapshotError(err)
+	}
+	for i, m := range members {
+		want := stripeMemberName(name, i)
+		for _, s := range snaps {
+			if s.Name != want {
+				continue
+			}
+			if lvolIDFromURL(s.LvolURL) != m.UUID {
+				return status.Errorf(codes.AlreadyExists,
+					"snapshot %q already exists with a different source volume", want)
+			}
+			klog.Warningf("striped snapshot %s: deleting member %d (%s) left by an earlier attempt", name, i, s.UUID)
+			if err := sbclient.DeleteSnapshot(ctx, s.UUID); err != nil {
+				return classifyCreateSnapshotError(err)
+			}
+		}
+	}
+	return nil
+}
+
+// existingMemberSnapshot is the snapshot named name of member lvolID that the
+// control plane answered a conflict for. One of that name taken of anything
+// else is a real conflict.
 func existingMemberSnapshot(
 	ctx context.Context, sbclient controlplane.ClusterAPI, lvolID, name string,
 ) (string, error) {
@@ -825,12 +881,12 @@ func existingMemberSnapshot(
 }
 
 // removeMemberSnapshots deletes the member snapshots a failed striped snapshot
-// took.
+// took or found.
 func (cs *Server) removeMemberSnapshots(sbclient controlplane.ClusterAPI, name string, taken []memberSnapshot) {
 	ctx, cancel := context.WithTimeout(context.Background(), stripeRollbackTimeout)
 	defer cancel()
 	for i := len(taken) - 1; i >= 0; i-- {
-		if taken[i].err != nil || taken[i].uuid == "" {
+		if taken[i].uuid == "" {
 			continue
 		}
 		if err := sbclient.DeleteSnapshot(ctx, taken[i].uuid); err != nil {
@@ -989,6 +1045,9 @@ func (cs *Server) cloneStripedMembers(
 		sourceIDs []string
 		sbclient  *controlplane.ClusterClient
 		clone     func(ctx context.Context, sourceID, name, size, pvc string) (string, error)
+		// liveSource is the volume a clone is taken of while it may be in use,
+		// which is cloned under its freeze.
+		liveSource string
 	)
 
 	switch {
@@ -1054,22 +1113,15 @@ func (cs *Server) cloneStripedMembers(
 		clone = func(ctx context.Context, sourceID, name, size, pvc string) (string, error) {
 			return sbclient.CloneVolume(ctx, sourceID, name, size, pvc)
 		}
+		liveSource = volumeID
 
 	default:
 		return nil, nil, status.Errorf(codes.InvalidArgument, "%v not a proper volume source", source)
 	}
 
-	params := req.GetParameters()
-	pvc := params[csicommon.CSIStorageNameKey]
-	if ns := params[csicommon.CSIStorageNamespaceKey]; ns != "" && pvc != "" {
-		// A restore claim carrying the consistency-group label asks for a new
-		// group formed from the clones, which a striped volume cannot join.
-		if _, labels, err := cs.fetchPVCMeta(ctx, pvc, ns); err == nil && labels[consistencyGroupLabel] != "" {
-			return nil, nil, status.Errorf(codes.InvalidArgument,
-				"the claim joins consistency group %q, and a striped volume cannot be a member of one",
-				labels[consistencyGroupLabel])
-		}
-		pvc = ns + "/" + pvc
+	pvc, err := cs.cloneClaim(ctx, req.GetParameters())
+	if err != nil {
+		return nil, nil, err
 	}
 
 	name := req.GetName()
@@ -1077,6 +1129,12 @@ func (cs *Server) cloneStripedMembers(
 	if err != nil {
 		return nil, nil, err
 	}
+	size := strconv.FormatInt(memberBytes, 10)
+	if liveSource != "" {
+		members, err := cs.cloneLiveStripe(ctx, sbclient, liveSource, name, size, pvc, sourceIDs, existing, clone)
+		return members, sbclient, err
+	}
+
 	members := make([]string, spec.width)
 	for i, m := range existing {
 		switch {
@@ -1096,7 +1154,6 @@ func (cs *Server) cloneStripedMembers(
 		}
 	}
 
-	size := strconv.FormatInt(memberBytes, 10)
 	for i := range members {
 		if members[i] != "" {
 			continue
@@ -1109,6 +1166,24 @@ func (cs *Server) cloneStripedMembers(
 		members[i] = id
 	}
 	return members, sbclient, nil
+}
+
+// cloneClaim is the claim a clone is recorded against, namespace/name, and
+// refuses one carrying the consistency-group label: a restore claim with it
+// asks for a new group formed from the clones, which a striped volume cannot
+// join.
+func (cs *Server) cloneClaim(ctx context.Context, params map[string]string) (string, error) {
+	pvc := params[csicommon.CSIStorageNameKey]
+	ns := params[csicommon.CSIStorageNamespaceKey]
+	if ns == "" || pvc == "" {
+		return pvc, nil
+	}
+	if _, labels, err := cs.fetchPVCMeta(ctx, pvc, ns); err == nil && labels[consistencyGroupLabel] != "" {
+		return "", status.Errorf(codes.InvalidArgument,
+			"the claim joins consistency group %q, and a striped volume cannot be a member of one",
+			labels[consistencyGroupLabel])
+	}
+	return ns + "/" + pvc, nil
 }
 
 // refuseStripedSourceForPlainClass refuses to make an ordinary volume out of a
@@ -1129,4 +1204,53 @@ func refuseStripedSourceForPlainClass(source *csi.VolumeContentSource) error {
 			id, width, kube.ParamStripeWidth, width)
 	}
 	return nil
+}
+
+// cloneLiveStripe clones every member of a striped volume that may be in use,
+// at one point in its write stream: the members are cloned concurrently under
+// the source's freeze (underFreeze), as its snapshots are, so the clone is a
+// crash-consistent copy of the source rather than members from different
+// moments.
+//
+// Members an earlier attempt left were not necessarily cloned under the same
+// freeze, so they are deleted and every member is cloned afresh. A clone that
+// cannot finish, or whose freeze did not last, removes what it made.
+func (cs *Server) cloneLiveStripe(
+	ctx context.Context,
+	sbclient *controlplane.ClusterClient,
+	sourceVolumeID, name, size, pvc string,
+	sourceIDs []string,
+	existing []*controlplane.LvolResp,
+	clone func(ctx context.Context, sourceID, name, size, pvc string) (string, error),
+) ([]string, error) {
+	for i, m := range existing {
+		if m == nil {
+			continue
+		}
+		klog.Warningf("striped clone %s: deleting member %d (%s) left by an earlier attempt", name, i, m.UUID)
+		if err := sbclient.DeleteVolume(ctx, m.UUID); err != nil && !errors.Is(err, controlplane.ErrVolumeNotFound) {
+			return nil, err
+		}
+	}
+
+	members := make([]string, len(sourceIDs))
+	errs := make([]error, len(sourceIDs))
+	err := cs.underFreeze(ctx, sourceVolumeID, func(ctx context.Context) error {
+		var wg sync.WaitGroup
+		for i := range sourceIDs {
+			wg.Go(func() { members[i], errs[i] = clone(ctx, sourceIDs[i], stripeMemberName(name, i), size, pvc) })
+		}
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil {
+				return fmt.Errorf("clone member %d of striped volume %s from %s: %w", i, name, sourceIDs[i], err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		cs.removeStripeMembers(sbclient, name, members)
+		return nil, err
+	}
+	return members, nil
 }

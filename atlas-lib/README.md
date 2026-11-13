@@ -168,6 +168,11 @@ atlas/
 │   └── placementrpc/       PlacementService: served by the operator, called by the CSI controller
 │       ├── placementrpc.go NewServer(Placer), Remote(conn).Place; controllers only
 │       └── placementv1/    the PlacementService protocol (buf-generated, committed)
+├── freeze/                 Hold a device-mapper device suspended under a token, with a deadline
+│   ├── freeze.go           Holds: Freeze/Thaw/Recover, records on disk; a striped volume's snapshot freeze
+│   └── freezerpc/          FreezeService: served by the CSI node plugin, relayed by the operator
+│       ├── freezerpc.go    NewServer(Freezer), NewRelay(conn), Remote(conn).Freeze/.Thaw
+│       └── freezev1/       the FreezeService protocol (buf-generated, committed)
 ├── bucketdelivery/         Deliver an S3 bucket's mount to its gateway's node set
 │   ├── paths.go            GatewayMountRoot: the one hostPath both the CSI node plugin (bind-mounts a
 │   │                       bucket there) and the operator's ObjectStoreReconciler (mounts every gateway
