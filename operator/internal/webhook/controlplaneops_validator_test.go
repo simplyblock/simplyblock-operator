@@ -164,3 +164,85 @@ func TestTheControlPlaneRefusalTableAndTheGraphAgree(t *testing.T) {
 		t.Errorf("the guard refuses %v, and the graph declares no abort edge from %v", refused, want)
 	}
 }
+
+// createRequestIn wraps an operation as the create request the API server sends.
+func createRequestIn(t *testing.T, ops *simplyblockv1alpha2.ControlPlaneOps) admission.Request {
+	t.Helper()
+	raw, err := json.Marshal(ops)
+	if err != nil {
+		t.Fatalf("marshal the operation: %v", err)
+	}
+	return admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Operation: admissionv1.Create,
+		Namespace: ops.Namespace,
+		Object:    runtime.RawExtension{Raw: raw},
+	}}
+}
+
+// A HostMaintenance window acts on the FoundationDBCluster the operator applied,
+// and a managed control plane has none. The guard that already refuses the other
+// actions against one refuses this action too, with no change for it.
+//
+// U-65 in test-plan-fdb-host-maintenance.md.
+func TestAHostMaintenanceWindowAgainstAManagedControlPlaneIsRefused(t *testing.T) {
+	managed := &simplyblockv1alpha2.ControlPlane{
+		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock", Namespace: "simplyblock"},
+		Spec: simplyblockv1alpha2.ControlPlaneSpec{
+			Source: simplyblockv1alpha2.ControlPlaneSource{
+				Managed: &simplyblockv1alpha2.ManagedControlPlane{Endpoint: "https://cp.example.internal"},
+			},
+		},
+	}
+	v := &ControlPlaneOpsValidator{
+		Client: fake.NewClientBuilder().WithScheme(cpOpsScheme(t)).WithObjects(managed).Build(),
+	}
+	window := &simplyblockv1alpha2.ControlPlaneOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-maintenance-3f9a1c2e", Namespace: "simplyblock"},
+		Spec: simplyblockv1alpha2.ControlPlaneOpsSpec{
+			ControlPlaneRef: "simplyblock",
+			Action:          simplyblockv1alpha2.ControlPlaneOpsActionHostMaintenance,
+			HostMaintenance: &simplyblockv1alpha2.HostMaintenanceSpec{WorkerNode: "worker-1"},
+		},
+	}
+
+	resp := v.Handle(context.Background(), createRequestIn(t, window))
+	if resp.Allowed {
+		t.Fatal("a HostMaintenance window was admitted against a managed control plane, " +
+			"which has no FoundationDBCluster for it to act on")
+	}
+	if !strings.Contains(resp.Result.Message, "does not host") {
+		t.Errorf("the refusal is %q, want it to say the control plane is not hosted here", resp.Result.Message)
+	}
+}
+
+// The webhook refuses a window without its worker the way it refuses an upgrade
+// without its image, so the error lands on the terminal that wrote the object
+// even where the CRD's own rule is not enforced.
+func TestAHostMaintenanceWindowWithoutAWorkerIsRefused(t *testing.T) {
+	local := &simplyblockv1alpha2.ControlPlane{
+		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock", Namespace: "simplyblock"},
+		Spec: simplyblockv1alpha2.ControlPlaneSpec{
+			Source: simplyblockv1alpha2.ControlPlaneSource{
+				Local: &simplyblockv1alpha2.LocalControlPlane{Image: "quay.io/simplyblock-io/simplyblock:26.3.0"},
+			},
+		},
+	}
+	v := &ControlPlaneOpsValidator{
+		Client: fake.NewClientBuilder().WithScheme(cpOpsScheme(t)).WithObjects(local).Build(),
+	}
+	window := &simplyblockv1alpha2.ControlPlaneOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-maintenance-3f9a1c2e", Namespace: "simplyblock"},
+		Spec: simplyblockv1alpha2.ControlPlaneOpsSpec{
+			ControlPlaneRef: "simplyblock",
+			Action:          simplyblockv1alpha2.ControlPlaneOpsActionHostMaintenance,
+		},
+	}
+
+	resp := v.Handle(context.Background(), createRequestIn(t, window))
+	if resp.Allowed {
+		t.Fatal("a HostMaintenance window was admitted without spec.hostMaintenance.workerNode")
+	}
+	if !strings.Contains(resp.Result.Message, "spec.hostMaintenance.workerNode") {
+		t.Errorf("the refusal is %q, want it to name the missing field", resp.Result.Message)
+	}
+}

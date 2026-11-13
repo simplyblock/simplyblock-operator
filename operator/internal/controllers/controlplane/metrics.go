@@ -115,6 +115,57 @@ var (
 		},
 		[]string{"namespace", "action"},
 	)
+
+	// The HostMaintenance window's series (design-fdb-host-maintenance.md §11).
+	//
+	// fdbMaintenanceZoneActive is the leak detector: a gauge at one with no
+	// window Running is a zone the teardown did not clear, and data
+	// distribution ignoring a zone nobody is maintaining.
+	fdbMaintenanceZoneActive = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "simplyblock_controlplane_fdb_maintenance_zone_state",
+			Help: "1 while a HostMaintenance window holds FoundationDB's maintenance zone for the worker.",
+		},
+		[]string{"namespace", "worker"},
+	)
+	// fdbEvictionHoldSeconds is what a node pool update feels: the time from
+	// the drain being observed to the budget's deletion, which is the only
+	// interval in which the window stands in a drain's way.
+	fdbEvictionHoldSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "simplyblock_controlplane_fdb_eviction_hold_seconds",
+			Help:    "How long a HostMaintenance window held the drain after observing it, by the signal that observed it.",
+			Buckets: []float64{5, 10, 20, 30, 60, 120, 300, 600, 900},
+		},
+		[]string{"namespace", "signal"},
+	)
+	// fdbHoldingWindows is, after a pool-wide cordon, the number of hosts
+	// still to go.
+	fdbHoldingWindows = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "simplyblock_controlplane_fdb_holding_windows_count",
+			Help: "HostMaintenance windows in Holding, waiting for the drain of their worker.",
+		},
+		[]string{"namespace"},
+	)
+	fdbCommandDurationSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "simplyblock_controlplane_fdb_command_duration_seconds",
+			Help:    "How long one fdbcli command Job of a HostMaintenance window took, by command and outcome.",
+			Buckets: []float64{1, 2, 5, 10, 20, 30, 60, 120},
+		},
+		[]string{"namespace", "command", "result"},
+	)
+	// fdbCoordinatorMovesTotal growing under placement Unchanged on a cluster
+	// larger than one host is a cluster whose stateful processes are fewer than
+	// it has hosts, which is a sizing fact worth a ticket.
+	fdbCoordinatorMovesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "simplyblock_controlplane_fdb_coordinator_moves_total",
+			Help: "HostMaintenance windows by how they placed the coordinators: Spread, SharedHost, or Unchanged.",
+		},
+		[]string{"namespace", "placement"},
+	)
 )
 
 func init() {
@@ -127,6 +178,11 @@ func init() {
 		controlPlaneInstallStepDuration,
 		controlPlaneOperationsTotal,
 		controlPlaneOperationDuration,
+		fdbMaintenanceZoneActive,
+		fdbEvictionHoldSeconds,
+		fdbHoldingWindows,
+		fdbCommandDurationSeconds,
+		fdbCoordinatorMovesTotal,
 	)
 }
 

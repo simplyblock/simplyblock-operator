@@ -561,6 +561,26 @@ func TestTheCoordinatorCountAndTheRedundancyModeAgree(t *testing.T) {
 	}
 }
 
+// The transaction system runs on stateless processes, as many as there are
+// log processes, so that a host's storage process carries no role a drain
+// would kill. The number of stateless processes is never disabled.
+//
+// U-112 in test-plan-fdb-host-maintenance.md.
+func TestStatelessProcessesMatchTheLogCount(t *testing.T) {
+	for _, replicas := range []int32{1, 3, 5} {
+		cp := localControlPlane()
+		cp.Spec.Source.Local.FoundationDB = &simplyblockv1alpha2.FoundationDBSpec{Replicas: &replicas}
+
+		cluster := foundationDBCluster(cp)
+		stateless, _, _ := unstructured.NestedInt64(cluster.Object, "spec", "processCounts", "stateless")
+		logs, _, _ := unstructured.NestedInt64(cluster.Object, "spec", "processCounts", "log")
+
+		if stateless != logs || stateless < 1 {
+			t.Errorf("%d replicas: processCounts.stateless = %d, want the log count %d", replicas, stateless, logs)
+		}
+	}
+}
+
 // An unset storage class leaves the field out rather than writing an empty
 // string, which is the difference between the cluster's default class and a
 // class literally named nothing.
