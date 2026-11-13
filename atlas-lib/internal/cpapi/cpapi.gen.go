@@ -5328,10 +5328,10 @@ type ClientInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/prepare-removal (the `ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost` operationId).
 	ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, params *ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPostParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost Clusters:Storage-Nodes:Start
+	// ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost Clusters:Storage-Nodes:Promote
 	//
-	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote (the `ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost` operationId).
-	ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote (the `ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost` operationId).
+	ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPostWithBody Clusters:Storage-Nodes:Restart
 	//
@@ -8748,11 +8748,11 @@ func (c *Client) ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorage
 	return c.Client.Do(req)
 }
 
-// ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost Clusters:Storage-Nodes:Start
+// ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost Clusters:Storage-Nodes:Promote
 //
-// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote (the `ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost` operationId).
-func (c *Client) ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostRequest(c.Server, clusterId, storageNodeId)
+// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote (the `ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost` operationId).
+func (c *Client) ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostRequest(c.Server, clusterId, storageNodeId)
 	if err != nil {
 		return nil, err
 	}
@@ -16279,8 +16279,8 @@ func NewClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStor
 	return req, nil
 }
 
-// NewClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostRequest constructs an http.Request for the ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost method
-func NewClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostRequest(server string, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID) (*http.Request, error) {
+// NewClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostRequest constructs an http.Request for the ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost method
+func NewClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostRequest(server string, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -21480,12 +21480,12 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/prepare-removal (the `ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost` operationId).
 	ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, params *ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPostParams, reqEditors ...RequestEditorFn) (*ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPostResponse, error)
 
-	// ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse Clusters:Storage-Nodes:Start
+	// ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse Clusters:Storage-Nodes:Promote
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote (the `ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost` operationId).
-	ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse, error)
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote (the `ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost` operationId).
+	ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse, error)
 
 	// ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPostWithBodyWithResponse Clusters:Storage-Nodes:Restart
 	//
@@ -27573,7 +27573,7 @@ func (r ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStor
 	return ""
 }
 
-type ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse struct {
+type ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	// JSON422 the response for an HTTP 422 `application/json` response
@@ -27581,17 +27581,17 @@ type ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPro
 }
 
 // GetJSON422 returns the response for an HTTP 422 `application/json` response
-func (r ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) GetJSON422() *HTTPValidationError {
+func (r ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) GetJSON422() *HTTPValidationError {
 	return r.JSON422
 }
 
 // GetBody returns the raw response body bytes
-func (r ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) GetBody() []byte {
+func (r ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) GetBody() []byte {
 	return r.Body
 }
 
 // Status returns HTTPResponse.Status
-func (r ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) Status() string {
+func (r ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -27599,7 +27599,7 @@ func (r ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeId
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) StatusCode() int {
+func (r ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -27607,7 +27607,7 @@ func (r ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeId
 }
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) ContentType() string {
+func (r ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -32711,17 +32711,17 @@ func (c *ClientWithResponses) ClustersStorageNodesPrepareRemovalApiV2ClustersClu
 	return ParseClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPostResponse(rsp)
 }
 
-// ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse Clusters:Storage-Nodes:Start
+// ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse Clusters:Storage-Nodes:Promote
 //
 // Returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote (the `ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost` operationId).
-func (c *ClientWithResponses) ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse, error) {
-	rsp, err := c.ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(ctx, clusterId, storageNodeId, reqEditors...)
+// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote (the `ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost` operationId).
+func (c *ClientWithResponses) ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse, error) {
+	rsp, err := c.ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(ctx, clusterId, storageNodeId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse(rsp)
+	return ParseClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse(rsp)
 }
 
 // ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPostWithBodyWithResponse Clusters:Storage-Nodes:Restart
@@ -37669,21 +37669,24 @@ func ParseClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesSt
 	return response, nil
 }
 
-// ParseClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse parses an HTTP response from a ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse call
-func ParseClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse(rsp *http.Response) (*ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse, error) {
+// ParseClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse parses an HTTP response from a ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse call
+func ParseClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse(rsp *http.Response) (*ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse{
+	response := &ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
 
 	switch {
 	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case rsp.StatusCode == 409:
 		break // No content-type
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
