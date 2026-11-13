@@ -13,6 +13,8 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kfake "k8s.io/client-go/kubernetes/fake"
 
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
@@ -220,5 +222,52 @@ func TestStartAcceptsANodeWithTheNVMeInitiator(t *testing.T) {
 	}
 	if _, err := os.Stat(message); err == nil {
 		t.Error("a termination message was written for a node that starts")
+	}
+}
+
+// The refusal is also an event on the plugin's own pod, so it is the last thing
+// `kubectl describe pod` prints, under the events a reader looks at first, and
+// not only the termination message in the middle of the container's status.
+func TestStartRefusalIsAnEventOnThePluginsPod(t *testing.T) {
+	client := kfake.NewSimpleClientset()
+	pod := PodRef{Namespace: "simplyblock", Name: "simplyblock-csi-node-abcde", UID: "uid-1"}
+	reason := errors.New("this node cannot connect a volume: install linux-modules-extra-" + awsKernel)
+
+	if err := RecordStartRefusal(context.Background(), client, pod, reason); err != nil {
+		t.Fatalf("RecordStartRefusal: %v", err)
+	}
+
+	events, err := client.CoreV1().Events(pod.Namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil || len(events.Items) != 1 {
+		t.Fatalf("want one event in %s, got %d (err %v)", pod.Namespace, len(events.Items), err)
+	}
+	event := events.Items[0]
+	if event.InvolvedObject.Kind != "Pod" || event.InvolvedObject.Name != pod.Name ||
+		string(event.InvolvedObject.UID) != pod.UID {
+		t.Errorf("the event is about %+v, want the plugin's own pod", event.InvolvedObject)
+	}
+	if event.Type != "Warning" || event.Reason != startRefusalReason {
+		t.Errorf("the event is %s/%s, want Warning/%s", event.Type, event.Reason, startRefusalReason)
+	}
+	if event.Message != reason.Error() {
+		t.Errorf("the event reads %q, want the refusal %q", event.Message, reason.Error())
+	}
+}
+
+// A plugin that does not know its pod, or has no API client, records nothing
+// and says so: the refusal still stands, and the termination message carries it.
+func TestStartRefusalWithoutAPodIsNotRecorded(t *testing.T) {
+	client := kfake.NewSimpleClientset()
+
+	if err := RecordStartRefusal(context.Background(), client, PodRef{}, errors.New("no initiator")); err == nil {
+		t.Error("recording against no pod reported success")
+	}
+	named := PodRef{Namespace: "a", Name: "b"}
+	if err := RecordStartRefusal(context.Background(), nil, named, errors.New("x")); err == nil {
+		t.Error("recording without a client reported success")
+	}
+	events, _ := client.CoreV1().Events("").List(context.Background(), metav1.ListOptions{})
+	if len(events.Items) != 0 {
+		t.Errorf("%d events were written for a pod nobody named", len(events.Items))
 	}
 }

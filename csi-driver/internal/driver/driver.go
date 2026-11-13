@@ -26,6 +26,9 @@ package driver
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	csiaddonsidentity "github.com/csi-addons/spec/lib/go/identity"
@@ -126,6 +129,13 @@ func Run(conf *config.Config) {
 	}
 
 	if conf.IsNodeServer {
+		// Before anything is started: a node whose kernel has no NVMe/TCP
+		// initiator can stage no volume, so the plugin exits and says why, in its
+		// log, in the container's termination message, and as an event on its pod.
+		if err := node.RequireInitiator(context.Background()); err != nil {
+			recordStartRefusal(kubeClient, conf, err)
+			klog.Fatalf("the node plugin does not start: %s", err)
+		}
 		var err error
 		ns, err = startNodeServer(cd, kubeClient)
 		if err != nil {
@@ -287,6 +297,28 @@ func startLink(ctx context.Context, conf *config.Config) (*link.Agent, error) {
 	return csilink.Start(ctx, cfg)
 }
 
+// serviceAccountNamespaceFile is where a pod reads its own namespace.
+const serviceAccountNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+// recordStartRefusal leaves the reason the node plugin does not start as an
+// event on its own pod. The pod's name and UID come from the downward API, and
+// its namespace from the ServiceAccount mount. It is bounded, because the
+// process is about to exit and an API server that does not answer must not
+// hold that up.
+func recordStartRefusal(kubeClient kubernetes.Interface, conf *config.Config, reason error) {
+	namespace, err := os.ReadFile(serviceAccountNamespaceFile)
+	if err != nil {
+		klog.Warningf("the refusal is not recorded as an event: reading the pod's namespace: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pod := node.PodRef{Namespace: strings.TrimSpace(string(namespace)), Name: conf.PodName, UID: conf.PodUID}
+	if err := node.RecordStartRefusal(ctx, kubeClient, pod, reason); err != nil {
+		klog.Warningf("the refusal is not recorded as an event: %v", err)
+	}
+}
+
 // startNodeServer builds the node service and starts the background loops that
 // belong to a node plugin rather than to a request: the connection monitor,
 // which reconnects NVMe-oF paths the control plane still publishes, the
@@ -304,13 +336,6 @@ func startLink(ctx context.Context, conf *config.Config) (*link.Agent, error) {
 // watch. It serves reads from cache once synced and falls back to the API until
 // then, so neither consumer needs a fallback of its own.
 func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*node.Server, error) {
-	// Before anything is started: a node whose kernel has no NVMe/TCP initiator
-	// can stage no volume, so the plugin exits and says why, in its log and in
-	// the container's termination message, instead of serving refusals.
-	if err := node.RequireInitiator(context.Background()); err != nil {
-		return nil, err
-	}
-
 	manager := sbkube.NewManager(kubeClient)
 	manager.Start(context.Background())
 

@@ -19,9 +19,15 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 )
 
 // initiatorModule is the transport a volume is connected over.
@@ -111,5 +117,51 @@ func requireInitiator(ctx context.Context, ensure func(context.Context) error, m
 	if writeErr := os.WriteFile(messagePath, []byte(err.Error()+"\n"), 0o600); writeErr != nil {
 		return fmt.Errorf("%w (and the termination message could not be written: %v)", err, writeErr)
 	}
+	return err
+}
+
+// startRefusalReason is the reason of the event a refused start leaves on the
+// plugin's pod.
+const startRefusalReason = "NVMeTCPInitiatorMissing"
+
+// PodRef names the pod this plugin runs as, which is the object a refused
+// start is recorded against.
+type PodRef struct {
+	Namespace string
+	Name      string
+	UID       string
+}
+
+// RecordStartRefusal leaves the refusal as a Warning event on the plugin's own
+// pod, so it is among the events `kubectl describe pod` ends with, beside the
+// back-off the kubelet reports there. The termination message says the same in
+// the container's status, which is further up and easier to miss.
+//
+// It is one event per refused start. The kubelet's restart backoff spaces
+// them out, and each is the proof that the node was looked at again.
+//
+// An error is for the caller's log only: the refusal does not depend on being
+// recorded.
+func RecordStartRefusal(ctx context.Context, kubeClient kubernetes.Interface, pod PodRef, reason error) error {
+	if kubeClient == nil {
+		return errors.New("no Kubernetes client, so the refusal is not recorded as an event")
+	}
+	if pod.Namespace == "" || pod.Name == "" {
+		return errors.New("the plugin does not know its own pod, so the refusal is not recorded as an event")
+	}
+	now := metav1.Now()
+	_, err := kubeClient.CoreV1().Events(pod.Namespace).Create(ctx, &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: pod.Name + ".", Namespace: pod.Namespace},
+		InvolvedObject: corev1.ObjectReference{
+			APIVersion: "v1", Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name, UID: types.UID(pod.UID),
+		},
+		Type:           corev1.EventTypeWarning,
+		Reason:         startRefusalReason,
+		Message:        reason.Error(),
+		Source:         corev1.EventSource{Component: "simplyblock-csi-node"},
+		FirstTimestamp: now,
+		LastTimestamp:  now,
+		Count:          1,
+	}, metav1.CreateOptions{})
 	return err
 }

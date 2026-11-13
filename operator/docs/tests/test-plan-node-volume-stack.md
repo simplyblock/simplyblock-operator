@@ -272,6 +272,8 @@ call, and a fake `nvme` first on `PATH` plays the nvme-cli that cannot be reaped
 | U-128 | A `modprobe` that succeeds is believed when the module shows no sysfs entry, as a built-in transport may not                              | Positive   | `TestInitiatorCheckBelievesAModprobeThatSucceeds`  |
 | U-129 | The node plugin refuses to start on a node with no NVMe/TCP initiator and leaves the reason as its termination message                    | Negative   | `TestStartRefusesANodeWithoutTheNVMeInitiator`     |
 | U-130 | The node plugin starts on a node whose initiator loads, and writes no termination message                                                 | Positive   | `TestStartAcceptsANodeWithTheNVMeInitiator`        |
+| U-131 | A refused start is recorded as a Warning event on the plugin's own pod, carrying the refusal                                              | Positive   | `TestStartRefusalIsAnEventOnThePluginsPod`         |
+| U-132 | A plugin that does not know its pod, or has no API client, records no event and reports that it did not                                   | Negative   | `TestStartRefusalWithoutAPodIsNotRecorded`         |
 
 ---
 
