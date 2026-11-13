@@ -19,6 +19,10 @@ import (
 
 const awsKernel = "6.8.0-1044-aws"
 
+// fabricsDevice is what nvme_fabrics exposes once it is loaded, with or without
+// a transport beside it.
+const fabricsDevice = "/dev/nvme-fabrics"
+
 // fabricsHost is a host whose nvme_tcp module is loaded or not, whose fabrics
 // device is there or not, and whose modprobe either loads the initiator or says
 // why it cannot. The two are separate facts: nvme_fabrics ships in the base
