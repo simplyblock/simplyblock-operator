@@ -24,7 +24,7 @@ COPY atlas-lib/go.mod atlas-lib/go.sum /atlas-lib/
 COPY operator/go.mod operator/go.sum ./
 # cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 # Copy the full sources (operator + the atlas-lib tree resolved by the replace directive).
 COPY atlas-lib/ /atlas-lib/
@@ -33,7 +33,9 @@ COPY operator/ .
 # Build with BoringCrypto (FIPS 140-2 validated crypto).
 # CGO_ENABLED=1 is required by GOEXPERIMENT=boringcrypto.
 # CC selects the appropriate cross-compiler when targeting arm64 from an amd64 host.
-RUN CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "gcc") \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "gcc") \
     CGO_ENABLED=1 GOEXPERIMENT=boringcrypto \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -o manager ./cmd
@@ -45,7 +47,9 @@ RUN CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "
 # CGO is off for it, unlike the manager. The probe reads sysfs and procfs and
 # issues ioctls through golang.org/x/sys and does no crypto at all, so it has
 # nothing to gain from BoringCrypto and nothing to link against.
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -o simplyblock-nodeprobe ./cmd/simplyblock-nodeprobe
 
 # The conversion webhook ships in this image under its own entry point rather
@@ -57,7 +61,9 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
 # are exactly those (§6.1).
 #
 # It serves TLS, so it takes the same BoringCrypto build the manager does.
-RUN CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "gcc") \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "gcc") \
     CGO_ENABLED=1 GOEXPERIMENT=boringcrypto \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -o conversion-webhook ./cmd/conversion-webhook
