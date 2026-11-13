@@ -24,10 +24,10 @@ single-volume pNFS exports. Everything there is assumed and not restated.
 Snapshots of a striped pNFS volume are refused until Phase 2, which is a
 deliberate sequencing choice rather than a gap: a per-member snapshot of a stripe
 taken while clients still write is an unmountable filesystem, and an export cannot
-yet stop every writer (§3.1). Block striped volumes take the other side of that
-choice ([Relation to Block Striped Volumes](#relation-to-block-striped-volumes)):
-they snapshot members concurrently and leave quiescing to the application. The
-refusal here is specific to pNFS.
+yet stop every writer (§3.1). Block striped volumes do not have that problem
+([Relation to Block Striped Volumes](#relation-to-block-striped-volumes)): their
+one writer is the node that stages them, which suspends the stripe while the
+members are snapshotted. The refusal here is specific to pNFS.
 
 ---
 
@@ -92,16 +92,24 @@ node-side shape, so the two cannot drift apart:
 - **The node shape.** The `Striped` plan, with the member order recorded in the
   stack record, which is what §2.1 assembles in the guest.
 
-**Snapshots are where the two differ, on purpose.** A block striped volume
-snapshots its members concurrently and documents that the snapshot is not atomic
-across nodes: a crash-consistent snapshot needs the application quiesced or the
-filesystem frozen (`fsfreeze`) while it is taken. That is acceptable there because
-the filesystem's only writer is the one node that mounts it, and freezing that
-filesystem stops every write to every member. A striped export has no such single
-writer: pNFS clients write to the members directly through their layouts, and
-freezing XFS on the metadata server does not by itself stop them (§3.1). So this
-design keeps refusing snapshots of a striped export (SM-4) until a freeze is shown
-to stop every client's direct writes, or until S0-1 exists.
+**Snapshots are where the two differ, and the reason is who writes.** A block
+striped volume's snapshots are crash-consistent without a cross-node backend
+primitive: the node that stages the volume suspends the stripe's device-mapper
+device (`dmsetup suspend`, which drains in-flight I/O, holds new I/O, and freezes a
+mounted filesystem) while the controller snapshots every member concurrently, then
+resumes it. The controller reaches the node through the operator's relay
+(`atlas-lib/freeze/freezerpc`) under a token, and the node resumes the device by
+itself at a deadline (10 seconds by default) whatever happens to the controller.
+That works because the staging node is the volume's only writer, so suspending its
+device stops every write to every member
+([`csi-driver/docs/striped-volumes.md`](../../../csi-driver/docs/striped-volumes.md)).
+
+A striped export has no such single writer: pNFS clients write to the members
+directly through their layouts, and suspending the device on the metadata server
+does not stop them (§3.1). So this design keeps refusing snapshots of a striped
+export (SM-4) until the same freeze is combined with recalling every client's
+layout first, and that is shown to stop their direct writes, or until S0-1
+exists.
 
 Block striped volumes refuse `fsType: pnfs` today. Phase 1 of this design is what
 lifts that refusal, for exports only.
@@ -393,9 +401,9 @@ place to find out.
 `xfs_freeze` in the metadata server's guest, which is how the base design quiesces a single-volume
 snapshot, is necessary here but no longer sufficient. On a block striped volume a
 freeze is enough, because the filesystem's one host is its only writer: with writes
-stopped, `n` separate member snapshots taken one after another all see the same
-state, which is how PR #918 snapshots a block stripe once the application or the
-filesystem is quiesced. A striped export breaks that premise. Its clients write data
+stopped, `n` separate member snapshots all see the same state, which is how PR #918
+snapshots a block stripe, suspending the stripe on its node for the length of the
+snapshots. A striped export breaks that premise. Its clients write data
 to the members directly through pNFS layouts, and the freeze on the metadata server
 holds back metadata changes, not those direct writes, unless every outstanding
 layout is recalled first. Until the freeze path is shown to recall every layout, the

@@ -137,6 +137,32 @@ func (m *Mapper) Swap(ctx context.Context, name, device string, sectors uint64) 
 	return nil
 }
 
+// Suspend suspends mapping name: I/O in flight drains, new I/O is queued, and a
+// filesystem mounted on it is frozen and flushed first, which is what dmsetup
+// does by default (lockfs). The image underneath is then one a filesystem can
+// mount after a crash, and stays that until Resume.
+//
+// It is not used by Swap's path only. A striped volume's snapshot suspends the
+// stripe's logical volume so that every member is snapshotted at one point in
+// its write stream (atlas-lib/freeze).
+func (m *Mapper) Suspend(ctx context.Context, name string) error {
+	if _, err := m.run(ctx, "dmsetup", "suspend", name); err != nil {
+		return fmt.Errorf("dmsetup suspend %s: %w", name, err)
+	}
+	return nil
+}
+
+// Resume lets mapping name's queued and new I/O through again, and thaws a
+// filesystem Suspend froze. Resuming a mapping that is not suspended is a
+// no-op for device-mapper, which is what lets a caller resume when it is not
+// sure a suspend took effect.
+func (m *Mapper) Resume(ctx context.Context, name string) error {
+	if _, err := m.run(ctx, "dmsetup", "resume", name); err != nil {
+		return fmt.Errorf("dmsetup resume %s: %w", name, err)
+	}
+	return nil
+}
+
 // Remove deletes mapping name; a missing mapping is success.
 func (m *Mapper) Remove(ctx context.Context, name string) error {
 	out, err := m.run(ctx, "dmsetup", "remove", "--retry", name)
