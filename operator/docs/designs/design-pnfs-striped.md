@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-25 (last updated 2026-10-17)  
+**Date:** 2026-08-25 (last updated 2026-11-13)  
 **Issue:** https://github.com/simplyblock/simplyblock-operator/issues/278  
 **Target release:** after 26.4  
 **Test Plan:** [`tests/test-plan-pnfs-striped.md`](../tests/test-plan-pnfs-striped.md)  
@@ -16,15 +16,18 @@ single-volume pNFS exports. Everything there is assumed and not restated.
 | Phase | Delivers                                                       | Depends on                                     | Status                         |
 |-------|----------------------------------------------------------------|------------------------------------------------|--------------------------------|
 | 0     | External prerequisites (§Phase 0)                              | Control plane, storage plane, and guest kernel | Consistency groups in progress |
-| 1     | Stripe assembly and topology, `stripe_count`, CR status change | The base design shipping, S0-6, and S0-7       | Planned                        |
+| 1     | Stripe assembly and topology, `stripe_width`, CR status change | The base design shipping, S0-6, and S0-7       | Planned                        |
 | 2     | Group snapshot, clone, and restore                             | S0-1, S0-2, and S0-3 for clone                 | Planned                        |
 | 3     | CSI GroupController and `VolumeGroupSnapshot`                  | Phase 2, S0-5                                  | Planned                        |
 | 4     | Failover measured with a stripe assembled                      | Phase 1                                        | Planned                        |
 
-Snapshots of a striped volume are refused until Phase 2, which is a deliberate
-sequencing choice rather than a gap: a per-member snapshot of a stripe is an
-unmountable filesystem, so refusing is the only correct behavior before the
-consistency group exists.
+Snapshots of a striped pNFS volume are refused until Phase 2, which is a
+deliberate sequencing choice rather than a gap: a per-member snapshot of a stripe
+taken while clients still write is an unmountable filesystem, and an export cannot
+yet stop every writer (§3.1). Block striped volumes take the other side of that
+choice ([Relation to Block Striped Volumes](#relation-to-block-striped-volumes)):
+they snapshot members concurrently and leave quiescing to the application. The
+refusal here is specific to pNFS.
 
 ---
 
@@ -37,8 +40,11 @@ XFS filesystem, so a shared filesystem scales past what one lvol can serve.
 
 **What that costs, and why it is a separate document.** Striping breaks the
 assumption that makes single-volume snapshots simple. A snapshot of a striped XFS
-is only mountable if every member is snapshotted at the same instant, which needs a
-backend consistency group the control plane does not implement. Once that primitive
+is only mountable if every member is snapshotted at one point in the write stream,
+which needs either every writer stopped or a backend primitive that snapshots lvols
+on different storage nodes atomically. The control plane's consistency groups are
+not that primitive: a consistency group is confined to one logical volume store,
+and the members of a stripe are on different nodes by construction (§2.5). Once that primitive
 exists it also backs the user-facing Kubernetes `VolumeGroupSnapshot`, which brings
 its own CSI service and version floors. None of it is needed to export a filesystem
 over pNFS, so none of it belongs in the document that does.
@@ -58,26 +64,72 @@ every member directly and assembles nothing itself (§2.2).
 
 ---
 
+## Relation to Block Striped Volumes
+
+PR #918 ships striping for block volumes, RWO and raw block
+([`csi-driver/docs/striped-volumes.md`](../../../csi-driver/docs/striped-volumes.md)).
+A striped export uses the same member model, the same parameter, and the same
+node-side shape, so the two cannot drift apart:
+
+- **One parameter.** `stripe_width` in the StorageClass, `stripeWidth` on
+  `StoragePool.spec.volumeDefaults`, with `stripe_size` / `stripeSize` for the
+  chunk (a power of two from 4Ki to 1Mi, 64Ki by default). Absent, 0, or 1 is an
+  ordinary volume. Earlier drafts of this document called it `stripe_count`.
+- **Members by name.** Member 0 carries the claim's volume name, exactly as an
+  ordinary volume does. Member *i* is `<name>-s<i>`. The control plane holds no
+  grouping object, and a consistency group is not used, because one is confined
+  to a single logical volume store.
+- **The handle marker.** The volume ID is member 0's handle with the width as a
+  fourth segment, `{cluster}:{pool}:{lvol0}:s{N}`, read by
+  `lvol.ParseStripedHandle`. `lvol.ParseHandle` refuses it, so a consumer that
+  does not know about striping cannot mistake the volume for member 0.
+- **Placement.** One member per distinct storage node, through `host_id` on
+  create, chosen round robin across failure domains. A volume never spans
+  clusters: a supercluster class picks one member cluster and stripes inside it.
+  A width larger than the cluster's storage nodes is refused at `CreateVolume`
+  and at `StoragePool` admission.
+- **Sizing.** `ceil(S/n)` per member, GiB-aligned, as §1.1 states.
+- **The node shape.** The `Striped` plan, with the member order recorded in the
+  stack record, which is what §2.1 assembles in the guest.
+
+**Snapshots are where the two differ, on purpose.** A block striped volume
+snapshots its members concurrently and documents that the snapshot is not atomic
+across nodes: a crash-consistent snapshot needs the application quiesced or the
+filesystem frozen (`fsfreeze`) while it is taken. That is acceptable there because
+the filesystem's only writer is the one node that mounts it, and freezing that
+filesystem stops every write to every member. A striped export has no such single
+writer: pNFS clients write to the members directly through their layouts, and
+freezing XFS on the metadata server does not by itself stop them (§3.1). So this
+design keeps refusing snapshots of a striped export (SM-4) until a freeze is shown
+to stop every client's direct writes, or until S0-1 exists.
+
+Block striped volumes refuse `fsType: pnfs` today. Phase 1 of this design is what
+lifts that refusal, for exports only.
+
+---
+
 ## Phase 0 — External Prerequisites
 
 In addition to every prerequisite in the base design, which still applies.
 
-| #    | Prerequisite                                                                                                     | Kind                    | Blocks                                            | Status                                    |
-|------|------------------------------------------------------------------------------------------------------------------|-------------------------|---------------------------------------------------|-------------------------------------------|
-| S0-1 | Consistency-group snapshot API: atomically snapshot a set of lvols, returning a group id and per-member ids (§3) | Control plane (`sbcli`) | Every snapshot of a striped volume, and all of §5 | In progress                               |
-| S0-2 | Freeze and unfreeze of all members for the duration of that group snapshot (§3)                                  | Storage plane (SPDK)    | Crash-consistency of the snapshot                 | In progress, with S0-1                    |
-| S0-3 | Consistency-group clone and restore from a group snapshot (§3)                                                   | Control plane (`sbcli`) | Clone and restore of a striped volume             | Not shipped, recommended                  |
-| S0-4 | A placement hint on lvol create, so members land on distinct storage nodes rather than by luck (§2.2)            | Control plane (`sbcli`) | The parallelism striping exists for               | Not shipped, recommended                  |
-| S0-5 | Kubernetes ≥ 1.32 and the sidecar version floors for the group feature (§5)                                      | Ecosystem               | The user-facing `VolumeGroupSnapshot` only        | Sidecars met, CRDs are Phase 3 chart work |
-| S0-6 | A guest nfsd patch (pnfs-os) that describes an exported device-mapper stripe as a pNFS volume topology (§2.2)    | Guest kernel            | Every striped export                              | Not started                               |
-| S0-7 | `BLK_DEV_DM` and `DM_STRIPED` in the guest kernel and `lvm2` in its root filesystem (§2.1)                       | Guest kernel and image  | Assembly on the metadata server                   | Not started                               |
+| #    | Prerequisite                                                                                                                      | Kind                    | Blocks                                            | Status                                           |
+|------|-----------------------------------------------------------------------------------------------------------------------------------|-------------------------|---------------------------------------------------|--------------------------------------------------|
+| S0-1 | Cross-node group snapshot API: atomically snapshot lvols on different storage nodes, returning a group id and per-member ids (§3) | Control plane (`sbcli`) | Every snapshot of a striped export, and all of §5 | Not available: consistency groups are single-LVS |
+| S0-2 | Freeze and unfreeze of all members for the duration of that group snapshot (§3)                                                   | Storage plane (SPDK)    | Crash-consistency of the snapshot                 | In progress, with S0-1                           |
+| S0-3 | Consistency-group clone and restore from a group snapshot (§3)                                                                    | Control plane (`sbcli`) | Clone and restore of a striped volume             | Not shipped, recommended                         |
+| S0-4 | A placement hint on lvol create, so members land on distinct storage nodes rather than by luck (§2.5)                             | Control plane (`sbcli`) | The parallelism striping exists for               | Available: `host_id`, used by PR #918            |
+| S0-5 | Kubernetes ≥ 1.32 and the sidecar version floors for the group feature (§5)                                                       | Ecosystem               | The user-facing `VolumeGroupSnapshot` only        | Sidecars met, CRDs are Phase 3 chart work        |
+| S0-6 | A guest nfsd patch (pnfs-os) that describes an exported device-mapper stripe as a pNFS volume topology (§2.2)                     | Guest kernel            | Every striped export                              | Not started                                      |
+| S0-7 | `BLK_DEV_DM` and `DM_STRIPED` in the guest kernel and `lvm2` in its root filesystem (§2.1)                                        | Guest kernel and image  | Assembly on the metadata server                   | Not started                                      |
 
-**Without S0-1 and S0-2** a snapshot of a striped RWX volume produces an
-unmountable filesystem, so snapshotting has to be refused rather than served wrong.
-That is the sharpest constraint in this document: striping without a consistency
-group is a volume that cannot be backed up. Both are being built in the control
-plane, so the constraint is a sequencing one rather than an open question. **Without S0-4** members may land on one
-node, which does not break correctness but removes the reason to stripe at all.
+**Without S0-1 and S0-2** a snapshot of a striped RWX volume can be taken only
+with every writer stopped, and §3.1 explains why an export cannot yet guarantee
+that, so snapshotting is refused rather than served wrong. That is the sharpest
+constraint in this document: a striped export cannot be backed up until one of the
+two is solved. The consistency groups the control plane ships do not solve it,
+because a group is confined to one logical volume store and cannot hold members on
+different nodes. S0-4 is met: `host_id` on lvol create places each member, and
+block striped volumes already use it.
 
 **Without S0-6** a striped export is refused rather than served. An unpatched nfsd
 describes the stripe as its first member, and a client given that layout writes
@@ -96,6 +148,7 @@ than an existing capability.
 ## Table of Contents
 
 - [Overview](#overview)
+- [Relation to Block Striped Volumes](#relation-to-block-striped-volumes)
 - [Phase 0 — External Prerequisites](#phase-0--external-prerequisites)
 
 1. [Goals and Non-Goals](#1-goals-and-non-goals)
@@ -126,7 +179,7 @@ than an existing capability.
 - Re-striping an existing volume across a changed node set. A volume's `n` is fixed at creation.
 - Redundancy across members. A stripe has none: losing one member loses the filesystem. Resiliency stays per-lvol, through erasure coding or replication (§6).
 - Mixed `n` within one export, or changing `n` on resize.
-- Striping for RWO volumes, which have no reason to want it.
+- Striping for RWO and raw block volumes, which PR #918 delivers outside this design.
 
 ---
 
@@ -310,10 +363,13 @@ after them.
 
 The `n` members should land on `n` distinct storage nodes. That is the entire point:
 a stripe whose members share a node has the throughput of one node and the failure
-domain of one node, with extra moving parts. The control plane offers no placement
-hint today (S0-4), so until it does, the driver creates members one at a time and
-verifies afterward that they landed on distinct nodes, failing provisioning rather
-than silently building a degenerate stripe. Refusing rather than warning is what the
+domain of one node, with extra moving parts. The driver places them the way it
+places a block striped volume's members
+([Relation to Block Striped Volumes](#relation-to-block-striped-volumes)): each
+member is created with `host_id` naming a different online storage node, so the
+placement is asked for rather than verified afterward, and a width the cluster's
+nodes cannot cover fails provisioning rather than silently building a degenerate
+stripe. Refusing rather than warning is what the
 test plan asserts (`SU-09`, `SE-09`), and S4 is the decision that could soften it to
 a warning. Until S4 is answered, refusal is the contract.
 
@@ -335,9 +391,21 @@ it does not fail loudly at snapshot time. It fails at restore, which is the wors
 place to find out.
 
 `xfs_freeze` in the metadata server's guest, which is how the base design quiesces a single-volume
-snapshot, is necessary here but no longer sufficient. Freezing stops new writes, but
-the members are still snapshotted by `n` separate backend calls, and nothing makes
-those calls simultaneous. The atomicity has to come from the backend.
+snapshot, is necessary here but no longer sufficient. On a block striped volume a
+freeze is enough, because the filesystem's one host is its only writer: with writes
+stopped, `n` separate member snapshots taken one after another all see the same
+state, which is how PR #918 snapshots a block stripe once the application or the
+filesystem is quiesced. A striped export breaks that premise. Its clients write data
+to the members directly through pNFS layouts, and the freeze on the metadata server
+holds back metadata changes, not those direct writes, unless every outstanding
+layout is recalled first. Until the freeze path is shown to recall every layout, the
+members of an export can change between one member snapshot and the next, and the
+atomicity has to come from the backend.
+
+That backend primitive is not the consistency group the control plane ships. A
+consistency group is confined to one logical volume store, and a stripe's members
+are on different storage nodes, so no consistency group can hold them. S0-1 is a
+different, cross-node primitive.
 
 ### 3.2 What the backend has to offer
 
@@ -380,8 +448,8 @@ edits striping forces:
 | §8.2 `CreateExport`          | The LVM steps in §2.1 sit between attach and `mkfs.xfs`.                                                                                                                                                                                                                   |
 | §10.1 `NodeStageVolume`      | The `lvmFilter` layer comes first (§2.4), then attaching and aliasing repeat per member (§2.2). No LVM activation runs, and unstage releases `n` namespaces where the base design releases one.                                                                            |
 | §8.3 `DeleteExport`          | `lvremove`, `vgremove`, and `pvremove` before the namespaces are released.                                                                                                                                                                                                 |
-| §9.2 StorageClass            | A `stripe_count` parameter, defaulting to `1`, bounded by the eligible node count.                                                                                                                                                                                         |
-| §9.3 `CreateVolume`          | Create `n` lvols of `ceil(S/n)`, verify distinct placement (§2.5), and record all members.                                                                                                                                                                                 |
+| §9.2 StorageClass            | The `stripe_width` and `stripe_size` parameters block striped volumes use (`stripeWidth` and `stripeSize` on the pool), bounded by the eligible node count.                                                                                                                |
+| §9.3 `CreateVolume`          | Create `n` lvols of `ceil(S/n)`, each on its own node (§2.5) and named and identified as block striped members are, and record all members.                                                                                                                                |
 | §12.2 Snapshot               | The group path in §3.3 replaces the per-lvol snapshot.                                                                                                                                                                                                                     |
 | §13 Failover                 | Unchanged in shape, but step 4 rebuilds an LVM stripe rather than mounting a device, which lengthens the freeze. The `fsid` and the VG and LV names still have to match.                                                                                                   |
 | §5.3 Compatibility           | The guest additionally needs S0-6 and S0-7. Client kernels need nothing beyond the base design, because the block layout client already decodes `STRIPE` and `SLICE` topologies.                                                                                           |
@@ -466,7 +534,7 @@ Beyond the base design's table:
 ## 8. Phased Delivery Plan
 
 - **Phase 0:** the prerequisites above. S0-6 and S0-7 are guest work in pnfs-os, and none of the others is implementable here.
-- **Phase 1 (assembly):** `stripe_count`, multi-lvol create with placement verification, LVM assembly in `CreateExport`, the topology capability check, multi-namespace attach on client and MDS, and the `NFSExport` status change. Snapshots stay refused for `n > 1`.
+- **Phase 1 (assembly):** `stripe_width` for exports, multi-lvol create with per-member placement, LVM assembly in `CreateExport`, the topology capability check, multi-namespace attach on client and MDS, and the `NFSExport` status change. Snapshots stay refused for `n > 1`.
 - **Phase 2 (consistency group):** the group snapshot, clone, and restore path in §3.3, which lifts that refusal.
 - **Phase 3 (group controller):** the CSI GroupController service and `VolumeGroupSnapshot` (§5).
 - **Phase 4 (failover under stripe):** measure and tune reassembly inside the freeze bound (S3).
