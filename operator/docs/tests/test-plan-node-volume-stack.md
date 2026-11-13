@@ -265,6 +265,16 @@ call, and a fake `nvme` first on `PATH` plays the nvme-cli that cannot be reaped
 | U-121 | A command killed at its deadline, or whose output a child still holds, returns an error wrapping `context.DeadlineExceeded`               | Regression | `TestCombinedOutputKillsAProcessAtTheDeadline`     |
 | U-122 | A device recorded by an attach while the presence scan runs is not reported gone by that scan                                             | Regression | `TestPruneLeavesADeviceRecordedDuringTheScan`      |
 | U-123 | A monitor tick whose path repair fails still reports the devices the kernel removed                                                       | Regression | `TestTickReportsGoneDevicesWhenPathRepairFails`    |
+| U-124 | A stage on a node with no NVMe/TCP initiator is refused as a failed precondition naming the package to install                            | Regression | `TestStageNamesTheMissingNVMeInitiator`            |
+| U-125 | A stage on a node whose initiator module is installed and not loaded loads it and goes on                                                 | Positive   | `TestStageLoadsAnInitiatorThatIsInstalled`         |
+| U-126 | A stage of a pNFS volume on a node with no NVMe/TCP initiator is refused the same way, before its own path                                | Negative   | `TestPNFSStageNamesTheMissingNVMeInitiator`        |
+| U-127 | A node with `/dev/nvme-fabrics` and no `nvme_tcp` module is not taken for one that can connect a volume                                   | Regression | `TestFabricsDeviceAloneIsNotAnInitiator`           |
+| U-128 | A `modprobe` that succeeds is believed when the module shows no sysfs entry, as a built-in transport may not                              | Positive   | `TestInitiatorCheckBelievesAModprobeThatSucceeds`  |
+| U-129 | The node plugin refuses to start on a node with no NVMe/TCP initiator and leaves the reason as its termination message                    | Negative   | `TestStartRefusesANodeWithoutTheNVMeInitiator`     |
+| U-130 | The node plugin starts on a node whose initiator loads, and writes no termination message                                                 | Positive   | `TestStartAcceptsANodeWithTheNVMeInitiator`        |
+| U-131 | A refused start is recorded as a Warning event on the plugin's own pod, carrying the refusal                                              | Positive   | `TestStartRefusalIsAnEventOnThePluginsPod`         |
+| U-132 | A plugin that does not know its pod, or has no API client, records no event and reports that it did not                                   | Negative   | `TestStartRefusalWithoutAPodIsNotRecorded`         |
+| U-133 | On a host whose kernel is not Ubuntu's, the refusal names the module and no package                                                       | Negative   | `TestRefusalNamesNoPackageOnAHostThatIsNotUbuntu`  |
 
 ---
 
@@ -504,7 +514,7 @@ nobody will release.
 
 | Class          | Scenarios | Covered | Not covered                           |
 |----------------|-----------|---------|---------------------------------------|
-| Unit           | 109       | 27      | U-01 … U-70, U-73 … U-76, U-78 … U-85 |
+| Unit           | 111       | 29      | U-01 … U-70, U-73 … U-76, U-78 … U-85 |
 | Integration    | 21        | 3       | I-01 … I-18                           |
 | E2E            | 27        | 10      | E-11 … E-27                           |
 | Unit — Phase 4 | 7         | 0       | U-P4-01 … U-P4-07                     |
