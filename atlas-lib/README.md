@@ -96,11 +96,12 @@ atlas/
 │   │   ├── filesystem.go   filesystem: format if blank, mount, refuse anything else
 │   │   └── filesystem_strategy.go  FilesystemLayerStrategy: what each fs type formats, mounts, and resizes with
 │   └── plans/              The plan shapes: one constructor per row of the design's plan table
-│       ├── plans.go        RawBlock / Plain / LVM / LVMRawBlock / Striped + the LVM naming rule
+│       ├── plans.go        RawBlock / Plain / LVM / LVMRawBlock / Striped / StripedRawBlock + the LVM naming rule
 │       └── node.go         NodeConfig: the seams every plan on this host is built over
 ├── lvol/                   Logical-volume identity, control-plane + device resolution
 │   ├── volume.go           VolumeHandle, Volume
 │   ├── handle.go           Handle: a volume handle taken apart; ParseHandle, IsCanonicalUUID
+│   ├── stripe.go           The striped-volume marker: ParseStripedHandle, SplitStripeMarker, WithStripeMarker
 │   ├── normalized.go       NormalizeHandle: the annotated handle over the field's, §16.4's rule
 │   ├── groupsnapshot.go    GroupSnapshotHandle: a consistency-group generation's CSI id
 │   ├── resolver.go         Resolver: control-plane lookup (info + Connection)

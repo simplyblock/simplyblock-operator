@@ -28,6 +28,11 @@ type mockVolume struct {
 	Status  string // defaults to "online" when empty
 	GroupID string // consistency group id, "" for a non-member
 
+	// HostID is the storage node the volume is on: the host_id its create
+	// asked for, or its source's for a clone. GET serves it as
+	// storage_node_id.
+	HostID string
+
 	// ReplicationPolicyID is the policy this volume currently follows, ""
 	// when none. Set by a PUT carrying replication_policy_id (a string
 	// attaches, an explicit JSON null detaches; the key's absence, as an
@@ -377,11 +382,17 @@ func (m *mockSBCLI) handleGetVolume(w http.ResponseWriter, r *http.Request) {
 	if volume == nil {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"id": volume.UUID, "name": volume.Name, "size": volume.Size, "status": volume.status(),
 		"group_id": volume.GroupID, "pool_name": sanityPoolName, "ns_id": 1,
 		"nqn": "nqn.2023-02.io.simplyblock:" + sanityClusterID + ":lvol:" + volume.UUID,
-	})
+	}
+	// Only a volume placed on a named node reports one: the generated client
+	// reads the field as a UUID and refuses an empty one.
+	if volume.HostID != "" {
+		body["storage_node_id"] = volume.HostID
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (m *mockSBCLI) handleDeleteVolume(w http.ResponseWriter, r *http.Request) {
@@ -588,7 +599,7 @@ func (m *mockSBCLI) handleCloneVolume(w http.ResponseWriter, r *http.Request) {
 	cloneName := r.URL.Query().Get("clone_name")
 	m.lastCloneSource = volume.UUID
 	newID := uuid.New().String()
-	m.volumes[newID] = &mockVolume{UUID: newID, Name: cloneName, Size: volume.Size}
+	m.volumes[newID] = &mockVolume{UUID: newID, Name: cloneName, Size: volume.Size, HostID: volume.HostID}
 	w.Header().Set("Location", fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/",
 		sanityClusterID, sanityPoolUUID, newID))
 	w.WriteHeader(http.StatusCreated)
@@ -629,6 +640,7 @@ func (m *mockSBCLI) createVolume(w http.ResponseWriter, r *http.Request) {
 		Name       string `json:"name"`
 		Size       string `json:"size"`
 		SnapshotID string `json:"snapshot_id"`
+		HostID     string `json:"host_id"`
 	}
 	_ = json.Unmarshal(raw, &body)
 
@@ -672,7 +684,14 @@ func (m *mockSBCLI) createVolume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	m.volumes[newID] = &mockVolume{UUID: newID, Name: body.Name, Size: size}
+	hostID := body.HostID
+	if body.SnapshotID != "" {
+		if source := m.volumes[m.snapshots[body.SnapshotID].VolUUID]; source != nil {
+			// A clone lands beside the volume its snapshot was taken of.
+			hostID = source.HostID
+		}
+	}
+	m.volumes[newID] = &mockVolume{UUID: newID, Name: body.Name, Size: size, HostID: hostID}
 	w.Header().Set("Location", fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/",
 		sanityClusterID, sanityPoolUUID, newID))
 	w.WriteHeader(http.StatusCreated)

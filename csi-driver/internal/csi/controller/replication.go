@@ -230,6 +230,9 @@ func (cs *Server) EnableVolumeReplication(
 	ctx context.Context,
 	req *replication.EnableVolumeReplicationRequest,
 ) (*replication.EnableVolumeReplicationResponse, error) {
+	if err := refuseStriped(volumeIDFrom(req), "replication"); err != nil {
+		return nil, err
+	}
 	policyID := req.GetParameters()[replicationPolicyParam]
 	// An empty replicationPolicyID is the FAIL-OVER TARGET: the side becoming
 	// primary carries no reverse-direction policy yet, because the reverse
@@ -308,6 +311,9 @@ func (cs *Server) DisableVolumeReplication(
 	ctx context.Context,
 	req *replication.DisableVolumeReplicationRequest,
 ) (*replication.DisableVolumeReplicationResponse, error) {
+	if err := refuseStriped(volumeIDFrom(req), "replication"); err != nil {
+		return nil, err
+	}
 	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
 		// The local group: this site detaches what it holds, never the live
 		// group on the other site.
@@ -354,6 +360,9 @@ func (cs *Server) GetVolumeReplicationInfo(
 	ctx context.Context,
 	req *replication.GetVolumeReplicationInfoRequest,
 ) (*replication.GetVolumeReplicationInfoResponse, error) {
+	if err := refuseStriped(volumeIDFrom(req), "replication"); err != nil {
+		return nil, err
+	}
 	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
 		gh, client, err := resolveGroupTarget(ctx, gh, groupActiveEnd)
 		if err != nil {
@@ -411,6 +420,9 @@ func (cs *Server) PromoteVolume(
 	ctx context.Context,
 	req *replication.PromoteVolumeRequest,
 ) (*replication.PromoteVolumeResponse, error) {
+	if err := refuseStriped(volumeIDFrom(req), "replication"); err != nil {
+		return nil, err
+	}
 	// A group handle promotes the whole consistency group atomically (design
 	// §14.4): every member is cloned from the same group generation. The
 	// planned/forced split is the backend group failover's own concern, so
@@ -481,6 +493,9 @@ func (cs *Server) DemoteVolume(
 	ctx context.Context,
 	req *replication.DemoteVolumeRequest,
 ) (*replication.DemoteVolumeResponse, error) {
+	if err := refuseStriped(volumeIDFrom(req), "replication"); err != nil {
+		return nil, err
+	}
 	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
 		// The local group: a relocate back demotes the group this site serves,
 		// which after the first move is the peer of the group the VGR names.
@@ -539,6 +554,9 @@ func (cs *Server) ResyncVolume(
 	ctx context.Context,
 	req *replication.ResyncVolumeRequest,
 ) (*replication.ResyncVolumeResponse, error) {
+	if err := refuseStriped(volumeIDFrom(req), "replication"); err != nil {
+		return nil, err
+	}
 	if named, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
 		gh, client, err := resolveGroupTarget(ctx, named, groupActiveEnd)
 		if err != nil {

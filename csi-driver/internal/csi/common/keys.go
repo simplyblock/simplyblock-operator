@@ -54,6 +54,16 @@ const (
 	// and the value the node branches on.
 	AccessProtocolNFS = "nfs"
 
+	// The volume-context keys a striped volume is staged from, written by the
+	// controller service and read by the node service. CtxStripeMembers lists
+	// the members' logical-volume UUIDs, comma separated, in stripe order: the
+	// first is the volume's own identity, and the order is the order the node
+	// stripes them in, so it is never rewritten after the volume is created.
+	// CtxStripeChunkBytes is the chunk each member takes, in bytes.
+	CtxStripeWidth      = "stripeWidth"
+	CtxStripeMembers    = "stripeMembers"
+	CtxStripeChunkBytes = "stripeChunkBytes"
+
 	// The topology keys the node service reports and the controller service
 	// places against. The beta zone key is still read because clusters upgraded
 	// from it keep the label.
@@ -82,10 +92,27 @@ const (
 //
 // Both services parse it: the controller to address the volume it was asked
 // about, the node to address the one it is staging.
+//
+// A striped volume's id carries a fourth segment naming its width
+// (lvol.ParseStripedHandle), and parses to its first member, which is the
+// volume's identity: the logical volume its PersistentVolume is found by, its
+// lock, and the one whose name the other members are named after. A caller that
+// acts on the volume's data rather than its identity has to ask StripeWidth as
+// well, or it acts on the first member alone.
 func ParseVolumeHandle(csiVolumeID string) (*lvol.Handle, error) {
-	handle, ok := lvol.ParseHandle(lvol.VolumeHandle(csiVolumeID))
+	handle, _, ok := lvol.ParseStripedHandle(lvol.VolumeHandle(csiVolumeID))
 	if !ok {
 		return nil, fmt.Errorf("invalid volume handle %q (expected {clusterID}:{poolID}:{lvolID})", csiVolumeID)
 	}
 	return &handle, nil
+}
+
+// StripeWidth is how many members the volume an id names is striped across,
+// and 1 for an ordinary volume and for an id that does not parse.
+func StripeWidth(csiVolumeID string) int {
+	_, width, ok := lvol.ParseStripedHandle(lvol.VolumeHandle(csiVolumeID))
+	if !ok {
+		return 1
+	}
+	return width
 }

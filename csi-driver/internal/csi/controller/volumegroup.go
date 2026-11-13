@@ -149,6 +149,9 @@ func parseGroupMembers(volumeIDs []string) (clusterID string, lvolIDs []string, 
 	}
 	lvolIDs = make([]string, 0, len(volumeIDs))
 	for _, vid := range volumeIDs {
+		if err := refuseStriped(vid, "a volume group"); err != nil {
+			return "", nil, err
+		}
 		h, ok := lvol.ParseHandle(lvol.VolumeHandle(vid))
 		if !ok {
 			return "", nil, status.Errorf(codes.InvalidArgument, "malformed volume handle %q", vid)

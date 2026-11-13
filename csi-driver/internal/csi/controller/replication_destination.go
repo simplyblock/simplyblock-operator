@@ -61,6 +61,9 @@ func (cs *Server) GetReplicationDestinationInfo(
 	if _, err := csicommon.ParseVolumeHandle(volumeID); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	if err := refuseStriped(volumeID, "replication"); err != nil {
+		return nil, err
+	}
 	return &replication.GetReplicationDestinationInfoResponse{
 		ReplicationDestination: &replication.ReplicationDestination{
 			Type: &replication.ReplicationDestination_Volume{

@@ -44,6 +44,7 @@ const (
 	layerLVMVolumeGroup    = "lvmVolumeGroup"
 	layerLVMLogicalVolume  = "lvmLogicalVolume"
 	layerDMLinear          = "dmLinear"
+	layerMembers           = "members"
 )
 
 // vdoPoolName is the pool `lvcreate --type vdo` creates alongside the logical
@@ -86,6 +87,13 @@ const (
 	// a volume never gains or loses the layer under a staged consumer.
 	shapeIndirectRawBlock
 	shapeIndirectPlain
+
+	// shapeStriped is a striped volume: one fabric per member under the
+	// members composite, the three LVM layers striping them into one logical
+	// volume, and a filesystem on top (striped.go). shapeStripedRawBlock is the
+	// same without the filesystem.
+	shapeStriped
+	shapeStripedRawBlock
 )
 
 // planFor is the layer list one of the shapes means, built with the seams the
@@ -147,6 +155,10 @@ func dmIndirectionEnabled() bool {
 func shapeFor(vc map[string]string, volCap *csi.VolumeCapability) stackShape {
 	block := volCap.GetBlock() != nil
 	switch {
+	case stripeWidth(vc) > 1 && block:
+		return shapeStripedRawBlock
+	case stripeWidth(vc) > 1:
+		return shapeStriped
 	case wantsVDO(vc) && block:
 		return shapeLVMRawBlock
 	case wantsVDO(vc):
@@ -382,6 +394,14 @@ var recordedShapes = []struct {
 		[]string{layerFabric, layerLVMPhysicalVolume, layerLVMVolumeGroup, layerLVMLogicalVolume, layerFilesystem},
 		shapeLVM,
 	},
+	{
+		[]string{layerMembers, layerLVMPhysicalVolume, layerLVMVolumeGroup, layerLVMLogicalVolume},
+		shapeStripedRawBlock,
+	},
+	{
+		[]string{layerMembers, layerLVMPhysicalVolume, layerLVMVolumeGroup, layerLVMLogicalVolume, layerFilesystem},
+		shapeStriped,
+	},
 }
 
 // knownLayers are the layer names the shapes above are made of, which is what
@@ -394,6 +414,7 @@ var knownLayers = map[string]bool{
 	layerLVMVolumeGroup:    true,
 	layerLVMLogicalVolume:  true,
 	layerDMLinear:          true,
+	layerMembers:           true,
 }
 
 // shapeFromRecord is the plan shape a recorded layer list describes.
