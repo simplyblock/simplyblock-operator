@@ -28,6 +28,9 @@ func (ns *Server) NodePublishVolume(
 
 	stagingParentPath := req.GetStagingTargetPath()
 	volumeContext, err := lookupVolumeContext(stagingParentPath)
+	if err := ns.refuseWhileHeld(volumeID); err != nil {
+		return nil, err
+	}
 	if err != nil {
 		klog.Errorf("failed to retrieve volume context for volume %s: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
@@ -50,7 +53,7 @@ func (ns *Server) NodePublishVolume(
 		ctx, volumeID, getStagingTargetPath(req), volumeContext, req.GetVolumeCapability())
 	if err != nil {
 		klog.Errorf("failed to build the stack plan for volume %s: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, stackError(err, "failed to build the stack plan for volume %s", volumeID)
 	}
 
 	// kubelet skips NodeStageVolume while the volume is still referenced on this
@@ -59,7 +62,7 @@ func (ns *Server) NodePublishVolume(
 	// and creates nothing, so a healthy volume costs a read of each layer.
 	if err := ns.healStack(ctx, volumeID, plan, stagingParentPath); err != nil {
 		klog.Errorf("failed to heal volume %s before publish: %v", volumeID, err)
-		return nil, status.Errorf(codes.Internal, "heal volume %s before publish: %v", volumeID, err)
+		return nil, stackError(err, "heal volume %s before publish", volumeID)
 	}
 
 	if err := ns.publishVolume(ctx, plan, getStagingTargetPath(req), req); err != nil { // idempotent

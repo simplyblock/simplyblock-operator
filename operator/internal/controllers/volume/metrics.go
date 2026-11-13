@@ -78,8 +78,41 @@ var (
 	)
 )
 
+// The subsystem moves a JoinConsistencyGroup makes.
+var (
+	cgSubsystemMoves = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "simplyblock_cg_subsystem_moves_total",
+			Help: "Consistency-group subsystem moves by outcome: succeeded, rolled_back, or refused.",
+		},
+		[]string{"cluster", "result"},
+	)
+
+	cgSubsystemMoveNamespaces = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "simplyblock_cg_subsystem_moved_namespaces_total",
+			Help: "Namespaces consistency-group subsystem moves took to their target.",
+		},
+		[]string{"cluster"},
+	)
+
+	// cgSubsystemMoveWindow is the measure of the design's goal: how long the
+	// consuming hosts held I/O, from the first hold to the last release.
+	cgSubsystemMoveWindow = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "simplyblock_cg_subsystem_move_window_seconds",
+			Help:    "Time from the first host holding I/O to the last host releasing it, per subsystem move.",
+			Buckets: []float64{0.25, 0.5, 1, 2, 3, 5, 8, 10, 15, 20, 30},
+		},
+		[]string{"cluster"},
+	)
+)
+
 func init() {
 	ctrlmetrics.Registry.MustRegister(
+		cgSubsystemMoves,
+		cgSubsystemMoveNamespaces,
+		cgSubsystemMoveWindow,
 		operationsTotal,
 		operationDuration,
 		stepDuration,

@@ -99,6 +99,11 @@ var clusterRoleRules = map[string][]rbacv1.PolicyRule{
 		// runs (co-location design §5). It creates and reads its own
 		// requests; it never updates or deletes one.
 		rule(simplyblock, []string{"volumemigrations"}, "get", "create"),
+		// The consistency-group watcher's join: a label added to an existing
+		// volume becomes one JoinConsistencyGroup PersistentVolumeOps, which the
+		// operator runs and whose phase the watcher reports. It never updates
+		// or deletes one.
+		rule(simplyblock, []string{"persistentvolumeops"}, "get", "list", "watch", "create"),
 	},
 	"attacher": {
 		rule(core, []string{"persistentvolumes"}, "get", "list", "watch", "update", "patch"),

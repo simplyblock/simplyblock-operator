@@ -201,6 +201,24 @@ func (e ConsistencyGroupReplicationStatusDTOState) Valid() bool {
 	}
 }
 
+// Defines values for ConsistencyGroupSubsystemMoveCreateDTOPurpose.
+const (
+	Join  ConsistencyGroupSubsystemMoveCreateDTOPurpose = "join"
+	Leave ConsistencyGroupSubsystemMoveCreateDTOPurpose = "leave"
+)
+
+// Valid indicates whether the value is a known member of the ConsistencyGroupSubsystemMoveCreateDTOPurpose enum.
+func (e ConsistencyGroupSubsystemMoveCreateDTOPurpose) Valid() bool {
+	switch e {
+	case Join:
+		return true
+	case Leave:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DevicePerformanceAssessmentDTOVerdict.
 const (
 	DevicePerformanceAssessmentDTOVerdictOk      DevicePerformanceAssessmentDTOVerdict = "ok"
@@ -1517,6 +1535,18 @@ type ConsistencyGroupColocateDTO struct {
 	ClientSwapReady *bool `json:"client_swap_ready,omitempty"`
 }
 
+// ConsistencyGroupColocationDTO The subsystem move a late join would end in, computed against the state
+// the pinned node has once the join's migration landed. Nothing is reserved.
+// “target_nqn“ is empty for a fresh subsystem (“target_is_new“), and
+// “refusal“ names why the group could not be brought into one subsystem
+// (“SubsystemLimitReached: ...“) -- the join would be refused for it.
+type ConsistencyGroupColocationDTO struct {
+	MovingLvolIds *[]string `json:"moving_lvol_ids,omitempty"`
+	Refusal       *string   `json:"refusal,omitempty"`
+	TargetIsNew   *bool     `json:"target_is_new,omitempty"`
+	TargetNqn     *string   `json:"target_nqn,omitempty"`
+}
+
 // ConsistencyGroupDTO A standalone consistency group summary (design §10).
 type ConsistencyGroupDTO struct {
 	ClusterId    openapi_types.UUID  `json:"cluster_id"`
@@ -1548,12 +1578,14 @@ type ConsistencyGroupGenerationMemberDTO struct {
 
 // ConsistencyGroupJoinPlanDTO The steps a late join of an existing volume takes (co-location design
 // §5): “migrate“ (live-migrate “migrate_lvol_ids“ to “target_node_id“
-// first), “join“, “colocate“ (move into “target_nqn“).
+// first), “join“, “colocate“ (move into “target_nqn“). “colocation“
+// is absent when the group has no other member to share a subsystem with.
 type ConsistencyGroupJoinPlanDTO struct {
-	MigrateLvolIds *[]string `json:"migrate_lvol_ids,omitempty"`
-	Steps          []string  `json:"steps"`
-	TargetNodeId   *string   `json:"target_node_id,omitempty"`
-	TargetNqn      *string   `json:"target_nqn,omitempty"`
+	Colocation     *ConsistencyGroupColocationDTO `json:"colocation,omitempty"`
+	MigrateLvolIds *[]string                      `json:"migrate_lvol_ids,omitempty"`
+	Steps          []string                       `json:"steps"`
+	TargetNodeId   *string                        `json:"target_node_id,omitempty"`
+	TargetNqn      *string                        `json:"target_nqn,omitempty"`
 }
 
 // ConsistencyGroupLineageMemberDTO One protected volume of a consistency group: the handle its
@@ -1643,6 +1675,69 @@ type ConsistencyGroupResolutionDTO struct {
 	ClusterId       string                              `json:"cluster_id"`
 	GroupId         string                              `json:"group_id"`
 	Members         *[]ConsistencyGroupLineageMemberDTO `json:"members,omitempty"`
+}
+
+// ConsistencyGroupSubsystemMoveCreateDTO Request body for a subsystem move: “lvol_id“ is the member that just
+// joined, or with “purpose“ “leave“ the member about to leave, which is
+// split out of the subsystem it shares into a fresh one on its node. A retry
+// with the same “request_id“ answers with the same move.
+type ConsistencyGroupSubsystemMoveCreateDTO struct {
+	LvolId    string                                         `json:"lvol_id"`
+	Purpose   *ConsistencyGroupSubsystemMoveCreateDTOPurpose `json:"purpose,omitempty"`
+	RequestId string                                         `json:"request_id"`
+}
+
+// ConsistencyGroupSubsystemMoveCreateDTOPurpose defines model for ConsistencyGroupSubsystemMoveCreateDTO.Purpose.
+type ConsistencyGroupSubsystemMoveCreateDTOPurpose string
+
+// ConsistencyGroupSubsystemMoveDTO A consistency group's subsystem move. “id“ is empty, and “volumes“
+// too, when nothing had to move. “namespaces_at“ is “source“ or
+// “target“; “deadline“ is the hosts' suspend deadline in Unix seconds
+// the move was started under (0 before it started).
+type ConsistencyGroupSubsystemMoveDTO struct {
+	Deadline     *int                                      `json:"deadline,omitempty"`
+	Id           string                                    `json:"id"`
+	NamespacesAt *string                                   `json:"namespaces_at,omitempty"`
+	RequestId    *string                                   `json:"request_id,omitempty"`
+	Status       *string                                   `json:"status,omitempty"`
+	TargetIsNew  *bool                                     `json:"target_is_new,omitempty"`
+	TargetNqn    *string                                   `json:"target_nqn,omitempty"`
+	Volumes      *[]ConsistencyGroupSubsystemMoveVolumeDTO `json:"volumes,omitempty"`
+}
+
+// ConsistencyGroupSubsystemMovePrepareDTO Request body for preparing a move: “host_nqn“ asks for the target
+// subsystem's connect entries for that host.
+type ConsistencyGroupSubsystemMovePrepareDTO struct {
+	HostNqn *string `json:"host_nqn,omitempty"`
+}
+
+// ConsistencyGroupSubsystemMovePreparedDTO A prepared move, and the connect entries of its target subsystem for
+// the requested host, shaped like the volume connect route's.
+type ConsistencyGroupSubsystemMovePreparedDTO struct {
+	Connect *[]map[string]interface{} `json:"connect,omitempty"`
+
+	// Move A consistency group's subsystem move. ``id`` is empty, and ``volumes``
+	// too, when nothing had to move. ``namespaces_at`` is ``source`` or
+	// ``target``; ``deadline`` is the hosts' suspend deadline in Unix seconds
+	// the move was started under (0 before it started).
+	Move ConsistencyGroupSubsystemMoveDTO `json:"move"`
+}
+
+// ConsistencyGroupSubsystemMoveStartDTO Request body for moving the namespaces: the hosts' suspend deadline in
+// Unix seconds. The move refuses to begin once it has passed.
+type ConsistencyGroupSubsystemMoveStartDTO struct {
+	Deadline int `json:"deadline"`
+}
+
+// ConsistencyGroupSubsystemMoveVolumeDTO One volume whose namespace changes subsystem: where it is exported
+// from and at which nsid, its wire identity, and its nsid in the target.
+type ConsistencyGroupSubsystemMoveVolumeDTO struct {
+	LvolId     string  `json:"lvol_id"`
+	Nguid      *string `json:"nguid,omitempty"`
+	NsUuid     *string `json:"ns_uuid,omitempty"`
+	SourceNqn  *string `json:"source_nqn,omitempty"`
+	SourceNsid *int    `json:"source_nsid,omitempty"`
+	TargetNsid *int    `json:"target_nsid,omitempty"`
 }
 
 // DeviceDTO defines model for DeviceDTO.
@@ -3076,6 +3171,9 @@ type ClustersConsistencyGroupsReplicationSyncStatusApiV2ClustersClusterIdConsist
 // ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody defines parameters for ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost.
 type ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody = UnderscoreGenerationTakeParams
 
+// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONBody defines parameters for ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost.
+type ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONBody = ConsistencyGroupSubsystemMovePrepareDTO
+
 // ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams defines parameters for ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost.
 type ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams struct {
 	Rebalance *bool `form:"rebalance,omitempty" json:"rebalance,omitempty"`
@@ -3443,6 +3541,15 @@ type ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsisten
 
 // ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONRequestBody defines body for ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost for application/json ContentType.
 type ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONRequestBody = ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody
+
+// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostJSONRequestBody defines body for ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost for application/json ContentType.
+type ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostJSONRequestBody = ConsistencyGroupSubsystemMoveCreateDTO
+
+// ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostJSONRequestBody defines body for ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost for application/json ContentType.
+type ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostJSONRequestBody = ConsistencyGroupSubsystemMoveStartDTO
+
+// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONRequestBody defines body for ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost for application/json ContentType.
+type ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONRequestBody = ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONBody
 
 // ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPostJSONRequestBody defines body for ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPost for application/json ContentType.
 type ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPostJSONRequestBody = PlanParams
@@ -4853,6 +4960,109 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots/{seq} (the `ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet` operationId).
 	ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, seq int, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithBody Clusters:Consistency-Groups:Subsystem-Moves:Create
+	//
+	// Bring the group into one subsystem now that ``lvol_id`` joined it
+	// (design-cg-live-subsystem-flip §5, §9): picks the target and reserves it.
+	//
+	// 409 ``SubsystemLimitReached`` (with ``node_id`` and ``limit``) when the
+	// group needs a fresh subsystem on a node at its limit, ``MoveConflict`` while
+	// another move or a migration is active, ``ColocationRefused`` for a volume
+	// that is not a member or a stretched cluster.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves (the `ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost` operationId).
+	ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithBody(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost Clusters:Consistency-Groups:Subsystem-Moves:Create
+	//
+	// Bring the group into one subsystem now that ``lvol_id`` joined it
+	// (design-cg-live-subsystem-flip §5, §9): picks the target and reserves it.
+	//
+	// 409 ``SubsystemLimitReached`` (with ``node_id`` and ``limit``) when the
+	// group needs a fresh subsystem on a node at its limit, ``MoveConflict`` while
+	// another move or a migration is active, ``ColocationRefused`` for a volume
+	// that is not a member or a stretched cluster.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves (the `ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost` operationId).
+	ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet Clusters:Consistency-Groups:Subsystem-Moves:Get
+	//
+	// The move, or its outcome once committed or rolled back.
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id} (the `ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet` operationId).
+	ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost Clusters:Consistency-Groups:Subsystem-Moves:Commit
+	//
+	// Switch the moving volumes to the target and end the move. Idempotent;
+	// 409 ``MoveConflict`` while the namespaces are not on the target.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/commit (the `ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost` operationId).
+	ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostWithBody Clusters:Consistency-Groups:Subsystem-Moves:Move
+	//
+	// Move every namespace into the target while the hosts hold their I/O.
+	//
+	// 409 ``DeadlinePassed`` before anything is touched once ``deadline`` has
+	// passed; 409 ``MoveFailed`` with ``namespaces_at`` when a namespace could
+	// not be moved (the sources are restored first). A repeat after success
+	// answers with ``namespaces_at: target``.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/move (the `ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost` operationId).
+	ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostWithBody(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost Clusters:Consistency-Groups:Subsystem-Moves:Move
+	//
+	// Move every namespace into the target while the hosts hold their I/O.
+	//
+	// 409 ``DeadlinePassed`` before anything is touched once ``deadline`` has
+	// passed; 409 ``MoveFailed`` with ``namespaces_at`` when a namespace could
+	// not be moved (the sources are restored first). A repeat after success
+	// answers with ``namespaces_at: target``.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/move (the `ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost` operationId).
+	ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, body ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostWithBody Clusters:Consistency-Groups:Subsystem-Moves:Prepare
+	//
+	// Create a fresh target on every HA node and assign the moving
+	// namespaces their nsids there. Returns the target's connect entries for
+	// ``host_nqn``. Idempotent.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/prepare (the `ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost` operationId).
+	ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostWithBody(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost Clusters:Consistency-Groups:Subsystem-Moves:Prepare
+	//
+	// Create a fresh target on every HA node and assign the moving
+	// namespaces their nsids there. Returns the target's connect entries for
+	// ``host_nqn``. Idempotent.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/prepare (the `ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost` operationId).
+	ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, body ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost Clusters:Consistency-Groups:Subsystem-Moves:Rollback
+	//
+	// Put every namespace back into its source and end the move. Idempotent;
+	// 409 ``MoveFailed`` when a namespace could not be restored.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/rollback (the `ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost` operationId).
+	ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersExpandApiV2ClustersClusterIdExpandPost Clusters:Expand
 	//
@@ -7644,6 +7854,199 @@ func (c *Client) ClustersConsistencyGroupsSnapshotsDeleteApiV2ClustersClusterIdC
 // Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots/{seq} (the `ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet` operationId).
 func (c *Client) ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, seq int, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGetRequest(c.Server, clusterId, groupId, seq)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithBody Clusters:Consistency-Groups:Subsystem-Moves:Create
+//
+// Bring the group into one subsystem now that “lvol_id“ joined it
+// (design-cg-live-subsystem-flip §5, §9): picks the target and reserves it.
+//
+// 409 “SubsystemLimitReached“ (with “node_id“ and “limit“) when the
+// group needs a fresh subsystem on a node at its limit, “MoveConflict“ while
+// another move or a migration is active, “ColocationRefused“ for a volume
+// that is not a member or a stretched cluster.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves (the `ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost` operationId).
+func (c *Client) ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithBody(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostRequestWithBody(c.Server, clusterId, groupId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost Clusters:Consistency-Groups:Subsystem-Moves:Create
+//
+// Bring the group into one subsystem now that “lvol_id“ joined it
+// (design-cg-live-subsystem-flip §5, §9): picks the target and reserves it.
+//
+// 409 “SubsystemLimitReached“ (with “node_id“ and “limit“) when the
+// group needs a fresh subsystem on a node at its limit, “MoveConflict“ while
+// another move or a migration is active, “ColocationRefused“ for a volume
+// that is not a member or a stretched cluster.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves (the `ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost` operationId).
+func (c *Client) ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostRequest(c.Server, clusterId, groupId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet Clusters:Consistency-Groups:Subsystem-Moves:Get
+//
+// The move, or its outcome once committed or rolled back.
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id} (the `ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet` operationId).
+func (c *Client) ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetRequest(c.Server, clusterId, groupId, moveId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost Clusters:Consistency-Groups:Subsystem-Moves:Commit
+//
+// Switch the moving volumes to the target and end the move. Idempotent;
+// 409 “MoveConflict“ while the namespaces are not on the target.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/commit (the `ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost` operationId).
+func (c *Client) ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostRequest(c.Server, clusterId, groupId, moveId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostWithBody Clusters:Consistency-Groups:Subsystem-Moves:Move
+//
+// Move every namespace into the target while the hosts hold their I/O.
+//
+// 409 “DeadlinePassed“ before anything is touched once “deadline“ has
+// passed; 409 “MoveFailed“ with “namespaces_at“ when a namespace could
+// not be moved (the sources are restored first). A repeat after success
+// answers with “namespaces_at: target“.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/move (the `ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost` operationId).
+func (c *Client) ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostWithBody(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostRequestWithBody(c.Server, clusterId, groupId, moveId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost Clusters:Consistency-Groups:Subsystem-Moves:Move
+//
+// Move every namespace into the target while the hosts hold their I/O.
+//
+// 409 “DeadlinePassed“ before anything is touched once “deadline“ has
+// passed; 409 “MoveFailed“ with “namespaces_at“ when a namespace could
+// not be moved (the sources are restored first). A repeat after success
+// answers with “namespaces_at: target“.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/move (the `ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost` operationId).
+func (c *Client) ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, body ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostRequest(c.Server, clusterId, groupId, moveId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostWithBody Clusters:Consistency-Groups:Subsystem-Moves:Prepare
+//
+// Create a fresh target on every HA node and assign the moving
+// namespaces their nsids there. Returns the target's connect entries for
+// “host_nqn“. Idempotent.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/prepare (the `ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost` operationId).
+func (c *Client) ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostWithBody(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostRequestWithBody(c.Server, clusterId, groupId, moveId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost Clusters:Consistency-Groups:Subsystem-Moves:Prepare
+//
+// Create a fresh target on every HA node and assign the moving
+// namespaces their nsids there. Returns the target's connect entries for
+// “host_nqn“. Idempotent.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/prepare (the `ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost` operationId).
+func (c *Client) ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, body ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostRequest(c.Server, clusterId, groupId, moveId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost Clusters:Consistency-Groups:Subsystem-Moves:Rollback
+//
+// Put every namespace back into its source and end the move. Idempotent;
+// 409 “MoveFailed“ when a namespace could not be restored.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/rollback (the `ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost` operationId).
+func (c *Client) ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostRequest(c.Server, clusterId, groupId, moveId)
 	if err != nil {
 		return nil, err
 	}
@@ -13345,6 +13748,326 @@ func NewClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistenc
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostRequest calls the generic ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost builder with application/json body
+func NewClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostRequest(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostRequestWithBody(server, clusterId, groupId, "application/json", bodyReader)
+}
+
+// NewClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostRequestWithBody constructs an http.Request for the ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost method, with any body, and a specified content type
+func NewClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostRequestWithBody(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "group_id", groupId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/consistency-groups/%s/subsystem-moves", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetRequest constructs an http.Request for the ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet method
+func NewClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetRequest(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "group_id", groupId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "move_id", moveId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/consistency-groups/%s/subsystem-moves/%s", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostRequest constructs an http.Request for the ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost method
+func NewClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostRequest(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "group_id", groupId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "move_id", moveId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/consistency-groups/%s/subsystem-moves/%s/commit", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostRequest calls the generic ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost builder with application/json body
+func NewClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostRequest(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, body ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostRequestWithBody(server, clusterId, groupId, moveId, "application/json", bodyReader)
+}
+
+// NewClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostRequestWithBody constructs an http.Request for the ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost method, with any body, and a specified content type
+func NewClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostRequestWithBody(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "group_id", groupId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "move_id", moveId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/consistency-groups/%s/subsystem-moves/%s/move", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostRequest calls the generic ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost builder with application/json body
+func NewClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostRequest(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, body ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostRequestWithBody(server, clusterId, groupId, moveId, "application/json", bodyReader)
+}
+
+// NewClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostRequestWithBody constructs an http.Request for the ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost method, with any body, and a specified content type
+func NewClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostRequestWithBody(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "group_id", groupId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "move_id", moveId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/consistency-groups/%s/subsystem-moves/%s/prepare", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostRequest constructs an http.Request for the ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost method
+func NewClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostRequest(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "group_id", groupId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "move_id", moveId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/consistency-groups/%s/subsystem-moves/%s/rollback", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -20906,6 +21629,115 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots/{seq} (the `ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet` operationId).
 	ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, seq int, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGetResponse, error)
 
+	// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithBodyWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Create
+	//
+	// Bring the group into one subsystem now that ``lvol_id`` joined it
+	// (design-cg-live-subsystem-flip §5, §9): picks the target and reserves it.
+	//
+	// 409 ``SubsystemLimitReached`` (with ``node_id`` and ``limit``) when the
+	// group needs a fresh subsystem on a node at its limit, ``MoveConflict`` while
+	// another move or a migration is active, ``ColocationRefused`` for a volume
+	// that is not a member or a stretched cluster.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves (the `ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost` operationId).
+	ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Create
+	//
+	// Bring the group into one subsystem now that ``lvol_id`` joined it
+	// (design-cg-live-subsystem-flip §5, §9): picks the target and reserves it.
+	//
+	// 409 ``SubsystemLimitReached`` (with ``node_id`` and ``limit``) when the
+	// group needs a fresh subsystem on a node at its limit, ``MoveConflict`` while
+	// another move or a migration is active, ``ColocationRefused`` for a volume
+	// that is not a member or a stretched cluster.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves (the `ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost` operationId).
+	ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Get
+	//
+	// The move, or its outcome once committed or rolled back.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id} (the `ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet` operationId).
+	ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetResponse, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Commit
+	//
+	// Switch the moving volumes to the target and end the move. Idempotent;
+	// 409 ``MoveConflict`` while the namespaces are not on the target.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/commit (the `ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost` operationId).
+	ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostResponse, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostWithBodyWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Move
+	//
+	// Move every namespace into the target while the hosts hold their I/O.
+	//
+	// 409 ``DeadlinePassed`` before anything is touched once ``deadline`` has
+	// passed; 409 ``MoveFailed`` with ``namespaces_at`` when a namespace could
+	// not be moved (the sources are restored first). A repeat after success
+	// answers with ``namespaces_at: target``.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/move (the `ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost` operationId).
+	ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Move
+	//
+	// Move every namespace into the target while the hosts hold their I/O.
+	//
+	// 409 ``DeadlinePassed`` before anything is touched once ``deadline`` has
+	// passed; 409 ``MoveFailed`` with ``namespaces_at`` when a namespace could
+	// not be moved (the sources are restored first). A repeat after success
+	// answers with ``namespaces_at: target``.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/move (the `ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost` operationId).
+	ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, body ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostWithBodyWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Prepare
+	//
+	// Create a fresh target on every HA node and assign the moving
+	// namespaces their nsids there. Returns the target's connect entries for
+	// ``host_nqn``. Idempotent.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/prepare (the `ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost` operationId).
+	ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Prepare
+	//
+	// Create a fresh target on every HA node and assign the moving
+	// namespaces their nsids there. Returns the target's connect entries for
+	// ``host_nqn``. Idempotent.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/prepare (the `ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost` operationId).
+	ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, body ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse, error)
+
+	// ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Rollback
+	//
+	// Put every namespace back into its source and end the move. Idempotent;
+	// 409 ``MoveFailed`` when a namespace could not be restored.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/rollback (the `ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost` operationId).
+	ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostResponse, error)
+
 	// ClustersExpandApiV2ClustersClusterIdExpandPostWithResponse Clusters:Expand
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -25012,6 +25844,280 @@ func (r ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistenc
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ConsistencyGroupSubsystemMoveDTO
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse) GetJSON200() *ConsistencyGroupSubsystemMoveDTO {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ConsistencyGroupSubsystemMoveDTO
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetResponse) GetJSON200() *ConsistencyGroupSubsystemMoveDTO {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ConsistencyGroupSubsystemMoveDTO
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse) GetJSON200() *ConsistencyGroupSubsystemMoveDTO {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ConsistencyGroupSubsystemMovePreparedDTO
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse) GetJSON200() *ConsistencyGroupSubsystemMovePreparedDTO {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -31765,6 +32871,169 @@ func (c *ClientWithResponses) ClustersConsistencyGroupsSnapshotsDetailApiV2Clust
 	return ParseClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGetResponse(rsp)
 }
 
+// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithBodyWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Create
+//
+// Bring the group into one subsystem now that “lvol_id“ joined it
+// (design-cg-live-subsystem-flip §5, §9): picks the target and reserves it.
+//
+// 409 “SubsystemLimitReached“ (with “node_id“ and “limit“) when the
+// group needs a fresh subsystem on a node at its limit, “MoveConflict“ while
+// another move or a migration is active, “ColocationRefused“ for a volume
+// that is not a member or a stretched cluster.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves (the `ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithBody(ctx, clusterId, groupId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse(rsp)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Create
+//
+// Bring the group into one subsystem now that “lvol_id“ joined it
+// (design-cg-live-subsystem-flip §5, §9): picks the target and reserves it.
+//
+// 409 “SubsystemLimitReached“ (with “node_id“ and “limit“) when the
+// group needs a fresh subsystem on a node at its limit, “MoveConflict“ while
+// another move or a migration is active, “ColocationRefused“ for a volume
+// that is not a member or a stretched cluster.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves (the `ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost(ctx, clusterId, groupId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse(rsp)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Get
+//
+// The move, or its outcome once committed or rolled back.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id} (the `ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet(ctx, clusterId, groupId, moveId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetResponse(rsp)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Commit
+//
+// Switch the moving volumes to the target and end the move. Idempotent;
+// 409 “MoveConflict“ while the namespaces are not on the target.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/commit (the `ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost(ctx, clusterId, groupId, moveId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostResponse(rsp)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostWithBodyWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Move
+//
+// Move every namespace into the target while the hosts hold their I/O.
+//
+// 409 “DeadlinePassed“ before anything is touched once “deadline“ has
+// passed; 409 “MoveFailed“ with “namespaces_at“ when a namespace could
+// not be moved (the sources are restored first). A repeat after success
+// answers with “namespaces_at: target“.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/move (the `ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostWithBody(ctx, clusterId, groupId, moveId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse(rsp)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Move
+//
+// Move every namespace into the target while the hosts hold their I/O.
+//
+// 409 “DeadlinePassed“ before anything is touched once “deadline“ has
+// passed; 409 “MoveFailed“ with “namespaces_at“ when a namespace could
+// not be moved (the sources are restored first). A repeat after success
+// answers with “namespaces_at: target“.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/move (the `ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, body ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost(ctx, clusterId, groupId, moveId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse(rsp)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostWithBodyWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Prepare
+//
+// Create a fresh target on every HA node and assign the moving
+// namespaces their nsids there. Returns the target's connect entries for
+// “host_nqn“. Idempotent.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/prepare (the `ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostWithBody(ctx, clusterId, groupId, moveId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse(rsp)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Prepare
+//
+// Create a fresh target on every HA node and assign the moving
+// namespaces their nsids there. Returns the target's connect entries for
+// “host_nqn“. Idempotent.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/prepare (the `ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, body ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost(ctx, clusterId, groupId, moveId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse(rsp)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Rollback
+//
+// Put every namespace back into its source and end the move. Idempotent;
+// 409 “MoveFailed“ when a namespace could not be restored.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/rollback (the `ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost(ctx, clusterId, groupId, moveId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostResponse(rsp)
+}
+
 // ClustersExpandApiV2ClustersClusterIdExpandPostWithResponse Clusters:Expand
 //
 // Returns a wrapper object for the known response body format(s).
@@ -35845,6 +37114,196 @@ func ParseClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsiste
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse parses an HTTP response from a ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithResponse call
+func ParseClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse(rsp *http.Response) (*ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ConsistencyGroupSubsystemMoveDTO
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetResponse parses an HTTP response from a ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetWithResponse call
+func ParseClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetResponse(rsp *http.Response) (*ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ConsistencyGroupSubsystemMoveDTO
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostResponse parses an HTTP response from a ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostWithResponse call
+func ParseClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostResponse(rsp *http.Response) (*ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse parses an HTTP response from a ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostWithResponse call
+func ParseClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse(rsp *http.Response) (*ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ConsistencyGroupSubsystemMoveDTO
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse parses an HTTP response from a ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostWithResponse call
+func ParseClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse(rsp *http.Response) (*ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ConsistencyGroupSubsystemMovePreparedDTO
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostResponse parses an HTTP response from a ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostWithResponse call
+func ParseClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostResponse(rsp *http.Response) (*ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest HTTPValidationError

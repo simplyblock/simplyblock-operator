@@ -57,6 +57,9 @@ func (ns *Server) NodeStageVolume(
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
 
+	if err := ns.refuseWhileHeld(volumeID); err != nil {
+		return nil, err
+	}
 	stagingParentPath := req.GetStagingTargetPath() // where the volume context is stashed
 	stagingTargetPath := getStagingTargetPath(req)
 
@@ -123,7 +126,7 @@ func (ns *Server) NodeStageVolume(
 	plan, err := ns.attachPlan(ctx, volumeID, stagingTargetPath, vc, req.GetVolumeCapability())
 	if err != nil {
 		klog.Errorf("failed to build the stack plan, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, stackError(err, "failed to build the stack plan for volume %s", volumeID)
 	}
 
 	artifact, err := ns.bringUp(ctx, volumeID, plan, vc)
@@ -151,6 +154,9 @@ func (ns *Server) NodeUnstageVolume(
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
 
+	if err := ns.refuseWhileHeld(volumeID); err != nil {
+		return nil, err
+	}
 	stagingParentPath := req.GetStagingTargetPath()
 	stagingTargetPath := getStagingTargetPath(req)
 
@@ -355,14 +361,15 @@ func (ns *Server) attachPlan(
 // attachShape decides whether a stage or heal builds the dmLinear indirection.
 // A volume's stack never gains or loses the layer under a staged consumer:
 // with a stack record the record decides (the layer is there or it is not),
-// and only a fresh stage, which has none, follows SPDKCSI_DM_INDIRECTION. A
+// and only a fresh stage, which has none, follows SPDKCSI_DM_INDIRECTION and
+// whether the host has device-mapper (dm_capability.go). A
 // record that cannot be read keeps the shape without the layer, which is what
 // every volume staged before the indirection existed is.
 func (ns *Server) attachShape(volumeID string, shape stackShape) stackShape {
 	record, err := ns.stack.store.Load(volumeID)
 	switch {
 	case errors.Is(err, volstack.ErrNoRecord):
-		if dmIndirectionEnabled() {
+		if ns.dmIndirectionEnabled() {
 			return indirect(shape)
 		}
 		return shape
@@ -598,6 +605,13 @@ func (ns *Server) publishedConnection(
 	connection, hostNQN, cpErr := ns.controlPlaneConnection(ctx, vc, handle)
 	if cpErr == nil {
 		return connection, hostNQN, nil
+	}
+	// A subsystem a consistency-group move holds is the one case the stash
+	// must not stand in for: the stash names the subsystem the move is
+	// replacing, and a path to it taken now is one the move never suspends.
+	// The refusal is transient and the stage is retried after the window.
+	if errors.Is(cpErr, controlplane.ErrVolumeHeldByMove) {
+		return lvol.Connection{}, "", fmt.Errorf("volume %s: %w", volumeID, cpErr)
 	}
 
 	connection = connectionFromContext(vc)

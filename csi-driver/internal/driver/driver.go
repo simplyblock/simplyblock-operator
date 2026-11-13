@@ -31,6 +31,7 @@ import (
 	csiaddonsidentity "github.com/csi-addons/spec/lib/go/identity"
 	csiaddonsreplication "github.com/csi-addons/spec/lib/go/replication"
 	csiaddonsvolumegroup "github.com/csi-addons/spec/lib/go/volumegroup"
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -46,6 +47,7 @@ import (
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/storage"
 	"github.com/simplyblock/atlas/storage/storagerpc"
+	"github.com/simplyblock/atlas/volstack/swaprpc"
 
 	"github.com/simplyblock/csi-driver/internal/clusters"
 	"github.com/simplyblock/csi-driver/internal/config"
@@ -126,12 +128,14 @@ func Run(conf *config.Config) {
 		}
 	}
 
+	var swapper *swaprpc.Swapper
 	if conf.IsNodeServer {
 		var err error
 		ns, err = startNodeServer(cd, kubeClient)
 		if err != nil {
 			klog.Fatalf("failed to create node server: %s", err)
 		}
+		swapper = startSwapper(ns, cd.GetNodeID())
 	}
 
 	if conf.IsControllerServer {
@@ -155,7 +159,7 @@ func Run(conf *config.Config) {
 	if conf.LinkEnabled {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		agent, err := startLink(ctx, conf)
+		agent, err := startLink(ctx, conf, swapper)
 		if err != nil {
 			klog.Fatalf("failed to start the operator link: %s", err)
 		}
@@ -220,7 +224,10 @@ func Run(conf *config.Config) {
 // linking it, and is identified by the node it runs on. A controller plugin
 // links as itself and serves nothing: it calls the operator's placement
 // service over the link instead.
-func startLink(ctx context.Context, conf *config.Config) (*link.Agent, error) {
+//
+// A node plugin also serves the swap service when it has one, which is what
+// lets the operator move a staged volume's namespace to another subsystem.
+func startLink(ctx context.Context, conf *config.Config, swapper *swaprpc.Swapper) (*link.Agent, error) {
 	cfg := csilink.Config{
 		HubAddress:  conf.LinkHubAddress,
 		CAFile:      conf.LinkCAFile,
@@ -271,9 +278,15 @@ func startLink(ctx context.Context, conf *config.Config) (*link.Agent, error) {
 			srv.Register(r)
 			flows.Register(r)
 			checks.Register(r)
+			if swapper != nil {
+				swaprpc.NewServer(swapper).Register(r)
+			}
 		}
 		cfg.Capabilities = append(storagerpc.Capabilities(), conntrackrpc.Capabilities()...)
 		cfg.Capabilities = append(cfg.Capabilities, netcheckrpc.Capabilities()...)
+		if swapper != nil {
+			cfg.Capabilities = append(cfg.Capabilities, swaprpc.Capabilities()...)
+		}
 
 	case conf.IsControllerServer:
 		if conf.PodName == "" {
@@ -286,6 +299,24 @@ func startLink(ctx context.Context, conf *config.Config) (*link.Agent, error) {
 	}
 
 	return csilink.Start(ctx, cfg)
+}
+
+// startSwapper builds the node's swap service and resolves every mapping a
+// previous process of this plugin left suspended, before anything is served: a
+// suspended mapping is kernel state that outlives the process, and the pod on
+// it hangs until something resumes it. A swapper that cannot be built leaves the
+// node unable to move a namespace live, which is a degradation and not a reason
+// to refuse to serve.
+func startSwapper(ns *node.Server, nodeName string) *swaprpc.Swapper {
+	sw, err := ns.NewSwapper(node.SwapperConfig{NodeName: nodeName, Registerer: prometheus.DefaultRegisterer})
+	if err != nil {
+		klog.Errorf("failed to build the swap service; namespaces cannot move under a live consumer: %v", err)
+		return nil
+	}
+	if err := sw.Recover(context.Background()); err != nil {
+		klog.Errorf("failed to resolve mappings left suspended by a previous process: %v", err)
+	}
+	return sw
 }
 
 // startNodeServer builds the node service and starts the background loops that
@@ -314,6 +345,9 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	}
 
 	nodeName := cd.GetNodeID()
+	// Before the service serves: a fresh stage reads the answer.
+	ns.ProbeDeviceMapper(context.Background(), nodeName)
+
 	podGuardian, err := guardian.Start(context.Background(), guardian.NewDefaultConfig(nodeName), manager)
 	if err != nil {
 		// A guardian that will not start costs pod restarts on total path loss,

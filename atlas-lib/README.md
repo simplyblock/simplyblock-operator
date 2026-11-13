@@ -124,6 +124,7 @@ atlas/
 │   ├── pools.go            storage pools (incl. by-name lookup)
 │   ├── storagenodes.go     storage nodes + their data NICs
 │   ├── consistencygroups.go consistency groups: by members, by name, member handles
+│   ├── subsystemmoves.go   late joins and leaves: join plan, join, detach, and the subsystem move a member joins or leaves through
 │   ├── migrations.go       subsystem migrations: create / get / list / continue / cancel, of a volume or a whole subsystem
 │   ├── volumemove.go       moving a volume to another cluster: start / stop / commit / release the cutover
 │   ├── chain.go            WalkChain: from a handle to the volume serving it, across relationships

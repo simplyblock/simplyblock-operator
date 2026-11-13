@@ -31,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -67,7 +68,23 @@ var undeletableVolumeSteps = map[simplyblockv1alpha2.PersistentVolumeOpsStep]str
 	simplyblockv1alpha2.PersistentVolumeOpsStepAwaitingCutover: committedRelocation,
 	simplyblockv1alpha2.PersistentVolumeOpsStepAttachingPaths:  committedRelocation,
 	simplyblockv1alpha2.PersistentVolumeOpsStepProceeding:      committedRelocation,
+
+	simplyblockv1alpha2.PersistentVolumeOpsStepJoining: "the volume is being added to its " +
+		"consistency group, and membership cannot be taken back by deleting the request",
+	simplyblockv1alpha2.PersistentVolumeOpsStepLeaving: "the volume is leaving the consistency " +
+		"group it was a member of, and leaving a group cannot be taken back by deleting the request",
+	simplyblockv1alpha2.PersistentVolumeOpsStepSuspending:       joinWindow,
+	simplyblockv1alpha2.PersistentVolumeOpsStepMovingNamespaces: joinWindow,
+	simplyblockv1alpha2.PersistentVolumeOpsStepResuming:         joinWindow,
+	simplyblockv1alpha2.PersistentVolumeOpsStepReleasingPaths: "the namespaces have settled in their " +
+		"subsystem, and the operation is disconnecting, on every consuming node, the subsystem the " +
+		"volumes no longer use",
 }
+
+// joinWindow is why a join inside its suspend window cannot be deleted.
+const joinWindow = "the consuming nodes are holding the I/O of the moving volumes while their " +
+	"namespaces change subsystem, and the operation is what releases every node on the " +
+	"subsystem the namespaces end up in. The window closes by itself at its deadline"
 
 // committedRelocation is why a Relocate past its commit cannot be deleted.
 const committedRelocation = "the move is committed: the control plane cuts the volumes over and " +
@@ -107,7 +124,29 @@ func (v *PersistentVolumeOpsValidator) admitCreate(
 	if ops.Spec.Action == simplyblockv1alpha2.PersistentVolumeOpsActionRelocate {
 		return v.relocateEligible(ctx, &ops, handle)
 	}
+	if ops.Spec.Action == simplyblockv1alpha2.PersistentVolumeOpsActionJoinConsistencyGroup {
+		return groupNameIsALabelValue(&ops)
+	}
 	return v.targetInTheVolumesCluster(ctx, &ops, handle)
+}
+
+// groupNameIsALabelValue refuses a group no claim could name. A group is the
+// value of its members' consistency-group label, so a name that is not a valid
+// label value could never match a member. The group itself is a control-plane
+// object with no Kubernetes kind, so there is nothing further to resolve here,
+// and a group that does not exist yet is the controller's to wait for.
+func groupNameIsALabelValue(ops *simplyblockv1alpha2.PersistentVolumeOps) admission.Response {
+	if ops.Spec.JoinConsistencyGroup == nil {
+		// The type's own rule covers this, and it runs whether or not the
+		// webhook is installed.
+		return admission.Allowed("")
+	}
+	name := ops.Spec.JoinConsistencyGroup.GroupName
+	if errs := validation.IsValidLabelValue(name); len(errs) > 0 {
+		return *denied("spec.joinConsistencyGroup.groupName %q is not a valid label value, so no claim "+
+			"could carry it in the consistency-group label: %s.", name, strings.Join(errs, "; "))
+	}
+	return admission.Allowed("")
 }
 
 // addressableVolume refuses a volume this operator has no means to move, and

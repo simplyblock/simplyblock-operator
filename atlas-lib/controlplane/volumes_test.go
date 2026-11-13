@@ -128,3 +128,23 @@ func TestClientSubsystemVolumesReportTheNodeHostingEachMember(t *testing.T) {
 		t.Errorf("members = %+v, want the one volume reported on node %s", members, node)
 	}
 }
+
+// TestClientVolumeReportsItsConsistencyGroup. A relabeled claim names a group
+// other than the one its volume is in, and only the volume's own record says
+// which group that is, so a move between groups starts from it.
+func TestClientVolumeReportsItsConsistencyGroup(t *testing.T) {
+	const group = "c9c9c9c9-c9c9-4c9c-8c9c-c9c9c9c9c9c9"
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"` + testVolume + `","name":"vol1","pool_name":"pool1",` +
+			`"size":100,"ns_id":1,"nqn":"nqn.one","group_id":"` + group + `"}`))
+	})
+
+	volume, err := c.Volume(context.Background(), lvol.NewVolumeHandle(testCluster, testPool, testVolume))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if volume.GroupID != group {
+		t.Errorf("the volume is reported in group %q, want %q", volume.GroupID, group)
+	}
+}

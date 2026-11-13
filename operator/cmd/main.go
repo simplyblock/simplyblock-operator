@@ -953,11 +953,21 @@ func main() {
 	// The volume band. It shares the backup band's control-plane client because
 	// there is one control plane and one endpoint; what differs is which of its
 	// endpoints each band calls.
+	// A JoinConsistencyGroup holds a moving volume's I/O through the swap
+	// service of the CSI plugin on each consuming host, reached over the CSI
+	// link. Without the link a join fails at its swap rather than running half
+	// of one.
+	var swapPeers volumecontrollers.SwapPeers
+	if csiPeers != nil {
+		swapPeers = volumecontrollers.LinkSwapPeers(csiPeers)
+	}
 	if err := (&volumecontrollers.PersistentVolumeOpsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("persistentvolumeops-controller"),
 		API:      backupAPI,
+		Join:     backupAPI,
+		Swap:     swapPeers,
 	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeOps")
 		os.Exit(1)
