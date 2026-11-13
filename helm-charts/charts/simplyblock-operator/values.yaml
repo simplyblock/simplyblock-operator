@@ -543,6 +543,17 @@ driver:
   # -- Tolerations for the CSI node plugin.
   tolerations: []
 
+  # Workers running Ubuntu often lack nvme-tcp until linux-modules-extra for
+  # the running kernel is installed. True adds a privileged init container to
+  # the node plugin that loads the module, installs that package with apt when
+  # the module is missing, and adds nvme-tcp to /etc/modules-load.d. It reads
+  # each host's /etc/os-release and leaves any host that is not Ubuntu as it is,
+  # so a mixed fleet can turn it on.
+  # -- Loads the `nvme-tcp` kernel module on the workers running the CSI node plugin, installing
+  # `linux-modules-extra-$(uname -r)` with apt on Ubuntu hosts when the module is missing. Other
+  # distributions are left unchanged.
+  enableNVMeTCPModuleInstall: false
+
   # Where the controller plugin runs. This is ordinary pod placement for one
   # workload, unlike the pair above.
   # -- Node selector for the CSI controller plugin.

@@ -430,3 +430,77 @@ func TestNodePostStartScriptWritesTheDefaultHostNQN(t *testing.T) {
 			nqn.PersistedHostIDFile, nodePostStartScript)
 	}
 }
+
+// U-111: enableNVMeTCPModuleInstall adds the nvme-tcp-module init container.
+// It runs the driver's own image under the driver's pull policy, so a mirrored
+// or air-gapped registry needs nothing more, and it reaches the host through a
+// mount of its root rather than the host's PID namespace, which would otherwise
+// stay shared with the long-running plugin containers.
+func TestNVMeTCPModuleInstallAddsTheInitContainer(t *testing.T) {
+	const resolved = "registry.example/simplyblock/spdkcsi:resolved"
+	d := testDriver("simplyblock")
+	d.Spec.EnableNVMeTCPModuleInstall = ptr.To(true)
+	d.Spec.ImagePullPolicy = corev1.PullIfNotPresent
+
+	pod := nodeDaemonSet(d, resolved).Spec.Template.Spec
+	init := containerNamed(pod.InitContainers, "nvme-tcp-module")
+	if init == nil {
+		t.Fatal("no nvme-tcp-module init container")
+	}
+	if init.Image != resolved || init.ImagePullPolicy != corev1.PullIfNotPresent {
+		t.Errorf("image = %q %q, want the driver's %q %q",
+			init.Image, init.ImagePullPolicy, resolved, corev1.PullIfNotPresent)
+	}
+	if init.SecurityContext == nil || init.SecurityContext.Privileged == nil ||
+		!*init.SecurityContext.Privileged {
+		t.Error("init container is not privileged")
+	}
+	if pod.HostPID {
+		t.Error("hostPID = true, the plugin containers would share the host's PID namespace")
+	}
+
+	var hostRoot string
+	for _, m := range init.VolumeMounts {
+		if m.MountPath == "/host" {
+			hostRoot = m.Name
+		}
+	}
+	if hostRoot == "" {
+		t.Fatal("the host's root is not mounted at /host")
+	}
+	for _, v := range pod.Volumes {
+		if v.Name == hostRoot && (v.HostPath == nil || v.HostPath.Path != "/") {
+			t.Errorf("volume %q = %+v, want hostPath /", hostRoot, v.VolumeSource)
+		}
+	}
+	for _, c := range pod.Containers {
+		for _, m := range c.VolumeMounts {
+			if m.Name == hostRoot {
+				t.Errorf("container %q mounts the host's root, only the init container may", c.Name)
+			}
+		}
+	}
+}
+
+// U-112: unset or false adds neither the init container nor the host root
+// volume, so the pod spec of a deployment that never set the field is the one
+// the chart rendered.
+func TestNVMeTCPModuleInstallOffAddsNothing(t *testing.T) {
+	for _, enable := range []*bool{nil, ptr.To(false)} {
+		d := testDriver("simplyblock")
+		d.Spec.EnableNVMeTCPModuleInstall = enable
+
+		pod := nodeDaemonSet(d, "img").Spec.Template.Spec
+		if containerNamed(pod.InitContainers, "nvme-tcp-module") != nil {
+			t.Errorf("enable = %v: nvme-tcp-module init container present", enable)
+		}
+		if pod.HostPID {
+			t.Errorf("enable = %v: hostPID = true", enable)
+		}
+		for _, v := range pod.Volumes {
+			if v.HostPath != nil && v.HostPath.Path == "/" {
+				t.Errorf("enable = %v: volume %q mounts the host's root", enable, v.Name)
+			}
+		}
+	}
+}

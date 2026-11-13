@@ -454,6 +454,9 @@
         "tolerations": {
           "type": "array"
         },
+        "enableNVMeTCPModuleInstall": {
+          "type": "boolean"
+        },
         "controllerNodeSelector": {
           "type": "object"
         },
