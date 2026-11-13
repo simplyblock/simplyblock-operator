@@ -36,7 +36,7 @@ COPY operator/ .
 RUN CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "gcc") \
     CGO_ENABLED=1 GOEXPERIMENT=boringcrypto \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -a -o manager ./cmd
+    go build -o manager ./cmd
 
 # The worker probe ships in this image rather than in one of its own, so that
 # the Job a discovery run creates cannot be a version out of step with the
@@ -46,7 +46,7 @@ RUN CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "
 # issues ioctls through golang.org/x/sys and does no crypto at all, so it has
 # nothing to gain from BoringCrypto and nothing to link against.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -a -o simplyblock-nodeprobe ./cmd/simplyblock-nodeprobe
+    go build -o simplyblock-nodeprobe ./cmd/simplyblock-nodeprobe
 
 # The conversion webhook ships in this image under its own entry point rather
 # than an image of its own, so the conversion code and the API types it converts
@@ -60,7 +60,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
 RUN CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "gcc") \
     CGO_ENABLED=1 GOEXPERIMENT=boringcrypto \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -a -o conversion-webhook ./cmd/conversion-webhook
+    go build -o conversion-webhook ./cmd/conversion-webhook
 
 # Use Red Hat UBI10 minimal as runtime base (required for Red Hat certification).
 # ubi10-minimal includes glibc, which is required for CGO-linked binaries (BoringCrypto).
