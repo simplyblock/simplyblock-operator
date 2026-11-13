@@ -278,7 +278,7 @@ func TestStartRefusalWithoutAPodIsNotRecorded(t *testing.T) {
 // kernelBuild is what /proc/version reads on this host.
 func (k *fabricsHost) kernelBuild() string {
 	if k.ubuntu {
-		return "Linux version " + awsKernel + " (buildd@lcy02-amd64-059) " +
+		return "Linux version " + awsKernel + " " +
 			"(x86_64-linux-gnu-gcc-12 (Ubuntu 12.3.0-1ubuntu1~22.04) 12.3.0) #46~22.04.1-Ubuntu SMP"
 	}
 	return "Linux version 5.14.0-503.14.1.el9_5.x86_64 (mockbuild@iad1-prod-build001) " +
