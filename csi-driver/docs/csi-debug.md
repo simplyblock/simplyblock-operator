@@ -22,10 +22,11 @@ kubectl describe pod -n <namespace> <csi-node-pod>
 ```
 The reason is a `Warning` event with the reason `NVMeTCPInitiatorMissing` at the end of the pod description. It is also the termination message of the `csi-node` container, shown under `Last State`, and the last line of its log.
 ```
-this node cannot connect a volume: kernel 6.8.0-1040-aws has no NVMe/TCP initiator (the nvme-tcp module is not loaded, and modprobe nvme-tcp said: modprobe: FATAL: Module nvme-tcp not found in directory /lib/modules/6.8.0-1040-aws). Install the package that carries the module on the node (linux-modules-extra-6.8.0-1040-aws on Ubuntu) and run `modprobe nvme-tcp`
+this node cannot connect a volume: kernel 6.8.0-1040-aws has no NVMe/TCP initiator (the nvme-tcp module is not loaded, and modprobe nvme-tcp said: modprobe: FATAL: Module nvme-tcp not found in directory /lib/modules/6.8.0-1040-aws). On Ubuntu the module is in the package linux-modules-extra-6.8.0-1040-aws: install it on the node and run `modprobe nvme-tcp`
 ```
+The last sentence names a package only on an Ubuntu kernel. On any other distribution it says to make the `nvme-tcp` kernel module available.
 
-Install the package that carries the module on the worker and load it. On Ubuntu, that is the `linux-modules-extra` package of the running kernel.
+Make the module available on the worker and load it. On Ubuntu, it is in the `linux-modules-extra` package of the running kernel.
 ```
 sudo apt-get install -y linux-modules-extra-$(uname -r)
 sudo modprobe nvme-tcp

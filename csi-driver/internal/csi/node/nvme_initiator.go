@@ -43,16 +43,31 @@ const initiatorModuleDir = "/sys/module/nvme_tcp"
 // default terminationMessagePath of a pod.
 const TerminationMessagePath = "/dev/termination-log"
 
-// initiatorCheck asks the host whether the NVMe-oF initiator is there. Both
-// halves are seams, so a test can be a kernel it does not have.
+// kernelBuildFile is where the kernel says who built it, which is the one
+// thing a container can read about the distribution of the host it runs on.
+const kernelBuildFile = "/proc/version"
+
+// initiatorCheck asks the host whether the NVMe-oF initiator is there. Its
+// fields are seams, so a test can be a kernel it does not have.
 type initiatorCheck struct {
 	run     commandRunner
 	present func(path string) bool
+	// kernelBuild is what kernelBuildFile reads, or nothing when it cannot be
+	// read.
+	kernelBuild func() string
 }
 
 // hostInitiatorCheck is the check against the host this plugin runs on.
 func hostInitiatorCheck() initiatorCheck {
-	return initiatorCheck{run: runCommand, present: pathExists}
+	return initiatorCheck{run: runCommand, present: pathExists, kernelBuild: hostKernelBuild}
+}
+
+func hostKernelBuild() string {
+	build, err := os.ReadFile(kernelBuildFile)
+	if err != nil {
+		return ""
+	}
+	return string(build)
 }
 
 func pathExists(path string) bool {
@@ -90,10 +105,21 @@ func (c initiatorCheck) ensure(ctx context.Context) error {
 		extra = "linux-modules-extra-" + strings.TrimSpace(name)
 	}
 
+	// What is needed is the module, and that is all this says on most hosts:
+	// which package carries it is the distribution's to say, and this plugin
+	// runs on distributions it knows nothing about. Ubuntu is the one named,
+	// because its cloud images are where the module is missing and its package
+	// name follows from the kernel release.
+	remedy := fmt.Sprintf("Make the %s kernel module available on the node and run `modprobe %s`",
+		initiatorModule, initiatorModule)
+	if c.kernelBuild != nil && strings.Contains(c.kernelBuild(), "Ubuntu") {
+		remedy = fmt.Sprintf("On Ubuntu the module is in the package %s: install it on the node and run `modprobe %s`",
+			extra, initiatorModule)
+	}
+
 	return fmt.Errorf(
-		"this node cannot connect a volume: %s has no NVMe/TCP initiator (the %s module is not loaded, and %s). "+
-			"Install the package that carries the module on the node (%s on Ubuntu) and run `modprobe %s`",
-		release, initiatorModule, said, extra, initiatorModule)
+		"this node cannot connect a volume: %s has no NVMe/TCP initiator (the %s module is not loaded, and %s). %s",
+		release, initiatorModule, said, remedy)
 }
 
 // RequireInitiator is the node plugin's precondition for starting: it returns

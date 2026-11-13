@@ -30,6 +30,9 @@ const fabricsDevice = "/dev/nvme-fabrics"
 // why it cannot. The two are separate facts: nvme_fabrics ships in the base
 // kernel package and brings the device with it, without the transport.
 type fabricsHost struct {
+	// Whether the kernel was built by Ubuntu, which is what decides whether the
+	// missing module has a package this plugin can name.
+	ubuntu     bool
 	loaded     bool
 	fabrics    bool
 	modprobe   error
@@ -60,7 +63,7 @@ func (k *fabricsHost) present(path string) bool {
 }
 
 func (k *fabricsHost) check() func(context.Context) error {
-	return initiatorCheck{run: k.run, present: k.present}.ensure
+	return initiatorCheck{run: k.run, present: k.present, kernelBuild: k.kernelBuild}.ensure
 }
 
 func stageRequest(t *testing.T) *csi.NodeStageVolumeRequest {
@@ -81,7 +84,7 @@ func stageRequest(t *testing.T) *csi.NodeStageVolumeRequest {
 func TestStageNamesTheMissingNVMeInitiator(t *testing.T) {
 	runner := newRecordingRunner()
 	ns, _ := newStackedServer(t, runner)
-	host := &fabricsHost{modprobe: errors.New("exit status 1")}
+	host := &fabricsHost{ubuntu: true, modprobe: errors.New("exit status 1")}
 	ns.ensureInitiator = host.check()
 
 	_, err := ns.NodeStageVolume(context.Background(), stageRequest(t))
@@ -143,7 +146,7 @@ func TestStageAsksNothingOfANodeWithAnInitiator(t *testing.T) {
 // stage went on and failed with what nvme-cli prints for a transport the
 // kernel does not have, which names nothing to install.
 func TestFabricsDeviceAloneIsNotAnInitiator(t *testing.T) {
-	host := &fabricsHost{fabrics: true, modprobe: errors.New("exit status 1")}
+	host := &fabricsHost{ubuntu: true, fabrics: true, modprobe: errors.New("exit status 1")}
 
 	err := host.check()(context.Background())
 
@@ -173,7 +176,7 @@ func TestInitiatorCheckBelievesAModprobeThatSucceeds(t *testing.T) {
 func TestPNFSStageNamesTheMissingNVMeInitiator(t *testing.T) {
 	runner := newRecordingRunner()
 	ns, _ := newStackedServer(t, runner)
-	host := &fabricsHost{modprobe: errors.New("exit status 1")}
+	host := &fabricsHost{ubuntu: true, modprobe: errors.New("exit status 1")}
 	ns.ensureInitiator = host.check()
 	req := stageRequest(t)
 	req.VolumeContext[csicommon.CtxAccessProtocol] = csicommon.AccessProtocolNFS
@@ -193,7 +196,7 @@ func TestPNFSStageNamesTheMissingNVMeInitiator(t *testing.T) {
 // message, which `kubectl describe pod` prints under the last state of a
 // container in a restart loop.
 func TestStartRefusesANodeWithoutTheNVMeInitiator(t *testing.T) {
-	host := &fabricsHost{modprobe: errors.New("exit status 1")}
+	host := &fabricsHost{ubuntu: true, modprobe: errors.New("exit status 1")}
 	message := filepath.Join(t.TempDir(), "termination-log")
 
 	err := requireInitiator(context.Background(), host.check(), message)
@@ -269,5 +272,37 @@ func TestStartRefusalWithoutAPodIsNotRecorded(t *testing.T) {
 	events, _ := client.CoreV1().Events("").List(context.Background(), metav1.ListOptions{})
 	if len(events.Items) != 0 {
 		t.Errorf("%d events were written for a pod nobody named", len(events.Items))
+	}
+}
+
+// kernelBuild is what /proc/version reads on this host.
+func (k *fabricsHost) kernelBuild() string {
+	if k.ubuntu {
+		return "Linux version " + awsKernel + " (buildd@lcy02-amd64-059) " +
+			"(x86_64-linux-gnu-gcc-12 (Ubuntu 12.3.0-1ubuntu1~22.04) 12.3.0) #46~22.04.1-Ubuntu SMP"
+	}
+	return "Linux version 5.14.0-503.14.1.el9_5.x86_64 (mockbuild@iad1-prod-build001) " +
+		"(gcc (GCC) 11.5.0 20240719 (Red Hat 11.5.0-2)) #1 SMP PREEMPT_DYNAMIC"
+}
+
+// On a host whose kernel is not Ubuntu's the refusal names the module and
+// nothing else. The driver runs on OpenShift, Talos, and other distributions,
+// where a package name from Ubuntu is wrong advice, and where which package
+// carries the module is the distribution's to say.
+func TestRefusalNamesNoPackageOnAHostThatIsNotUbuntu(t *testing.T) {
+	host := &fabricsHost{modprobe: errors.New("exit status 1")}
+
+	err := host.check()(context.Background())
+
+	if err == nil {
+		t.Fatal("the check passed on a node whose module cannot be loaded")
+	}
+	if !strings.Contains(err.Error(), "nvme-tcp") {
+		t.Errorf("the error reads %q, want it to name the module", err.Error())
+	}
+	for _, unwanted := range []string{"linux-modules-extra", "Ubuntu", "kernel-modules-extra"} {
+		if strings.Contains(err.Error(), unwanted) {
+			t.Errorf("the error reads %q, and names %q on a host that is not Ubuntu", err.Error(), unwanted)
+		}
 	}
 }

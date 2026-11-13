@@ -69,8 +69,8 @@ sudo apt-get install -y linux-modules-extra-$(uname -r)
 ```
 
 The node plugin loads the module when it is installed. When it is not, the node plugin does not start
-on that node: its pod is in `CrashLoopBackOff`, and the container's termination message names the
-package.
+on that node: its pod is in `CrashLoopBackOff`, and an event on the pod names the module and, on Ubuntu,
+the package.
 
 ### 2. Install via Helm (Recommended)
 
