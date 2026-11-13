@@ -76,8 +76,10 @@ File: `operator/internal/controllers/driver/simplyblockdriver_controller_unit_te
 | U-108 | The cluster serves no snapshot API: `status.snapshotSupport` is `Missing`            | Positive | `TestACrdlessClusterReportsMissing`                    |
 | U-109 | `Missing` becomes `Detected` when the API appears                                    | Boundary | `TestMissingBecomesDetectedWhenTheAPIAppears`          |
 | U-110 | A deployment that disabled snapshots reports nothing                                 | Negative | `TestSnapshotsDisabledReportsNothing`                  |
-| U-111 | `enableUbuntuNVMeTCPModule`: a privileged `nvme-tcp-module` init container, hostPID  | Positive | `TestUbuntuNVMeTCPModuleInitContainerFollowsTheFlag`   |
-| U-112 | Unset or false: no init container and no hostPID on the node plugin                  | Negative | `TestUbuntuNVMeTCPModuleInitContainerFollowsTheFlag`   |
+| U-111 | `enableNVMeTCPModuleInstall`: init container in the driver image, host root at /host | Positive | `TestNVMeTCPModuleInstallAddsTheInitContainer`         |
+| U-112 | Unset or false: no init container and no host root volume                            | Negative | `TestNVMeTCPModuleInstallOffAddsNothing`               |
+| U-113 | An Ubuntu host is entered with `chroot` and runs the apt install                     | Positive | `TestNVMeTCPGuardEntersAnUbuntuHost`                   |
+| U-114 | A non-Ubuntu host, or one without `os-release`, is left alone and exits 0            | Negative | `TestNVMeTCPGuardLeavesOtherHostsAlone`                |
 
 `U-44` holds the boundary design §4.1 draws. The `csi-snapshotter` sidecar is part
 of this driver's controller plugin, and the detection applies to the cluster's

@@ -53,7 +53,7 @@ spec:
   # the cluster) provides the csiaddons.openshift.io CRDs.
   enableCSIAddons: {{ .Values.csiaddons.create }}
   # Loads nvme-tcp on Ubuntu workers before the node plugin starts.
-  enableUbuntuNVMeTCPModule: {{ .Values.driver.enableUbuntuNVMeTCPModule | default false }}
+  enableNVMeTCPModuleInstall: {{ .Values.driver.enableNVMeTCPModuleInstall | default false }}
   {{- if .Values.driver.image.repository }}
   image: "{{ .Values.driver.image.repository }}:{{ required "driver.image.tag is required when driver.image.repository is set: the field is a full reference and an untagged one is refused by the schema" .Values.driver.image.tag }}"
   {{- end }}

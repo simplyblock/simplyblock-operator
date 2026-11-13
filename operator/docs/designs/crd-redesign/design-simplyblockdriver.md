@@ -373,14 +373,27 @@ running a second CSI driver runs a second set of its own.
 
 **On Ubuntu workers the node plugin can load its own transport.** An Ubuntu
 cloud kernel ships `nvme-tcp` in `linux-modules-extra`, which a minimal image
-leaves out, and a node plugin without it fails its first connect.
-`spec.enableUbuntuNVMeTCPModule` adds an init container, `nvme-tcp-module`, that
-enters the host's namespaces through PID 1, loads the module, installs
+leaves out, and the node plugin refuses to start on a node without an NVMe/TCP
+initiator. `spec.enableNVMeTCPModuleInstall` adds the remedy, an init container
+named `nvme-tcp-module`. It runs the driver's own image under the driver's pull
+policy, mounts the host's root at `/host`, and reads `/host/etc/os-release`. On
+an Ubuntu host it enters the root with `chroot`, loads the module, installs
 `linux-modules-extra-$(uname -r)` with apt only when the module is missing, and
-writes `/etc/modules-load.d/nvme-tcp.conf` so a reboot loads it again. The pod
-shares the host's PID namespace only while the field is true. It is off by
-default, so the pod spec of a deployment that never set it is the one the chart
-rendered, and adoption restarts nothing.
+writes `/etc/modules-load.d/nvme-tcp.conf` so a reboot loads it again. Any other
+host, including one with no shell, is left unchanged and the container exits
+successfully, so the plugin's own check is what reports a module that is still
+missing there. The pod does not share the host's PID namespace.
+
+The script follows the storage node's kernel-extra job in the control plane: it
+tries the module before the package and the install before an apt update. The
+two run on different hosts, since the node plugin runs on every worker that
+mounts a volume and the job only on storage nodes, which is why
+`StorageCluster.spec.storageNodes.ubuntuHost` does not decide this field.
+
+An install that fails holds the node plugin in `Init`, and a rolling update of
+the DaemonSet stalls on that worker. The field is off by default, so the pod spec
+of a deployment that never set it is the one the chart rendered, and adoption
+restarts nothing. Turning it off leaves the `modules-load.d` file on the hosts.
 
 **Snapshot support is one component for the whole cluster, and the operator
 supplies it where the cluster has none.** A `snapshot-controller` turns a
@@ -1218,19 +1231,21 @@ type SimplyblockDriverSpec struct {
 	// +optional
 	EnableCSIAddons *bool `json:"enableCSIAddons,omitempty"`
 
-	// EnableUbuntuNVMeTCPModule makes sure the nvme-tcp kernel module is
-	// loaded on every worker that runs the node plugin, for workers running
-	// Ubuntu. A privileged init container enters the host's namespaces, loads
-	// nvme-tcp, and installs linux-modules-extra for the running kernel with
-	// apt when the module is not present yet. It also adds nvme-tcp to
-	// /etc/modules-load.d so the module loads again after a reboot. The pod
-	// then shares the host's PID namespace. The worker needs to reach its apt
-	// mirrors when the package is missing. Leave it false on any other
-	// distribution, and on hosts that already load nvme-tcp. Changing it
+	// EnableNVMeTCPModuleInstall loads the nvme-tcp kernel module on every
+	// worker that runs the node plugin, before the plugin starts. A privileged
+	// init container mounts the host's root and reads its /etc/os-release. On an
+	// Ubuntu host it loads nvme-tcp, installs linux-modules-extra for the
+	// running kernel with apt when the module is missing, and adds nvme-tcp to
+	// /etc/modules-load.d so it loads again after a reboot. Any other host is
+	// left unchanged with a warning in the init container's log. An Ubuntu
+	// worker needs its apt mirror when the package is missing, which is again
+	// the case after a kernel upgrade, and an install that fails holds the node
+	// plugin in Init and stalls a rolling update of the DaemonSet. Turning it
+	// off leaves /etc/modules-load.d/nvme-tcp.conf on the hosts. Changing it
 	// restarts every node plugin.
 	// +kubebuilder:default=false
 	// +optional
-	EnableUbuntuNVMeTCPModule *bool `json:"enableUbuntuNVMeTCPModule,omitempty"`
+	EnableNVMeTCPModuleInstall *bool `json:"enableNVMeTCPModuleInstall,omitempty"`
 
 	// TLS configures whether both plugins reach the control plane over TLS.
 	// Unset is plaintext, the shape every deployment ran before this field

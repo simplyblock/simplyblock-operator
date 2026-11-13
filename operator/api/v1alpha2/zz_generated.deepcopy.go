@@ -3043,8 +3043,8 @@ func (in *SimplyblockDriverSpec) DeepCopyInto(out *SimplyblockDriverSpec) {
 		*out = new(bool)
 		**out = **in
 	}
-	if in.EnableUbuntuNVMeTCPModule != nil {
-		in, out := &in.EnableUbuntuNVMeTCPModule, &out.EnableUbuntuNVMeTCPModule
+	if in.EnableNVMeTCPModuleInstall != nil {
+		in, out := &in.EnableNVMeTCPModuleInstall, &out.EnableNVMeTCPModuleInstall
 		*out = new(bool)
 		**out = **in
 	}
