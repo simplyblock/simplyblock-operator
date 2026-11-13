@@ -30,9 +30,9 @@ COPY fleet/ .
 # plane over TLS the standard library provides, and a static binary is what the
 # minimal runtime base below can run without a libc.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -a -o fleet-manager ./cmd/fleet-manager && \
+    go build -o fleet-manager ./cmd/fleet-manager && \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -a -o fleet-agent ./cmd/fleet-agent
+    go build -o fleet-agent ./cmd/fleet-agent
 
 FROM registry.access.redhat.com/ubi10/ubi-minimal:10.2
 

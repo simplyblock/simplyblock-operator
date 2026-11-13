@@ -37,7 +37,7 @@ COPY operator/ .
 
 # CGO disabled — simplyblock-rebalancer has no CGO dependencies.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -a -o simplyblock-rebalancer ./cmd/simplyblock-rebalancer
+    go build -o simplyblock-rebalancer ./cmd/simplyblock-rebalancer
 
 FROM registry.access.redhat.com/ubi10/ubi:10.2
 
