@@ -84,6 +84,16 @@ const (
 	// Come back with a re-read object after a write that bumped
 	// resourceVersion, so status is not written over a copy already stale.
 	s3BucketFreshCopyRequeue = time.Second
+	// How often a Ready bucket's mount delivery is reasserted to every node
+	// its gateway currently runs on, even with no triggering event. This is
+	// what bounds design-bucket-provisioning.md Open Question 6: a node's
+	// mount dying under a bucket (most commonly, the node rebooting) leaves
+	// no trace this reconciler's own bookkeeping would otherwise notice,
+	// since the gateway pod and its node placement stay exactly as
+	// recorded. See reconcileMountDelivery's own doc comment
+	// (s3bucket_delivery.go) for why the redundant calls this causes are
+	// cheap, and why this is a stopgap rather than the fix.
+	s3BucketMountResyncInterval = 5 * time.Minute
 )
 
 // S3BucketReconciler reconciles S3Bucket objects.
@@ -155,6 +165,11 @@ func (r *S3BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			if _, err := r.reconcileMountDelivery(ctx, &bucket, export); err != nil {
 				return ctrl.Result{}, err
 			}
+			// Requeue on a fixed cadence rather than ctrl.Result{}: this is
+			// what makes reconcileMountDelivery's resync (its own doc
+			// comment) actually periodic instead of only re-running when
+			// some other event happens to touch this bucket.
+			return ctrl.Result{RequeueAfter: s3BucketMountResyncInterval}, nil
 		}
 		return ctrl.Result{}, nil
 	}

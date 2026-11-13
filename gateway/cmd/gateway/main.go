@@ -32,6 +32,7 @@ import (
 	"github.com/simplyblock/gateway/internal/buckets"
 	"github.com/simplyblock/gateway/internal/certwatch"
 	"github.com/simplyblock/gateway/internal/config"
+	"github.com/simplyblock/gateway/internal/readiness"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -55,6 +56,16 @@ const (
 	copyObjectThreshold = 5 * 1024 * 1024 * 1024
 
 	healthPath = "/healthz"
+
+	// readinessAddr and readinessPath are the gateway's own readiness probe
+	// (internal/readiness), reporting whether every bucket directory under
+	// GATEWAY_ROOT_DIR is still mounted rather than only that the process is
+	// up. A fixed port and path, like healthPath: the operator's
+	// buildDeployment (operator/internal/controllers/objectstore/
+	// objectstore_build.go) wires its ReadinessProbe at this same address,
+	// so the two have to move together.
+	readinessAddr = ":8081"
+	readinessPath = "/readyz"
 
 	// bucketPollInterval is how often CreateBucket and DeleteBucket re-read
 	// the S3Bucket they wait on.
@@ -120,6 +131,12 @@ func run(ctx context.Context, cfg config.Config, cli client.Client) error {
 	if err != nil {
 		return fmt.Errorf("starting the posix backend at %s: %w", cfg.RootDir, err)
 	}
+
+	go func() {
+		if err := readiness.Serve(ctx, readinessAddr, readinessPath, cfg.RootDir); err != nil {
+			log.Printf("readiness server: %v", err)
+		}
+	}()
 
 	gateway := buckets.New(be, cli, buckets.Settings{
 		RootDir:          cfg.RootDir,

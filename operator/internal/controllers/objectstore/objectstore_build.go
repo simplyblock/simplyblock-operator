@@ -82,6 +82,26 @@ const (
 	// serves, and re-reads when the TLS Secret is rotated.
 	gatewayTLSCertFileEnv = "GATEWAY_TLS_CERT_FILE"
 	gatewayTLSKeyFileEnv  = "GATEWAY_TLS_KEY_FILE"
+
+	// gatewayReadinessPort and gatewayReadinessPath name the gateway's own
+	// readiness probe (kubernetes/gateway/internal/readiness,
+	// cmd/gateway's readinessAddr/readinessPath): whether every bucket
+	// directory under GATEWAY_ROOT_DIR is still mounted, not only that the
+	// process answers requests. A fixed port and path the gateway binary
+	// also hardcodes, so the two have to change together.
+	//
+	// This probe exists because the delivery reconciler's own periodic
+	// resync (s3bucket_delivery.go) only bounds how long a dead mount goes
+	// unnoticed -- it does not make the gap zero width. Between a node's
+	// mount dying (most commonly, the node rebooting) and the next resync,
+	// this is what stops the gateway from silently serving reads and writes
+	// off the node's local disk instead of failing loudly
+	// (design-bucket-provisioning.md Open Question 6). Neither this probe
+	// nor the resync is the real fix: that is decoupling a bucket's mount
+	// from its lifetime and mounting on demand instead, deliberately out of
+	// scope here.
+	gatewayReadinessPort = 8081
+	gatewayReadinessPath = "/readyz"
 )
 
 // defaultReplicas is spec.replicas' own +kubebuilder:default, read here too:
@@ -175,6 +195,16 @@ func buildDeployment(store *simplyblockv1alpha2.ObjectStore) *appsv1.Deployment 
 							ImagePullPolicy: store.Spec.ImagePullPolicy,
 							Ports: []corev1.ContainerPort{
 								{Name: "s3", ContainerPort: store.Spec.Port},
+								{Name: "readyz", ContainerPort: gatewayReadinessPort},
+							},
+							ReadinessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: gatewayReadinessPath,
+										Port: intstr.FromInt32(gatewayReadinessPort),
+									},
+								},
+								PeriodSeconds: 10,
 							},
 							Env: []corev1.EnvVar{
 								{Name: gatewayRootDirEnv, Value: gatewayRootDir(store)},

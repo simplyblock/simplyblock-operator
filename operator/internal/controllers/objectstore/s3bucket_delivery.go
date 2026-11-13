@@ -120,6 +120,27 @@ func diffDeliveryNodes(desired, delivered []string) (toDeliver, toWithdraw []str
 // while already Ready (Reconcile's terminal path), where the return value is
 // not read: a gateway pod moving to a new node is this function's job to
 // notice regardless of phase.
+//
+// Every node in desired is (re)delivered to on every pass, not only nodes
+// diffDeliveryNodes finds newly added to the set. DeliverBucket's underlying
+// NodeStageVolume/NodePublishVolume calls are already idempotent
+// (csi-driver/internal/csi/node: stagePNFS checks IsMounted,
+// publishPNFSVolume checks IsDead and restages), so a redundant call against
+// a healthy mount costs one cheap check, while a call against a mount that
+// died under it -- most commonly, its node rebooting -- self-heals instead
+// of this reconciler's own bookkeeping papering over the gap indefinitely
+// (design-bucket-provisioning.md Open Question 6: "stack-record drift").
+// Reconcile's Ready branch pairs this with a fixed RequeueAfter
+// (s3BucketMountResyncInterval), so a Ready bucket gets re-asserted on that
+// cadence even with no triggering event.
+//
+// This is a stopgap, not the fix: it bounds the staleness window to the
+// resync interval instead of closing it, and a gateway pod's own readiness
+// probe (kubernetes/gateway/internal/readiness) is what keeps that window
+// from serving silently wrong reads and writes in the meantime. The actual
+// fix -- decoupling a bucket's mount from its lifetime and mounting it on
+// demand instead of for as long as the bucket exists -- is deliberately out
+// of scope for this change.
 func (r *S3BucketReconciler) reconcileMountDelivery(
 	ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket, export *simplyblockv1alpha2.NFSExport,
 ) (complete bool, err error) {
@@ -146,7 +167,8 @@ func (r *S3BucketReconciler) reconcileMountDelivery(
 		return false, err
 	}
 
-	toDeliver, toWithdraw := diffDeliveryNodes(desired, bucket.Status.MountDeliveredNodes)
+	_, toWithdraw := diffDeliveryNodes(desired, bucket.Status.MountDeliveredNodes)
+	toDeliver := desired
 	if len(toDeliver) == 0 && len(toWithdraw) == 0 {
 		return true, nil
 	}
