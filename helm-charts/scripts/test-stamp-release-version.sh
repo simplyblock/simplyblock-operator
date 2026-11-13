@@ -37,6 +37,13 @@ check() {
     fail "$tag: image.operator.tag is '$operator', want '$want_operator'"
   [[ "$simplyblock" == "$want_simplyblock" ]] ||
     fail "$tag: image.simplyblock.tag is '$simplyblock', want '$want_simplyblock'"
+  # The Control Center image is pushed under the release tag verbatim, while
+  # the chart's appVersion, its fallback, has no "v".
+  # Regression: 2026-11-13-control-center-tag-without-v (v26.4.0-beta6)
+  local control_center
+  control_center="$("$YQ" -r '.controlCenter.image.tag' "$copy/values.yaml")"
+  [[ "$control_center" == "$want_operator" ]] ||
+    fail "$tag: controlCenter.image.tag is '$control_center', want '$want_operator'"
 }
 
 check v26.4.0 v26.4.0 26.4.0
