@@ -121,3 +121,55 @@ func TestDesiredExportRecordsEncryption(t *testing.T) {
 		t.Fatalf("spec.encrypted = %t (found %t), want true", got, found)
 	}
 }
+
+func fakeDriverClient(objects ...runtime.Object) *dynamicfake.FakeDynamicClient {
+	scheme := runtime.NewScheme()
+	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme,
+		map[schema.GroupVersionResource]string{
+			nfsExportGVR:         "NFSExportList",
+			simplyblockDriverGVR: "SimplyblockDriverList",
+		}, objects...)
+}
+
+func driverWithPNFS(name string, pnfs map[string]any) *unstructured.Unstructured {
+	object := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "storage.simplyblock.io/v1alpha2",
+		"kind":       "SimplyblockDriver",
+		"metadata":   map[string]any{"name": name, "namespace": "simplyblock"},
+		"spec":       map[string]any{},
+	}}
+	if pnfs != nil {
+		_ = unstructured.SetNestedMap(object.Object, pnfs, "spec", "pnfs")
+	}
+	return object
+}
+
+// spec.pnfs.mds decides it, even when empty; spec.pnfs alone does not.
+func TestMetadataServerConfiguredReadsSpecPNFSMDS(t *testing.T) {
+	cases := []struct {
+		name    string
+		objects []runtime.Object
+		want    bool
+	}{
+		{"no driver", nil, false},
+		{"no pnfs", []runtime.Object{driverWithPNFS("a", nil)}, false},
+		{"pnfs without mds", []runtime.Object{driverWithPNFS("a", map[string]any{})}, false},
+		{"empty mds", []runtime.Object{driverWithPNFS("a", map[string]any{"mds": map[string]any{}})}, true},
+		{"second driver has mds", []runtime.Object{
+			driverWithPNFS("a", nil),
+			driverWithPNFS("b", map[string]any{"mds": map[string]any{"replicas": int64(1)}}),
+		}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := &dynamicExportRegistry{client: fakeDriverClient(tc.objects...)}
+			got, err := registry.MetadataServerConfigured(context.Background())
+			if err != nil {
+				t.Fatalf("MetadataServerConfigured: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("configured = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

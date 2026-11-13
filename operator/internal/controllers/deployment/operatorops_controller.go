@@ -338,6 +338,8 @@ func (r *OperatorOpsReconciler) succeed(
 	ops.Status.CompletedAt = &now
 	ops.Status.Step.Deadline = nil
 	r.event(ops, corev1.EventTypeNormal, OperationSucceeded, ops.Status.Message)
+	// After the event, which names the step that finished the run.
+	ops.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.OperatorOpsStepCompleted)}
 	observeRun(ops, ops.Status.Phase)
 	return r.status(ctx, ops)
 }
@@ -359,6 +361,10 @@ func (r *OperatorOpsReconciler) inspect(
 
 	// Refused before a single worker is probed. See refuseUnreadableFilter.
 	if err := refuseUnreadableFilter(spec); err != nil {
+		return false, err
+	}
+	// So is a network attachment the namespace does not hold.
+	if err := r.refuseMissingAttachments(ctx, ops.Namespace, spec); err != nil {
 		return false, err
 	}
 
@@ -618,10 +624,17 @@ func (r *OperatorOpsReconciler) write(
 		// Counted rather than listed per worker, because this message is carried
 		// by an event and an event is refused past 1024 characters. The
 		// per-worker detail is not lost: every device refusal above went out as
-		// its own DeviceDeclined event.
+		// its own DeviceDeclined event. The environment's own explanation, when
+		// it has one, is added within the same budget.
+		advice := plan.Advice(ops.Status.Environment)
+		budget := maxEventMessage - len(refusalPreamble)
+		if advice != "" {
+			advice = ". " + advice
+			budget -= len(advice)
+		}
 		return false, refusef(OperationFailed,
-			"no worker has a device this run would use: %s",
-			plan.ExplainWithin(maxEventMessage-len(refusalPreamble)))
+			"no worker has a device this run would use: %s%s",
+			plan.ExplainWithin(budget), advice)
 	}
 
 	config, notes, err := r.draftFor(ctx, ops, spec, plan)
@@ -805,7 +818,9 @@ func (r *OperatorOpsReconciler) draftFor(
 
 		template, err := discoverypkg.ClusterTemplateFor(clusterName, plan,
 			discoverypkg.TemplateOptions{
-				ForceJournalDevice: ptr.BoolFromOrFalse(spec.ForceJournalDevice),
+				ForceJournalDevice:   ptr.BoolFromOrFalse(spec.ForceJournalDevice),
+				Network:              spec.Network,
+				EnableFailureDomains: spec.EnableFailureDomains,
 			})
 		if err != nil {
 			return nil, notes, err

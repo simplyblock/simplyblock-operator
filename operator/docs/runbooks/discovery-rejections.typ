@@ -250,7 +250,8 @@ below destroys what is on the disk.
   [If it is the boot or a system disk: expected, nothing to do. Otherwise unmount it and remove it from `/etc/fstab` or the systemd mount unit, so it is not mounted again after a reboot.],
   [`SwapArea`], [The disk or a partition of it is in use as swap.], [`the device is an active swap area`],
   [`swapoff /dev/<disk>` and remove it from `/etc/fstab`.],
-  [`Stacked`], [Another device is built on top of the disk: an active LVM volume, a software RAID array, an encrypted volume, or a multipath map. `lsblk` shows children under the disk.], [`held by [<device>]`],
+  [`Stacked`], [Another device is built on top of the disk: an active LVM volume, an encrypted volume, or a multipath map. `lsblk` shows children under the disk. A software RAID array is reported as `RAIDMember` instead.], [`held by [<device>]`],
+  [`RAIDMember`], [The disk is a member of a software RAID (md) array, named with its level. `cat /proc/mdstat` lists the array. On GKE, a node pool created with ephemeral-storage local SSDs assembles every local SSD into `md0` for the kubelet's ephemeral storage; such a pool has no disk to hand over, and a pool created with `local-nvme-ssd-block` attaches them as raw devices instead.], [`a member of the MD RAID array md0 (raid0)`],
   [Ask what the disk is used for. To release it: LVM, check what else the group holds with `pvs -o pv_name,vg_name,pv_used`. If the volume group lies only on this disk: `vgchange -an <vg>`, then `vgremove <vg>`. If it spans other disks, `vgremove` would delete their volumes too: move the data off this disk with `pvmove /dev/<disk>` (or remove the volumes on it), then `vgreduce <vg> /dev/<disk>`. Then `pvremove /dev/<disk>`. Software RAID, `mdadm --stop /dev/<md>`, then `mdadm --zero-superblock /dev/<disk>`. Encryption, `cryptsetup close <name>`. Multipath, exclude the disk in the multipath configuration.],
   [`LVMPhysicalVolume`], [The disk is an LVM physical volume, but no LVM volume on it is active. `lsblk` shows a bare disk; `pvs` or `pvdisplay` lists it.], [`LVM2 physical-volume label at 512`],
   [Check what else the group holds with `pvs -o pv_name,vg_name,pv_used`. If the volume group lies only on this disk: `vgchange -an <vg>`, then `vgremove <vg>`. If it spans other disks, `vgremove` would delete their volumes too: move the data off this disk with `pvmove /dev/<disk>` (or remove the volumes on it), then `vgreduce <vg> /dev/<disk>`. Then `pvremove /dev/<disk>`. On RHEL-based hosts also `lvmdevices --deldev /dev/<disk>`. Operator versions before this reason existed report the same disk as `NotBlank`.],
@@ -260,7 +261,7 @@ below destroys what is on the disk.
   [If the partitions are not needed: `wipefs -a /dev/<disk>` (and `sgdisk --zap-all /dev/<disk>` to remove the backup GPT). If the table is left over and partitioning is the only reason on the disk, the customer can set `spec.discover.enablePartitionedDevices: true` instead of wiping.],
   [`NotAWholeDisk`], [The device is a partition, an LVM volume, a RAID array, a loop device, a RAM disk, or a network block device (`nbd`). Every worker has many of these; they are expected.], [`the device is a <kind>`],
   [Usually nothing: these are never proposed. If the customer expected a *partition* to be used: partitions can only be used in logical block device mode. Ask whether logical block devices are meant to be used (see section 5, "Not NVMe"). Otherwise use the whole disk. In logical block device mode a partition is taken when this is its only reason and it is empty; any other reason on it is resolved like the same reason on a disk.],
-  [`Busy`], [The kernel would not hand the disk over, and nothing visible (mount, swap, stacked device) explains why.], [`the kernel refused an exclusive open, and gives no reason`],
+  [`Busy`], [The kernel would not hand the disk over. When a mount, a swap area, or a holding device explains it, the detail says which; otherwise nothing visible explains the refusal, and the disk is one to look at by hand.], [`the kernel refused an exclusive open: md0 holds it`, or `…, and gives no reason`],
   [Usually seen together with `Mounted` on the boot disk, which explains it. Alone: find out what holds the disk with `fuser -vm /dev/<disk>` or `lsof /dev/<disk>`. Typical holders: multipathd, a virtual machine, an iSCSI target, a backup agent.],
   [`Unreadable`], [The probe could not establish whether the disk is in use or what is on it.], [`the kernel could not be asked: ...` or `the device could not be read: ...`],
   [Check `dmesg` on the worker for I/O errors (failing disk) and the probe logs for permission errors. Run discovery again.],
@@ -333,9 +334,9 @@ gets only the first refusal that applies, in the order listed. Each one is repor
   [NVMe disks free to reclaim], [`... are bound to a userspace driver and nothing is using them, so the disks are there to be reclaimed`],
   [Left over from an earlier installation and not in use.],
   [Normally taken automatically. If not, unbind the controllers from `vfio-pci` and run again.],
-  [Management network], [`<worker>: declined by management network because <worker> is on <network>, and the fleet's management network is <network>, held by <n> of its <m> workers`],
-  [The worker's management address is on a different network than most workers.],
-  [Ask whether the worker is meant to be part of the cluster. Either connect it to the common management network or leave it out of the run.],
+  [Management network], [`<worker>: declined by management network because <interface> is on <network>, and the fleet's management network is <network>, held by <n> of its <m> workers`, or `... and the cluster reaches the fleet's other workers on <networks>`],
+  [The worker's management interface does not hold its node address, so it was chosen by ranking, and it is on a different network than the other workers. Workers on different subnets are not refused for it when each is managed on its node address, as in a cluster spread over availability zones.],
+  [Ask whether the worker is meant to be part of the cluster. Check that its Node object states an `InternalIP` and that the address is on the interface meant for management. Otherwise connect it to the common management network or leave it out of the run.],
   [Data network], [`... because it holds no data interface on <network>, and the fleet's data networks are <networks>, held by <n> of its <m> workers`],
   [The worker is missing an interface on one of the networks most workers use for storage traffic.],
   [Configure the missing interface on the worker, or leave it out of the run.],
@@ -349,17 +350,14 @@ gets only the first refusal that applies, in the order listed. Each one is repor
 
 == Journal disk (logical block device mode)
 
-In logical block device mode every worker needs one disk set aside for the journal. The run fails with
-`no document could be drafted: ...` and a `ConfigRefused` event.
+Logical block device mode refuses no worker for its journal. By default the configure of every storage node
+carves a journal partition out of the node's smallest disk (the journal split), so a worker with a single
+disk, such as one RAID-protected storage-array LUN, is drafted too, and every disk carries data. The draft
+leaves `enableJournalDevice` unset and says so in its notes.
 
-#grid(cols, head,
-  [Only one disk], [`<worker> hands over no disk that could carry the journal, and a block cluster has no other journal layout ... Give the worker a second disk, or deploy it as nvme`],
-  [A worker contributes fewer than two disks.],
-  [Add a second disk to the worker, leave the worker out, or deploy in NVMe mode if the disks are NVMe.],
-  [Tied smallest disks], [`<worker> hands over no disk smaller than its others, so nothing says which one carries the journal ...`],
-  [Two or more of the worker's disks share the smallest size, so none is obviously the journal disk. The larger disks do not matter: 1 TB, 1 TB, and 4 TB is refused too.],
-  [Set `spec.discover.forceJournalDevice: true`. One of the disks then becomes the journal; the message states how much capacity that costs.],
-)
+`spec.discover.forceJournalDevice: true` dedicates the smallest disk of every node to the journal instead. It is
+honoured only when every worker hands over at least two disks of known size; otherwise the draft keeps the
+journal split and names the worker that could not give up a disk.
 
 = Draft document checks
 
@@ -379,7 +377,6 @@ spec.approved`.
   [Too many failure domains \ `TooManyFailureDomains`], [`the document would bring the cluster to <n> failure domains, and a cluster maps at most <max>`], [Merge failure domains.],
   [Failure domains do not fit the stripe \ `FailureDomainLayout`], [`failure-domain mode with <scheme> needs at least <n> distinct failure domains (the stripe's parity plus two), and the workers are in <n> (...)` or `failure-domain mode needs an equal number of workers in every failure domain when the cluster is activated, and the domains hold <domain>: <n>, ...`], [Add workers in further failure domains, move workers so every domain holds the same number, choose a stripe with less parity, or set `spec.cluster.enableFailureDomains: false`.],
   [Mixed disk types \ `DeviceClassMismatch`], [`the groups name <class> devices and cluster <name> is built out of <class> ...`], [When adding to an existing cluster, use the same mode (NVMe or logical block devices) the cluster was built with.],
-  [Journal required \ `JournalDeviceRequired`], [`the groups name logical block devices, and the control plane runs those only with the journal on a device of its own ...`], [Set `spec.cluster.enableJournalDevice: true`.],
   [Cluster too large \ `MemberTooLarge`], [`node set <name> makes <n> storage nodes, and a cluster holds at most <max> ...` or `the document adds <n> storage nodes to cluster <name> ...`], [Split the workers into several node sets (each becomes its own cluster), or add fewer nodes.],
   [Name too long \ `MemberNameInvalid`], [`node set <name> makes a member named like <name>, which a StorageCluster cannot be named ...`], [Shorten the cluster or node set name.],
   [Sizing missing \ `MemberSizingUnstated`], [`spec.clusterRef names supercluster <name>, and the members the document adds have no sizing ...`], [Add the cluster settings (`spec.cluster`).],
@@ -472,7 +469,7 @@ All under `spec.discover` of the OperatorOps.
 #grid((1.5fr, 4fr), ([Setting], [Effect]),
   [`enableLogicalBlockDevices`], [Logical block device mode: virtio, SCSI, SAS, SATA, and NVMe disks through the kernel, named by `/dev/disk/by-id` path. Required for virtual machines and most cloud instances. The default is NVMe mode, which takes only NVMe disks, named by PCI address.],
   [`enablePartitionedDevices`], [Takes a disk whose only problem is a leftover partition table.],
-  [`forceJournalDevice`], [Logical block device mode: picks a journal disk when several disks tie for the smallest size.],
+  [`forceJournalDevice`], [Logical block device mode: dedicates the smallest disk of every node to the journal instead of the default journal split.],
   [`enableControlPlaneNodes`], [Includes control-plane nodes. Infrastructure nodes are always included.],
   [`workers` or `nodeSelector`], [Which workers to inspect; use one or the other.],
   [`tolerations`], [Includes workers whose `NoSchedule` and `NoExecute` taints these tolerate, lets the probe run there, and carries over to the deployment.],

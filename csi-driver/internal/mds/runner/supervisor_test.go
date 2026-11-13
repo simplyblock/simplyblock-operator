@@ -283,3 +283,109 @@ func TestAFailedDrainStillPowersDown(t *testing.T) {
 		t.Errorf("Run = %v, want a clean shutdown", err)
 	}
 }
+
+// Regression: 2026-11-11-mds-forwarder-dies-before-guest. The host-path
+// forwarder carries the guest's NVMe/TCP connections, and it was served under
+// the runner's stop-signal context. SIGTERM therefore cut the guest's storage
+// at the moment the power button was pressed: unmounting the exported XFS hung
+// on paths that no longer existed, the guest never powered down, and QEMU was
+// killed after the shutdown grace on every MDS move (about 20 s of client
+// stall each time).
+func TestTheGuestKeepsItsStorageUntilItHasPoweredDown(t *testing.T) {
+	q := newFakeQEMU()
+	s := supervisor(q)
+	var storage context.Context
+	s.StoragePath = func(ctx context.Context) error { storage = ctx; return nil }
+	s.Powerdown = func(context.Context) error {
+		// The guest flushes and unmounts on the way down, through its storage.
+		if storage.Err() != nil {
+			return errors.New("the guest's storage path is gone")
+		}
+		q.stop(nil)
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runAsync(ctx, s)
+
+	waitFor(t, "readiness", s.Ready)
+	cancel()
+
+	if err := result(t, done); err != nil {
+		t.Errorf("Run after a requested shutdown = %v, want nil", err)
+	}
+	if q.killed.Load() {
+		t.Error("QEMU was killed: the guest lost its storage before it could power down")
+	}
+	if storage.Err() == nil {
+		t.Error("the storage path outlived Run")
+	}
+}
+
+// Regression: 2026-11-12-pnfs-mds-stays-dead-after-state-disk-journal-abort.
+// A replacement MDS served for 2 h 46 m, lost its storage paths and its state
+// disk, and then sat unready with no restart for 19 h 39 m: the supervisor only
+// cleared readiness once the guest had booted, and readiness never restarts a
+// pod. Every pNFS client in the cluster had no data path the whole time.
+func TestAGuestThatStaysUnhealthyAfterBootIsKilled(t *testing.T) {
+	q := newFakeQEMU()
+	s := supervisor(q)
+	var broken atomic.Bool
+	s.Probe = func(context.Context) error {
+		if broken.Load() {
+			return errors.New("the state disk is not writable")
+		}
+		return nil
+	}
+	s.UnhealthyDeadline = 50 * time.Millisecond
+	done := runAsync(context.Background(), s)
+
+	waitFor(t, "readiness", s.Ready)
+	broken.Store(true)
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrGuestUnhealthy) {
+			t.Errorf("Run = %v, want ErrGuestUnhealthy", err)
+		}
+	case <-time.After(2 * time.Second):
+		q.stop(nil)
+		<-done
+		t.Fatal("the guest stayed unhealthy past the deadline and Run kept it running: nothing restarts the pod")
+	}
+	if !q.killed.Load() {
+		t.Error("QEMU was left running after the guest was given up on")
+	}
+}
+
+// A guest that is unhealthy for less than the deadline and recovers, during a
+// reconnect for example, keeps running.
+func TestABriefUnhealthySpellDoesNotKillTheGuest(t *testing.T) {
+	q := newFakeQEMU()
+	s := supervisor(q)
+	var broken atomic.Bool
+	s.Probe = func(context.Context) error {
+		if broken.Load() {
+			return errors.New("reconnecting")
+		}
+		return nil
+	}
+	s.UnhealthyDeadline = time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runAsync(ctx, s)
+
+	waitFor(t, "readiness", s.Ready)
+	broken.Store(true)
+	waitFor(t, "unreadiness", func() bool { return !s.Ready() })
+	time.Sleep(100 * time.Millisecond)
+	broken.Store(false)
+	waitFor(t, "readiness again", s.Ready)
+	time.Sleep(time.Second)
+	cancel()
+
+	if err := result(t, done); err != nil {
+		t.Errorf("Run = %v, want nil after a requested shutdown", err)
+	}
+	if q.killed.Load() {
+		t.Error("QEMU was killed for an unhealthy spell shorter than the deadline")
+	}
+}

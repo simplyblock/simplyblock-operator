@@ -178,8 +178,8 @@ func TestTheClusterIsCreatedWithTheClassReadOffTheGroups(t *testing.T) {
 	if created.Spec.DeviceClass != simplyblockv1alpha2.StorageClusterDeviceClassNVMe {
 		t.Errorf("deviceClass = %q, want NVMe read off the groups", created.Spec.DeviceClass)
 	}
-	if created.Spec.StorageNodes == nil || created.Spec.StorageNodes.MgmtInterface != "eth1" {
-		t.Errorf("the workload did not take the group's interfaces: %+v", created.Spec.StorageNodes)
+	if wl := created.Spec.StorageNodes; wl != nil && wl.MgmtInterface != "" {
+		t.Errorf("the workload carries the group's interface, want the nodes to: %+v", wl)
 	}
 }
 
@@ -400,6 +400,32 @@ func TestFailureDomainsAreCheckedAgainstTheTemplate(t *testing.T) {
 	}
 	if len(findings) != 1 {
 		t.Fatalf("findings = %+v, want the missing fault group", findings)
+	}
+	if !strings.Contains(findings[0].message, "rack-a/saturn") {
+		t.Errorf("the finding does not name the group: %s", findings[0].message)
+	}
+}
+
+// A sync-replication document whose groups declare no site holds, the same way a
+// failure-domain document missing a fault group does: every node of a sync
+// cluster needs a site, and the backend refuses a node added without one.
+func TestSitesAreCheckedAgainstTheTemplate(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Approved = false
+		c.Spec.Cluster.EnableSyncReplication = ptr.To(true)
+	})
+	objects := append(workers("worker-1", "worker-2"), config)
+	r := reconcilerFor(t, objects...)
+
+	findings, err := r.validate(context.Background(), config)
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want the missing site", findings)
+	}
+	if findings[0].reason != MissingSites {
+		t.Errorf("reason = %q, want %q", findings[0].reason, MissingSites)
 	}
 	if !strings.Contains(findings[0].message, "rack-a/saturn") {
 		t.Errorf("the finding does not name the group: %s", findings[0].message)

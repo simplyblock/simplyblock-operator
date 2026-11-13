@@ -69,7 +69,7 @@ http://simplyblock-operator:8080
 {{- if $cp.url -}}
 {{- $cp.url -}}
 {{- else if eq .Values.deployment.profile "standalone" -}}
-{{- printf "%s://simplyblock-webappapi.%s.svc.%s:5000" (ternary "https" "http" .Values.tls.enabled) .Release.Namespace .Values.clusterDnsDomain -}}
+{{- printf "%s://simplyblock-webappapi.%s.svc:5000" (ternary "https" "http" .Values.tls.enabled) .Release.Namespace -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -83,7 +83,7 @@ http://simplyblock-operator:8080
 {{- if $ls.url -}}
 {{- $ls.url -}}
 {{- else if ((.Values.controlplane).observability).enabled -}}
-{{- printf "http://simplyblock-graylog.%s.svc.%s:9000" .Release.Namespace .Values.clusterDnsDomain -}}
+{{- printf "http://simplyblock-graylog.%s.svc:9000" .Release.Namespace -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

@@ -1,0 +1,60 @@
+# The fleet manager Deployment and the relay's NodePort.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simplyblock-fleet-manager
+  labels:
+    app: simplyblock-fleet-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: simplyblock-fleet-manager
+  template:
+    metadata:
+      labels:
+        app: simplyblock-fleet-manager
+    spec:
+      serviceAccountName: simplyblock-fleet-manager
+      containers:
+        - name: manager
+          image: quay.io/simplyblock-io/simplyblock-fleet:0.1.0
+          command: ["/fleet-manager"]
+          args:
+            - --leader-elect
+            - --site-link-address=REPLACE-WITH-HOST:30443
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: site-link
+              containerPort: 9443
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: simplyblock-site-link-relay
+spec:
+  type: NodePort
+  selector:
+    app: simplyblock-fleet-manager
+  ports:
+    - name: site-link
+      port: 9443
+      targetPort: 9443
+      nodePort: 30443

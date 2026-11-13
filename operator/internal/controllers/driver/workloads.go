@@ -218,7 +218,7 @@ func nodeVolumes(n objectNames, driver string) []corev1.Volume {
 		hostPathVolume("stack-records", stackRecordsHostDir, &dirOrCreate),
 		configMapVolume("csi-nodeserver-config", n.nodeServerConfigMap, true),
 		configMapVolume("csi-config", n.configMap, false),
-		secretVolume("csi-secret", n.secretV2),
+		credentialsVolume(n.secretV2),
 	}
 }
 
@@ -291,7 +291,7 @@ func controllerStatefulSet(d *simplyblockv1alpha2.SimplyblockDriver, image strin
 			},
 		},
 		configMapVolume("csi-config", n.configMap, false),
-		secretVolume("csi-secret", n.secretV2),
+		credentialsVolume(n.secretV2),
 	}
 	if v := tlsVolume(d, n.controllerClientSecret); v != nil {
 		volumes = append(volumes, *v)
@@ -399,9 +399,13 @@ func csiAddonsSidecarContainer(
 	}
 }
 
+// controllerPluginName is the controller plugin's container, the one of the
+// controller pod's containers that links to the operator and to the site.
+const controllerPluginName = "csi-controller"
+
 func controllerPluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string) corev1.Container {
 	return corev1.Container{
-		Name:            "csi-controller",
+		Name:            controllerPluginName,
 		Image:           image,
 		ImagePullPolicy: pullPolicy(d),
 		Args: append([]string{

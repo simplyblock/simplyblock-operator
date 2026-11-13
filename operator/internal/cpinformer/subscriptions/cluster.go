@@ -51,6 +51,13 @@ type ClusterDTO struct {
 	NDCS              int  `json:"distr_ndcs"`
 	NPCS              int  `json:"distr_npcs"`
 	MaxFaultTolerance int  `json:"max_fault_tolerance"`
+	// SyncReplication, LostSite and LostSiteState are the sync-replication
+	// facts, zero on a control plane that does not report them.
+	SyncReplication bool   `json:"sync_replication"`
+	LostSite        string `json:"lost_site"`
+	LostSiteState   string `json:"lost_site_state"`
+	// LeaderSite is the site the record names as a stretched cluster's leader.
+	LeaderSite string `json:"leader_site"`
 }
 
 // ClusterSubscription streams every cluster, decodes them into an in-memory

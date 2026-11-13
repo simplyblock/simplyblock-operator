@@ -82,6 +82,12 @@ type HubConfig struct {
 
 	// Logger receives session lifecycle events. Nil means slog.Default.
 	Logger *slog.Logger
+
+	// Registry is where the hub registers its peers. Nil means a new one.
+	// Pass one when a service the hub registers needs the registry before the
+	// hub exists, as a [Relay] does: build the registry, then the relay over
+	// it, then the hub with both.
+	Registry *Registry
 }
 
 // Hub accepts peer links and keeps a [Registry] of who is reachable.
@@ -117,10 +123,13 @@ func NewHub(cfg HubConfig) (*Hub, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	if cfg.Registry == nil {
+		cfg.Registry = NewRegistry()
+	}
 	return &Hub{
 		cfg:      cfg,
 		log:      cfg.Logger,
-		registry: NewRegistry(),
+		registry: cfg.Registry,
 		sessions: make(map[*Session]struct{}),
 	}, nil
 }

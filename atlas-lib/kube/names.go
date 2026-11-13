@@ -110,12 +110,13 @@ const (
 	// NFS clients can use.
 	FSTypePNFS = "pnfs"
 
-	// The three a StoragePool's volume defaults reach the class under and that
-	// nothing consumes yet. They are written because the pool's contract is that
-	// its defaults appear in the class's parameters, and a class's parameters
-	// are immutable: a key omitted now cannot be added to a class later, so the
-	// pool that wanted compression would need replacing rather than editing.
-	// What the driver does with a parameter is its own concern.
+	// The three a StoragePool's volume defaults reach the class under. The
+	// driver sends ParamPriorityClass, the name of one of the cluster's service
+	// classes, with every volume it creates; the other two nothing consumes yet.
+	// They are written because the pool's contract is that its defaults appear
+	// in the class's parameters, and a class's parameters are immutable: a key
+	// omitted now cannot be added to a class later, so the pool that wanted
+	// compression would need replacing rather than editing.
 	ParamCompression   = "compression"
 	ParamReplication   = "replicate"
 	ParamPriorityClass = "priority_class"

@@ -60,7 +60,7 @@ const (
 )
 
 // ClusterDeploymentConfigStep is one step of the expansion path.
-// +kubebuilder:validation:Enum=Validating;CreatingCluster;AwaitingCluster;CreatingNodes;Activating
+// +kubebuilder:validation:Enum=Validating;CreatingCluster;AwaitingCluster;CreatingNodes;Activating;Completed
 type ClusterDeploymentConfigStep string
 
 const (
@@ -77,6 +77,9 @@ const (
 	// cluster that serves nothing behind a document reporting Expanded, with
 	// nothing saying that one more thing is required of anybody.
 	ClusterDeploymentConfigStepActivating ClusterDeploymentConfigStep = "Activating"
+	// ClusterDeploymentConfigStepCompleted is the terminal step of a document
+	// that expanded.
+	ClusterDeploymentConfigStepCompleted ClusterDeploymentConfigStep = "Completed"
 )
 
 // KubernetesEnvironment is the distribution a deployment targets. The values are
@@ -228,8 +231,34 @@ type DeviceSelection struct {
 	Block []string `json:"block,omitempty"`
 }
 
+// NetworkAttachmentSelection names the Multus NetworkAttachmentDefinitions a
+// storage node is attached through instead of the host's network. The names
+// are definitions in the namespace the storage nodes run in.
+//
+// Management is required. With Data left out, data traffic flows through the
+// management attachment, as it flows through the management interface of a
+// host-networked node that names no data interfaces.
+type NetworkAttachmentSelection struct {
+	// Management is the definition the storage node's management traffic is
+	// attached through.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
+	// +kubebuilder:validation:Required
+	Management string `json:"management"`
+
+	// Data is the definition the storage node's data traffic is attached
+	// through. Absent sends data through the management attachment.
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
+	// +optional
+	Data string `json:"data,omitempty"`
+}
+
 // NodeGroup is a set of workers that share one configuration, which is what
 // makes ten identical machines one entry rather than ten.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.networkAttachment) || (!has(self.mgmtInterface) && !has(self.dataInterfaces))",message="a group names its network interfaces or its network attachments, not both"
 type NodeGroup struct {
 	// Name identifies the group within its node set, for a reader and for the
 	// events a validation failure emits.
@@ -256,6 +285,13 @@ type NodeGroup struct {
 	// +optional
 	DataInterfaces []string `json:"dataInterfaces,omitempty"`
 
+	// NetworkAttachment attaches the storage nodes through Multus
+	// NetworkAttachmentDefinitions instead of host networking. A group names
+	// this or its interfaces, and every group of a document uses the same
+	// networking.
+	// +optional
+	NetworkAttachment *NetworkAttachmentSelection `json:"networkAttachment,omitempty"`
+
 	// Devices selects the storage devices every worker in the group uses.
 	// +optional
 	Devices *DeviceSelection `json:"devices,omitempty"`
@@ -270,6 +306,16 @@ type NodeGroup struct {
 	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`
 	// +optional
 	FailureDomain string `json:"failureDomain,omitempty"`
+
+	// Site is the replication site every worker in this group belongs to, one of
+	// the cluster's two sites. Discovery seeds it from topology.kubernetes.io/zone,
+	// as it does FailureDomain, since a sync cluster's two sites are its two zones.
+	// Required when the cluster has enableSyncReplication=true, rejected otherwise.
+	// It expands into StorageNode.spec.config.site, whose shape it shares.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
+	// +optional
+	Site string `json:"site,omitempty"`
 
 	// SpdkSystemMemory is the memory the control plane starts SPDK with on these
 	// nodes.
@@ -339,7 +385,7 @@ type NodeSetClusterOverrides struct {
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
 	// node of this member serves.
 	// +kubebuilder:validation:Minimum=10
-	// +kubebuilder:validation:Maximum=75
+	// +kubebuilder:validation:Maximum=500
 	// +optional
 	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
 
@@ -383,12 +429,19 @@ type ClusterTemplate struct {
 	// +kubebuilder:validation:MaxLength=63
 	Name string `json:"name"`
 
+	// Network states the networks the storage nodes' SPDK pods attach to, which
+	// is spec.storageNodes.network of the cluster this document creates. It is
+	// set here and nowhere else, because a cluster's network is fixed when it is
+	// created. Unstated, the nodes run on the host network.
+	// +optional
+	Network *StorageNetworkSpec `json:"network,omitempty"`
+
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
 	// node of this cluster serves. Required, because the StorageCluster's own
 	// field is, and no StorageNode carries a copy of it.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=10
-	// +kubebuilder:validation:Maximum=75
+	// +kubebuilder:validation:Maximum=500
 	MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
 
 	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
@@ -431,6 +484,10 @@ type ClusterTemplate struct {
 	// EnableJournalDevice dedicates the smallest NVMe device on each of this
 	// deployment's workers to the journal manager, instead of carving a journal
 	// partition out of every device.
+	//
+	// For logical block devices it dedicates the smallest device of each node
+	// to the journal, instead of carving one journal partition out of that
+	// device (the default journal split), and needs two devices per node.
 	//
 	// It is here rather than on a node set because it is immutable on the cluster
 	// it lands on, for the reason SocketsToUse is: the on-disk layout a fleet was
@@ -631,6 +688,24 @@ type ClusterTemplate struct {
 	// +optional
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
 
+	// EnableSyncReplication opts the cluster into synchronous two-site
+	// replication. The cluster then spans exactly two sites and every node group
+	// declares a site (see NodeGroup.Site). It is on the document because it is
+	// immutable on the cluster it lands on: the backend accepts it only at
+	// cluster-create, so a cluster created without it is one nobody can turn it
+	// on for.
+	// +optional
+	EnableSyncReplication *bool `json:"enableSyncReplication,omitempty"`
+
+	// Stretched makes the cluster one site of a stretched cluster, whose two
+	// sites are two Kubernetes clusters: the site this document's nodes join,
+	// the other site, and whether this site creates the cluster or adopts it.
+	// Written by the hub that manages both sites, and expanded verbatim into the
+	// StorageCluster. Requires enableSyncReplication; every node group's site
+	// must equal stretched.site.
+	// +optional
+	Stretched *StretchedSpec `json:"stretched,omitempty"`
+
 	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
 	// from the local node's own devices where it can, before crossing the
 	// network.
@@ -752,10 +827,11 @@ type DeploymentImages struct {
 // node set names the same member of its DeviceSelection. The expansion reads the
 // class off them and stamps it onto the cluster it creates, which is why the
 // document carries no field for it.
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval cannot be withdrawn"
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)) || s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group of a node set must name the same device class: all nvme or all block"
+// +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, has(g.networkAttachment))) || self.nodeSets.all(s, s.groups.all(g, !has(g.networkAttachment)))",message="every group must use the same networking: all host networking or all network attachments"
 // +kubebuilder:validation:XValidation:rule="size(self.nodeSets) > 1 || has(self.clusterRef) || self.nodeSets.all(s, !has(s.cluster))",message="a node set overrides the cluster template only when the document has more than one node set or names a cluster in clusterRef"
+// +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.network) || (has(self.cluster.network.spdkOnHostNetwork) && self.cluster.network.spdkOnHostNetwork) || self.nodeSets.all(s, s.groups.all(g, !has(g.dataInterfaces)))",message="group dataInterfaces are allowed only with cluster.network.spdkOnHostNetwork"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || (!has(self.cluster.enableCpuTopology) && !has(self.cluster.enableKubeletConfiguration)) || (has(self.environment) && self.environment == 'Vanilla')",message="spec.cluster.enableCpuTopology and spec.cluster.enableKubeletConfiguration are stated only when spec.environment is Vanilla: every other environment decides both"
 type ClusterDeploymentConfigSpec struct {
@@ -844,7 +920,7 @@ type ClusterDeploymentConfigStatus struct {
 	Phase ClusterDeploymentConfigPhase `json:"phase,omitempty"`
 
 	// Step is the position of the expansion machine within Expanding.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','CreatingCluster','AwaitingCluster','CreatingNodes','Activating']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','CreatingCluster','AwaitingCluster','CreatingNodes','Activating','Completed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

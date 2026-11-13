@@ -261,6 +261,38 @@ spec:
                               address, ascending, so two runs over one unchanged fleet propose the same
                               document.
                             type: boolean
+                          networkAttachment:
+                            description: |-
+                              NetworkAttachment attaches the proposed storage nodes through Multus
+                              NetworkAttachmentDefinitions in the run's namespace instead of host
+                              networking. Absent keeps host networking, and the draft names each
+                              group's interfaces.
+
+                              The draft names the definitions in place of interfaces, and a worker
+                              whose host lacks the interface a definition builds on is left out with
+                              the reason. A definition the namespace does not hold fails the run before
+                              any worker is probed, naming the definitions the namespace does hold. A
+                              cluster that does not serve the NetworkAttachmentDefinition kind keeps
+                              host networking, and the run says so with a Warning event.
+                            properties:
+                              data:
+                                description: |-
+                                  Data is the definition the storage node's data traffic is attached
+                                  through. Absent sends data through the management attachment.
+                                maxLength: 253
+                                pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                                type: string
+                              management:
+                                description: |-
+                                  Management is the definition the storage node's management traffic is
+                                  attached through.
+                                maxLength: 253
+                                minLength: 1
+                                pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                                type: string
+                            required:
+                            - management
+                            type: object
                           nodeSelector:
                             additionalProperties:
                               type: string

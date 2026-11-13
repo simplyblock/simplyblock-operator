@@ -39,12 +39,6 @@ spec:
         - name: conversion-webhook
           image: controller:latest
           command: ["/usr/local/bin/conversion-webhook"]
-          # The upgrade step that applies this has to add
-          # --cluster-dns-domain=<domain> on a cluster whose DNS domain is not
-          # cluster.local, from the same value the chart's clusterDnsDomain
-          # carries. Without it the serving certificate's fully qualified name
-          # is under cluster.local. The API server dials <service>.<ns>.svc,
-          # which the certificate carries either way.
           args:
             - --webhook-bind-port=9443
             - --health-probe-bind-address=:8081

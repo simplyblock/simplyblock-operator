@@ -1,0 +1,31 @@
+# The identity a discovery probe writes its report as. The Helm chart renders the
+# same three objects (templates/nodeprobe-rbac.yaml); a bundle has no chart.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nodeprobe
+  namespace: system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nodeprobe
+  namespace: system
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nodeprobe
+  namespace: system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nodeprobe
+subjects:
+- kind: ServiceAccount
+  name: nodeprobe
+  namespace: system

@@ -578,9 +578,11 @@ func isCrossCluster(restoreCR *simplyblockv1alpha1.BackupRestore) bool {
 // The restore backend reads a backup from wherever it says it lives, which may
 // not be this cluster's own bucket for a backup imported from another cluster.
 // The source cluster's StorageCluster CR (if still present in this namespace)
-// already has that bucket's credentials via its own backup.credentialsSecretRef,
-// so this resolves and passes them on rather than requiring the caller to supply
-// them separately.
+// already has that bucket's credentials via its own backup.credentials, so
+// this resolves and passes them on rather than requiring the caller to supply
+// them separately. A source authenticating through ProviderChain has no
+// static key to pass on, which is not a failure: the node restoring the
+// backup reaches the bucket through its own role the same way.
 //
 // Returns a nil credentials with a non-nil error when they cannot be resolved
 // (source cluster CR gone, no backup config, secret missing) -- the caller
@@ -603,7 +605,15 @@ func (r *BackupRestoreReconciler) resolveCrossClusterCredentials(
 		return nil, fmt.Errorf("source cluster %s has no backup configuration", sourceCluster.Name)
 	}
 
-	secretName := sourceCluster.Spec.Backup.CredentialsSecretRef.Name
+	creds, ok := sourceCluster.Spec.Backup.EffectiveCredentials()
+	if !ok {
+		return nil, fmt.Errorf("source cluster %s has no backup credentials configured", sourceCluster.Name)
+	}
+	if creds.Source == simplyblockv1alpha2.BackupCredentialsSourceProviderChain {
+		return nil, nil
+	}
+
+	secretName := creds.SecretRef.Name
 	secret := &corev1.Secret{}
 	if err := r.Get(ctx, client.ObjectKey{Name: secretName, Namespace: sourceCluster.Namespace}, secret); err != nil {
 		return nil, fmt.Errorf("get backup credentials secret %q for source cluster %s: %w", secretName, sourceCluster.Name, err)

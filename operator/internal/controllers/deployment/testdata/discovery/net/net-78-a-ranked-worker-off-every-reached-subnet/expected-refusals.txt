@@ -1,0 +1,1 @@
+worker-04: declined by management network because eth0 is on 172.16.0.0/24, and the cluster reaches the fleet's other workers on 10.248.192.0/23, 10.248.194.0/23, 10.248.196.0/23

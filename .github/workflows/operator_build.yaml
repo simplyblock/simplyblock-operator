@@ -60,24 +60,9 @@ jobs:
 
       - name: Compute image tag
         id: image_tag
-        # A Docker tag admits [a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}, and a branch name
-        # admits far more than that, so every character outside the set becomes a
-        # dash rather than only "/." Sanitizing one character was enough until a
-        # branch carried a "+," which produced an invalid reference and failed the
-        # build after the image had already been built.
-        run: |
-          version="${{ inputs.version || github.ref_name }}"
-          tag="$(printf %s "$version" | tr -c 'a-zA-Z0-9_.-' '-' | cut -c1-128)"
-          # A tag's first character may not be a dash or a dot.
-          tag="$(printf %s "$tag" | sed 's/^[^a-zA-Z0-9_]*//')"
-          if [ -z "$tag" ]; then
-            echo "::error::branch name ${version} sanitizes to an empty image tag"
-            exit 1
-          fi
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          # Both Dockerfiles read this as the OCI `version` label, which must not
-          # carry the tag's leading "v."
-          echo "label_version=${tag#v}" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/image-tag
+        with:
+          version: ${{ inputs.version || github.ref_name }}
 
       # Quay.io is only listed on a release run, matching the login step above.
       - name: Determine target tags
@@ -95,6 +80,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Build and push multi-arch ${{ matrix.name }} image (DockerHub + ECR + Quay + Internal)
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
@@ -107,3 +93,93 @@ jobs:
             RELEASE=1
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      # Red Hat certification runs these checks on every image the bundle lists.
+      # Running them on the pushed digest fails the build instead of the release.
+      # preflight exits 0 either way, so the verdict is read from results.json.
+      - name: Run Red Hat preflight container checks
+        env:
+          PREFLIGHT_VERSION: "1.22.0"
+          PREFLIGHT_SHA256: "1451ed8763f209f4d4a63848d9d62d1d40653a247db43d7606feb28eadbbd99b"
+          IMAGE: docker.io/${{ matrix.image_name }}@${{ steps.build.outputs.digest }}
+        run: |
+          curl -fsSL -o preflight \
+            "https://github.com/redhat-openshift-ecosystem/openshift-preflight/releases/download/${PREFLIGHT_VERSION}/preflight-linux-amd64"
+          echo "${PREFLIGHT_SHA256}  preflight" | sha256sum -c -
+          chmod +x preflight
+          failed=0
+          for platform in amd64 arm64; do
+            ./preflight check container "$IMAGE" --platform "$platform" --artifacts preflight-artifacts > /dev/null
+            result="preflight-artifacts/${platform}/results.json"
+            if [ "$(jq -r .passed "$result")" != "true" ]; then
+              echo "::error::preflight failed for ${IMAGE} (${platform})"
+              jq -r '.results.failed[], .results.errors[] | "  \(.name): \(.suggestion // .help // "")"' "$result"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+  # An OLM bundle for the branch's images. A release pushes its own, with
+  # digests, from operator_release.yaml.
+  bundle:
+    name: "Build and push (bundle)"
+    if: inputs.version == ''
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: operator
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Computed here rather than read from a build-and-push job output, which
+      # GitHub drops when the tag happens to contain a secret's value.
+      - name: Compute image tag
+        id: image_tag
+        uses: ./.github/actions/image-tag
+        with:
+          version: ${{ github.ref_name }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: operator/go.mod
+
+      - name: Install operator-sdk
+        run: |
+          OPERATOR_SDK_VERSION="v1.42.2"
+          OPERATOR_SDK_SHA256="8847c45ea994ac62b3cd134f77934df2a16a56a39a634eb988e0d1db99d1a413"
+          curl -sLo /usr/local/bin/operator-sdk \
+            "https://github.com/operator-framework/operator-sdk/releases/download/${OPERATOR_SDK_VERSION}/operator-sdk_linux_amd64"
+          echo "${OPERATOR_SDK_SHA256}  /usr/local/bin/operator-sdk" | sha256sum -c -
+          chmod +x /usr/local/bin/operator-sdk
+
+      - name: Install kustomize
+        run: |
+          make kustomize
+          echo "${{ github.workspace }}/operator/bin" >> "$GITHUB_PATH"
+
+      # A ClusterServiceVersion name must be SemVer, so the run number stands in
+      # for the version and the branch is in the image tag.
+      - name: Build and push the bundle image
+        env:
+          TAG: ${{ steps.image_tag.outputs.tag }}
+        run: |
+          [ -n "$TAG" ] || { echo "::error::empty image tag"; exit 1; }
+          make bundle-dev \
+            VERSION=0.0.0-${{ github.run_number }} IMG_TAG="$TAG" \
+            IMG_BASE=docker.io/simplyblock/simplyblock-operator \
+            REBALANCER_IMG_BASE=docker.io/simplyblock/simplyblock-rebalancer \
+            CLUSTER_IMAGE_BASE=docker.io/simplyblock/simplyblock CLUSTER_IMAGE_TAG=main
+          make bundle-validate
+          docker build -f bundle.Dockerfile -t "docker.io/simplyblock/simplyblock-operator-bundle:$TAG" .
+          docker push "docker.io/simplyblock/simplyblock-operator-bundle:$TAG"

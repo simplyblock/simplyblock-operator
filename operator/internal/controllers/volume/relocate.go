@@ -567,7 +567,7 @@ func (r *PersistentVolumeOpsReconciler) startPathJobs(
 	jobs := make([]simplyblockv1alpha2.ValidationJob, 0, len(nodes))
 	for _, node := range nodes {
 		jobs = append(jobs, simplyblockv1alpha2.ValidationJob{
-			Namespace: subject.namespace(), Name: jobName(modePreconnect, ops.Name, node), Node: node,
+			Namespace: subject.namespace(), Name: jobName(modePreconnect, ops.Name, string(ops.UID), node), Node: node,
 		})
 	}
 	if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.PersistentVolumeOpsStatus) {

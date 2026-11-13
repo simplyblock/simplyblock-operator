@@ -78,6 +78,7 @@ spec:
                 enum:
                 - Restart
                 - Fail
+                - CheckHealth
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -180,7 +181,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'',''Removing'',''Failing'']'
+                  rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'',''Removing'',''Failing'',''Completed'']'
             type: object
         type: object
     served: true

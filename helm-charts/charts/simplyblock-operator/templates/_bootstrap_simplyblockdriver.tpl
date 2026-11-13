@@ -1,0 +1,133 @@
+{{/*
+The CSI driver, as the one object the operator builds it from.
+
+The chart used to render the node DaemonSet, the controller StatefulSet, their
+RBAC, and the CSIDriver registration directly. It renders this instead, and the
+operator applies all of them (design-simplyblockdriver.md §8). Nothing else
+creates it: without this template a fresh install comes up with an operator, a
+control plane, and no way to provision a volume.
+
+Named simplyblock, beside the ControlPlane of that name, because the object's
+name is what every child's name derives from: simplyblock-csi-node,
+simplyblock-csi-controller, and the ten more in §4.3's table. On a cluster
+upgraded from a chart that rendered those objects, that derivation lands on the
+ones already running and the reconcile adopts them in place rather than
+building a second deployment beside them.
+
+Authored at v1alpha2 for the same reason the ControlPlane is: an object written
+at the storage version needs no conversion, so nothing on a fresh install's path
+calls the conversion webhook.
+
+Rendered into the simplyblock-bootstrap-objects ConfigMap rather than as a
+release resource, for the reason _bootstrap_controlplane.tpl gives.
+*/}}
+{{- define "simplyblock.bootstrap.simplyblockDriver" -}}
+{{- if eq (include "simplyblock.rendersCSIDriver" .) "true" }}
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: SimplyblockDriver
+metadata:
+  name: simplyblock
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # Helm must not delete this object, because deleting it deletes the CSI
+    # driver, and the volumes attached through it stay attached with nothing left
+    # to detach them. Removing the driver is a deliberate
+    # `kubectl delete simplyblockdriver` performed while the operator is up, so
+    # its finalizer can take the plugins down in order (§8).
+    #
+    # The operator applies this object, so it is not part of the release and
+    # Helm does not delete it. The annotation is what keeps it on an upgrade
+    # from a chart release that rendered it directly, which Helm would otherwise
+    # prune as dropped from the manifest.
+    helm.sh/resource-policy: keep
+    # Read by validate-controlplane.yaml, as on the ControlPlane.
+    storage.simplyblock.io/chart-release: {{ .Release.Name | quote }}
+spec:
+  # Immutable, and the one field an upgraded cluster cannot repair by editing.
+  driverName: {{ .Values.driver.driverName | quote }}
+  imagePullPolicy: {{ .Values.driver.image.pullPolicy | quote }}
+  controllerReplicas: {{ .Values.driver.controllerReplicas }}
+  enableVolumeSnapshots: {{ .Values.driver.enableVolumeSnapshots }}
+  enableServiceAccountAuth: {{ .Values.driver.enableServiceAccountAuth }}
+  # The sidecar publishes a CSIAddonsNode, so it runs only where the chart (or
+  # the cluster) provides the csiaddons.openshift.io CRDs.
+  enableCSIAddons: {{ .Values.csiaddons.create }}
+  {{- if .Values.driver.image.repository }}
+  image: "{{ .Values.driver.image.repository }}:{{ required "driver.image.tag is required when driver.image.repository is set: the field is a full reference and an untagged one is refused by the schema" .Values.driver.image.tag }}"
+  {{- end }}
+  {{- with .Values.driver.nodeSelector }}
+  nodeSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.driver.tolerations }}
+  tolerations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.driver.controllerNodeSelector }}
+  controllerNodeSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.driver.controllerTolerations }}
+  controllerTolerations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- $sidecars := dict }}
+  {{- range $field, $image := .Values.driver.sidecarImages }}
+  {{- if $image }}
+  {{- $_ := set $sidecars $field $image }}
+  {{- end }}
+  {{- end }}
+  {{- with $sidecars }}
+  # Only the sidecars somebody pinned. One left empty takes this operator
+  # release's version rather than being frozen at whatever the chart last
+  # defaulted to.
+  sidecarImages:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.driver.pnfs.mds }}
+  {{- if .enabled }}
+  {{- $network := .dataNetwork | default dict }}
+  {{- $networkSet := or $network.subnet $network.rangeStart $network.rangeEnd }}
+  pnfs:
+    # The pNFS metadata server, configured by default so a ReadWriteMany volume
+    # needs no patch of the driver after the install. An empty object turns it on
+    # with the driver's defaults; a bare key would be null and leave it off.
+    {{- if not (or .nodeSelector .tolerations .resources .stateSize $networkSet) }}
+    mds: {}
+    {{- else }}
+    mds:
+      {{- with .nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .resources }}
+      resources:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .stateSize }}
+      stateSize: {{ . | quote }}
+      {{- end }}
+      {{- with .dataNetwork }}
+      {{- if or .subnet .rangeStart .rangeEnd }}
+      dataNetwork:
+        subnet: {{ required "driver.pnfs.mds.dataNetwork.subnet is required once any dataNetwork value is set" .subnet | quote }}
+        rangeStart: {{ required "driver.pnfs.mds.dataNetwork.rangeStart is required once any dataNetwork value is set" .rangeStart | quote }}
+        rangeEnd: {{ required "driver.pnfs.mds.dataNetwork.rangeEnd is required once any dataNetwork value is set" .rangeEnd | quote }}
+      {{- end }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  tls:
+    enableTLS: {{ .Values.tls.enabled }}
+    enableMutualTLS: {{ .Values.tls.mutual_enabled }}
+    # The chart spells the providers in lower case and this API spells OpenShift
+    # as the product does, so the two are mapped here rather than being assumed
+    # to match.
+    provider: {{ if eq .Values.tls.provider "openshift" }}OpenShift{{ else }}cert-manager{{ end }}
+{{- end }}
+{{- end -}}

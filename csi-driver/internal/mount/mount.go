@@ -168,8 +168,8 @@ func xfsStripeOptions(volumeContext map[string]string) []string {
 
 // xfsFormatConfigPath is the mkfs.xfs config file that pins which on-disk features
 // new XFS volumes are created with. xfsprogs ships it, and the container image only has
-// to contain a matching xfsprogs. Kept in sync with the assertion in
-// deploy/image/Dockerfile_base.
+// to contain a matching xfsprogs. Kept in sync with the xfsprogs that
+// deploy/image/Dockerfile installs.
 const xfsFormatConfigPath = "/usr/share/xfsprogs/mkfs/lts_5.15.conf"
 
 // xfsFeatureOptions returns the mkfs.xfs option that pins the on-disk feature set to

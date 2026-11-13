@@ -314,7 +314,9 @@ func (m *OperationMover) Start(ctx context.Context, request MoveRequest) error {
 //
 // A UUID nothing reports is refused rather than guessed at. The kind names a
 // Kubernetes object, so an operation written against a node that has none would
-// be refused at admission with a worse message than this one.
+// be refused at admission with a worse message than this one. A UUID only a
+// remote record reports is refused too: that node belongs to the other site of a
+// stretched cluster, which this site does not place volumes on.
 func (m *OperationMover) nodeReporting(
 	ctx context.Context, namespace, uuid string,
 ) (*simplyblockv1alpha2.StorageNode, error) {
@@ -322,10 +324,20 @@ func (m *OperationMover) nodeReporting(
 	if err := m.Client.List(ctx, &nodes, client.InNamespace(namespace)); err != nil {
 		return nil, fmt.Errorf("list the storage nodes of namespace %s: %w", namespace, err)
 	}
+	var remote *simplyblockv1alpha2.StorageNode
 	for i := range nodes.Items {
-		if nodes.Items[i].Status.UUID == uuid {
-			return &nodes.Items[i], nil
+		if nodes.Items[i].Status.UUID != uuid {
+			continue
 		}
+		if nodes.Items[i].IsRemote() {
+			remote = &nodes.Items[i]
+			continue
+		}
+		return &nodes.Items[i], nil
+	}
+	if remote != nil {
+		return nil, fmt.Errorf("node %s is StorageNode %s/%s on the peer site %q of a stretched cluster, "+
+			"and a volume cannot move to the other site", uuid, namespace, remote.Name, remote.Spec.Config.Site)
 	}
 	return nil, fmt.Errorf("no StorageNode in namespace %s reports node %s", namespace, uuid)
 }

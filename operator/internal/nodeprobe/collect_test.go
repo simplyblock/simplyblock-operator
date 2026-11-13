@@ -412,6 +412,73 @@ func TestFromInventoryReportsAHostWhoseOSWasNotRead(t *testing.T) {
 	}
 }
 
+func TestTheReportVersionMarksTheNetworkAttachments(t *testing.T) {
+	// A version-10 report decodes with no network attachments, which a run
+	// asked to attach its storage nodes through one would read as a worker
+	// that has none. Refusing it re-runs the probe.
+	if ReportVersion < 11 {
+		t.Errorf("the report is version %d, and the network attachments arrived at version 11", ReportVersion)
+	}
+}
+
+func TestFromInventoryCarriesTheNetworkAttachments(t *testing.T) {
+	report := FromInventory(testNode, probedAt, inventory.Inventory{
+		NetworkAttachments: inventory.NetworkAttachments{
+			State:     inventory.NetworkAttachmentsServed,
+			Namespace: "simplyblock",
+			Definitions: []inventory.NetworkAttachment{{
+				Namespace:    "simplyblock",
+				Name:         "storage-ipvlan",
+				ResourceName: "intel.com/sriov",
+				Config: inventory.NetworkAttachmentConfig{
+					Type: "ipvlan", HostInterface: "enp1s0", PCIAddress: "0000:3b:00.1",
+					Mode: "l2", IPAM: "static", Problem: "none really",
+				},
+			}},
+		},
+	}, nil)
+
+	got := report.NetworkAttachments
+	if got == nil {
+		t.Fatal("the report carries no network attachments")
+	}
+	want := NetworkAttachments{
+		State:     "Served",
+		Namespace: "simplyblock",
+		Definitions: []NetworkAttachment{{
+			Namespace: "simplyblock", Name: "storage-ipvlan", ResourceName: "intel.com/sriov",
+			Type: "ipvlan", HostInterface: "enp1s0", PCIAddress: "0000:3b:00.1",
+			Mode: "l2", IPAM: "static", Problem: "none really",
+		}},
+	}
+	if fmt.Sprintf("%+v", *got) != fmt.Sprintf("%+v", want) {
+		t.Errorf("got %+v, want %+v", *got, want)
+	}
+}
+
+// A refused list is carried with its reason. Read as a namespace without
+// definitions, it would put a fleet that has Multus on host networking.
+func TestFromInventoryCarriesWhyTheNetworkAttachmentsWereNotRead(t *testing.T) {
+	report := FromInventory(testNode, probedAt, inventory.Inventory{
+		NetworkAttachments: inventory.NetworkAttachments{
+			State: inventory.NetworkAttachmentsUnread, Detail: "forbidden",
+		},
+	}, nil)
+	if report.NetworkAttachments == nil || report.NetworkAttachments.State != "Unread" ||
+		report.NetworkAttachments.Detail != "forbidden" {
+		t.Errorf("got %+v", report.NetworkAttachments)
+	}
+}
+
+// A probe run by hand without a cluster did not ask, and its report says
+// nothing rather than that the cluster serves no definitions.
+func TestFromInventoryOmitsNetworkAttachmentsThatWereNotAsked(t *testing.T) {
+	report := FromInventory(testNode, probedAt, inventory.Inventory{}, nil)
+	if report.NetworkAttachments != nil {
+		t.Errorf("got %+v for a collection that was given no cluster", *report.NetworkAttachments)
+	}
+}
+
 func TestTheReportCarriesEachControllersLBAFormats(t *testing.T) {
 	// The formats are read per controller and reported on it, by PCI address,
 	// so a reviewer reads them beside the driver that owns the controller.

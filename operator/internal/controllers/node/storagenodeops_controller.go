@@ -257,6 +257,13 @@ func (r *StorageNodeOpsReconciler) Reconcile(
 		return ctrl.Result{}, r.releaseLock(ctx, &ops)
 	}
 
+	// A maintenance window guards its worker before either gate can hold it,
+	// because the drain that raised it does not wait for admission
+	// (guardWaitingWindow).
+	if err := r.guardWaitingWindow(ctx, &ops); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// The cluster gate is the admission check of §7.1, and it is not the same as
 	// the lock. An operation that moves data into a cluster that is mid-rebalance
 	// or not active is either rejected by the control plane or succeeds into an
@@ -291,6 +298,8 @@ func (r *StorageNodeOpsReconciler) Reconcile(
 		case err != nil:
 			return ctrl.Result{}, err
 		case node.Status.ActiveOpsRef == ops.Name:
+		case node.IsRemote():
+			// The lock refuses a remote node's operation; the gate does not hold it.
 		default:
 			ready, reason, err := r.clusterReady(ctx, node)
 			if err != nil {
@@ -535,6 +544,10 @@ func (r *StorageNodeOpsReconciler) finish(
 		status.Phase = phase
 		status.Message = message
 		status.CompletedAt = &now
+		// A failed or aborted operation keeps the step it stopped in.
+		if phase == simplyblockv1alpha2.StorageNodeOpsPhaseSucceeded {
+			status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.StorageNodeOpsStepCompleted)}
+		}
 	})
 	if err != nil {
 		return ctrl.Result{}, err
@@ -633,6 +646,20 @@ func (r *StorageNodeOpsReconciler) teardown(
 	} else if pending {
 		return ctrl.Result{RequeueAfter: opsRetry}, nil
 	}
+	// A window deleted before it finished leaves no guard behind. One that never
+	// ran used to hold nothing; it now holds its worker from the first pass
+	// (guardWaitingWindow), and a budget nobody removes makes the worker
+	// undrainable for good.
+	//
+	// A finished window cleared its markers on the way out (Cleanup, fail,
+	// unwind) and is not asked again: clearing takes the manager's own budget
+	// down with it, and that budget is namespace-wide. The uncordon deletes a
+	// succeeded window at about the moment the next worker's window enters
+	// ShuttingDown, which on the manager's own worker is exactly when the
+	// manager needs holding.
+	if !terminalOps(ops.Status.Phase) {
+		r.clearMaintenanceMarkers(ctx, ops)
+	}
 	if err := r.releaseLock(ctx, ops); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -657,6 +684,15 @@ func (r *StorageNodeOpsReconciler) acquireLock(
 		return false, err
 	}
 	if err != nil {
+		return false, err
+	}
+
+	// A remote node is the peer site's, managed by that site's operator.
+	// Admission refuses an operation on one; this is the refusal for an
+	// operation admitted while the webhook was down or on a failed read.
+	if node.IsRemote() {
+		_, err := r.finish(ctx, ops, simplyblockv1alpha2.StorageNodeOpsPhaseFailed,
+			remoteNodeRefusal(node))
 		return false, err
 	}
 
@@ -736,6 +772,14 @@ func (r *StorageNodeOpsReconciler) releaseLock(
 	}
 	operationActiveState.WithLabelValues(node.Spec.ClusterRef, node.Name).Set(0)
 	return nil
+}
+
+// remoteNodeRefusal is the terminal message for an operation whose target is a
+// remote node of a stretched cluster.
+func remoteNodeRefusal(node *simplyblockv1alpha2.StorageNode) string {
+	return fmt.Sprintf("RemoteNode: node %s belongs to site %q of the stretched cluster "+
+		"and is managed by that site's operator; run the operation there",
+		node.Name, node.Spec.Config.Site)
 }
 
 // node reads the operation's target.
@@ -923,6 +967,7 @@ func readingFromDTO(dto subscriptions.NodeDTO) NodeReading {
 		LvolPort:      dto.LvolPort,
 		NVMeOFPort:    dto.NVMeOFPort,
 		FailureDomain: dto.FailureDomain,
+		Site:          dto.Site,
 
 		SecondaryNodeID: dto.SecondaryNodeID,
 		TertiaryNodeID:  dto.TertiaryNodeID,

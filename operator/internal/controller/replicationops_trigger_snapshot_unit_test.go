@@ -19,6 +19,9 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
+// testPolicyName is the ReplicationPolicy the fixtures in this file belong to.
+const testPolicyName = "pol"
+
 // testOpsName is the ReplicationOps every test here reconciles.
 const testOpsName = "ops1"
 
@@ -32,7 +35,7 @@ func opsFor(action, scope, ref string) *simplyblockv1alpha1.ReplicationOps {
 	}
 }
 
-// slotNamed is a slot of policy "pol" named name, for volumeID.
+// slotNamed is a slot of policy testPolicyName named name, for volumeID.
 func slotNamed(name, volumeID string) *simplyblockv1alpha1.ReplicationSlot {
 	s := slotForPolicy()
 	s.Name, s.Spec.VolumeID = name, volumeID
@@ -89,12 +92,12 @@ func TestOps_Trigger_ReplicatesEveryVolumeOfTheScope(t *testing.T) {
 		scope, ref string
 		volumes    []string
 	}{
-		{utils.ReplicationOpsScopePolicy, "pol", []string{"vol-1", "vol-2"}},
+		{utils.ReplicationOpsScopePolicy, testPolicyName, []string{"vol-1", "vol-2"}},
 		{utils.ReplicationOpsScopeVolume, "pol-pvc1", []string{"vol-1"}},
 		{utils.ReplicationOpsScopeTarget, "pair1", []string{"vol-1", "vol-2"}},
 	} {
 		t.Run(tc.scope, func(t *testing.T) {
-			r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps("pol"),
+			r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps(testPolicyName),
 				slotNamed("pol-pvc1", "cluster-u:pool-u:vol-1"),
 				slotNamed("pol-pvc2", "cluster-u:pool-u:vol-2"),
 				opsFor("trigger", tc.scope, tc.ref))
@@ -130,12 +133,12 @@ func TestOps_Trigger_ReplicatesEveryVolumeOfTheScope(t *testing.T) {
 // A trigger takes a new snapshot per call, so a reconcile that resumes after a
 // restart does not trigger again a volume its status already records.
 func TestOps_Trigger_DoesNotRetriggerARecordedVolume(t *testing.T) {
-	ops := opsFor("trigger", utils.ReplicationOpsScopePolicy, "pol")
+	ops := opsFor("trigger", utils.ReplicationOpsScopePolicy, testPolicyName)
 	ops.Status.Phase = string(simplyblockv1alpha1.ReplicationOpsPhaseRunning)
 	ops.Status.Results = []simplyblockv1alpha1.ReplicationOpsResult{
 		{SlotRef: "pol-pvc1", Status: string(simplyblockv1alpha1.ReplicationOpsResultSucceeded)},
 	}
-	pol := readyPolicyForOps("pol")
+	pol := readyPolicyForOps(testPolicyName)
 	pol.Status.ActiveOpsRef = testOpsName
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), pol,
 		slotNamed("pol-pvc1", "cluster-u:pool-u:vol-1"),
@@ -165,9 +168,9 @@ func TestOps_Trigger_DoesNotRetriggerARecordedVolume(t *testing.T) {
 
 // A volume the control plane refuses fails the operation, and its result says so.
 func TestOps_Trigger_RefusedVolumeFailsTheOperation(t *testing.T) {
-	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps("pol"),
+	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps(testPolicyName),
 		slotNamed("pol-pvc1", "cluster-u:pool-u:vol-1"),
-		opsFor("trigger", utils.ReplicationOpsScopePolicy, "pol"))
+		opsFor("trigger", utils.ReplicationOpsScopePolicy, testPolicyName))
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
@@ -215,8 +218,8 @@ func groupPlane(t *testing.T, log *callLog) {
 // the policy's backend id, keyed by the operation so a retry takes no second
 // one, and records the generation.
 func TestOps_Snapshot_TakesOneGenerationOfThePolicysGroup(t *testing.T) {
-	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps("pol"),
-		opsFor("snapshot", utils.ReplicationOpsScopePolicy, "pol"))
+	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps(testPolicyName),
+		opsFor("snapshot", utils.ReplicationOpsScopePolicy, testPolicyName))
 	log := &callLog{}
 	groupPlane(t, log)
 
@@ -231,7 +234,7 @@ func TestOps_Snapshot_TakesOneGenerationOfThePolicysGroup(t *testing.T) {
 	if log.body["request_id"] != "ops1-uid" {
 		t.Errorf("take body = %v, want request_id ops1-uid", log.body)
 	}
-	if len(got.Status.Results) != 1 || got.Status.Results[0].PolicyRef != "pol" ||
+	if len(got.Status.Results) != 1 || got.Status.Results[0].PolicyRef != testPolicyName ||
 		got.Status.Results[0].Generation != 7 ||
 		got.Status.Results[0].Status != string(simplyblockv1alpha1.ReplicationOpsResultSucceeded) {
 		t.Errorf("results = %+v, want policy pol at generation 7", got.Status.Results)
@@ -243,7 +246,7 @@ func TestOps_Snapshot_TakesOneGenerationOfThePolicysGroup(t *testing.T) {
 func TestOps_Snapshot_TargetSkipsAPolicyWithoutAGroup(t *testing.T) {
 	plain := readyPolicyForOps("plain")
 	plain.Status.BackendPolicyID = "no-group-policy"
-	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps("pol"), plain,
+	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps(testPolicyName), plain,
 		opsFor("snapshot", utils.ReplicationOpsScopeTarget, "pair1"))
 	log := &callLog{}
 	groupPlane(t, log)
@@ -257,7 +260,7 @@ func TestOps_Snapshot_TargetSkipsAPolicyWithoutAGroup(t *testing.T) {
 	for _, res := range got.Status.Results {
 		statuses[res.PolicyRef] = res.Status
 	}
-	if statuses["pol"] != string(simplyblockv1alpha1.ReplicationOpsResultSucceeded) ||
+	if statuses[testPolicyName] != string(simplyblockv1alpha1.ReplicationOpsResultSucceeded) ||
 		statuses["plain"] != string(simplyblockv1alpha1.ReplicationOpsResultSkipped) {
 		t.Errorf("results = %+v, want pol succeeded and plain skipped", got.Status.Results)
 	}
@@ -266,10 +269,10 @@ func TestOps_Snapshot_TargetSkipsAPolicyWithoutAGroup(t *testing.T) {
 // A snapshot of a policy with no consistency group fails and says why: there is
 // nothing to take a generation of.
 func TestOps_Snapshot_PolicyWithoutAGroupFails(t *testing.T) {
-	pol := readyPolicyForOps("pol")
+	pol := readyPolicyForOps(testPolicyName)
 	pol.Status.BackendPolicyID = "no-group-policy"
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), pol,
-		opsFor("snapshot", utils.ReplicationOpsScopePolicy, "pol"))
+		opsFor("snapshot", utils.ReplicationOpsScopePolicy, testPolicyName))
 	log := &callLog{}
 	groupPlane(t, log)
 
@@ -289,7 +292,7 @@ func TestOps_Snapshot_PolicyWithoutAGroupFails(t *testing.T) {
 // A snapshot is a policy's, so scope volume is refused. Admission refuses it too,
 // and this is the reconciler's own guard for an object that predates the rule.
 func TestOps_Snapshot_ScopeVolumeFails(t *testing.T) {
-	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps("pol"),
+	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps(testPolicyName),
 		slotNamed("pol-pvc1", "cluster-u:pool-u:vol-1"),
 		opsFor("snapshot", utils.ReplicationOpsScopeVolume, "pol-pvc1"))
 	log := &callLog{}

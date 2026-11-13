@@ -45,6 +45,10 @@ const (
 	// in.
 	ComponentMinio = "simplyblock-minio"
 
+	// ComponentPrometheus keeps the metrics the control plane pushes, and its
+	// Thanos sidecar uploads them to the object store.
+	ComponentPrometheus = "simplyblock-prometheus"
+
 	// ComponentFDBCluster is the FoundationDBCluster, whose readiness is that
 	// resource's own report rather than a replica count: a cluster at two of
 	// three coordinators is serving and a count cannot say so.
@@ -78,8 +82,9 @@ const (
 	clusterRoleBindingName = "simplyblock-binding"
 
 	// podTeardownRoleName and podTeardownBindingName grant the same account the
-	// one thing it does that is confined to its own namespace, so it is a Role
-	// rather than another rule on the cluster-wide one.
+	// one thing it does that is confined to its own namespace, deleting a storage
+	// node's SPDK pod and Service, so it is a Role rather than another rule on
+	// the cluster-wide one.
 	podTeardownRoleName    = "simplyblock-pod-teardown"
 	podTeardownBindingName = "simplyblock-pod-teardown-binding"
 

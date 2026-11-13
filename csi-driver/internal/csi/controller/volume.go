@@ -53,6 +53,10 @@ func (cs *Server) CreateVolume(
 		}
 	}
 
+	if err := cs.refuseWithoutMetadataServer(ctx, pnfs); err != nil {
+		return nil, err
+	}
+
 	selection, err := cs.resolveClusterSelection(ctx, req)
 	if err != nil {
 		klog.Errorf("failed to resolve cluster selection for volume %s: %v", volumeID, err)
@@ -252,6 +256,11 @@ func (cs *Server) DeleteVolume(
 	return &csi.DeleteVolumeResponse{}, nil
 }
 
+// maxChainHops bounds deleteRetiredReplicaChain: a guard against a looping
+// relationship record, not a limit on how often a volume may move. Same value
+// as the walks in atlas-lib's controlplane and the node package.
+const maxChainHops = 256
+
 // deleteRetiredReplicaChain removes the RETIRED members of the volume's
 // replication pairing chain. Ramen's S3-restore keeps every PV on the
 // ORIGINAL volumeHandle across fail-overs, so the DeleteVolume that cleans up
@@ -272,7 +281,10 @@ func (cs *Server) deleteRetiredReplicaChain(ctx context.Context, volumeID string
 		return nil // unparsable handles were already tolerated as deleted above
 	}
 	cur := h
-	for range 8 { // one hop per past fail-over; capped far above any real chain
+	// One hop per past move, never compacted: the 8-hop cap the chain walks
+	// lost on 2026-10-03 left the ninth retired copy here. A loop ends at the
+	// hop whose target is the active volume, so the bound is a cycle guard.
+	for range maxChainHops {
 		client, err := clusters.ReplicationClient(ctx, cur.ClusterID)
 		if err != nil {
 			return err
@@ -372,21 +384,23 @@ func (cs *Server) prepareCreateVolumeReq(
 	}
 
 	createVolReq := controlplane.CreateLVolData{
-		LvolName:     req.GetName(),
-		Size:         strconv.FormatInt(capacityBytes, 10),
-		LvsName:      params["pool_name"],
-		Fabric:       params["fabric"],
-		MaxRWIOPS:    maxRWIOPS,
-		MaxRWmBytes:  maxRWmBytes,
-		MaxRmBytes:   maxRmBytes,
-		MaxWmBytes:   maxWmBytes,
-		MaxSize:      params["max_size"],
-		MaxNamespace: maxNamespace,
-		Encryption:   encryption,
-		HostID:       hostID,
-		LvolID:       lvolID,
-		Namespaced:   maxNamespace > 1,
-		PvcName:      pvcFullName,
+		LvolName:    req.GetName(),
+		Size:        strconv.FormatInt(capacityBytes, 10),
+		LvsName:     params["pool_name"],
+		Fabric:      params["fabric"],
+		MaxRWIOPS:   maxRWIOPS,
+		MaxRWmBytes: maxRWmBytes,
+		MaxRmBytes:  maxRmBytes,
+		MaxWmBytes:  maxWmBytes,
+		MaxSize:     params["max_size"],
+		// The service class the pool's volumeDefaults.priorityClass names.
+		PriorityClass: params[kube.ParamPriorityClass],
+		MaxNamespace:  maxNamespace,
+		Encryption:    encryption,
+		HostID:        hostID,
+		LvolID:        lvolID,
+		Namespaced:    maxNamespace > 1,
+		PvcName:       pvcFullName,
 		// Join the volume to its consistency group at creation (design §4.1):
 		// the PVC's storage.simplyblock.io/consistency-group label, forwarded so
 		// the control plane pins placement and opens the member's epoch.
@@ -405,6 +419,7 @@ func reconcileExistingVolume(
 	sbclient controlplane.ClusterAPI,
 	name string,
 	requiredBytes int64,
+	sync bool,
 ) (string, error) {
 	volumes, err := sbclient.ListVolumes(ctx)
 	if err != nil {
@@ -429,6 +444,16 @@ func reconcileExistingVolume(
 			}
 			klog.Infof("reconcile: reusing online existing volume %q id=%s", name, v.UUID)
 			return v.UUID, nil
+		}
+		// On a sync cluster a volume that is not online is also what a volume
+		// whose site is down looks like, and a claim recreated on the surviving
+		// site inherits it (design-stretched-sync-replication-ramen.md §9.6).
+		// The create holds until it is online again or an administrator
+		// removes it; it never deletes it.
+		if sync {
+			return "", status.Errorf(codes.Aborted,
+				"volume %q exists with status %s on a sync cluster; waiting for it rather than replacing it",
+				name, v.Status)
 		}
 		// Non-online leftover from a failed attempt: it will never come online.
 		klog.Warningf("reconcile: deleting non-online leftover volume %q id=%s status=%s", name, v.UUID, v.Status)
@@ -473,6 +498,9 @@ func (cs *Server) createVolume(
 	if err != nil {
 		return nil, err
 	}
+	// A volume of a stretched cluster is born led from this driver's site
+	// (design-stretched-sync-replication-ramen.md §9.5).
+	createVolReq.Site = birthSite(sbclient.ClusterID())
 
 	// Co-locate the volume's primary with the consuming Pod's scheduled worker
 	// (node-affinity placement) when no explicit host_id was already set from a
@@ -497,6 +525,9 @@ func (cs *Server) createVolume(
 
 	volumeID, err := sbclient.CreateVolume(ctx, createVolReq)
 	if err != nil {
+		if errors.Is(err, controlplane.ErrSiteConflict) {
+			return nil, status.Errorf(codes.FailedPrecondition, "createVolume %s: %v", req.GetName(), err)
+		}
 		if errors.Is(err, controlplane.ErrVolumeExists) {
 			klog.Infof("createVolume: volume %q already exists, reconciling", req.GetName())
 			existingUUID, rerr := reconcileExistingVolume(
@@ -504,6 +535,7 @@ func (cs *Server) createVolume(
 				sbclient,
 				req.GetName(),
 				req.GetCapacityRange().GetRequiredBytes(),
+				syncCluster(sbclient.ClusterID()),
 			)
 			if rerr != nil {
 				return nil, rerr
@@ -577,4 +609,23 @@ func (cs *Server) unpublishVolume(ctx context.Context, volumeID string) error {
 		return err
 	}
 	return sbclient.UnpublishVolume(ctx, spdkVol.VolumeID)
+}
+
+// syncCluster reports whether the driver's secret marks clusterID as one site of
+// a stretched, sync-replicated cluster. A secret that cannot be read is not one:
+// the create then behaves as it always has.
+func syncCluster(clusterID string) bool {
+	_, sync, err := clusters.SyncSite(clusterID)
+	return err == nil && sync
+}
+
+// birthSite is the site a new volume of clusterID is born led from: this
+// driver's, when the secret marks the cluster sync-replicated, and none
+// otherwise.
+func birthSite(clusterID string) string {
+	site, sync, err := clusters.SyncSite(clusterID)
+	if err != nil || !sync {
+		return ""
+	}
+	return site
 }

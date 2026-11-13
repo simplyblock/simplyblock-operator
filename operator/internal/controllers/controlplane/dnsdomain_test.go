@@ -37,16 +37,23 @@ func TestTheDatabaseNamesItsCoordinatorsUnderTheClusterDNSDomain(t *testing.T) {
 	}
 }
 
-func TestTheManagementAPIEndpointIsUnderTheClusterDNSDomain(t *testing.T) {
+// The endpoint is published in status and dialed by the operator and the CSI
+// driver, so it carries no domain: the resolver's search list answers it
+// whatever the cluster's domain is.
+func TestTheManagementAPIEndpointCarriesNoClusterDomain(t *testing.T) {
 	useClusterDNSDomain(t, "acme.local")
 
 	got := localEndpoint(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{}))
-	if !strings.Contains(got, "."+"simplyblock.svc.acme.local:") {
-		t.Fatalf("localEndpoint = %q, not under acme.local", got)
+	want := "https://" + ComponentWebAPI + ".simplyblock.svc:5000"
+	if got != want {
+		t.Fatalf("localEndpoint = %q, want %q", got, want)
 	}
 }
 
-func TestThePeerCertificateNamesTheClusterDNSDomain(t *testing.T) {
+// The database's peers are named by the FoundationDB operator, which builds
+// them under the domain, so the certificate has to carry that spelling as well
+// as the suffix-free one.
+func TestThePeerCertificateNamesBothSpellings(t *testing.T) {
 	useClusterDNSDomain(t, "acme.local")
 
 	issued := fdbPeerCertificate(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{}))
@@ -55,17 +62,21 @@ func TestThePeerCertificateNamesTheClusterDNSDomain(t *testing.T) {
 	}
 	names, _, _ := unstructured.NestedSlice(issued[0].(*unstructured.Unstructured).Object, "spec", "dnsNames")
 
-	var found bool
+	found := map[string]bool{}
 	for _, n := range names {
 		name := n.(string)
 		if strings.HasSuffix(name, ".cluster.local") {
 			t.Errorf("the peer certificate names %q on a cluster whose domain is acme.local", name)
 		}
-		if name == "*."+ComponentFDBCluster+".simplyblock.svc.acme.local" {
-			found = true
-		}
+		found[name] = true
 	}
-	if !found {
-		t.Errorf("the peer certificate %v does not cover the pods under acme.local", names)
+
+	for _, want := range []string{
+		"*." + ComponentFDBCluster + ".simplyblock.svc",
+		"*." + ComponentFDBCluster + ".simplyblock.svc.acme.local",
+	} {
+		if !found[want] {
+			t.Errorf("the peer certificate %v lacks %q", names, want)
+		}
 	}
 }

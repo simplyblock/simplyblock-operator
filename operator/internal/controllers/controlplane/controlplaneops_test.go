@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/simplyblock/atlas/statemachine"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -727,5 +729,32 @@ func TestARestartIsNotFinishedWhileOldPodsStillServe(t *testing.T) {
 	}
 	if held == "" {
 		t.Errorf("await held without saying what it is waiting on")
+	}
+}
+
+// A succeeded operation reports the terminal step Completed, while a failed one
+// keeps the step it broke on.
+func TestAFinishedOperationReportsItsTerminalStep(t *testing.T) {
+	for phase, want := range map[simplyblockv1alpha2.ControlPlaneOpsPhase]simplyblockv1alpha2.ControlPlaneOpsStep{
+		simplyblockv1alpha2.ControlPlaneOpsPhaseSucceeded: simplyblockv1alpha2.ControlPlaneOpsStepCompleted,
+		simplyblockv1alpha2.ControlPlaneOpsPhaseFailed:    simplyblockv1alpha2.ControlPlaneOpsStepVerifying,
+	} {
+		cp := localControlPlane()
+		ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionRestart)
+		ops.Status.Phase = simplyblockv1alpha2.ControlPlaneOpsPhaseRunning
+		ops.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.ControlPlaneOpsStepVerifying)}
+		c := newClient(t, cp, ops)
+		r := &ControlPlaneOpsReconciler{Client: c, Scheme: testScheme(t)}
+
+		if _, err := r.finish(context.Background(), ops, cp, phase, "done"); err != nil {
+			t.Fatalf("%s: finish: %v", phase, err)
+		}
+		var after simplyblockv1alpha2.ControlPlaneOps
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(ops), &after); err != nil {
+			t.Fatalf("read the operation back: %v", err)
+		}
+		if after.Status.Step.State != string(want) {
+			t.Errorf("%s: status.step = %q, want %q", phase, after.Status.Step.State, want)
+		}
 	}
 }

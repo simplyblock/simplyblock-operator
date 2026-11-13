@@ -14,7 +14,8 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// storageNodes returns the cluster's StorageNodes.
+// storageNodes returns the cluster's StorageNodes on this site. A remote node is
+// the peer site's node of a stretched cluster and is left out.
 func (r *ArbitrationReconciler) storageNodes(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) ([]simplyblockv1alpha2.StorageNode, error) {
@@ -24,7 +25,7 @@ func (r *ArbitrationReconciler) storageNodes(
 	}
 	var out []simplyblockv1alpha2.StorageNode
 	for _, n := range list.Items {
-		if n.Spec.ClusterRef == cluster.Name {
+		if n.Spec.ClusterRef == cluster.Name && !n.IsRemote() {
 			out = append(out, n)
 		}
 	}

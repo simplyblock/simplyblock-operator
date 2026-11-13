@@ -26,8 +26,13 @@ const (
 	// controller, and the event is the only thing that distinguishes them.
 	ClusterNotReady      = "ClusterNotReady"
 	FailureDomainMissing = "FailureDomainMissing"
-	HostUnreachable      = "HostUnreachable"
-	AwaitingSlot         = "AwaitingSlot"
+	SiteMissing          = "SiteMissing"
+	// RemoteNodeAdded and RemoteNodeRemoved are a stretched cluster's other-site
+	// node appearing in, or leaving, this site's listing.
+	RemoteNodeAdded   = "RemoteNodeAdded"
+	RemoteNodeRemoved = "RemoteNodeRemoved"
+	HostUnreachable   = "HostUnreachable"
+	AwaitingSlot      = "AwaitingSlot"
 
 	// WorkerAway is the machine this node is being added to being not Ready or
 	// cordoned, which is every MachineConfig reboot and every drain.
@@ -54,6 +59,23 @@ const (
 	// PodSchedulingFailed says the node's storage pod cannot be placed, which is
 	// the one Kubernetes-side failure a node's own status cannot show.
 	PodSchedulingFailed = "PodSchedulingFailed"
+
+	// The storage network reasons, raised on the StorageNode. Each one holds the
+	// node in Pending or takes it out of service for a named cause, because the
+	// phase alone cannot tell a cluster without Multus from a mistyped
+	// definition name.
+	NetworkAttachmentUnsupported = "NetworkAttachmentUnsupported"
+	NetworkAttachmentNotFound    = "NetworkAttachmentNotFound"
+	NetworkAttachmentFailed      = "NetworkAttachmentFailed"
+	NetworkAddressPoolExhausted  = "NetworkAddressPoolExhausted"
+	NetworkHostCheckUnavailable  = "NetworkHostCheckUnavailable"
+	NetworkInterfaceNoAddress    = "NetworkInterfaceNoAddress"
+	NetworkAddressMismatch       = "NetworkAddressMismatch"
+	DataNetworkHostUnreachable   = "DataNetworkHostUnreachable"
+	NetworkAttachmentLost        = "NetworkAttachmentLost"
+
+	// NetworkAttached says every declared network is attached and verified.
+	NetworkAttached = "NetworkAttached"
 
 	// The operation reasons, raised on the StorageNodeOps rather than the node.
 	//

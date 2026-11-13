@@ -26,6 +26,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -37,6 +39,7 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
+	"github.com/simplyblock/simplyblock-operator/internal/multus"
 )
 
 // sampledCapacity is a metrics endpoint that answers with what a test scripted,
@@ -61,7 +64,7 @@ func aSteadyNode(
 	t *testing.T, api ControlPlane, objects ...client.Object,
 ) (*StorageNodeReconciler, client.Client) {
 	t.Helper()
-	scheme := testsupport.NewScheme(t, corev1.AddToScheme)
+	scheme := testsupport.NewScheme(t, corev1.AddToScheme, addDefinitionKind)
 
 	node := anOpsNode()
 	node.Finalizers = []string{NodeFinalizer}
@@ -707,4 +710,13 @@ func TestAnUncordonCallsOffAWindowThatHasNotStarted(t *testing.T) {
 	if !window.Spec.Abort {
 		t.Error("a window that had not started yet was left to take the node down")
 	}
+}
+
+// addDefinitionKind registers the NetworkAttachmentDefinition kind, which the
+// operator reads unstructured, so a fake client can serve one.
+func addDefinitionKind(scheme *runtime.Scheme) error {
+	scheme.AddKnownTypeWithName(multus.DefinitionGVK, &unstructured.Unstructured{})
+	scheme.AddKnownTypeWithName(multus.DefinitionGVK.GroupVersion().WithKind(multus.DefinitionGVK.Kind+"List"),
+		&unstructured.UnstructuredList{})
+	return nil
 }

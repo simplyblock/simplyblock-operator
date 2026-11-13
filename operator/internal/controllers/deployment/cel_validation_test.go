@@ -21,6 +21,8 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/ptr"
@@ -108,8 +110,9 @@ func TestAStoredDocumentCarriesItsApprovalFlag(t *testing.T) {
 	}
 }
 
-// Approval is one-way, and an approved document is frozen. Both rules exist to
-// stop a document being edited out from under a deployment that is acting on it.
+// Approval is one-way. The freeze on the rest of an approved document is the
+// admission webhook's (TestEditingAnApprovedDocumentIsRefused), because it
+// makes one exception, the stretched role, which a schema rule cannot state.
 func TestAnApprovedDocumentIsFrozen(t *testing.T) {
 	apiClient := apiServer(t)
 	config := aStoredDocument(t, apiClient, "frozen")
@@ -127,11 +130,26 @@ func TestAnApprovedDocumentIsFrozen(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "withdraw") && !strings.Contains(err.Error(), "immutable") {
 		t.Errorf("the refusal is %v, want one about withdrawal or immutability", err)
 	}
+}
 
-	edited := config.DeepCopy()
-	edited.Spec.NodeSets[0].Groups[0].Workers = []string{"worker-1", "worker-2"}
-	if err := apiClient.Update(context.Background(), edited); err == nil {
-		t.Error("an approved document was edited")
+// Regression: 2026-10-26-role-swap-never-delivered: the schema froze an approved
+// document whole, so the hub's re-delivery of a site's document with its new
+// stretched role was refused and no role swap reached a site. The apiserver
+// admits the role change; the webhook admits it and nothing else.
+func TestTheStretchedRoleOfAnApprovedDocumentCanChange(t *testing.T) {
+	apiClient := apiServer(t)
+	config := aStoredDocument(t, apiClient, "swappable")
+	config.Spec.Cluster.Stretched = &simplyblockv1alpha2.StretchedSpec{
+		Site: "a", PeerSite: "b", Role: simplyblockv1alpha2.StretchedRoleLeader,
+	}
+	config.Spec.Approved = true
+	if err := apiClient.Update(context.Background(), config); err != nil {
+		t.Fatalf("approving: %v", err)
+	}
+	swapped := config.DeepCopy()
+	swapped.Spec.Cluster.Stretched.Role = simplyblockv1alpha2.StretchedRoleFollower
+	if err := apiClient.Update(context.Background(), swapped); err != nil {
+		t.Fatalf("the apiserver refused a role swap on an approved document: %v", err)
 	}
 }
 
@@ -495,5 +513,86 @@ func TestANodeSetsVCPUOverrideIsHeldToTheTemplatesFloor(t *testing.T) {
 		if !tc.admit && (err == nil || !strings.Contains(err.Error(), "vcpuCount")) {
 			t.Errorf("vcpuCount %d was admitted, or refused for another reason: %v", tc.vcpu, err)
 		}
+	}
+}
+
+// withGroups replaces a stored document's node sets with the given groups,
+// written unstructured so that the fields under test are stated the way a
+// manifest states them.
+func withGroups(t *testing.T, config *simplyblockv1alpha2.ClusterDeploymentConfig, groups ...map[string]any) *unstructured.Unstructured {
+	t.Helper()
+	content, err := runtime.DefaultUnstructuredConverter.ToUnstructured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := &unstructured.Unstructured{Object: content}
+	doc.SetGroupVersionKind(simplyblockv1alpha2.GroupVersion.WithKind("ClusterDeploymentConfig"))
+	list := make([]any, 0, len(groups))
+	for _, group := range groups {
+		list = append(list, group)
+	}
+	if err := unstructured.SetNestedSlice(doc.Object, []any{map[string]any{"name": "discovered", "groups": list}},
+		"spec", "nodeSets"); err != nil {
+		t.Fatal(err)
+	}
+	return doc
+}
+
+// aGroup is a group of one worker with one NVMe device and the network fields
+// given.
+func aGroup(name, worker string, network map[string]any) map[string]any {
+	group := map[string]any{
+		"name":    name,
+		"workers": []any{worker},
+		"devices": map[string]any{"nvme": []any{"0000:00:02.0"}},
+	}
+	for key, value := range network {
+		group[key] = value
+	}
+	return group
+}
+
+// A group names the NetworkAttachmentDefinitions its storage nodes are attached
+// through, in place of host interfaces.
+func TestAGroupNamesItsNetworkAttachments(t *testing.T) {
+	apiClient := apiServer(t)
+	config := aStoredDocument(t, apiClient, "attached")
+
+	doc := withGroups(t, config, aGroup("g", "worker-1", map[string]any{
+		"networkAttachment": map[string]any{"management": "storage-mgmt", "data": "storage-data"},
+	}))
+	if err := apiClient.Update(context.Background(), doc, client.FieldValidation("Strict")); err != nil {
+		t.Fatalf("a group naming its network attachments was refused: %v", err)
+	}
+}
+
+// Host networking and network attachments do not mix within a group.
+func TestAGroupNamingInterfacesAndAttachmentsIsRefused(t *testing.T) {
+	apiClient := apiServer(t)
+	config := aStoredDocument(t, apiClient, "both-in-group")
+
+	doc := withGroups(t, config, aGroup("g", "worker-1", map[string]any{
+		"mgmtInterface":     "eth0",
+		"networkAttachment": map[string]any{"management": "storage-mgmt"},
+	}))
+	err := apiClient.Update(context.Background(), doc, client.FieldValidation("Strict"))
+	if err == nil || !strings.Contains(err.Error(), "not both") {
+		t.Errorf("a group naming an interface and an attachment was admitted, or refused for another reason: %v", err)
+	}
+}
+
+// Nor within a document: every storage node of a deployment is on host
+// networking, or every one is attached.
+func TestADocumentMixingHostNetworkingAndAttachmentsIsRefused(t *testing.T) {
+	apiClient := apiServer(t)
+	config := aStoredDocument(t, apiClient, "mixed")
+
+	doc := withGroups(t, config,
+		aGroup("g", "worker-1", map[string]any{"mgmtInterface": "eth0"}),
+		aGroup("h", "worker-2", map[string]any{"networkAttachment": map[string]any{"management": "storage-mgmt"}}),
+	)
+	err := apiClient.Update(context.Background(), doc, client.FieldValidation("Strict"))
+	if err == nil || !strings.Contains(err.Error(), "host networking") {
+		t.Errorf("a document mixing host networking and attachments was admitted, or refused for another reason: %v", err)
 	}
 }

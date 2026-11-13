@@ -1,0 +1,13 @@
+# The fleet manager on the hub, with the site link's relay.
+#
+# The relay is enabled by --site-link-address, the host:port members reach it
+# at. The Service below exposes it on a NodePort, so on a hub without a load
+# balancer that is a hub node's address and the node port; set it with a patch
+# on the Deployment's args.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: simplyblock
+resources:
+  - rbac.yaml
+  - manager.yaml
+  - agent-hub-role.yaml

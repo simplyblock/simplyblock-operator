@@ -94,6 +94,16 @@ type StorageDeviceOpsReconciler struct {
 
 	// API is the control plane the operation issues its call to.
 	API DeviceClient
+
+	// Health reads a device's health log for the CheckHealth action. It is the
+	// health monitor, so a log read on demand is judged, published, and
+	// reported exactly as a scheduled one is. Nil refuses the action.
+	Health DeviceHealthChecker
+}
+
+// DeviceHealthChecker reads one device's health log now and publishes it.
+type DeviceHealthChecker interface {
+	CheckHealth(ctx context.Context, device *simplyblockv1alpha2.StorageDevice) (*simplyblockv1alpha2.DeviceSMART, error)
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagedeviceops,verbs=get;list;watch;create;update;patch;delete
@@ -132,6 +142,22 @@ func (r *StorageDeviceOpsReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{}, r.fail(ctx, &ops, refusal.Error())
 		}
 		return ctrl.Result{}, err
+	}
+
+	// A remote node's device is the peer site's, managed by that site's
+	// operator. Admission refuses an operation on one; this is the refusal for
+	// an operation admitted while the webhook was down or on a failed read.
+	var node simplyblockv1alpha2.StorageNode
+	nodeKey := client.ObjectKey{Namespace: device.Namespace, Name: device.Spec.NodeRef}
+	switch err := r.Get(ctx, nodeKey, &node); {
+	case apierrors.IsNotFound(err):
+	case err != nil:
+		return ctrl.Result{}, err
+	case node.IsRemote():
+		return ctrl.Result{}, r.fail(ctx, &ops, fmt.Sprintf(
+			"RemoteNode: device %s belongs to node %s of site %q of the stretched cluster "+
+				"and is managed by that site's operator; run the operation there",
+			device.Name, node.Name, node.Spec.Config.Site))
 	}
 
 	held, err := r.acquireLock(ctx, &ops, device)
@@ -288,6 +314,9 @@ func (r *StorageDeviceOpsReconciler) performStep(
 ) (bool, error) {
 	switch current {
 	case stepDeviceRequesting:
+		if ops.Spec.Action == simplyblockv1alpha2.StorageDeviceOpsActionCheckHealth {
+			return r.checkHealth(ctx, ops, device)
+		}
 		return r.request(ctx, ops, device)
 	case stepDeviceRemoving:
 		return r.removeFromDataPath(ctx, ops, device)
@@ -298,6 +327,25 @@ func (r *StorageDeviceOpsReconciler) performStep(
 	default:
 		return false, fmt.Errorf("step %s belongs to no operation this operator performs", current)
 	}
+}
+
+// checkHealth reads the device's health log and records the verdict as the
+// step's message, which the succeeded message then carries.
+func (r *StorageDeviceOpsReconciler) checkHealth(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageDeviceOps,
+	device *simplyblockv1alpha2.StorageDevice,
+) (bool, error) {
+	if r.Health == nil {
+		return false, refuseDevice("no health monitor is running to read the health log of device %s",
+			device.Name)
+	}
+	smart, err := r.Health.CheckHealth(ctx, device)
+	if err != nil {
+		return false, refuseDevice("the health log of device %s could not be read: %v", device.Name, err)
+	}
+	return true, r.note(ctx, ops, fmt.Sprintf("the health log of device %s was read: %s, %s",
+		device.Name, smart.Verdict, smart.Reason))
 }
 
 // request issues the restart.
@@ -580,6 +628,9 @@ func deviceTimeoutMessage(
 		return fmt.Sprintf("device %s did not come back within %s of being restarted",
 			name, awaitingDeviceDeadline)
 	default:
+		if act == simplyblockv1alpha2.StorageDeviceOpsActionCheckHealth {
+			return fmt.Sprintf("the health log of device %s was not read within %s", name, requestingDeviceDeadline)
+		}
 		return fmt.Sprintf("the control plane did not accept the restart of device %s "+
 			"within %s", name, requestingDeviceDeadline)
 	}
@@ -607,6 +658,11 @@ func narrateDevice(
 			starting: fmt.Sprintf("failing device %s", name),
 			succeeded: fmt.Sprintf("device %s was failed; the cluster is rebuilding the "+
 				"redundancy it held and has stopped reading from it", name),
+		}
+	case simplyblockv1alpha2.StorageDeviceOpsActionCheckHealth:
+		return deviceNarration{
+			starting:  fmt.Sprintf("reading the health log of device %s", name),
+			succeeded: fmt.Sprintf("the health log of device %s was read", name),
 		}
 	default:
 		return deviceNarration{
@@ -725,13 +781,18 @@ func (r *StorageDeviceOpsReconciler) succeed(
 		return err
 	}
 	message := narrateDevice(ops.Spec.Action, device.Name).succeeded
+	// A health check's result is the verdict its step recorded, and the generic
+	// sentence would drop the one thing the operation was run to learn.
+	if ops.Spec.Action == simplyblockv1alpha2.StorageDeviceOpsActionCheckHealth && ops.Status.Message != "" {
+		message = ops.Status.Message
+	}
 	r.event(ops, corev1.EventTypeNormal, DeviceOperationSucceeded, message)
 
 	now := metav1.Now()
 	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageDeviceOpsStatus) {
 		status.Phase = simplyblockv1alpha2.StorageDeviceOpsPhaseSucceeded
 		status.CompletedAt = &now
-		status.Step.Deadline = nil
+		status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.StorageDeviceOpsStepCompleted)}
 		status.Message = message
 	})
 }

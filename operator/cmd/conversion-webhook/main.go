@@ -67,19 +67,15 @@ func main() {
 		"The port the conversion webhook serves /convert on.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the webhook server")
-	var clusterDNSDomain string
-	flag.StringVar(&clusterDNSDomain, "cluster-dns-domain", utils.DefaultClusterDNSDomain,
-		"The cluster's DNS domain, which the serving certificate names the service under.")
-
 	opts := zap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	if err := utils.SetClusterDNSDomain(clusterDNSDomain); err != nil {
-		setupLog.Error(err, "invalid --cluster-dns-domain")
-		os.Exit(1)
+	if domain, err := utils.DetectClusterDNSDomain(); err != nil {
+		setupLog.Info("falling back to the default cluster DNS domain",
+			"domain", domain, "reason", err.Error())
 	}
 
 	namespace, err := tlsutil.DetectOperatorNamespace()

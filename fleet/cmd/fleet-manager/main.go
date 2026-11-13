@@ -15,9 +15,14 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
+	"fmt"
+	"log/slog"
+	"net"
 	"os"
+	"strings"
 
 	// Every Kubernetes client auth plugin, so that a kubeconfig using one works
 	// without this process knowing which.
@@ -25,10 +30,12 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	clusterv1 "open-cluster-management.io/api/cluster/v1"
 	workv1 "open-cluster-management.io/api/work/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -37,6 +44,7 @@ import (
 	storagev1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 
 	fleetv1alpha1 "github.com/simplyblock/fleet/api/v1alpha1"
+	"github.com/simplyblock/fleet/internal/relay"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -63,6 +71,7 @@ func main() {
 	var enableLeaderElection bool
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var siteLinkListen, siteLinkAddress, siteLinkHosts string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -77,6 +86,11 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 is enabled for the metrics server.")
+	flag.StringVar(&siteLinkListen, "site-link-listen", ":9443", "Where the site link's relay listens.")
+	flag.StringVar(&siteLinkAddress, "site-link-address", "",
+		"The host:port members reach the site link's relay at. Empty runs no relay.")
+	flag.StringVar(&siteLinkHosts, "site-link-hosts", "",
+		"Comma-separated names and addresses for the relay's certificate. Empty uses the host of --site-link-address.")
 
 	opts := zap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
@@ -120,6 +134,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	if siteLinkAddress != "" {
+		if err := setupSiteLink(mgr, siteLinkListen, siteLinkAddress, siteLinkHosts); err != nil {
+			setupLog.Error(err, "unable to set up the site link's relay")
+			os.Exit(1)
+		}
+	}
+
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
@@ -136,4 +157,46 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// setupSiteLink adds the site link's relay and the reconciler that gives every
+// member its link objects. The relay's certificate is read or made before the
+// manager starts, with a client of its own, because the manager's cache is not
+// running yet and every member's endpoint carries the certificate's CA.
+func setupSiteLink(mgr ctrl.Manager, listen, address, hosts string) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("--site-link-address %q: %w", address, err)
+	}
+	names := []string{host}
+	if hosts != "" {
+		names = strings.Split(hosts, ",")
+	}
+	namespace := os.Getenv("POD_NAMESPACE")
+	if namespace == "" {
+		return fmt.Errorf("POD_NAMESPACE is required to keep the relay's certificate")
+	}
+
+	direct, err := client.New(mgr.GetConfig(), client.Options{Scheme: mgr.GetScheme()})
+	if err != nil {
+		return err
+	}
+	cert, caPEM, err := relay.LoadOrCreateTLS(context.Background(), direct, namespace, names)
+	if err != nil {
+		return err
+	}
+	hub, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		return err
+	}
+	if err := mgr.Add(&relay.Server{
+		ListenAddr: listen,
+		Cert:       cert,
+		Hub:        hub,
+		Elected:    mgr.Elected(),
+		Logger:     slog.Default().With("component", "site-link-relay"),
+	}); err != nil {
+		return err
+	}
+	return (&relay.MemberReconciler{Client: mgr.GetClient(), Address: address, CA: caPEM}).SetupWithManager(mgr)
 }

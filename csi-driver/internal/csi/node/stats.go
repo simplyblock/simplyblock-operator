@@ -4,6 +4,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -166,6 +167,14 @@ func redirectToActiveVolume(
 			continue
 		}
 		connInfo, err := tgtClient.VolumeInfo(ctx, rel.TargetLvolID, vc["hostNQN"])
+		if errors.Is(err, controlplane.ErrVolumeNotFound) {
+			// The record names its target active, but the target is gone: a
+			// control plane that recorded only this move cannot know the
+			// volume moved on again (A -> B -> C, each with --delete-source).
+			// The target's own relationship carries the later move.
+			client, lvolID = tgtClient, rel.TargetLvolID
+			continue
+		}
 		if err != nil {
 			klog.Warningf("failed to fetch connection info from target cluster %s for volume %s: %v",
 				rel.TargetClusterID, rel.TargetLvolID, err)

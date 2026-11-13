@@ -31,6 +31,7 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -77,8 +78,8 @@ var fdbBackupGVK = schema.GroupVersionKind{
 // than the deployment's. Moving FoundationDB forward is a release of this
 // operator.
 const (
-	fdbOperatorImage = "quay.io/simplyblock-io/fdb-kubernetes-operator:v2.13.0"
-	fdbMonitorImage  = "quay.io/simplyblock-io/fdb-kubernetes-monitor:7.3.63"
+	fdbOperatorImage = "quay.io/simplyblock-io/fdb-kubernetes-operator:v2.13.0@sha256:880d19f6d15198c54b5b03073768d1f8231430c7bbcb4fcb7247eece8e0b7687"
+	fdbMonitorImage  = "quay.io/simplyblock-io/fdb-kubernetes-monitor:7.3.63@sha256:348929437e4203dcf38f7788b85b86723c4250c2a5981213a73b8c6fe238fcd2"
 	fdbVersionString = "7.3.63"
 )
 
@@ -94,8 +95,8 @@ func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 	ns := cp.Namespace
 	//nolint:prealloc // the literal is the declaration; the append below is the conditional set
 	objects := []client.Object{
-		serviceAccount(ns, fdbOperatorServiceAccount),
-		serviceAccount(ns, fdbPodServiceAccount),
+		serviceAccount(ns, fdbOperatorServiceAccount, nil),
+		serviceAccount(ns, fdbPodServiceAccount, nil),
 		fdbManagerRoleObject(),
 		fdbManagerClusterRoleObject(),
 		fdbManagerRoleBindingObject(ns),
@@ -118,11 +119,12 @@ func foundationDBClusterScoped() []client.Object {
 	}
 }
 
-// serviceAccount is the account an object set runs under. It carries nothing but
-// its name: what it may do is in the bindings that name it.
-func serviceAccount(namespace, name string) *corev1.ServiceAccount {
+// serviceAccount is the account an object set runs under. It carries nothing
+// but its name and, where the caller passes one, an annotation: what it may
+// do is in the bindings that name it.
+func serviceAccount(namespace, name string, annotations map[string]string) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Annotations: annotations},
 	}
 }
 
@@ -260,7 +262,7 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 		}, peerVolumeIf(peerTLS)...),
 		InitContainers: []corev1.Container{{
 			Name:  "foundationdb-kubernetes-init-7-3",
-			Image: fdbMonitorImage,
+			Image: image(fdbMonitorImage),
 			Args: []string{
 				"--copy-library", "7.3",
 				"--copy-binary", "fdbcli",
@@ -275,9 +277,11 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 		}},
 		Containers: []corev1.Container{{
 			Name:    "manager",
-			Image:   fdbOperatorImage,
+			Image:   image(fdbOperatorImage),
 			Command: []string{"/manager"},
-			Args:    []string{"--health-probe-bind-address=:9443"},
+			Args: []string{
+				"--health-probe-bind-address=:9443",
+			},
 			// The operator reconciles the database, so it reaches it the way its
 			// processes reach each other and needs the same material.
 			Env: append([]corev1.EnvVar{{
@@ -405,7 +409,7 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 			},
 		},
 		"volumeClaimTemplate": map[string]any{
-			"spec": volumeClaimSpec(fdb),
+			"spec": volumeClaimSpec(storageClassOf(cp)),
 		},
 	}
 	if selector := foundationDBNodeSelector(cp); len(selector) > 0 {
@@ -516,15 +520,15 @@ func fdbContainer(fdb *simplyblockv1alpha2.FoundationDBSpec, peerTLS bool) map[s
 // class leaves the field out rather than writing an empty string, which is the
 // difference between the cluster's default class and a class literally named
 // nothing.
-func volumeClaimSpec(fdb *simplyblockv1alpha2.FoundationDBSpec) map[string]any {
+func volumeClaimSpec(class string) map[string]any {
 	spec := map[string]any{
 		"accessModes": []any{string(corev1.ReadWriteOnce)},
 		"resources": map[string]any{
 			"requests": map[string]any{"storage": fdbCoordinatorDisk},
 		},
 	}
-	if fdb != nil && fdb.StorageClassName != "" {
-		spec["storageClassName"] = fdb.StorageClassName
+	if class != "" {
+		spec["storageClassName"] = class
 	}
 	return spec
 }
@@ -575,16 +579,15 @@ func redundancyMode(processes int64) string {
 	}
 }
 
-// fdbMonitorImageRepository is the monitor image without its tag, which is the
-// form mainContainer.imageConfigs takes: the FoundationDB operator appends the
-// version it is running.
+// fdbMonitorImageRepository is the monitor image without its tag or digest,
+// which is the form mainContainer.imageConfigs takes: the FoundationDB operator
+// appends the version it is running, so this one image is pulled by tag.
 func fdbMonitorImageRepository() string {
-	for i := len(fdbMonitorImage) - 1; i >= 0; i-- {
-		if fdbMonitorImage[i] == ':' {
-			return fdbMonitorImage[:i]
-		}
+	ref, _, _ := strings.Cut(image(fdbMonitorImage), "@")
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		ref = ref[:i]
 	}
-	return fdbMonitorImage
+	return ref
 }
 
 // toAnyMap converts a string map to the shape an unstructured object holds.

@@ -154,16 +154,29 @@ func afterApproval(
 				"un-expand it, and the cluster and nodes it produced are removed by " +
 				"deleting them rather than by editing the record that describes them")
 	}
-	if !equality.Semantic.DeepEqual(old.Spec, config.Spec) {
+	if !equality.Semantic.DeepEqual(withoutStretchedRole(old.Spec), withoutStretchedRole(config.Spec)) {
 		deployment.CountApprovalRejection(namespace, deployment.SpecImmutable)
 		return admission.Denied(
 			"spec is immutable once spec.approved is true, because the document is " +
 				"then the record of what was deployed. To add nodes to the cluster " +
 				"this one built, write a second config naming it in spec.clusterRef")
 	}
-	// Metadata alone. The operator labels an approved config itself, so this is
-	// the ordinary edit rather than an exception to the rule above.
+	// Metadata alone, or the stretched role. The operator labels an approved
+	// config itself, and the hub swaps a stretched cluster's roles by
+	// re-delivering each site's document with its new role (§11.1 of the
+	// stretched design), which the site's controller carries onto its cluster.
 	return admission.Allowed("")
+}
+
+// withoutStretchedRole is spec with a stretched cluster's role cleared, the one
+// field an approved document may still change. CEL cannot compare two objects
+// but for one nested field, which is why this freeze is the webhook's.
+func withoutStretchedRole(spec simplyblockv1alpha2.ClusterDeploymentConfigSpec) simplyblockv1alpha2.ClusterDeploymentConfigSpec {
+	out := *spec.DeepCopy()
+	if out.Cluster != nil && out.Cluster.Stretched != nil {
+		out.Cluster.Stretched.Role = ""
+	}
+	return out
 }
 
 // checkApproval is §5.1's five checks, and returns everything wrong rather than

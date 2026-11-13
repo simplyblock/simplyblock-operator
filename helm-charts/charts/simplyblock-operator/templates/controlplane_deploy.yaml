@@ -196,9 +196,8 @@ spec:
             - --store=simplyblock-thanos:10901
             {{- $replicas := int .Values.prometheus.server.replicaCount }}
             {{- $ns := .Release.Namespace }}
-            {{- $domain := .Values.clusterDnsDomain }}
             {{- range $i := until $replicas }}
-            - --store=simplyblock-prometheus-{{ $i }}.simplyblock-prometheus-headless.{{ $ns }}.svc.{{ $domain }}:10901
+            - --store=simplyblock-prometheus-{{ $i }}.simplyblock-prometheus-headless.{{ $ns }}.svc:10901
             {{- end }}
           ports:
             - containerPort: 9091

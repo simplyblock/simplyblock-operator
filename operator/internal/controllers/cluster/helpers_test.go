@@ -234,6 +234,11 @@ type fakeControlPlane struct {
 	tasks        func(string) ([]subscriptions.TaskDTO, error)
 	cancelTask   func(string, string) error
 
+	setLeaderSite     func(string, string) error
+	reachability      func(string, []string) ([]WorkerReachability, error)
+	serviceClasses    func(string) (ServiceClassConfig, error)
+	setServiceClasses func(string, ServiceClassConfig) error
+
 	// The counters the write-ahead tests read. Each is the number of times the
 	// control plane was actually asked to do something, which is the only way
 	// to tell a step that skipped its call from one that made it twice.
@@ -246,9 +251,31 @@ type fakeControlPlane struct {
 	shutdownNodeCalls int
 	restartNodeCalls  int
 	cancelTaskCalls   int
+
+	serviceClassesCalls    int
+	setServiceClassesCalls int
 }
 
 func (f *fakeControlPlane) Endpoint(context.Context) string { return f.endpoint }
+
+func (f *fakeControlPlane) SetLeaderSite(_ context.Context, clusterID, site string) error {
+	if f.setLeaderSite == nil {
+		return nil
+	}
+	return f.setLeaderSite(clusterID, site)
+}
+
+// Reachability answers every address reachable unless a test scripts it.
+func (f *fakeControlPlane) Reachability(_ context.Context, clusterID string, addrs []string) ([]WorkerReachability, error) {
+	if f.reachability == nil {
+		out := make([]WorkerReachability, 0, len(addrs))
+		for _, a := range addrs {
+			out = append(out, WorkerReachability{Address: a, Reachable: true})
+		}
+		return out, nil
+	}
+	return f.reachability(clusterID, addrs)
+}
 
 func (f *fakeControlPlane) Ready(context.Context) error {
 	if f.ready == nil {
@@ -386,6 +413,24 @@ func (f *fakeControlPlane) CancelTask(_ context.Context, clusterID, taskID strin
 		return nil
 	}
 	return f.cancelTask(clusterID, taskID)
+}
+
+func (f *fakeControlPlane) ServiceClasses(_ context.Context, clusterID string) (ServiceClassConfig, error) {
+	f.serviceClassesCalls++
+	if f.serviceClasses == nil {
+		f.t.Fatal("the control plane was asked for the service classes and the test did not script it")
+	}
+	return f.serviceClasses(clusterID)
+}
+
+func (f *fakeControlPlane) SetServiceClasses(
+	_ context.Context, clusterID string, config ServiceClassConfig,
+) error {
+	f.setServiceClassesCalls++
+	if f.setServiceClasses == nil {
+		f.t.Fatal("the control plane was sent service classes and the test did not script it")
+	}
+	return f.setServiceClasses(clusterID, config)
 }
 
 var _ ControlPlane = (*fakeControlPlane)(nil)

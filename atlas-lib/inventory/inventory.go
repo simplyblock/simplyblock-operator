@@ -179,6 +179,13 @@ type KubernetesSources struct {
 	// Nodes are the cluster's nodes. A caller inspecting a fleet has listed
 	// them already, so they are passed in rather than listed again here.
 	Nodes []corev1.Node
+
+	// NetworkAttachments is where the NetworkAttachmentDefinitions are read
+	// from. It is separate from Discovery because it needs a client that lists
+	// objects and is scoped to a namespace, and because a caller giving it does
+	// not thereby ask for the environment: a probe on one worker reads the
+	// definitions and leaves the distribution to the run.
+	NetworkAttachments NetworkAttachmentSource
 }
 
 // sysfs, proc, and dev resolve the roots, so that the zero Config reads the
@@ -296,6 +303,11 @@ type Inventory struct {
 	// not the same as DistributionVanilla: one means nothing was asked, and the
 	// other means the cluster was read and carried no distinctive marker.
 	Environment Environment
+
+	// NetworkAttachments is the Multus NetworkAttachmentDefinitions the
+	// configured namespace holds, which a storage node can be attached through
+	// instead of host networking. Its State is empty when no source was given.
+	NetworkAttachments NetworkAttachments
 }
 
 // AvailableDevices is the block devices that may be handed to a storage
@@ -576,6 +588,16 @@ func Collect(ctx context.Context, cfg Config) (Inventory, error) {
 			errs = append(errs, fmt.Errorf("read the Kubernetes environment: %w", err))
 		}
 		inv.Environment = env
+	}
+
+	// An unread list is recorded on the reading and joined here as well, so a
+	// caller that only looks at the error still learns the attachments are
+	// missing from the answer.
+	if cfg.Kubernetes.NetworkAttachments.configured() {
+		inv.NetworkAttachments = CollectNetworkAttachments(ctx, cfg.Kubernetes.NetworkAttachments)
+		if inv.NetworkAttachments.State == NetworkAttachmentsUnread {
+			errs = append(errs, fmt.Errorf("read the network attachments: %s", inv.NetworkAttachments.Detail))
+		}
 	}
 
 	return inv, errors.Join(errs...)

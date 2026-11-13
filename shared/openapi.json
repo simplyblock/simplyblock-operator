@@ -246,6 +246,12 @@
               }
             }
           },
+          "400": {
+            "description": "A refused field (detail.message)"
+          },
+          "409": {
+            "description": "leader_site names the lost site (detail.message)"
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -546,6 +552,98 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/reachability": {
+      "get": {
+        "summary": "Clusters:Reachability",
+        "description": "Run the storage-node monitor's management-address probe once, now,\nagainst the nodes of ``site`` (every node of the cluster without one;\nremoved nodes excepted) and answer, per node, whether it answered. Reads\nnothing the monitor recorded and records nothing. 400 for a site the\ncluster does not have, and for any site on a cluster without sync\nreplication.\n\nWith ``address`` (repeatable), probe exactly those addresses instead -\nhosts that are not storage nodes yet, such as the workers a follower\noperator's preflight checks (design-stretched \u00a75.4) - one row per\naddress in request order, ``id`` and ``site`` empty. 400 together with\n``site``, for an address that is not an IPv4/IPv6 literal (no name is\never resolved), and for more than MAX_REACHABILITY_ADDRESSES.",
+        "operationId": "clusters_reachability_api_v2_clusters__cluster_id__reachability_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: only the nodes of this site",
+              "title": "Site"
+            },
+            "description": "Sync replication: only the nodes of this site"
+          },
+          {
+            "name": "address",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Probe these management addresses (IP literals, repeatable, at most 64) instead of the nodes; not with site",
+              "title": "Address"
+            },
+            "description": "Probe these management addresses (IP literals, repeatable, at most 64) instead of the nodes; not with site"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NodeReachabilityDTO"
+                  },
+                  "title": "Response Clusters Reachability Api V2 Clusters  Cluster Id  Reachability Get"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A bad site, site with address, a non-literal address, or too many addresses (detail.message)"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/start": {
       "post": {
         "summary": "Clusters:Start",
@@ -818,6 +916,62 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/grow-devices": {
+      "post": {
+        "summary": "Clusters:Grow Devices",
+        "description": "Grow every online lblk data device of the cluster to the size of its\nblock device, one device at a time. Used after the LUNs of the cluster\nwere grown on the storage array. If they have grown unevenly, the device\nweights are set to the new sizes and the cluster is rebalanced, unless\n``rebalance`` is false.",
+        "operationId": "clusters_grow_devices_api_v2_clusters__cluster_id__grow_devices_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "rebalance",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Rebalance"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceGrowthDTO"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -1144,6 +1298,109 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/arbitration/client-host": {
+      "put": {
+        "summary": "Clusters:Arbitration:Client-Host",
+        "description": "The operator reports the kernel NVMe host NQNs of the Kubernetes node a\nstorage node runs on (the kernel default and the simplyblock form); a host\nfence revokes all of them on the peer\n(docs/design/two-node-kubernetes-fencing.md, section 3.1). Empty clears them.",
+        "operationId": "clusters_arbitration_client_host_api_v2_clusters__cluster_id__arbitration_client_host_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_ClientHost"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/arbitration/host-fence/release": {
+      "post": {
+        "summary": "Clusters:Arbitration:Host-Fence:Release",
+        "description": "The operator verified that the node is clean (Ready, no pod from before\nthe fence): give its host access back (contract section 3.2). Accepted only\nonce the storage no longer needs the fence (state ``releasable``).",
+        "operationId": "clusters_arbitration_host_fence_release_api_v2_clusters__cluster_id__arbitration_host_fence_release_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_HostFenceRelease"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -1982,8 +2239,8 @@
     },
     "/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote": {
       "post": {
-        "summary": "Clusters:Storage-Nodes:Start",
-        "operationId": "clusters_storage_nodes_start_api_v2_clusters__cluster_id__storage_nodes__storage_node_id__promote_post",
+        "summary": "Clusters:Storage-Nodes:Promote",
+        "operationId": "clusters_storage_nodes_promote_api_v2_clusters__cluster_id__storage_nodes__storage_node_id__promote_post",
         "security": [
           {
             "HTTPBearer": []
@@ -2014,6 +2271,9 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "409": {
+            "description": "The promote did not finish: a device is still new or still removed; call again"
           },
           "422": {
             "description": "Validation Error",
@@ -2769,6 +3029,75 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/resize": {
+      "post": {
+        "summary": "Clusters:Storage Nodes:Devices:Resize",
+        "description": "Grow an lblk device online to the size its block device now has.\n\nThe storage node's host re-reads the size of the block device (for\nexample, a LUN grown on its storage array) and the device takes it over\nwithout interrupting I/O. Shrinking is refused. The placement weight of\nthe device stays at its original size, so the added capacity is only\nfully usable once all data devices of the cluster have grown by the same\nfactor; `uniform` and `warning` report it.",
+        "operationId": "clusters_storage_nodes_devices_resize_api_v2_clusters__cluster_id__storage_nodes__storage_node_id__devices__device_id__resize_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "storage_node_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Storage Node Id"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceResizeDTO"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The device cannot be grown"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/restart": {
       "post": {
         "summary": "Clusters:Storage Nodes:Devices:Restart",
@@ -3056,6 +3385,7 @@
     "/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-info": {
       "get": {
         "summary": "Clusters:Storage Nodes:Devices:Get-Device-Health-Info",
+        "description": "The device's health log (NVMe SMART / ATA SMART).\n\nA device that exposes no health log answers 200 with `supported=false`;\na storage node that cannot be reached is an error.",
         "operationId": "clusters_storage_nodes_devices_get_device_health_info_api_v2_clusters__cluster_id__storage_nodes__storage_node_id__devices__device_id__health_info_get",
         "security": [
           {
@@ -3104,6 +3434,75 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-assessment": {
+      "put": {
+        "summary": "Clusters:Storage Nodes:Devices:Set-Health-Assessment",
+        "description": "Record an externally computed health assessment (performance + SMART).\n\nStored on the device as sent; it raises the `device_slow` /\n`device_unhealthy` alerts while `reported_at + valid_seconds` has not\npassed.",
+        "operationId": "clusters_storage_nodes_devices_set_health_assessment_api_v2_clusters__cluster_id__storage_nodes__storage_node_id__devices__device_id__health_assessment_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "storage_node_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Storage Node Id"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceHealthAssessmentDTO"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -4420,6 +4819,7 @@
     "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/connect": {
       "get": {
         "summary": "Clusters:Storage-Pools:Volumes:Connect",
+        "description": "The volume's connection entries. On a sync-replication cluster the\npaths are those of the site the volume's LVS is currently led from\n(``lvs_active_site``, which promote and demote set); the caller does not\nchoose a site - leadership is control-plane state, so connect reads it\nrather than being told it.",
         "operationId": "clusters_storage_pools_volumes_connect_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__connect_get",
         "security": [
           {
@@ -4789,6 +5189,138 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/suspend": {
+      "post": {
+        "summary": "Clusters:Storage-Pools:Volumes:Suspend",
+        "operationId": "clusters_storage_pools_volumes_suspend_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__suspend_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "pool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pool Id"
+            }
+          },
+          {
+            "name": "volume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Volume Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean",
+                  "title": "Response Clusters Storage Pools Volumes Suspend Api V2 Clusters  Cluster Id  Storage Pools  Pool Id  Volumes  Volume Id  Suspend Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/resume": {
+      "post": {
+        "summary": "Clusters:Storage-Pools:Volumes:Resume",
+        "operationId": "clusters_storage_pools_volumes_resume_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__resume_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "pool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pool Id"
+            }
+          },
+          {
+            "name": "volume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Volume Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean",
+                  "title": "Response Clusters Storage Pools Volumes Resume Api V2 Clusters  Cluster Id  Storage Pools  Pool Id  Volumes  Volume Id  Resume Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/clone": {
       "post": {
         "summary": "Clusters:Storage-Pools:Volumes:Clone",
@@ -5144,7 +5676,7 @@
           "replication"
         ],
         "summary": "Clusters:Storage-Pools:Volumes:Replication:Status",
-        "description": "The typed steady-state replication status.\n\nUnlike the relationship read above, which serves cutover records and 404s\nfor a volume's whole healthy replicated life, this endpoint always answers\nfor a volume that exists: ``state: not_replicating, role: none`` is the\nvalid answer for an unreplicated volume. The csi-addons adapter derives\nits conditions and ``lastSyncTime`` from this read on every reconcile.",
+        "description": "The typed steady-state replication status.\n\nUnlike the relationship read above, which serves cutover records and 404s\nfor a volume's whole healthy replicated life, this endpoint always answers\nfor a volume that exists: ``state: not_replicating, role: none`` is the\nvalid answer for an unreplicated volume. The csi-addons adapter derives\nits conditions and ``lastSyncTime`` from this read on every reconcile.\n\nOn a sync-replication cluster the same DTO carries the site replication's\nstatus: role ``source`` on the site the volume is served from, state\n``in_sync`` or ``degraded`` (``resyncing`` set while a catch-up runs),\n``outstanding_bytes`` = the bytes behind. ``site`` is optional - a status\nread is cluster-wide, so a caller with no site to assert (the csi-addons\nadapter) is answered for the volume's led site.",
         "operationId": "clusters_storage_pools_volumes_replication_status_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_status_get",
         "security": [
           {
@@ -5181,6 +5713,24 @@
               "format": "uuid",
               "title": "Volume Id"
             }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: the site the caller acts from",
+              "title": "Site"
+            },
+            "description": "Sync replication: the site the caller acts from"
           }
         ],
         "responses": {
@@ -5190,6 +5740,93 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ReplicationStatusDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/sync-status": {
+      "get": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Storage-Pools:Volumes:Replication:Sync-Status",
+        "description": "The sync-replication status of the volume seen from ``site``: its role\nthere and the cluster-wide state (the worst over every LVS, the same for\nevery volume). ``site`` is optional (a status read is cluster-wide; a\nmissing one resolves to the volume's led site). 400 on a cluster without\nsync replication.",
+        "operationId": "clusters_storage_pools_volumes_replication_sync_status_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_sync_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "pool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pool Id"
+            }
+          },
+          {
+            "name": "volume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Volume Id"
+            }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: the site the caller acts from",
+              "title": "Site"
+            },
+            "description": "Sync replication: the site the caller acts from"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncReplicationStatusDTO"
                 }
               }
             }
@@ -5417,7 +6054,7 @@
           "replication"
         ],
         "summary": "Clusters:Storage-Pools:Volumes:Replication:Failover",
-        "description": "Bring the volume up on the target cluster.\n\nThe counterpart's id is read back from this volume's replication\nrelationship, its connection paths from the target volume's `connect`.\n\n``generation`` selects WHICH retained point-in-time to come up on: 0 (the\ndefault) is the newest, 1 the one before it, and so on through the\nhistory a retention schedule keeps. Failing over to an older generation\nis the recovery path for a logical corruption, which the newest copy has\nfaithfully replicated.\n\n``planned=True`` gates on a completed demote (P0-3) so a planned swap\nloses nothing: 409 while demote is still converging (retryable -- 409\nmust never become a code the controller reads as permission to force,\nsince that controller escalates on ANY FAILED_PRECONDITION from a\nforce=false promote with no wait-and-retry grace period of its own).\nWhen no demote was ever requested, the source's own health decides: a\ngenuinely healthy, still-serving source means there is nothing to fail\nover -- this is the vendored csi-addons controller's OWN first-ever\nreconcile of a `VolumeReplication` that already lives here, not a\ndisaster, and this call succeeds as the no-op it is. A source that is\nNOT healthy gets 412, the caller's premise that it was reachable to\ndemote was wrong, and 412 is what lets the controller's own\nforce-escalation take over. Unplanned failover (the default) ignores\ndemote state entirely, unchanged from today: its whole premise is that\nthe source may never have been reachable to demote.",
+        "description": "Bring the volume up on the target cluster.\n\nThe counterpart's id is read back from this volume's replication\nrelationship, its connection paths from the target volume's `connect`.\n\n``generation`` selects WHICH retained point-in-time to come up on: 0 (the\ndefault) is the newest, 1 the one before it, and so on through the\nhistory a retention schedule keeps. Failing over to an older generation\nis the recovery path for a logical corruption, which the newest copy has\nfaithfully replicated.\n\n``planned=True`` gates on a completed demote (P0-3) so a planned swap\nloses nothing: 409 while demote is still converging (retryable -- 409\nmust never become a code the controller reads as permission to force,\nsince that controller escalates on ANY FAILED_PRECONDITION from a\nforce=false promote with no wait-and-retry grace period of its own).\nWhen no demote was ever requested, the source's own health decides: a\ngenuinely healthy, still-serving source means there is nothing to fail\nover -- this is the vendored csi-addons controller's OWN first-ever\nreconcile of a `VolumeReplication` that already lives here, not a\ndisaster, and this call succeeds as the no-op it is. A source that is\nNOT healthy gets 412, the caller's premise that it was reachable to\ndemote was wrong, and 412 is what lets the controller's own\nforce-escalation take over. Unplanned failover (the default) ignores\ndemote state entirely, unchanged from today: its whole premise is that\nthe source may never have been reachable to demote.\n\nOn a sync-replication cluster this is the promote of the volume on\n``site`` (required), forced unless ``planned``\n(``sync_replication_controller.sync_promote_lvol``): 200 with its\nconnection strings on ``site`` once served there; 409 while the promote\ntask runs (the call that queues it included - call again), for a gate\nthat fails or a promote the decision table refuses (a volume still served\non the other site, the list in ``detail.volumes``); 412 when the site the\nvolume is served from is not online and the call is not forced.",
         "operationId": "clusters_storage_pools_volumes_replication_failover_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_failover_post",
         "security": [
           {
@@ -5474,11 +6111,32 @@
               "default": false,
               "title": "Planned"
             }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: the site the caller acts from",
+              "title": "Site"
+            },
+            "description": "Sync replication: the site the caller acts from"
           }
         ],
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "200": {
+            "description": "Sync replication: the volume's connection strings on the promoted site (SyncPromoteResultDTO). Async: {\"warnings\": [...]} when a consistency-group generation does not match the current membership."
           },
           "422": {
             "description": "Validation Error",
@@ -5581,7 +6239,7 @@
           "replication"
         ],
         "summary": "Clusters:Storage-Pools:Volumes:Replication:Demote",
-        "description": "Fence the source and confirm the last write replicated (P0-3).\n\nSynchronous and re-drivable, not queued: each call does only the work its\ncurrent state calls for (fence + trigger the final snapshot once, then\njust check whether it has landed), so the caller re-invokes this route\nuntil it reports 204. A 202 means still waiting -- call again, the same\nway `GET .../status` is re-read rather than pushed.",
+        "description": "Fence the source and confirm the last write replicated (P0-3).\n\nSynchronous and re-drivable, not queued: each call does only the work its\ncurrent state calls for (fence + trigger the final snapshot once, then\njust check whether it has landed), so the caller re-invokes this route\nuntil it reports 204. A 202 means still waiting -- call again, the same\nway `GET .../status` is re-read rather than pushed.\n\nOn a sync-replication cluster: fence the volume on ``site`` (required),\nsynchronously - 204 (also when it is not served there), 409 when the gate\nfails (the replicas are not in sync).",
         "operationId": "clusters_storage_pools_volumes_replication_demote_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_demote_post",
         "security": [
           {
@@ -5618,6 +6276,24 @@
               "format": "uuid",
               "title": "Volume Id"
             }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: the site the caller acts from",
+              "title": "Site"
+            },
+            "description": "Sync replication: the site the caller acts from"
           }
         ],
         "responses": {
@@ -5646,7 +6322,7 @@
           "replication"
         ],
         "summary": "Clusters:Storage-Pools:Volumes:Replication:Failback",
-        "description": "Point replication back at a source cluster. The cutover itself is\n`commit`.",
+        "description": "Point replication back at a source cluster. The cutover itself is\n`commit`. A no-op on a sync-replication cluster (its resync is automatic).",
         "operationId": "clusters_storage_pools_volumes_replication_failback_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_failback_post",
         "security": [
           {
@@ -6062,6 +6738,549 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/backups/groups/": {
+      "get": {
+        "tags": [
+          "group-backups"
+        ],
+        "summary": "Clusters:Backups:Groups:List",
+        "description": "List the cluster's group backups, newest first.",
+        "operationId": "clusters_backups_groups_list_api_v2_clusters__cluster_id__backups_groups__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GroupBackupDTO"
+                  },
+                  "title": "Response Clusters Backups Groups List Api V2 Clusters  Cluster Id  Backups Groups  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "group-backups"
+        ],
+        "summary": "Clusters:Backups:Groups:Create",
+        "description": "Back up one generation of a consistency group to S3 as one all-or-nothing\nunit. Takes a fresh crash-consistent generation unless\n``group_seq`` names an existing one. Returns the in-progress group backup,\nwhich commits once every member backup completes.",
+        "operationId": "clusters_backups_groups_create_api_v2_clusters__cluster_id__backups_groups__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_GroupBackupCreateParams"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupBackupDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/backups/groups/export": {
+      "get": {
+        "tags": [
+          "group-backups"
+        ],
+        "summary": "Clusters:Backups:Groups:Export",
+        "description": "Export a group backup's manifests as a unit, for import elsewhere.\n\nCarries the group manifest plus every member backup's chain, so a hand-carried\nfile describes the group backup identically to a bucket read.",
+        "operationId": "clusters_backups_groups_export_api_v2_clusters__cluster_id__backups_groups_export_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_backup_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Export the group backup with this UUID",
+              "title": "Group Backup Id"
+            },
+            "description": "Export the group backup with this UUID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupBackupExport-Output"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/backups/groups/import": {
+      "post": {
+        "tags": [
+          "group-backups"
+        ],
+        "summary": "Clusters:Backups:Groups:Import",
+        "description": "Import a group backup, preserving ids, all-or-nothing.",
+        "operationId": "clusters_backups_groups_import_api_v2_clusters__cluster_id__backups_groups_import_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/_GroupImportManifests"
+                  },
+                  {
+                    "$ref": "#/components/schemas/_GroupImportFromBucket"
+                  }
+                ],
+                "title": "Parameters"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/backups/groups/discover": {
+      "post": {
+        "tags": [
+          "group-backups"
+        ],
+        "summary": "Clusters:Backups:Groups:Discover",
+        "description": "List the group backups a bucket contains, without importing anything.\n\nA POST because it carries credentials, which have no business in a query\nstring. Takes no cluster state at all: this is what an operator runs when the\ncluster that wrote the group backups no longer exists.",
+        "operationId": "clusters_backups_groups_discover_api_v2_clusters__cluster_id__backups_groups_discover_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupConfig-Input"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GroupBackupManifest"
+                  },
+                  "title": "Response Clusters Backups Groups Discover Api V2 Clusters  Cluster Id  Backups Groups Discover Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/backups/groups/{group_backup_id}/": {
+      "get": {
+        "tags": [
+          "group-backups"
+        ],
+        "summary": "Clusters:Backups:Groups:Detail",
+        "operationId": "clusters_backups_groups_detail_api_v2_clusters__cluster_id__backups_groups__group_backup_id___get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_backup_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Backup Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupBackupDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "group-backups"
+        ],
+        "summary": "Clusters:Backups:Groups:Delete",
+        "description": "Start deleting a group backup. Its record and manifest are\nmarked deleting, and a task retires its member backups and then removes\nboth; the record reads ``deleting`` until then, and ``broken`` if the delete\ncould not finish after retiring a member.",
+        "operationId": "clusters_backups_groups_delete_api_v2_clusters__cluster_id__backups_groups__group_backup_id___delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_backup_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Backup Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/backups/groups/{group_backup_id}/members/": {
+      "get": {
+        "tags": [
+          "group-backups"
+        ],
+        "summary": "Clusters:Backups:Groups:Members",
+        "description": "The group backup's member backups, as the single-volume backup records\nthey are: one per member volume of the generation.",
+        "operationId": "clusters_backups_groups_members_api_v2_clusters__cluster_id__backups_groups__group_backup_id__members__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_backup_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Backup Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackupDTO"
+                  },
+                  "title": "Response Clusters Backups Groups Members Api V2 Clusters  Cluster Id  Backups Groups  Group Backup Id  Members  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/backups/groups/{group_backup_id}/restore": {
+      "post": {
+        "tags": [
+          "group-backups"
+        ],
+        "summary": "Clusters:Backups:Groups:Restore",
+        "description": "Restore a group backup into a NEW consistency group, all-or-nothing.\nReturns the restored group id and one entry per restored member\nvolume (its id and the source member's name); each volume recovers its data\nasynchronously, the same as a single-volume restore.",
+        "operationId": "clusters_backups_groups_restore_api_v2_clusters__cluster_id__backups_groups__group_backup_id__restore_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_backup_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Backup Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_GroupRestoreParams"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -6851,549 +8070,6 @@
         }
       }
     },
-    "/api/v2/clusters/{cluster_id}/backups/groups/": {
-      "get": {
-        "tags": [
-          "group-backups"
-        ],
-        "summary": "Clusters:Backups:Groups:List",
-        "description": "List the cluster's group backups, newest first.",
-        "operationId": "clusters_backups_groups_list_api_v2_clusters__cluster_id__backups_groups__get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/GroupBackupDTO"
-                  },
-                  "title": "Response Clusters Backups Groups List Api V2 Clusters  Cluster Id  Backups Groups  Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "group-backups"
-        ],
-        "summary": "Clusters:Backups:Groups:Create",
-        "description": "Back up one generation of a consistency group to S3 as one all-or-nothing\nunit (design \u00a76). Takes a fresh crash-consistent generation unless\n``group_seq`` names an existing one. Returns the in-progress group backup,\nwhich commits once every member backup completes.",
-        "operationId": "clusters_backups_groups_create_api_v2_clusters__cluster_id__backups_groups__post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/_GroupBackupCreateParams"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GroupBackupDTO"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/clusters/{cluster_id}/backups/groups/export": {
-      "get": {
-        "tags": [
-          "group-backups"
-        ],
-        "summary": "Clusters:Backups:Groups:Export",
-        "description": "Export a group backup's manifests as a unit, for import elsewhere (\u00a76.5).\n\nCarries the group manifest plus every member backup's chain, so a hand-carried\nfile describes the group backup identically to a bucket read.",
-        "operationId": "clusters_backups_groups_export_api_v2_clusters__cluster_id__backups_groups_export_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          },
-          {
-            "name": "group_backup_id",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "description": "Export the group backup with this UUID",
-              "title": "Group Backup Id"
-            },
-            "description": "Export the group backup with this UUID"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GroupBackupExport-Output"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/clusters/{cluster_id}/backups/groups/import": {
-      "post": {
-        "tags": [
-          "group-backups"
-        ],
-        "summary": "Clusters:Backups:Groups:Import",
-        "description": "Import a group backup, preserving ids, all-or-nothing (\u00a76.5).",
-        "operationId": "clusters_backups_groups_import_api_v2_clusters__cluster_id__backups_groups_import_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/_GroupImportManifests"
-                  },
-                  {
-                    "$ref": "#/components/schemas/_GroupImportFromBucket"
-                  }
-                ],
-                "title": "Parameters"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/clusters/{cluster_id}/backups/groups/discover": {
-      "post": {
-        "tags": [
-          "group-backups"
-        ],
-        "summary": "Clusters:Backups:Groups:Discover",
-        "description": "List the group backups a bucket contains, without importing anything (\u00a76.5).\n\nA POST because it carries credentials, which have no business in a query\nstring. Takes no cluster state at all: this is what an operator runs when the\ncluster that wrote the group backups no longer exists.",
-        "operationId": "clusters_backups_groups_discover_api_v2_clusters__cluster_id__backups_groups_discover_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cluster Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BackupConfig-Input"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/GroupBackupManifest"
-                  },
-                  "title": "Response Clusters Backups Groups Discover Api V2 Clusters  Cluster Id  Backups Groups Discover Post"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/clusters/{cluster_id}/backups/groups/{group_backup_id}/": {
-      "get": {
-        "tags": [
-          "group-backups"
-        ],
-        "summary": "Clusters:Backups:Groups:Detail",
-        "operationId": "clusters_backups_groups_detail_api_v2_clusters__cluster_id__backups_groups__group_backup_id___get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          },
-          {
-            "name": "group_backup_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Group Backup Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GroupBackupDTO"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "group-backups"
-        ],
-        "summary": "Clusters:Backups:Groups:Delete",
-        "description": "Start deleting a group backup (design \u00a79). Its record and manifest are\nmarked deleting, and a task retires its member backups and then removes\nboth; the record reads ``deleting`` until then, and ``broken`` if the delete\ncould not finish after retiring a member.",
-        "operationId": "clusters_backups_groups_delete_api_v2_clusters__cluster_id__backups_groups__group_backup_id___delete",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          },
-          {
-            "name": "group_backup_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Group Backup Id"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/clusters/{cluster_id}/backups/groups/{group_backup_id}/members/": {
-      "get": {
-        "tags": [
-          "group-backups"
-        ],
-        "summary": "Clusters:Backups:Groups:Members",
-        "description": "The group backup's member backups, as the single-volume backup records\nthey are: one per member volume of the generation.",
-        "operationId": "clusters_backups_groups_members_api_v2_clusters__cluster_id__backups_groups__group_backup_id__members__get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          },
-          {
-            "name": "group_backup_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Group Backup Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/BackupDTO"
-                  },
-                  "title": "Response Clusters Backups Groups Members Api V2 Clusters  Cluster Id  Backups Groups  Group Backup Id  Members  Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/clusters/{cluster_id}/backups/groups/{group_backup_id}/restore": {
-      "post": {
-        "tags": [
-          "group-backups"
-        ],
-        "summary": "Clusters:Backups:Groups:Restore",
-        "description": "Restore a group backup into a NEW consistency group, all-or-nothing\n(design \u00a76). Returns the restored group id and one entry per restored member\nvolume (its id and the source member's name); each volume recovers its data\nasynchronously, the same as a single-volume restore.",
-        "operationId": "clusters_backups_groups_restore_api_v2_clusters__cluster_id__backups_groups__group_backup_id__restore_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          },
-          {
-            "name": "group_backup_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Group Backup Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/_GroupRestoreParams"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/": {
       "get": {
         "summary": "Clusters:Subsystems:Migrations:List",
@@ -7802,7 +8478,7 @@
           "replication"
         ],
         "summary": "Clusters:Replication:Relationships:Detail",
-        "description": "Replication relationship for a volume, resolvable even when the source volume\nhas been deleted (e.g. after replication-commit --delete-source). The CSI driver\nuses this to redirect NodeStageVolume to the active volume on the target cluster.",
+        "description": "Replication relationship for a volume, resolvable even when the source volume\nhas been deleted (e.g. after replication-commit --delete-source). The CSI driver\nuses this to redirect NodeStageVolume to the active volume on the target cluster.\nAlways 404 on a sync-replication cluster: its volumes keep their identity on\nboth sites.",
         "operationId": "clusters_replication_relationships_detail_api_v2_clusters__cluster_id__replication_relationships__lvol_id__get",
         "security": [
           {
@@ -9342,7 +10018,7 @@
           "consistency-groups"
         ],
         "summary": "Clusters:Consistency-Groups:Snapshots:Take",
-        "description": "Take one crash-consistent generation across every current member (\u00a75).\n\nWith a ``request_id``, a retry of a take whose answer was lost returns the\ngeneration already taken under that id.",
+        "description": "Take one crash-consistent generation across every current member.\n\nWith a ``request_id``, a retry of a take whose answer was lost returns the\ngeneration already taken under that id.",
         "operationId": "clusters_consistency_groups_snapshots_take_api_v2_clusters__cluster_id__consistency_groups__group_id__snapshots_post",
         "security": [
           {
@@ -9544,7 +10220,7 @@
           "consistency-groups"
         ],
         "summary": "Clusters:Consistency-Groups:Replication:Configure",
-        "description": "Enable or disable group replication (design-csi-addons-replication.md\n\u00a714.4): a policy id attaches the whole group to that group replication\npolicy; ``null`` detaches it (the group and its members stay grouped by\nlabel). A refused attach (not a consistency-group policy, missing policy) is\na 409.",
+        "description": "Enable or disable group replication (design-csi-addons-replication.md\n\u00a714.4): a policy id attaches the whole group to that group replication\npolicy; ``null`` detaches it (the group and its members stay grouped by\nlabel). A refused attach is a 409: not a consistency-group policy, a missing\npolicy, or a member that cannot start replicating under it (a policy whose\ntarget is the group's own cluster, refused by replication_start). Unmapped,\nthe last was an unhandled 500 (run 20261020-1300-ebs, test 2). A no-op on a\nsync-replication cluster, where every volume is replicated to the other site.",
         "operationId": "clusters_consistency_groups_replication_configure_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_put",
         "security": [
           {
@@ -9606,7 +10282,7 @@
           "consistency-groups"
         ],
         "summary": "Clusters:Consistency-Groups:Replication:Status",
-        "description": "The group's replication status as one unit: oldest recovery point, worst\nmember lag and health, summed backlog (design-csi-addons-replication.md\n\u00a714.4/\u00a714.6). Never 404s -- a group with no replicating member reports\n``state: not_replicating``.",
+        "description": "The group's replication status as one unit: oldest recovery point, worst\nmember lag and health, summed backlog (design-csi-addons-replication.md\n\u00a714.4/\u00a714.6). Never 404s -- a group with no replicating member reports\n``state: not_replicating``.\n\nOn a sync-replication cluster: the cluster-wide site replication status\n(the same for every member, not summed) and the group's role on ``site`` -\n``source`` only when every member is served there. ``site`` is optional (a\nstatus read is cluster-wide; a missing one resolves to the members' led\nsite), the read the csi-addons adapter makes with no site to assert.",
         "operationId": "clusters_consistency_groups_replication_status_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_status_get",
         "security": [
           {
@@ -9633,6 +10309,24 @@
               "format": "uuid",
               "title": "Group Id"
             }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: the site the caller acts from",
+              "title": "Site"
+            },
+            "description": "Sync replication: the site the caller acts from"
           }
         ],
         "responses": {
@@ -9642,6 +10336,83 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ConsistencyGroupReplicationStatusDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/sync-status": {
+      "get": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Replication:Sync-Status",
+        "description": "The sync-replication status of the group seen from ``site``: its role\nthere (``primary`` only when every member is served there) and the\ncluster-wide state. ``site`` is optional (a status read is cluster-wide; a\nmissing one resolves to the members' led site). 400 on a cluster without\nsync replication.",
+        "operationId": "clusters_consistency_groups_replication_sync_status_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_sync_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: the site the caller acts from",
+              "title": "Site"
+            },
+            "description": "Sync replication: the site the caller acts from"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncReplicationStatusDTO"
                 }
               }
             }
@@ -9724,7 +10495,7 @@
           "consistency-groups"
         ],
         "summary": "Clusters:Consistency-Groups:Replication:Failover",
-        "description": "Fail the whole group over as ONE unit (design-csi-addons-replication.md\n\u00a714.4): every member is pinned to the same group generation, all-or-nothing.\n\nA group without a policy is not refused: after a relocate demoted the group\nand the demoted source volumes were deleted, the group is detached and empty,\nand the promote on the peer restores it from its newest replicated generation\nthere (failover_group). Only when nothing can be promoted is it a 409.",
+        "description": "Fail the whole group over as ONE unit (design-csi-addons-replication.md\n\u00a714.4): every member is pinned to the same group generation, all-or-nothing.\n\nA group without a policy is not refused: after a relocate demoted the group\nand the demoted source volumes were deleted, the group is detached and empty,\nand the promote on the peer restores it from its newest replicated generation\nthere (failover_group). Only when nothing can be promoted is it a 409.\n\nOn a sync-replication cluster: the promote of every member on ``site``\n(required) as one, forced unless ``planned``\n(``sync_replication_controller.sync_promote_group``) - 200\n``{\"members\": [{lvol_id, connection_strings}]}`` once all are served\nthere; 409 in progress / gate / refused, 412 as for a volume.",
         "operationId": "clusters_consistency_groups_replication_failover_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_failover_post",
         "security": [
           {
@@ -9751,6 +10522,34 @@
               "format": "uuid",
               "title": "Group Id"
             }
+          },
+          {
+            "name": "planned",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Planned"
+            }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: the site the caller acts from",
+              "title": "Site"
+            },
+            "description": "Sync replication: the site the caller acts from"
           }
         ],
         "responses": {
@@ -9758,11 +10557,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Clusters Consistency Groups Replication Failover Api V2 Clusters  Cluster Id  Consistency Groups  Group Id  Replication Failover Post"
-                }
+                "schema": {}
               }
             }
           },
@@ -9785,7 +10580,7 @@
           "consistency-groups"
         ],
         "summary": "Clusters:Consistency-Groups:Replication:Demote",
-        "description": "Demote the whole group: fence every member and confirm each one's last\nwrite replicated (design-csi-addons-replication.md \u00a714.4). Re-drivable, not\nqueued: 204 once every member is demoted, 202 (with per-member detail) while\nany is still converging, 500 on a hard failure.",
+        "description": "Demote the whole group: fence every member and confirm each one's last\nwrite replicated (design-csi-addons-replication.md \u00a714.4). Re-drivable, not\nqueued: 204 once every member is demoted, 202 (with per-member detail) while\nany is still converging, 500 on a hard failure.\n\nOn a sync-replication cluster: fence every member on ``site`` (required),\none gate for all - 204, 409 when the gate fails.",
         "operationId": "clusters_consistency_groups_replication_demote_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_demote_post",
         "security": [
           {
@@ -9812,6 +10607,24 @@
               "format": "uuid",
               "title": "Group Id"
             }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sync replication: the site the caller acts from",
+              "title": "Site"
+            },
+            "description": "Sync replication: the site the caller acts from"
           }
         ],
         "responses": {
@@ -9840,7 +10653,7 @@
           "consistency-groups"
         ],
         "summary": "Clusters:Consistency-Groups:Replication:Failback",
-        "description": "Fail the whole group back: point every member's replication back at the\nsource cluster (design-csi-addons-replication.md \u00a714.4). The cutover itself is\neach member's own commit.",
+        "description": "Fail the whole group back: point every member's replication back at the\nsource cluster (design-csi-addons-replication.md \u00a714.4). The cutover itself is\neach member's own commit. A no-op on a sync-replication cluster (its resync\nis automatic).",
         "operationId": "clusters_consistency_groups_replication_failback_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_failback_post",
         "security": [
           {
@@ -9875,6 +10688,509 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/GroupFailbackParams"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/sites/{site}/status": {
+      "get": {
+        "tags": [
+          "sync-replication"
+        ],
+        "summary": "Clusters:Sites:Status",
+        "description": "The site's record: whether the cluster records it as lost and in\nwhich state (``draining`` / ``down`` by the storage-node monitor,\n``fencing`` / ``done`` by a fence), its latest fence task, its nodes.",
+        "operationId": "clusters_sites_status_api_v2_clusters__cluster_id__sites__site__status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "site",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Site"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteRecordDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/sites/{site}/fence": {
+      "post": {
+        "tags": [
+          "sync-replication"
+        ],
+        "summary": "Clusters:Sites:Fence",
+        "description": "Fence the site as a whole: the backend's disaster site steps, run once\nfor the site (sync_replication_controller.fence_site) - the liveness\nproof of each of its nodes, then the site recorded lost, its devices\nunavailable, its nodes offline, every volume of every store led from it\nfenced there. Leadership does not move: a forced promote on the\nsurviving site opens the volumes afterwards.\n\nIdempotent and resumable: 202 with the task while the fence runs (the\ncall that queues it included - call again), 200 with the site's record\nonce the cluster records the site ``done``, 409 while the fence is\nrefused - a node of the site may still run, another site is lost, the\nmonitor drains the site, a site activation runs, no other site serves,\nor the last fence task failed its proof (reported once, with its\n``task_id``; the next call queues a new attempt).",
+        "operationId": "clusters_sites_fence_api_v2_clusters__cluster_id__sites__site__fence_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "site",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Site"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "202": {
+            "description": "The fence runs: call again (Location: the task)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteFenceTaskDTO"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused while the site's loss is not proven (detail.message; detail.task_id names a failed fence task, reported once)"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/sites/{site}/unfence": {
+      "post": {
+        "tags": [
+          "sync-replication"
+        ],
+        "summary": "Clusters:Sites:Unfence",
+        "description": "A confirmation, not an action: the site returns by the backend's own\nsite activation once its nodes are back. 200 with the site's record once\nthe cluster no longer records the site as lost, 409 while it does.",
+        "operationId": "clusters_sites_unfence_api_v2_clusters__cluster_id__sites__site__unfence_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "site",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Site"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteRecordDTO"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The cluster still records the site as lost"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/migration-plans/": {
+      "get": {
+        "tags": [
+          "migration-plans"
+        ],
+        "summary": "Clusters:Migration-Plans:List",
+        "operationId": "clusters_migration_plans_list_api_v2_clusters__cluster_id__migration_plans__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MigrationPlanDTO"
+                  },
+                  "title": "Response Clusters Migration Plans List Api V2 Clusters  Cluster Id  Migration Plans  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "migration-plans"
+        ],
+        "summary": "Clusters:Migration-Plans:Create",
+        "operationId": "clusters_migration_plans_create_api_v2_clusters__cluster_id__migration_plans__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanParams"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationPlanDTO"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/migration-plans/{plan_id}": {
+      "get": {
+        "tags": [
+          "migration-plans"
+        ],
+        "summary": "Clusters:Migration-Plans:Detail",
+        "operationId": "clusters_migration_plans_detail_api_v2_clusters__cluster_id__migration_plans__plan_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Plan Id"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationPlanDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "migration-plans"
+        ],
+        "summary": "Clusters:Migration-Plans:Cancel",
+        "operationId": "clusters_migration_plans_cancel_api_v2_clusters__cluster_id__migration_plans__plan_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Plan Id"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/qos/": {
+      "get": {
+        "summary": "Clusters:Qos:Get",
+        "operationId": "clusters_qos_get_api_v2_clusters__cluster_id__qos__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QOSConfigDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Clusters:Qos:Set",
+        "description": "Make the cluster's service classes exactly the ones given.\n\nClasses not listed are removed (refused with 409 while a volume uses one),\nand existing ones keep their id. A request that passes the schema but not\nthe controller's checks (for example duplicate names) is answered with 400\nby the general PreconditionError handler. Works on an active cluster: the weights\nreach the online nodes before this returns, and nodes that are not online\nget them when they next start.",
+        "operationId": "clusters_qos_set_api_v2_clusters__cluster_id__qos__put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QOSConfigParams"
               }
             }
           }
@@ -10388,6 +11704,11 @@
           "group_seq": {
             "type": "integer",
             "title": "Group Seq",
+            "default": 0
+          },
+          "max_namespace_per_subsys": {
+            "type": "integer",
+            "title": "Max Namespace Per Subsys",
             "default": 0
           }
         },
@@ -10920,6 +12241,10 @@
             "type": "boolean",
             "title": "Enable Failure Domain"
           },
+          "lvol_geometry_enabled": {
+            "type": "boolean",
+            "title": "Lvol Geometry Enabled"
+          },
           "device_mode": {
             "type": "string",
             "title": "Device Mode"
@@ -10931,6 +12256,16 @@
           "atomic_4k": {
             "type": "boolean",
             "title": "Atomic 4K"
+          },
+          "page_copy": {
+            "type": "boolean",
+            "title": "Page Copy",
+            "default": false
+          },
+          "md_journal": {
+            "type": "boolean",
+            "title": "Md Journal",
+            "default": false
           },
           "secret": {
             "type": "string",
@@ -10949,6 +12284,26 @@
           "backup_enabled": {
             "type": "boolean",
             "title": "Backup Enabled"
+          },
+          "sync_replication": {
+            "type": "boolean",
+            "title": "Sync Replication",
+            "default": false
+          },
+          "lost_site": {
+            "type": "string",
+            "title": "Lost Site",
+            "default": ""
+          },
+          "lost_site_state": {
+            "type": "string",
+            "title": "Lost Site State",
+            "default": ""
+          },
+          "leader_site": {
+            "type": "string",
+            "title": "Leader Site",
+            "default": ""
           },
           "capacity": {
             "$ref": "#/components/schemas/CapacityStatDTO"
@@ -10988,6 +12343,7 @@
           "node_affinity",
           "anti_affinity",
           "enable_failure_domain",
+          "lvol_geometry_enabled",
           "device_mode",
           "inline_checksum",
           "atomic_4k",
@@ -11251,6 +12607,21 @@
             "title": "Enable Failure Domain",
             "default": false
           },
+          "lvol_geometry_enabled": {
+            "type": "boolean",
+            "title": "Lvol Geometry Enabled",
+            "default": true
+          },
+          "sync_replication": {
+            "type": "boolean",
+            "title": "Sync Replication",
+            "default": false
+          },
+          "leader_site": {
+            "type": "string",
+            "title": "Leader Site",
+            "default": ""
+          },
           "max_subsys": {
             "type": "integer",
             "minimum": 0.0,
@@ -11286,17 +12657,27 @@
             "title": "Atomic 4K",
             "default": false
           },
+          "page_copy": {
+            "type": "boolean",
+            "title": "Page Copy",
+            "default": false
+          },
+          "md_journal": {
+            "type": "boolean",
+            "title": "Md Journal",
+            "default": true
+          },
           "snode_api_service": {
             "type": "string",
             "maxLength": 63,
-            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+            "pattern": "^[a-z]([-a-z0-9]*[a-z0-9])?$",
             "title": "Snode Api Service",
             "default": "simplyblock-storage-node-api"
           },
           "spdk_proxy_service": {
             "type": "string",
             "maxLength": 63,
-            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+            "pattern": "^[a-z]([-a-z0-9]*[a-z0-9])?$",
             "title": "Spdk Proxy Service",
             "default": "simplyblock-spdk-proxy"
           },
@@ -11915,6 +13296,18 @@
           },
           "capacity": {
             "$ref": "#/components/schemas/CapacityStatDTO"
+          },
+          "health_assessment": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Assessment"
           }
         },
         "type": "object",
@@ -11938,6 +13331,92 @@
         ],
         "title": "DeviceDTO"
       },
+      "DeviceGrowthDTO": {
+        "properties": {
+          "devices": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Devices"
+          },
+          "errors": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Errors"
+          },
+          "uniform": {
+            "type": "boolean",
+            "title": "Uniform"
+          },
+          "rebalance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeviceRebalanceDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "devices",
+          "errors",
+          "uniform"
+        ],
+        "title": "DeviceGrowthDTO"
+      },
+      "DeviceHealthAssessmentDTO": {
+        "properties": {
+          "reporter": {
+            "type": "string",
+            "title": "Reporter",
+            "default": ""
+          },
+          "reported_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reported At"
+          },
+          "valid_seconds": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Valid Seconds",
+            "default": 900
+          },
+          "performance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DevicePerformanceAssessmentDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "smart": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeviceSmartAssessmentDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "reported_at"
+        ],
+        "title": "DeviceHealthAssessmentDTO",
+        "description": "A device health verdict computed outside the control plane.\n\nThe Kubernetes operator judges each device's performance against the\nfleet and its SMART log, and records the result here; the control plane\nstores it on the device and raises ``device_slow`` / ``device_unhealthy``\nfrom it while it is fresh (``reported_at`` + ``valid_seconds``). ``None``\nfor ``performance`` or ``smart`` means that half was not assessed."
+      },
       "DeviceHealthInfoDTO": {
         "properties": {
           "id": {
@@ -11945,117 +13424,497 @@
             "format": "uuid",
             "title": "Id"
           },
-          "model_number": {
+          "supported": {
+            "type": "boolean",
+            "title": "Supported",
+            "default": true
+          },
+          "source": {
             "type": "string",
+            "title": "Source",
+            "default": ""
+          },
+          "model_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Model Number"
           },
           "serial_number": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Serial Number"
           },
           "firmware_revision": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Firmware Revision"
           },
           "traddr": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Traddr"
           },
           "critical_warning": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Critical Warning"
           },
           "temperature_celsius": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Temperature Celsius"
           },
           "available_spare_percentage": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Available Spare Percentage"
           },
           "available_spare_threshold_percentage": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Available Spare Threshold Percentage"
           },
           "percentage_used": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Percentage Used"
           },
           "data_units_read": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Data Units Read"
           },
           "data_units_written": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Data Units Written"
           },
           "host_read_commands": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Host Read Commands"
           },
           "host_write_commands": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Host Write Commands"
           },
           "controller_busy_time": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Controller Busy Time"
           },
           "power_cycles": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Power Cycles"
           },
           "power_on_hours": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Power On Hours"
           },
           "unsafe_shutdowns": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Unsafe Shutdowns"
           },
           "media_errors": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Media Errors"
           },
           "num_err_log_entries": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Num Err Log Entries"
           },
           "warning_temperature_time_minutes": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Warning Temperature Time Minutes"
           },
           "critical_composite_temperature_time_minutes": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Critical Composite Temperature Time Minutes"
+          },
+          "smart_passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smart Passed"
+          },
+          "reallocated_sectors": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reallocated Sectors"
+          },
+          "pending_sectors": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Sectors"
           }
         },
         "type": "object",
         "required": [
-          "id",
-          "model_number",
-          "serial_number",
-          "firmware_revision",
-          "traddr",
-          "critical_warning",
-          "temperature_celsius",
-          "available_spare_percentage",
-          "available_spare_threshold_percentage",
-          "percentage_used",
-          "data_units_read",
-          "data_units_written",
-          "host_read_commands",
-          "host_write_commands",
-          "controller_busy_time",
-          "power_cycles",
-          "power_on_hours",
-          "unsafe_shutdowns",
-          "media_errors",
-          "num_err_log_entries",
-          "warning_temperature_time_minutes",
-          "critical_composite_temperature_time_minutes"
+          "id"
         ],
-        "title": "DeviceHealthInfoDTO"
+        "title": "DeviceHealthInfoDTO",
+        "description": "A device's health log, in SPDK's field names whatever it was read with.\n\nEvery metric is optional: an AIO device read through smartctl reports a\ndifferent subset than an NVMe controller does, and a device with no\nhealth log at all (a virtio disk, a host without smartctl) is\n``supported=false`` with every metric null -- a 200, not an error."
+      },
+      "DevicePerformanceAssessmentDTO": {
+        "properties": {
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "slow",
+              "unknown"
+            ],
+            "title": "Verdict"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "latency_us": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Us"
+          },
+          "fleet_latency_us": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fleet Latency Us"
+          },
+          "latency_ratio": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ratio"
+          },
+          "iops_per_tib": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Iops Per Tib"
+          },
+          "fleet_iops_per_tib": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fleet Iops Per Tib"
+          },
+          "iops_ratio": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Iops Ratio"
+          }
+        },
+        "type": "object",
+        "required": [
+          "verdict"
+        ],
+        "title": "DevicePerformanceAssessmentDTO"
+      },
+      "DeviceRebalanceDTO": {
+        "properties": {
+          "weights_updated": {
+            "type": "boolean",
+            "title": "Weights Updated"
+          },
+          "started": {
+            "type": "boolean",
+            "title": "Started"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "weights_updated",
+          "started",
+          "reason"
+        ],
+        "title": "DeviceRebalanceDTO"
+      },
+      "DeviceResizeDTO": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "old_size": {
+            "type": "integer",
+            "title": "Old Size"
+          },
+          "new_size": {
+            "type": "integer",
+            "title": "New Size"
+          },
+          "placement_size": {
+            "type": "integer",
+            "title": "Placement Size"
+          },
+          "resized": {
+            "type": "boolean",
+            "title": "Resized"
+          },
+          "uniform": {
+            "type": "boolean",
+            "title": "Uniform"
+          },
+          "warning": {
+            "type": "string",
+            "title": "Warning",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "old_size",
+          "new_size",
+          "placement_size",
+          "resized",
+          "uniform"
+        ],
+        "title": "DeviceResizeDTO"
+      },
+      "DeviceSmartAssessmentDTO": {
+        "properties": {
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warning",
+              "failing",
+              "unsupported",
+              "unknown"
+            ],
+            "title": "Verdict"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "verdict"
+        ],
+        "title": "DeviceSmartAssessmentDTO"
       },
       "DrainStepProgress": {
         "properties": {
@@ -12303,7 +14162,7 @@
           "created_at"
         ],
         "title": "GroupBackupDTO",
-        "description": "A consistency-group backup: the member backups of one generation as one\nall-or-nothing unit (design \u00a74.1)."
+        "description": "A consistency-group backup: the member backups of one generation as one\nall-or-nothing unit."
       },
       "GroupBackupExport-Input": {
         "properties": {
@@ -12326,7 +14185,7 @@
           "members"
         ],
         "title": "GroupBackupExport",
-        "description": "A group backup carried out of a cluster in a file: the group manifest plus\nthe member backup manifests it names, as one unit (design \u00a76.5).\n\nThis is to the group manifest what ``BackupExport`` is to a single-volume\nmanifest -- the one document that does record a location, because it is not\nstored in the bucket it describes. The group manifest names the generation's\nmembers; ``members`` carries each member's whole restorable chain, grouped by\nthe location it lives in exactly as a single-volume export groups its\nmanifests. A group backup is homogeneous -- its members share one location\n(\u00a73.4) -- so there is one group in practice, but reusing ``BackupExport`` keeps\nthe member records on the single-volume import path and describes a member's\nchain the same way everywhere."
+        "description": "A group backup carried out of a cluster in a file: the group manifest plus\n   the member backup manifests it names, as one unit.\n\n   This is to the group manifest what ``BackupExport`` is to a single-volume\n   manifest -- the one document that does record a location, because it is not\n   stored in the bucket it describes. The group manifest names the generation's\n   members; ``members`` carries each member's whole restorable chain, grouped by\n   the location it lives in exactly as a single-volume export groups its\n   manifests. A group backup is homogeneous -- its members share one location\n-- so there is one group in practice, but reusing ``BackupExport`` keeps\n   the member records on the single-volume import path and describes a member's\n   chain the same way everywhere.\n   "
       },
       "GroupBackupExport-Output": {
         "properties": {
@@ -12349,7 +14208,7 @@
           "members"
         ],
         "title": "GroupBackupExport",
-        "description": "A group backup carried out of a cluster in a file: the group manifest plus\nthe member backup manifests it names, as one unit (design \u00a76.5).\n\nThis is to the group manifest what ``BackupExport`` is to a single-volume\nmanifest -- the one document that does record a location, because it is not\nstored in the bucket it describes. The group manifest names the generation's\nmembers; ``members`` carries each member's whole restorable chain, grouped by\nthe location it lives in exactly as a single-volume export groups its\nmanifests. A group backup is homogeneous -- its members share one location\n(\u00a73.4) -- so there is one group in practice, but reusing ``BackupExport`` keeps\nthe member records on the single-volume import path and describes a member's\nchain the same way everywhere."
+        "description": "A group backup carried out of a cluster in a file: the group manifest plus\n   the member backup manifests it names, as one unit.\n\n   This is to the group manifest what ``BackupExport`` is to a single-volume\n   manifest -- the one document that does record a location, because it is not\n   stored in the bucket it describes. The group manifest names the generation's\n   members; ``members`` carries each member's whole restorable chain, grouped by\n   the location it lives in exactly as a single-volume export groups its\n   manifests. A group backup is homogeneous -- its members share one location\n-- so there is one group in practice, but reusing ``BackupExport`` keeps\n   the member records on the single-volume import path and describes a member's\n   chain the same way everywhere.\n   "
       },
       "GroupBackupManifest": {
         "properties": {
@@ -12471,6 +14330,16 @@
         ],
         "title": "GroupManifestSource",
         "description": "Where a group backup's generation came from. Provenance for a reader."
+      },
+      "GroupManifestState": {
+        "type": "string",
+        "enum": [
+          "committed",
+          "deleting",
+          "broken"
+        ],
+        "title": "GroupManifestState",
+        "description": "Whether a group manifest's member backups can be relied on.\n\nA group manifest is written ``committed``, at the commit barrier. A delete\nmarks it ``deleting`` before it touches any member, and removes it only once\nevery member is retired. A delete that ended after retiring a member marks it\n``broken``: some members are gone, so the group backup cannot restore, and\nthe bucket says so rather than presenting it as whole. Only a ``committed``\ngroup backup is restorable or importable."
       },
       "HCPKeyDescriptor": {
         "properties": {
@@ -12783,6 +14652,17 @@
             ],
             "title": "Fabric"
           },
+          "max_namespace_per_subsys": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Namespace Per Subsys"
+          },
           "lvol_priority_class": {
             "anyOf": [
               {
@@ -12959,6 +14839,262 @@
         ],
         "title": "MigrationDTO"
       },
+      "MigrationForecastDTO": {
+        "properties": {
+          "bytes_remaining": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Bytes Remaining",
+            "default": 0
+          },
+          "eta_seconds": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Eta Seconds",
+            "default": 0
+          },
+          "completes_at": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Completes At",
+            "default": 0
+          },
+          "throughput_bytes_per_sec": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Throughput Bytes Per Sec",
+            "default": 0
+          },
+          "throughput_measured": {
+            "type": "boolean",
+            "title": "Throughput Measured",
+            "default": false
+          },
+          "converging": {
+            "type": "boolean",
+            "title": "Converging",
+            "default": true
+          },
+          "dirty_bytes_per_sec": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Dirty Bytes Per Sec",
+            "default": 0
+          },
+          "not_converging_lvs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Not Converging Lvs",
+            "default": []
+          }
+        },
+        "type": "object",
+        "title": "MigrationForecastDTO"
+      },
+      "MigrationPlanDTO": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "default": ""
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "cluster_id": {
+            "type": "string",
+            "title": "Cluster Id"
+          },
+          "target_cluster_id": {
+            "type": "string",
+            "title": "Target Cluster Id"
+          },
+          "delete_source": {
+            "type": "boolean",
+            "title": "Delete Source"
+          },
+          "created_at": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Created At",
+            "default": 0
+          },
+          "finished_at": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Finished At",
+            "default": 0
+          },
+          "volumes": {
+            "items": {
+              "$ref": "#/components/schemas/MigrationPlanVolumeDTO"
+            },
+            "type": "array",
+            "title": "Volumes"
+          },
+          "forecast": {
+            "$ref": "#/components/schemas/MigrationForecastDTO"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "cluster_id",
+          "target_cluster_id",
+          "delete_source",
+          "volumes",
+          "forecast"
+        ],
+        "title": "MigrationPlanDTO",
+        "description": "A bulk online migration to another cluster. ``id`` is null for a dry run."
+      },
+      "MigrationPlanVolumeDTO": {
+        "properties": {
+          "lvol_id": {
+            "type": "string",
+            "title": "Lvol Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "default": ""
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "target_node_id": {
+            "type": "string",
+            "title": "Target Node Id",
+            "default": ""
+          },
+          "error": {
+            "type": "string",
+            "title": "Error",
+            "default": ""
+          },
+          "bytes_total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Bytes Total",
+            "default": 0
+          },
+          "bytes_remaining": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Bytes Remaining",
+            "default": 0
+          },
+          "eta_seconds": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Eta Seconds",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "lvol_id",
+          "state"
+        ],
+        "title": "MigrationPlanVolumeDTO",
+        "description": "One volume of a migration plan (docs/online-migration.md)."
+      },
+      "NetworkAttachment": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 253,
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+            "title": "Name"
+          },
+          "namespace": {
+            "type": "string",
+            "maxLength": 253,
+            "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)?$",
+            "title": "Namespace",
+            "default": ""
+          },
+          "interface": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,14}$",
+            "title": "Interface"
+          },
+          "ips": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ips"
+          },
+          "resource": {
+            "type": "string",
+            "maxLength": 316,
+            "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$",
+            "title": "Resource",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "interface"
+        ],
+        "title": "NetworkAttachment",
+        "description": "One NetworkAttachmentDefinition the pod joins, as the operator states it. The\nnode record keeps these as plain dicts, which is what the record's base model stores."
+      },
+      "NodeReachabilityDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "mgmt_ip": {
+            "type": "string",
+            "title": "Mgmt Ip"
+          },
+          "site": {
+            "type": "string",
+            "title": "Site"
+          },
+          "reachable": {
+            "type": "boolean",
+            "title": "Reachable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "mgmt_ip",
+          "site",
+          "reachable"
+        ],
+        "title": "NodeReachabilityDTO",
+        "description": "One node's answer to the storage-node monitor's management-address\nprobe, run once on demand (``GET /clusters/{id}/reachability``)."
+      },
       "NvmeConnectEntry": {
         "properties": {
           "transport": {
@@ -13040,6 +15176,11 @@
               }
             ],
             "title": "Target-Lvol-Id"
+          },
+          "two-node": {
+            "type": "boolean",
+            "title": "Two-Node",
+            "default": false
           }
         },
         "type": "object",
@@ -13056,6 +15197,78 @@
           "connect"
         ],
         "title": "NvmeConnectEntry"
+      },
+      "PlanParams": {
+        "properties": {
+          "target_cluster_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Cluster Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "default": ""
+          },
+          "pool_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pool Id"
+          },
+          "lvol_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lvol Ids"
+          },
+          "delete_source": {
+            "type": "boolean",
+            "title": "Delete Source",
+            "default": false
+          },
+          "interval_min": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Min"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "PlanParams"
       },
       "PolicyParams": {
         "properties": {
@@ -13139,6 +15352,135 @@
           "host_nqn"
         ],
         "title": "PoolHostParams"
+      },
+      "QOSClassDTO": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "weight": {
+            "type": "integer",
+            "title": "Weight"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "weight"
+        ],
+        "title": "QOSClassDTO"
+      },
+      "QOSClassParams": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$",
+            "title": "Name"
+          },
+          "weight": {
+            "type": "integer",
+            "maximum": 1000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Weight"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "weight"
+        ],
+        "title": "QOSClassParams"
+      },
+      "QOSConfigDTO": {
+        "properties": {
+          "default_weight": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Weight"
+          },
+          "classes": {
+            "items": {
+              "$ref": "#/components/schemas/QOSClassDTO"
+            },
+            "type": "array",
+            "title": "Classes"
+          },
+          "replication_weight": {
+            "type": "integer",
+            "title": "Replication Weight"
+          },
+          "replication_class_available": {
+            "type": "boolean",
+            "title": "Replication Class Available"
+          },
+          "weights": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Weights"
+          }
+        },
+        "type": "object",
+        "required": [
+          "default_weight",
+          "classes",
+          "replication_weight",
+          "replication_class_available",
+          "weights"
+        ],
+        "title": "QOSConfigDTO"
+      },
+      "QOSConfigParams": {
+        "properties": {
+          "default_weight": {
+            "type": "integer",
+            "maximum": 1000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Default Weight"
+          },
+          "classes": {
+            "items": {
+              "$ref": "#/components/schemas/QOSClassParams"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "title": "Classes",
+            "default": []
+          },
+          "replication_weight": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 74.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replication Weight"
+          }
+        },
+        "type": "object",
+        "required": [
+          "default_weight"
+        ],
+        "title": "QOSConfigParams"
       },
       "ReplicateLVolParams": {
         "properties": {
@@ -13776,6 +16118,113 @@
         "title": "SecondaryTarget",
         "description": "The kind of secondary store, numbered as the data plane's RPC expects."
       },
+      "SiteFenceTaskDTO": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Task Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id"
+        ],
+        "title": "SiteFenceTaskDTO",
+        "description": "A site fence in progress (the 202 answer of ``fence``): the fence task,\nalso readable at ``/clusters/{id}/tasks/{task_id}/``."
+      },
+      "SiteNodeDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "online",
+              "offline",
+              "suspended",
+              "in_shutdown",
+              "removed",
+              "in_restart",
+              "in_creation",
+              "unreachable",
+              "schedulable",
+              "down",
+              "in_removal",
+              "pending_removal",
+              "migrating_devices",
+              "migrating_lvols",
+              "removed_failed"
+            ],
+            "title": "Status"
+          },
+          "mgmt_ip": {
+            "type": "string",
+            "title": "Mgmt Ip"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "mgmt_ip"
+        ],
+        "title": "SiteNodeDTO",
+        "description": "A node of a site, as the site record lists it. ``id`` is the storage\nnode's id (``StorageNodeDTO.id``)."
+      },
+      "SiteRecordDTO": {
+        "properties": {
+          "site": {
+            "type": "string",
+            "title": "Site"
+          },
+          "lost": {
+            "type": "boolean",
+            "title": "Lost"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "",
+              "draining",
+              "down",
+              "fencing",
+              "done"
+            ],
+            "title": "State"
+          },
+          "fence_task_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fence Task Id"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/SiteNodeDTO"
+            },
+            "type": "array",
+            "title": "Nodes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "site",
+          "lost",
+          "state",
+          "nodes"
+        ],
+        "title": "SiteRecordDTO",
+        "description": "What the control plane records about one site of a sync-replication\ncluster (``GET /clusters/{id}/sites/{site}/status``, and the 200 answers\nof ``fence`` / ``unfence``): ``lost`` when the cluster records it as its\nlost site, ``state`` that record's ``lost_site_state`` (``draining`` /\n``down`` written by the storage-node monitor, ``fencing`` / ``done``\nby a fence), the latest site-level fence task, the site's nodes."
+      },
       "SnapshotDTO": {
         "properties": {
           "id": {
@@ -14022,6 +16471,11 @@
             "type": "integer",
             "title": "Failure Domain"
           },
+          "site": {
+            "type": "string",
+            "title": "Site",
+            "default": ""
+          },
           "capacity": {
             "$ref": "#/components/schemas/CapacityStatDTO"
           }
@@ -14231,6 +16685,17 @@
             ],
             "title": "Failure Domain"
           },
+          "site": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site"
+          },
           "expand": {
             "type": "boolean",
             "title": "Expand",
@@ -14239,6 +16704,18 @@
           "force_format": {
             "type": "boolean",
             "title": "Force Format",
+            "default": false
+          },
+          "networks": {
+            "items": {
+              "$ref": "#/components/schemas/NetworkAttachment"
+            },
+            "type": "array",
+            "title": "Networks"
+          },
+          "pod_network": {
+            "type": "boolean",
+            "title": "Pod Network",
             "default": false
           }
         },
@@ -14413,6 +16890,94 @@
         ],
         "title": "StoragePoolParams"
       },
+      "SyncReplicationStatusDTO": {
+        "properties": {
+          "site": {
+            "type": "string",
+            "title": "Site"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "primary",
+              "secondary"
+            ],
+            "title": "Role"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "degraded",
+              "resyncing"
+            ],
+            "title": "State"
+          },
+          "last_replicated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Replicated At"
+          },
+          "lag_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lag Seconds"
+          },
+          "bytes_behind": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Bytes Behind",
+            "default": 0
+          },
+          "diverged": {
+            "type": "boolean",
+            "title": "Diverged"
+          },
+          "completed": {
+            "type": "boolean",
+            "title": "Completed"
+          },
+          "degraded": {
+            "type": "boolean",
+            "title": "Degraded"
+          },
+          "resyncing": {
+            "type": "boolean",
+            "title": "Resyncing"
+          },
+          "peer_ready": {
+            "type": "boolean",
+            "title": "Peer Ready"
+          }
+        },
+        "type": "object",
+        "required": [
+          "site",
+          "role",
+          "state",
+          "diverged",
+          "completed",
+          "degraded",
+          "resyncing",
+          "peer_ready"
+        ],
+        "title": "SyncReplicationStatusDTO",
+        "description": "The sync-replication status of a volume or consistency group seen from\none site (``GET .../replication/sync-status?site=``).\n\nEverything but ``role`` is cluster-wide (the worst over every LVS), so\nevery volume and group answers the same: csi-addons' GetReplicationStatus\n(``state``, ``last_replicated_at``, ``lag_seconds``, ``bytes_behind``,\n``diverged``) and GetSecondaryReadiness (``peer_ready = completed and not\ndegraded and not resyncing``)."
+      },
       "TargetParams": {
         "properties": {
           "target_name": {
@@ -14533,7 +17098,10 @@
               "group_backup_delete",
               "cluster_expand",
               "replication_final",
-              "fdb_backup"
+              "fdb_backup",
+              "sync_promote",
+              "sync_resync",
+              "sync_site_fence"
             ],
             "title": "Function Name"
           },
@@ -14695,6 +17263,43 @@
               }
             ],
             "title": "Two Node Arbitration"
+          },
+          "leader_site": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leader Site"
+          },
+          "two_node_fencing_authority": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "witness",
+                  "pacemaker"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Two Node Fencing Authority"
+          },
+          "two_node_host_fencing": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Two Node Host Fencing"
           }
         },
         "type": "object",
@@ -15206,6 +17811,28 @@
         ],
         "title": "_BackupSnapshotParams"
       },
+      "_ClientHost": {
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "title": "Node Id"
+          },
+          "host_nqns": {
+            "items": {
+              "type": "string",
+              "maxLength": 223
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Host Nqns"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_id"
+        ],
+        "title": "_ClientHost"
+      },
       "_CloneParams": {
         "properties": {
           "name": {
@@ -15354,10 +17981,13 @@
             "title": "Host Id"
           },
           "priority_class": {
-            "type": "integer",
-            "enum": [
-              0,
-              1
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
             ],
             "title": "Priority Class",
             "default": 0
@@ -15470,6 +18100,17 @@
             "type": "boolean",
             "title": "Encrypt",
             "default": false
+          },
+          "site": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site"
           }
         },
         "type": "object",
@@ -15478,6 +18119,18 @@
           "size"
         ],
         "title": "_CreateParams"
+      },
+      "_GenerationTakeParams": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "maxLength": 128,
+            "title": "Request Id",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "_GenerationTakeParams"
       },
       "_GroupBackupCreateParams": {
         "properties": {
@@ -15570,6 +18223,19 @@
           "pool"
         ],
         "title": "_GroupRestoreParams"
+      },
+      "_HostFenceRelease": {
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "title": "Node Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_id"
+        ],
+        "title": "_HostFenceRelease"
       },
       "_ImportFromBucket": {
         "properties": {
@@ -15887,28 +18553,6 @@
           "spdk_image"
         ],
         "title": "_UpdateParams"
-      },
-      "_GenerationTakeParams": {
-        "properties": {
-          "request_id": {
-            "type": "string",
-            "maxLength": 128,
-            "title": "Request Id",
-            "default": ""
-          }
-        },
-        "type": "object",
-        "title": "_GenerationTakeParams"
-      },
-      "GroupManifestState": {
-        "type": "string",
-        "enum": [
-          "committed",
-          "deleting",
-          "broken"
-        ],
-        "title": "GroupManifestState",
-        "description": "Whether a group manifest's member backups can be relied on (design \u00a79).\n\nA group manifest is written ``committed``, at the commit barrier. A delete\nmarks it ``deleting`` before it touches any member, and removes it only once\nevery member is retired. A delete that ended after retiring a member marks it\n``broken``: some members are gone, so the group backup cannot restore, and\nthe bucket says so rather than presenting it as whole. Only a ``committed``\ngroup backup is restorable or importable."
       }
     },
     "securitySchemes": {

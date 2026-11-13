@@ -12,6 +12,7 @@ package blockdev
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -464,5 +465,101 @@ func TestCandidatesDoesNotReadAMountedPartition(t *testing.T) {
 	}
 	if got.RejectedFor(ReasonUnreadable) {
 		t.Errorf("a mounted partition was opened: %v", got.Rejections)
+	}
+}
+
+// rejection is the ground a candidate was refused on, or a failure when it was
+// not refused on it.
+func rejection(t *testing.T, c Candidate, reason Reason) Rejection {
+	t.Helper()
+	for _, r := range c.Rejections {
+		if r.Reason == reason {
+			return r
+		}
+	}
+	t.Fatalf("%s was not rejected for %s: %v", c.Name, reason, c.Rejections)
+	return Rejection{}
+}
+
+// heldBy is a kernel that refuses the named devices and hands over the rest.
+func heldBy(paths ...string) ExclusiveOpener {
+	return func(path string) error {
+		for _, held := range paths {
+			if path == held {
+				return ErrDeviceBusy
+			}
+		}
+		return nil
+	}
+}
+
+func TestCandidatesNamesTheArrayARAIDMemberBelongsTo(t *testing.T) {
+	// GKE assembles a node pool's local SSDs into an MD RAID array for ephemeral
+	// storage, and a reviewer told the disk is "held by [md0]" and "busy for no
+	// reason" is left to work out what md0 is. The reason names the array and
+	// its level, and the kernel's refusal is explained by it.
+	root := raidHost().write(t)
+	in := Inspector{
+		Config:    ScanConfig{SysfsRoot: root, ProcRoot: root},
+		Prober:    NewProberWithOpener(contentOpener(nil), WithRegionSize(MinRegionSize)),
+		Exclusive: heldBy("/dev/nvme0n1", "/dev/nvme0n2", "/dev/md0"),
+	}
+
+	cands, err := in.Candidates(context.Background())
+	if err != nil {
+		t.Fatalf("collect the candidates: %v", err)
+	}
+
+	for _, name := range []string{"nvme0n1", "nvme0n2"} {
+		member := found(t, cands, name)
+		if member.Available() {
+			t.Fatalf("%s, a member of md0, was handed over", name)
+		}
+		got := rejection(t, member, ReasonRAIDMember)
+		for _, want := range []string{"md0", "raid0"} {
+			if !strings.Contains(got.Detail, want) {
+				t.Errorf("%s: the RAID member detail %q does not name %s", name, got.Detail, want)
+			}
+		}
+		if member.RejectedFor(ReasonStacked) {
+			t.Errorf("%s was also rejected as Stacked, which says the same thing without the array: %v",
+				name, member.Rejections)
+		}
+		busy := rejection(t, member, ReasonBusy)
+		if !strings.Contains(busy.Detail, "md0") {
+			t.Errorf("%s: the Busy detail %q does not say that md0 is why", name, busy.Detail)
+		}
+	}
+}
+
+func TestCandidatesExplainsAKernelRefusalItCanAccountFor(t *testing.T) {
+	// The kernel gives no reason for refusing an exclusive open, but when a
+	// readable source already found who holds the device, that is the reason,
+	// and "gives no reason" would be telling the reader to look for one.
+	in := inspectorOver(t, nil, heldBy("/dev/sda", "/dev/nvme1n1", "/dev/vda"))
+
+	cands, err := in.Candidates(context.Background())
+	if err != nil {
+		t.Fatalf("collect the candidates: %v", err)
+	}
+
+	for _, tc := range []struct{ name, want string }{
+		{"sda", "dm-0"},        // an LVM volume group holds it
+		{"nvme1n1", "mounted"}, // its partitions carry the root filesystem
+		{"vda", "swap"},        // it is swap
+	} {
+		got := rejection(t, found(t, cands, tc.name), ReasonBusy)
+		if !strings.Contains(got.Detail, tc.want) {
+			t.Errorf("%s: the Busy detail %q does not mention %s", tc.name, got.Detail, tc.want)
+		}
+		if strings.Contains(got.Detail, "gives no reason") {
+			t.Errorf("%s: the Busy detail %q claims there is no reason when one was found", tc.name, got.Detail)
+		}
+	}
+
+	// A device held by a device-mapper node is still Stacked: the array reason
+	// is for arrays.
+	if sda := found(t, cands, "sda"); sda.RejectedFor(ReasonRAIDMember) {
+		t.Errorf("sda, held by a device-mapper node, was rejected as a RAID member: %v", sda.Rejections)
 	}
 }

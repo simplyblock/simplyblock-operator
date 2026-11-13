@@ -94,7 +94,7 @@ func held(t *testing.T, r *StorageNodeOpsReconciler, ops *simplyblockv1alpha2.St
 // A cluster that says nothing about concurrency takes one worker at a time,
 // which is the safe reading of a cluster whose fault tolerance is unknown.
 func TestOneWorkerAtATimeIsWhatAnUnstatedConcurrencyMeans(t *testing.T) {
-	other, itsNode := aRunningWindow("another-window", "another-node", "worker-9")
+	other, itsNode := aRunningWindow("another-window", "another-node", opsElsewhere)
 	r, _ := anOpsWorld(t, aControlPlane(), other, itsNode)
 
 	if !held(t, r, aWindow("a-window")) {
@@ -104,7 +104,7 @@ func TestOneWorkerAtATimeIsWhatAnUnstatedConcurrencyMeans(t *testing.T) {
 
 // What the cluster says it can afford is what the gate admits.
 func TestTheClusterSaysHowManyWorkersMayBeDownAtOnce(t *testing.T) {
-	other, itsNode := aRunningWindow("another-window", "another-node", "worker-9")
+	other, itsNode := aRunningWindow("another-window", "another-node", opsElsewhere)
 	r, apiClient := anOpsWorld(t, aControlPlane(), other, itsNode)
 	allowing(t, apiClient, 2)
 
@@ -116,7 +116,7 @@ func TestTheClusterSaysHowManyWorkersMayBeDownAtOnce(t *testing.T) {
 // A window still in Holding holds no slot. Counting one would let a deployment
 // deadlock with every window waiting for every other.
 func TestAWindowStillWaitingHoldsNoSlot(t *testing.T) {
-	queued, itsNode := aRunningWindow("another-window", "another-node", "worker-9")
+	queued, itsNode := aRunningWindow("another-window", "another-node", opsElsewhere)
 	queued.Status.Step = kubeStep(stepHolding)
 	r, _ := anOpsWorld(t, aControlPlane(), queued, itsNode)
 
@@ -127,7 +127,7 @@ func TestAWindowStillWaitingHoldsNoSlot(t *testing.T) {
 
 // A finished window holds nothing either, whatever its last step was.
 func TestAFinishedWindowHoldsNoSlot(t *testing.T) {
-	over, itsNode := aRunningWindow("another-window", "another-node", "worker-9")
+	over, itsNode := aRunningWindow("another-window", "another-node", opsElsewhere)
 	over.Status.Phase = simplyblockv1alpha2.StorageNodeOpsPhaseSucceeded
 	r, _ := anOpsWorld(t, aControlPlane(), over, itsNode)
 
@@ -150,7 +150,7 @@ func TestASiblingSocketOfTheSameWorkerIsNotASecondWorker(t *testing.T) {
 
 // Another cluster's maintenance is another cluster's business.
 func TestAWindowInAnotherClusterDoesNotHoldThisOneBack(t *testing.T) {
-	elsewhere, itsNode := aRunningWindow("another-clusters-window", "another-node", "worker-9")
+	elsewhere, itsNode := aRunningWindow("another-clusters-window", "another-node", opsElsewhere)
 	itsNode.Spec.ClusterRef = "another-cluster"
 	r, _ := anOpsWorld(t, aControlPlane(), elsewhere, itsNode)
 
@@ -723,5 +723,47 @@ func TestAMaintenanceWindowSendsNothingToANodeLeavingTheCluster(t *testing.T) {
 					shut, restarted)
 			}
 		})
+	}
+}
+
+// anMDSPod is the pNFS metadata server's pod, labeled as its StatefulSet labels
+// it: by its per-cluster name and the cluster it serves.
+func anMDSPod(worker string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-pnfs-mds-2b201eb1-0",
+			Namespace: opsNamespace,
+			Labels: map[string]string{
+				"app":                               "simplyblock-pnfs-mds-2b201eb1",
+				"storage.simplyblock.io/cluster-id": "2b201eb1-15b6-4bb6-a341-23acde78bb6c",
+			},
+		},
+		Spec:   corev1.PodSpec{NodeName: worker},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+// Regression: 2026-11-11-pnfs-mds-not-in-eviction-targets. The window's budget
+// held the SPDK pod, the management API, and FoundationDB, and nothing else, so
+// a drain of the worker evicted the pNFS metadata server at once, even while
+// the control plane refused or deferred the maintenance it was drained for.
+// Every pNFS client in the cluster stalled until a new metadata server had
+// booted and ended its grace period, three times in a day for maintenance that
+// never ran.
+func TestTheWindowHoldsThePNFSMetadataServer(t *testing.T) {
+	mds := anMDSPod(opsWorker)
+	elsewhere := anMDSPod("another-worker")
+	elsewhere.Name = "simplyblock-pnfs-mds-other-0"
+	r, apiClient := anOpsWorld(t, aControlPlane(), anSpdkPod(opsWorker, "4420"), mds, elsewhere)
+
+	if err := r.Workload.BlockEviction(
+		context.Background(), opsNamespace, opsCluster, opsWorker); err != nil {
+		t.Fatalf("holding the eviction: %v", err)
+	}
+	if !guarded(t, apiClient, mds.Name) {
+		t.Error("the metadata server on the drained worker is not held by the window's budget")
+	}
+	if guarded(t, apiClient, elsewhere.Name) {
+		t.Error("a metadata server on another worker was held by this worker's window")
 	}
 }

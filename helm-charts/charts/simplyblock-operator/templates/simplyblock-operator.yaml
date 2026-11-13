@@ -50,17 +50,29 @@ spec:
           args:
             - --leader-elect
             - --health-probe-bind-address=:8081
-            - --cluster-dns-domain={{ .Values.clusterDnsDomain }}
             - --csi-link
             - --csi-link-bind-address=:{{ .Values.csiLink.port }}
             - --csi-link-audience={{ .Values.csiLink.audience }}
             {{- if include "simplyblock.csiLinkCertSecret" . }}
             - --csi-link-cert-path=/etc/simplyblock/csi-link-certs
             {{- end }}
+            {{- if .Values.siteLink.enabled }}
+            # The site end of a stretched cluster's site link: the elected
+            # replica links to this site's fleet agent and, through it and the
+            # relay on the hub, reaches the other site's operator.
+            - --site-link
+            - --site-link-address={{ .Values.siteLink.address }}
+            - --site-link-namespace={{ .Values.siteLink.agentNamespace }}
+            {{- end }}
             {{- if and .Values.tls.enabled .Values.tls.mutual_enabled }}
             # The CA in the operator's own TLS volume is the one that issued
             # the CSI plugins' client certificates.
             - --csi-link-client-ca-file=/etc/simplyblock/tls/ca.crt
+            {{- end }}
+            {{- if and .Values.tls.enabled (eq .Values.tls.provider "cert-manager") }}
+            - --cert-manager-ca-chain
+            - --cert-manager-root-issuer={{ index .Values.tls "cert-manager" "cluster-issuer" }}
+            - --cert-manager-create-root-issuer={{ index .Values.tls "cert-manager" "createSelfSignedIssuer" }}
             {{- end }}
             {{- if .Values.volumeMigration.legacy }}
             # An upgrade turns this on so the migrations already raised against
@@ -85,6 +97,16 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            {{- if .Values.siteLink.enabled }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            {{- end }}
             {{- with .Values.image.rebalancer }}
             {{- if or .repository .tag }}
             # A pinned rebalancer. Without one the operator derives the image from
@@ -117,6 +139,10 @@ spec:
             - name: SB_EXTRA_ADMIN_SERVICE_ACCOUNTS
               value: {{ . | quote }}
             {{- end }}
+            # The NUMA device plugin the operator runs beside the storage nodes. The
+            # chart no longer renders it, so its image comes from here.
+            - name: SB_NUMA_PLUGIN_IMAGE
+              value: "{{ .Values.image.numaResource.repository }}:{{ .Values.image.numaResource.tag }}"
             {{- include "simplyblock.tlsEnv" . | nindent 12 }}
           resources:
             limits:
@@ -138,6 +164,11 @@ spec:
             {{- if include "simplyblock.csiLinkCertSecret" . }}
             - mountPath: /etc/simplyblock/csi-link-certs
               name: csi-link-certs
+              readOnly: true
+            {{- end }}
+            {{- if .Values.siteLink.enabled }}
+            - mountPath: /var/run/secrets/simplyblock/site-link
+              name: site-link-token
               readOnly: true
             {{- end }}
             {{- if .Values.metricsAPI.enabled }}
@@ -186,6 +217,17 @@ spec:
         # optional:true lets the pod start before the operator creates/populates it.
         # In cert-manager mode the operator writes the issued cert to disk itself,
         # so a writable emptyDir is required there instead.
+        {{- if .Values.siteLink.enabled }}
+        # Bound to this pod and to the site link's audience, so the fleet agent
+        # can tell this operator from any other holder of its ServiceAccount.
+        - name: site-link-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: simplyblock-site-link
+                  expirationSeconds: 3600
+        {{- end }}
         {{- if include "simplyblock.csiLinkCertSecret" . }}
         # The link's serving certificate. optional:true lets the pod start
         # before cert-manager or the service-CA operator has issued it; the

@@ -206,9 +206,9 @@ func (r *PersistentVolumeOpsReconciler) clusterReporting(
 //
 // The operation names a Kubernetes object, so that a migration can be written
 // by hand without looking a UUID up, and this is where the two are joined. A
-// node in a different cluster than the volume is refused at admission; it is
-// checked again here because admission happens once and the objects can change
-// afterward.
+// node in a different cluster than the volume, or one of a stretched cluster's
+// other site, is refused at admission; both are checked again here because
+// admission happens once and the objects can change afterward.
 func (r *PersistentVolumeOpsReconciler) targetNode(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.PersistentVolumeOps,
@@ -223,6 +223,13 @@ func (r *PersistentVolumeOpsReconciler) targetNode(
 		return "", fatalf("no StorageNode %s/%s to move the volume to", ref.Namespace, ref.Name)
 	case err != nil:
 		return "", fmt.Errorf("read the target node %s/%s: %w", ref.Namespace, ref.Name, err)
+	}
+
+	if node.IsRemote() {
+		return "", fatalf(
+			"RemoteNode: node %s/%s belongs to site %s of a stretched cluster and is listed on this site "+
+				"from the control plane, and a volume cannot move to the other site",
+			ref.Namespace, ref.Name, node.Spec.Config.Site)
 	}
 
 	if node.Namespace != cluster.Namespace || node.Spec.ClusterRef != cluster.Name {

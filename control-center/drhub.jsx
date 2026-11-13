@@ -205,8 +205,8 @@ const runActionDialog = (target, kind, ctx) => {
           options: paths.map(p => { const pp = target.kind === "papp" ? target.paths.find(x => x.name === p) : null; return {v: p, l: pp ? `${p}  (${pp.from} → ${pp.to}, ${pp.verdict})` : p}; }),
           empty: `No declared DRPath offers ${m.label} for this ${target.kind === "rplan" ? "plan" : "application"}. Declaring a direction is a dr-admin decision, not an override.`},
         !pathless && verdict === "NotReady" && {k: "n1", type: "note", label: `Readiness on this path is NotReady: ${blockingChecks(target, v.path).join(", ") || "blocking checks failed"}. Running anyway needs a reason and the "override" verb on recoveryactions (dr-admin). The run is audited with the reason.`},
-        !pathless && verdict === "NotReady" && {k: "override", label: "Override reason (10–1024 characters)", type: "text", required: true, maxLen: OVERRIDE_MAX,
-          placeholder: "why this action must run despite the verdict", validate: overrideError,
+        !pathless && verdict === "NotReady" && {k: "override", label: "Override reason", type: "text", required: true, maxLen: OVERRIDE_MAX,
+          validate: overrideError,
           hint: x => `${(x || "").trim().length} characters; 10 to ${OVERRIDE_MAX}. Kept with the run in the audit record.`},
         !pathless && verdict === "Degraded" && {k: "n2", type: "note", label: "Readiness is Degraded: only advisory checks failed. The action runs without an override."},
         kind === "Restart" && target.kind === "papp" && (target.probes.length
@@ -214,7 +214,7 @@ const runActionDialog = (target, kind, ctx) => {
             hint: `dr-agent evaluates them on ${target.currentCluster || "the application's site"} now; the restart waits for the same probes.`,
             run: () => drhub.probeHealth({app: target}).then(healthAnswer)}
           : {k: "pnone", type: "note", label: "The application has no health probes: the restart reports it up once its tiers are ready. Add probes under Edit tiers & probes."}),
-        {k: "timeout", label: "Timeout", type: "text", def: "30m", placeholder: "30m"},
+        {k: "timeout", label: "Timeout", type: "text", def: "30m"},
         // only when the chosen path does not start where the application runs:
         // shown for every path, it read as if this move would be refused (UI walkthrough #24)
         opposite && (sel => sel && !sel.active && {k: "n3", type: "note", label: `The application runs on ${target.currentCluster}, but ${sel.name} starts at ${sel.from}: the hub refuses a Relocate along it. Choose the path that starts where the application runs.`})(target.paths.find(p => p.name === v.path))
@@ -262,8 +262,8 @@ const runTestDialog = target => {
       {k: "path", label: "DR path", type: "select", required: true, options: paths.map(p => ({v: p, l: p})),
         empty: "No declared DRPath offers Test here. A path's `actions` must include Test and carry a `test` block (isolated NAD, quotas)."},
       {k: "idOverride", label: "Choose the test id by hand", type: "checkbox", def: false},
-      v.idOverride ? {k: "testID", label: "Test id (4 to 12 lower-case letters and digits)", type: "text", required: true, def: proposed, validate: x => err(x)}
-        : {k: "testID", label: "Test id (proposed)", type: "select", options: [{v: proposed, l: proposed}], validate: x => err(x)},
+      v.idOverride ? {k: "testID", label: "Test id", desc: "4 to 12 lower-case letters and digits.", type: "text", required: true, def: proposed, validate: x => err(x)}
+        : {k: "testID", label: "Test id", type: "select", options: [{v: proposed, l: proposed}], validate: x => err(x)},
       {k: "nNs", type: "note", icon: "check", label: tt.namespaces.length ? `Recovers into ${tt.namespaces.map(n => bubbleNamespace(n, v.testID || proposed)).join(", ")}${tt.cluster ? ` on ${tt.cluster}` : ""}.` : "The bubble namespaces are <namespace>-drtest-<test id> on the target."},
       {k: "cloneSource", label: "Clone source", type: "select", options: [{v: "latest-replicated-snapshot", l: "latest replicated snapshot (default)"}, {v: "secondary-snapshot", l: "secondary snapshot (feature gate)"}]},
       {k: "holdFor", label: "Hold the bubble for", type: "select", def: "", options: [{v: "", l: "no hold — tear down right after validation"}].concat(["15m", "30m", "1h", "2h", "4h", "8h"].map(x => ({v: x, l: x})))},
@@ -286,7 +286,7 @@ const restoreDialog = app => ({
 });
 const holdDialog = t => ({
   title: `Hold test bubble ${t.name}`, confirm: "Update hold", done: "Hold updated",
-  fields: [{k: "holdFor", label: "Hold for (from now)", type: "text", def: t.holdFor || "1h", required: true}],
+  fields: [{k: "holdFor", label: "Hold for", desc: "From now.", type: "text", def: t.holdFor || "1h", required: true}],
   run: v => drhub.holdTest(t, v.holdFor.trim())
 });
 const deleteDialog = (o, note, needsConfirm) => ({
@@ -319,10 +319,10 @@ const parseSites = txt => String(txt || "")
     return Object.assign({name, cluster: cluster || name}, zone ? {zone} : {}, region ? {region} : {});
   });
 const SITE_COLS = [
-  {k: "name", label: "Site", placeholder: "site-a", flex: 1},
-  {k: "cluster", label: "Cluster (managed cluster)", placeholder: "same as the site", flex: 1.2},
-  {k: "zone", label: "Zone (sync)", placeholder: "", flex: 0.8},
-  {k: "region", label: "Region", placeholder: "eu-central", flex: 0.8}
+  {k: "name", label: "Site", flex: 1},
+  {k: "cluster", label: "Managed cluster", note: "empty uses the site name.", flex: 1.2},
+  {k: "zone", label: "Zone", note: "sync plans only.", flex: 0.8},
+  {k: "region", label: "Region", flex: 0.8}
 ];
 const SITE_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
 const emptySite = () => ({name: "", cluster: "", zone: "", region: ""});
@@ -390,16 +390,17 @@ const checkStores = (sites, stores) => {
 };
 // ---- form <-> spec helpers for the editable parts of the DR objects --------
 // The secret a store names when the row leaves it empty: the one the DR hub
-// chart creates in Ramen's namespace. Pre-filling it in the row looked like a
-// placeholder and was typed a second time ("ramen-s3-secretramen-s3-secret").
+// chart creates in Ramen's namespace. A new row starts with it as its value
+// (once it showed as a placeholder and was typed after it a second time:
+// "ramen-s3-secretramen-s3-secret"; forms carry no placeholders now).
 const DEFAULT_S3_SECRET = "ramen-s3-secret";
 const S3_COLS = [
-  {k: "site", label: "Site", placeholder: "site-a", flex: 1},
-  {k: "bucket", label: "Bucket", placeholder: "dr-site-a", flex: 1.4},
-  {k: "endpoint", label: "Endpoint", placeholder: "https://s3.eu-central-1.amazonaws.com", flex: 2},
+  {k: "site", label: "Site", flex: 1},
+  {k: "bucket", label: "Bucket", required: true, flex: 1.4},
+  {k: "endpoint", label: "Endpoint", required: true, note: "for example https://s3.eu-central-1.amazonaws.com.", flex: 2},
   // required: Ramen's S3 client needs it, and the hub refuses a store without one (UI walkthrough #16)
-  {k: "region", label: "Region (required; us-east-1 for MinIO)", placeholder: "e.g. eu-central-1", flex: 1},
-  {k: "secretRef", label: "Secret (empty: ramen-s3-secret)", placeholder: "ramen-s3-secret", flex: 1}
+  {k: "region", label: "Region", required: true, note: "the bucket's region on AWS; us-east-1 for MinIO.", flex: 1},
+  {k: "secretRef", label: "Secret", required: true, note: "in Ramen's namespace on the hub.", flex: 1}
 ];
 const s3Rows = profiles => (profiles || []).map(p => ({site: p.site || "", bucket: p.bucket || "", endpoint: p.endpoint || "", region: p.region || "", secretRef: typeof p.secretRef === "string" ? p.secretRef : (p.secretRef || {}).name || ""}));
 const s3Profiles = rows => (rows || []).filter(r => (r.site || "").trim() && (r.bucket || "").trim()).map(r => Object.assign(
@@ -437,33 +438,52 @@ const tiersSpec = rows => (rows || []).filter(r => (r.name || "").trim()).map(r 
   return Object.assign({name: r.name.trim(), selector}, ready.length ? {ready} : {});
 });
 const TIER_COLS = [
-  {k: "name", label: "Tier", placeholder: "db", flex: 0.8},
+  {k: "name", label: "Tier", flex: 0.8},
   {k: "by", label: "Select by", type: "select", options: [{v: "labels", l: "labels"}, {v: "resources", l: "resource types"}], flex: 0.9},
-  {k: "selector", label: "Selector", placeholder: "dr.simplyblock.io/tier=db  |  configmaps, secrets", flex: 2},
-  {k: "ready", label: "Ready when", placeholder: "vmRunning, exec(app=shop-tools; nc -z -w 3 db 3306; 900)", flex: 2.4}
+  {k: "selector", label: "Selector", note: "labels (k=v) or resource types, comma-separated.", flex: 2},
+  {k: "ready", label: "Ready when", flex: 2.4}
 ];
-const probeRows = probes => (probes || []).map(p => ({name: p.name || "", type: p.type || "http", target: p.target || "", timeout: p.timeout || "", expectStatus: p.expectStatus || ""}));
-const probesSpec = rows => (rows || []).filter(r => (r.target || "").trim() || r.type === "vmRunning").map(r => Object.assign(
-  {name: (r.name || "").trim() || r.type, type: r.type || "http"}, r.target && r.target.trim() ? {target: r.target.trim()} : {},
-  r.timeout && String(r.timeout).trim() ? {timeout: String(r.timeout).trim()} : {}, Number(r.expectStatus) ? {expectStatus: Number(r.expectStatus)} : {}));
+// A probe's type and name follow from its target: a URL is http, host:port
+// is tcp, and the name is the target's host (wp-web for
+// http://wp-web.wordpress.svc/). A probe saved with a name keeps it; a
+// vmRunning probe (no target) keeps its type.
+const probeType = r => r.type === "vmRunning" ? "vmRunning" : /^https?:\/\//i.test((r.target || "").trim()) ? "http" : "tcp";
+const probeHost = t => (t || "").trim().replace(/^https?:\/\//i, "").split(/[/:?#]/)[0].split(".")[0];
+const probeRowError = r => {
+  const t = (r.target || "").trim();
+  if (!t) return r.type === "vmRunning" ? null : "Target required.";
+  return probeType(r) === "tcp" && !/^[^\s:/]+:\d{1,5}$/.test(t) ? "A URL (http://…) or host:port." : null;
+};
+const probeRows = probes => (probes || []).map(p => ({name: p.name || "", type: p.type || "", target: p.target || "", timeout: p.timeout || "", expectStatus: p.expectStatus || ""}));
+const probesSpec = rows => {
+  const used = {};
+  return (rows || []).filter(r => (r.target || "").trim() || r.type === "vmRunning").map(r => {
+    const type = probeType(r);
+    let name = (r.name || "").trim() || probeHost(r.target) || type;
+    // two checks on one host stay apart: wp-web, wp-web-2
+    used[name] = (used[name] || 0) + 1;
+    if (used[name] > 1 && !(r.name || "").trim()) name = `${name}-${used[name]}`;
+    return Object.assign({name, type}, r.target && r.target.trim() ? {target: r.target.trim()} : {},
+      r.timeout && String(r.timeout).trim() ? {timeout: String(r.timeout).trim()} : {}, type === "http" && Number(r.expectStatus) ? {expectStatus: Number(r.expectStatus)} : {});
+  });
+};
 const PROBE_COLS = [
-  {k: "name", label: "Probe", placeholder: "web", flex: 0.8},
-  {k: "type", label: "Type", type: "select", options: [{v: "http", l: "http"}, {v: "tcp", l: "tcp"}], flex: 0.7},
-  {k: "target", label: "Target (URL / host:port)", placeholder: "http://web.shop.svc.cluster.local/", flex: 2.4},
-  {k: "timeout", label: "Timeout", placeholder: "15s", flex: 0.7},
-  {k: "expectStatus", label: "HTTP status", type: "number", placeholder: "any 2xx or 3xx", flex: 0.8}
+  {k: "target", label: "Target", required: true, note: "a URL for an HTTP check, host:port for a TCP check.", flex: 3},
+  {k: "timeout", label: "Timeout", required: true, flex: 0.7},
+  {k: "expectStatus", label: "HTTP status", type: "number", disabled: r => probeType(r) !== "http", note: "empty accepts any 2xx or 3xx.", flex: 0.8}
 ];
+const newProbe = () => ({target: "", timeout: "15s", expectStatus: ""});
 const TIER_HINT = "Ready gates: vmRunning, deploymentsReady, podsReady, or exec(<pod labels k=v>; <command>; <timeout seconds>) run in a pod of the tier's namespace. Tiers restore in order; the next starts when every gate of the previous holds.";
 
 // Site profile bindings (ADR 0020)
 const LNET_COLS = [
-  {k: "role", label: "Role", placeholder: "app", flex: 0.8},
-  {k: "nad", label: "NetworkAttachmentDefinition (namespace/name)", placeholder: "app-net/vlan110", flex: 2.4}
+  {k: "role", label: "Role", flex: 0.8},
+  {k: "nad", label: "NAD", note: "namespace/name of the NetworkAttachmentDefinition.", flex: 2.4}
 ];
 const GNET_COLS = [
-  {k: "role", label: "Role", placeholder: "app", flex: 0.7},
-  {k: "cidr", label: "Guest subnet", placeholder: "192.168.110.0/24", flex: 1.3},
-  {k: "reservedHostIDs", label: "Reserved host ids", placeholder: "1, 2", flex: 0.9},
+  {k: "role", label: "Role", flex: 0.7},
+  {k: "cidr", label: "Guest subnet", flex: 1.3},
+  {k: "reservedHostIDs", label: "Reserved host ids", note: "comma-separated host numbers, for example 1, 2.", flex: 0.9},
   {k: "dhcpServerRef", label: "DHCP server", flex: 1.1}
 ];
 // The guest-network DHCP server is one of the site's registered DHCPServers;
@@ -489,7 +509,7 @@ const bindingsSpec = v => ({
 // Sites, Velero, storage classes and S3 stores are offered from what the
 // hub knows (discovery.jsx); typing is behind an explicit override.
 const siteColsFor = disc => [
-  {k: "name", label: "Site (empty: the cluster's name)", placeholder: "site-a", flex: 1},
+  {k: "name", label: "Site", note: "empty uses the cluster's name.", flex: 1},
   {k: "cluster", label: "Cluster", type: "select", blank: "— cluster —", options: clusterOptions(disc), unknown: v => `${v} (not a managed cluster)`, flex: 1.2},
   {k: "zone", label: "Zone", type: "select", blank: r => zoneOptions(disc, r.cluster).length ? "— none —" : "— no zone reported —", options: r => zoneOptions(disc, r.cluster), unknown: v => `${v} (not reported)`, flex: 0.9},
   {k: "region", label: "Region", type: "select", blank: r => regionOptions(disc, r.cluster).length ? "— none —" : "— no region reported —", options: r => regionOptions(disc, r.cluster), unknown: v => `${v} (not reported)`, flex: 0.9}
@@ -500,7 +520,7 @@ const isMethodName = x => /^(a?sync|async-s3-backup|sync-s3-backup|s3-backup)(-[
 const S3_SITE_COLS = S3_COLS.map(c => c.k === "site" ? Object.assign({}, c, {readonly: true}) : c);
 const S3_ALL_COLS = S3_COLS.filter(c => c.k !== "site");
 const S3_MODES = [{v: "site", l: "one store per site"}, {v: "all", l: "one store for all sites"}, {v: "profile", l: "an existing Ramen S3 profile"}];
-const blankStore = (site, prev) => ({site, bucket: "", endpoint: prev ? prev.endpoint : "", region: prev ? prev.region : "", secretRef: prev ? prev.secretRef : ""});
+const blankStore = (site, prev) => ({site, bucket: "", endpoint: prev ? prev.endpoint : "", region: prev ? prev.region : "", secretRef: prev && prev.secretRef ? prev.secretRef : DEFAULT_S3_SECRET});
 // One store row per declared site, in the sites' order, keeping what was typed.
 const syncStores = (rows, siteNames) => siteNames.map((n, i) => (rows || []).find(r => r.site === n) || blankStore(n, (rows || [])[i - 1] || (rows || [])[0]));
 const storesOf = (v, sites) => v.s3Mode === "all" ? s3Profiles(sites.map(s => Object.assign({}, (v.s3all || [])[0] || {}, {site: s.name})))
@@ -521,7 +541,7 @@ const veleroFields = (v, disc, clusters, def) => {
     {k: "veleroOverride", label: "Name Velero's namespace by hand", type: "checkbox", def: false},
     v.veleroOverride ? {k: "velero", label: "Velero namespace on the sites", type: "text", required: true, def: def || "velero",
       validate: x => x && !DNS_LABEL_RE.test(x) ? "A namespace name: lower-case letters, digits and \"-\"." : null}
-      : {k: "velero", label: "Velero namespace on the sites (found by dr-agent)", type: "select", options: opts,
+      : {k: "velero", label: "Velero namespace", desc: "On the sites, as dr-agent reports it.", type: "select", options: opts,
         sync: (x, vv) => vv.veleroOverride ? undefined : (pr.value || x || def || "velero")},
     !v.veleroOverride && pr.disagree && {k: "nVel", type: "note", label: `The sites run Velero in different namespaces (${Object.entries(pr.perCluster).map(([c, n]) => `${c}: ${n}`).join(", ")}): each site gets its own (sites[].veleroNamespace).`},
     !v.veleroOverride && pr.missing.length > 0 && clusters.length > 0 && {k: "nVel2", type: "note", label: `dr-agent has not reported Velero on ${pr.missing.join(", ")}: install it (OADP) there, or name the namespace by hand.`}
@@ -545,16 +565,16 @@ const newPlanDialog = () => ({
     const sel = scSelectorOf(v);
     const missing = scMissing(disc, sites, sel);
     return [
-      {k: "name", label: "Name", type: "text", required: true, placeholder: "fra",
+      {k: "name", label: "Name", type: "text", required: true,
         validate: x => x && !DNS_LABEL_RE.test(x) ? "A plan's name is a DNS label: lower-case letters, digits and \"-\"." : x && ((prep || {}).plans || []).some(p => p.name === x) ? `A plan named ${x} exists already.` : null},
       {k: "sitesOverride", label: "Enter clusters, zones and regions by hand", type: "checkbox", def: false},
-      {k: "sites", label: "Sites — the managed cluster each site is", type: "rows", cols: v.sitesOverride ? SITE_COLS : siteColsFor(disc), max: 8, addLabel: "Add site", required: true,
+      {k: "sites", label: "Sites", desc: "The managed cluster each site is.", type: "rows", cols: v.sitesOverride ? SITE_COLS : siteColsFor(disc), max: 8, addLabel: "Add site", required: true,
         def: [emptySite(), emptySite()], add: () => emptySite(), validate: sitesError, rowsBlock: !v.sitesOverride,
         rowError: (r, i, rows) => v.sitesOverride ? null : siteRowError(disc, r) || (r.cluster && rows.filter(x => x.cluster === r.cluster && !x.zone).length > 1 && !r.zone ? `${r.cluster} is named twice without zones: a stretch (sync) plan names one zone per site.` : null),
         hint: "A cross-cluster plan names one cluster per site; a sync plan (stretch cluster) names the same cluster on every site, each with its own zone."},
       {k: "type", label: "Replication method", type: "select", required: true, options: METHOD_TYPES},
       // named after what it does unless changed: "primary" said nothing (UI walkthrough #10)
-      {k: "method", label: "Method name", type: "text", required: true, placeholder: "async-5m",
+      {k: "method", label: "Method name", type: "text", required: true,
         sync: (x, vv) => { const auto = methodName(vv); return auto && (!x || x === "primary" || isMethodName(x)) && x !== auto ? auto : undefined; },
         validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label." : null},
       /^async/.test(v.type || "") && {k: "interval", label: "Scheduling interval", type: "select", required: true, def: "5m",
@@ -563,25 +583,25 @@ const newPlanDialog = () => ({
       /backup/.test(v.type || "") && {k: "bInterval", label: "Backup interval", type: "select", required: true, def: "1h", options: ["15m", "30m", "1h", "4h", "12h", "24h"].map(x => ({v: x, l: x}))},
       /backup/.test(v.type || "") && {k: "bRetention", label: "Backups retained", type: "number", min: 1, def: 24, validate: x => !(Number(x) >= 1 && Number(x) <= 1000) ? "1 to 1000." : null},
       {k: "scOverride", label: "Choose another StorageClass selector", type: "checkbox", def: false},
-      v.scOverride ? {k: "sc", label: "Storage class selector (matchLabels)", type: "kv", max: 8, def: Object.entries(DEFAULT_SC_SELECTOR).map(([k, x]) => ({k, v: x})),
+      v.scOverride ? {k: "sc", label: "StorageClass selector", desc: "matchLabels.", type: "kv", max: 8, def: Object.entries(DEFAULT_SC_SELECTOR).map(([k, x]) => ({k, v: x})),
         validate: x => !Object.keys(kvToObj(x)).length ? "Name at least one label: the selector picks the replicated StorageClasses." : null,
         hint: () => siteNames.length ? `Matches — ${scSummary(disc, sites, kvToObj(v.sc))}` : ""}
         : {k: "nSc", type: "note", icon: "check", label: `StorageClass selector ${selectorText({matchLabels: DEFAULT_SC_SELECTOR})}${siteNames.length ? ` — ${scSummary(disc, sites, sel)}` : ""}.`},
       {k: "cg", label: "Consistency groups", type: "checkbox", def: false},
-      {k: "scName", label: missing.length ? `Create the replicated StorageClass on ${missing.join(", ")} (no class there matches), named` : "Create the replicated StorageClass on every site, named (empty: the classes exist already)",
-        type: "text", placeholder: missing.length ? DEFAULT_SC_NAME : "leave empty: the classes exist already", sync: (x, vv) => missing.length && x === undefined ? DEFAULT_SC_NAME : undefined,
+      {k: "scName", label: "New replicated StorageClass", desc: missing.length ? `No class matches on ${missing.join(", ")}: dr-hub creates this one there.` : "Empty uses the existing classes.",
+        type: "text", sync:(x, vv) => missing.length && x === undefined ? DEFAULT_SC_NAME : undefined,
         validate: x => x && !DNS_LABEL_RE.test(x) ? "A StorageClass name: lower-case letters, digits and \"-\"." : missing.length && !x ? `No StorageClass matches the selector on ${missing.join(", ")}: name the class dr-hub creates there, or choose another selector.` : null,
         hint: "dr-hub writes it on each site with the selector's labels, the site's storage cluster and pool."},
-      v.scName && {k: "scPool", label: "…from the pool (empty: the storage cluster's default pool)", type: "text", placeholder: "", validate: x => x && !DNS_LABEL_RE.test(x) ? "A pool name: lower-case letters, digits and \"-\"." : null},
+      v.scName && {k: "scPool", label: "Pool", desc: "Empty uses the storage cluster's default pool.", type: "text", validate: x => x && !DNS_LABEL_RE.test(x) ? "A pool name: lower-case letters, digits and \"-\"." : null},
       v.scName && {k: "scFs", label: "…with the filesystem", type: "select", def: "xfs", options: [{v: "xfs", l: "xfs"}, {v: "ext4", l: "ext4"}]},
-      {k: "s3Mode", label: "S3 stores (Ramen's metadata store and Velero's backups)", type: "select", def: "site", options: S3_MODES},
+      {k: "s3Mode", label: "S3 stores", desc: "Ramen's metadata store and Velero's backups.", type: "select", def: "site", options: S3_MODES},
       v.s3Mode === "all" && {k: "s3all", label: "The store every site uses", type: "rows", cols: S3_ALL_COLS, fixed: true, sync: x => x && x.length ? undefined : [blankStore("")], rowAction: S3_ALL_TEST, rowError: r => nb(r.bucket) && !nb(r.region) ? "Name the store's region (the bucket's region on AWS, us-east-1 for MinIO): Ramen needs it, although the store test passes without it." : null,
         hint: "Test probes the store from the hub (list, write, delete) with its Secret, which must exist in Ramen's namespace on the hub."},
       v.s3Mode !== "profile" && {k: "s3", label: v.s3Mode === "all" ? "Per-site stores (not used: one store for all sites)" : "One store per site", type: "rows", cols: S3_SITE_COLS, fixed: true,
         def: [], sync: x => syncStores(x, siteNames), disabled: vv => vv.s3Mode === "all", rowAction: S3_ROW_TEST,
         rowError: (r, i, rows, vv) => vv.s3Mode !== "site" ? null : !nb(r.bucket) ? `Name ${r.site}'s bucket.` : !nb(r.region) ? `Name ${r.site}'s region (the bucket's region on AWS, us-east-1 for MinIO): Ramen needs it, although the store test passes without it.` : null, rowsBlock: v.s3Mode === "site",
         hint: siteNames.length ? "Test probes a store from the hub before the plan is saved." : "Declare the sites first: one row opens per site."},
-      v.s3Mode === "profile" && {k: "s3Profile", label: "Ramen S3 profile", type: "text", required: true, placeholder: "existing profile name",
+      v.s3Mode === "profile" && {k: "s3Profile", label: "Ramen S3 profile", type: "text", required: true,
         validate: x => x && !/^[A-Za-z0-9][-A-Za-z0-9_.]*$/.test(x) ? "A profile name." : null},
       ...veleroFields(v, disc, sites.map(s => s.cluster).filter(Boolean), "velero"),
       {k: "autoRestart", label: "Restart applications in place after a storage recovery", type: "checkbox", def: false},
@@ -648,7 +668,7 @@ const pathFields = (plan, disc, paths, v, fixedSites, servers) => {
   return [
     !fixedSites && {k: "from", label: "From site", type: "select", required: true, options: sites.map(s => ({v: s.name, l: `${s.name} (${s.cluster}${s.zone ? "/" + s.zone : ""})`}))},
     !fixedSites && {k: "to", label: "To site", type: "select", required: true, options: sites.filter(s => s.name !== v.from).map(s => ({v: s.name, l: `${s.name} (${s.cluster}${s.zone ? "/" + s.zone : ""})`}))},
-    {k: "name", label: "Path name", type: "text", required: true, placeholder: "site-a-to-site-b",
+    {k: "name", label: "Path name", type: "text", required: true,
       sync: x => (!x || /-to-/.test(x)) && auto && x !== auto && !(paths || []).some(p => p.name === x && x !== auto) ? auto : undefined,
       validate: (x, vv) => pathError(plan, paths, Object.assign({}, vv, {name: x}))},
     prop && {k: "nMeth", type: "note", icon: "check", label: `${prop.sync ? "Sync (zones of one stretch cluster)" : "Async"}: replicates by the plan's ${prop.method ? `${prop.method.name} (${prop.method.type}${prop.method.interval ? ` every ${prop.method.interval}` : ""})` : "method"}; the plan's StorageClass and replication classes apply.`},
@@ -659,7 +679,7 @@ const pathFields = (plan, disc, paths, v, fixedSites, servers) => {
       validate: x => target ? testNadError(disc, target.cluster, paths, x) : null,
       sync: x => !x && prop && prop.nad ? prop.nad : undefined},
     ...testDHCPFields(disc, servers, target, v),
-    (v.actions || []).includes("Test") && {k: "cap", label: "Test: max clone capacity (empty: no limit)", type: "text", placeholder: "500Gi",
+    (v.actions || []).includes("Test") && {k: "cap", label: "Test: max clone capacity", desc: "Empty means no limit.", type: "text", example: "500Gi",
       validate: x => x && !QUANTITY_RE.test(x) ? `${x} is not a quantity (500Gi, 2Ti).` : null},
     (v.actions || []).includes("Test") && {k: "recent", label: "Test: a passed test counts as recent for", type: "select", def: "720h", options: RECENT_OPTIONS},
     // explained here: the runbook and the form never said what it does (UI walkthrough #6)
@@ -776,7 +796,7 @@ const proposePathsDialog = plans => ({
 // chosen from what the source site reports, with match counts.
 const TIER_EDITOR_HINT = "Tiers restore in order (↑↓ to reorder); the next starts when every gate of the previous holds. Labels and gates are chosen from what the site reports.";
 const tierCols = (disc, cluster, nss) => [
-  {k: "name", label: "Tier", placeholder: "db", flex: 0.6, min: 70},
+  {k: "name", label: "Tier", flex: 0.6, min: 70},
   {k: "kinds", label: "Resource types", type: "multi", options: RESOURCE_TYPE_OPTIONS, addLabel: "+ type", flex: 1.5},
   {k: "labels", label: "Labels", type: "multi", options: r => tierLabelOptions(disc, cluster, nss, r), addLabel: "+ label", empty: "no labels reported", flex: 1.6},
   {k: "ready", label: "Ready when", type: "multi", options: GATE_TYPE_OPTIONS, addLabel: "+ gate", flex: 1.3}
@@ -787,8 +807,8 @@ const gateCols = (disc, cluster, nss, tierNames) => [
   {k: "template", label: "Check", type: "select", options: GATE_TEMPLATES, flex: 1},
   {k: "target", label: "Service:port", type: "select", blank: r => r.template === "custom" ? "— n/a —" : "— service —", options: r => r.template === "custom" ? [] : serviceTargets(disc, cluster, nss), unknown: x => `${x} (not reported)`, flex: 1.3},
   {k: "pod", label: "Runs in pods", type: "select", blank: "— pods —", options: podPairOptions(disc, cluster, nss), unknown: x => `${x} (not reported)`, flex: 1.3},
-  {k: "command", label: "Command (custom only)", placeholder: "pg_isready -h db", disabled: r => r.template !== "custom", flex: 1.4},
-  {k: "timeout", label: "Timeout s", type: "number", placeholder: "900", flex: 0.6}
+  {k: "command", label: "Command", note: "custom checks only.", disabled: r => r.template !== "custom", flex: 1.4},
+  {k: "timeout", label: "Timeout s", type: "number", flex: 0.6}
 ];
 const gateSpecOf = g => Object.assign({type: "exec", selector: parseSelector(g.pod || "", {exists: false}).matchLabels || {}, command: gateCommand(g)}, Number(g.timeout) ? {timeoutSeconds: Number(g.timeout)} : {});
 const testTierRow = (target, r) => {
@@ -828,14 +848,14 @@ const tierFields = (v, disc, cluster, nss, target, siteOf) => {
       disabled: () => !nss.length || !reported(disc, cluster, nss),
       hint: () => nss.length && reported(disc, cluster, nss) ? `${prop.tiers.map(t => t.name).join(" → ")}${prop.gates.length ? `, with ${prop.gates.length} check${prop.gates.length === 1 ? "" : "s"}` : ""}` : "Choose the namespaces first.",
       apply: () => ({tiers: prop.tiers, gates: prop.gates}), done: "Proposed: review the tiers and checks below before saving."},
-    {k: "tiers", label: "Tiers — the boot order the Recipe is generated from", type: "rows", cols: tierCols(disc, cluster, nss), max: 12, addLabel: "Add tier", reorder: true, hint: TIER_EDITOR_HINT,
+    {k: "tiers", label: "Tiers", desc: "The boot order the Recipe is generated from.", type: "rows", cols: tierCols(disc, cluster, nss), max: 12, addLabel: "Add tier", reorder: true, hint: TIER_EDITOR_HINT,
       sync: (x, vv) => x === undefined && nss.length && reported(disc, cluster, nss) ? prop.tiers : undefined,
       add: () => ({name: "", kinds: [], labels: [], ready: []}),
       rowError: (r, i, rows) => tierRowError(disc, cluster, nss, r, rows), // the checks that gate the tier, named on its row: they live in the Checks
       // section below, and a tier's "Ready when" alone looked incomplete (UI walkthrough #14)
       rowInfo: (r, i, rows, vv) => [tierRowInfo(disc, cluster, nss, r), tierChecksNote(r, vv.gates)].filter(Boolean).join("; ") || null, rowsBlock: true,
       rowAction: {label: "Test", title: "dr-agent checks this tier's gates now, where the application runs", run: r => testTierRow(target(), r)}},
-    {k: "gates", label: "Checks — commands a tier waits for (exec gates)", type: "rows", cols: gateCols(disc, cluster, nss, tierNames), max: 16, addLabel: "Add check",
+    {k: "gates", label: "Checks", desc: "Commands a tier waits for (exec gates).", type: "rows", cols: gateCols(disc, cluster, nss, tierNames), max: 16, addLabel: "Add check",
       sync: (x, vv) => x === undefined && nss.length && reported(disc, cluster, nss) ? prop.gates : undefined,
       add: () => ({tier: tierNames[tierNames.length - 1] || "", template: "tcp", target: "", pod: (podPairOptions(disc, cluster, nss)[0] || {}).v || "", command: "", timeout: 900}),
       rowError: r => gateRowError(disc, cluster, nss, r, tierNames), rowsBlock: true,
@@ -870,7 +890,7 @@ const protectAppDialogDR = (plans, cfg) => ({
     return [
       {k: "plan", label: "Protection plan", type: "select", required: true, options: plans.map(p => ({v: p.name, l: p.name})), empty: "Create a protection plan first."},
       {k: "appKind", label: "Application kind", type: "select", required: true, options: [{v: "discovered", l: "discovered — no OCM Placement, protected by namespace + PVC selector"}, {v: "managed", l: "managed — deployed through an OCM Placement"}]},
-      {k: "name", label: "Name", type: "text", required: true, placeholder: "shop",
+      {k: "name", label: "Name", type: "text", required: true,
         validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label: lower-case letters, digits and \"-\"." : x && (apps || []).some(a => a.name === x && a.namespace === (v.appKind === "managed" ? v.namespace : opsNs)) ? `${x} is protected already.` : null},
       // A discovered application's DR objects (ProtectedApplication, DRPC) live
       // in the hub's Ramen operations namespace, which the hub's configuration
@@ -878,7 +898,7 @@ const protectAppDialogDR = (plans, cfg) => ({
       // OCM Placement.
       discovered
         ? {k: "nOps", type: "note", icon: "check", label: `Its DR objects are kept in the hub namespace ${opsNs} (Ramen operations namespace).`}
-        : {k: "namespace", label: "Placement namespace — where the application's OCM Placement lives", type: "text", required: true, def: "", placeholder: "the Placement's namespace",
+        : {k: "namespace", label: "Placement namespace", desc: "Where the application's OCM Placement lives.", type: "text", required: true, def: "",
           validate: x => x && !DNS_LABEL_RE.test(x) ? "A namespace name." : null},
       {k: "source", label: "Source site", type: "select", required: true, options: sites},
       {k: "target", label: "Target site", type: "select", required: true, options: sites.filter(s => s.v !== v.source)},
@@ -886,7 +906,7 @@ const protectAppDialogDR = (plans, cfg) => ({
       !discovered && {k: "placement", label: "Placement name", type: "text", required: true, validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label." : null},
       discovered && {k: "nsOverride", label: "Name namespaces the site has not reported", type: "checkbox", def: false},
       discovered && (v.nsOverride
-        ? {k: "nsText", label: "Protected namespaces (comma-separated)", type: "text", required: true, validate: x => csv(x).find(n => !DNS_LABEL_RE.test(n)) ? `${csv(x).find(n => !DNS_LABEL_RE.test(n))} is not a namespace name.` : null}
+        ? {k: "nsText", label: "Protected namespaces", desc: "Comma-separated.", type: "text", required: true, validate: x => csv(x).find(n => !DNS_LABEL_RE.test(n)) ? `${csv(x).find(n => !DNS_LABEL_RE.test(n))} is not a namespace name.` : null}
         : {k: "namespaces", label: `Protected namespaces on ${cluster || "the source site"}`, type: "chips", required: true, def: [], options: namespaceOptions(disc, cluster, src ? src.name : cluster), addLabel: "— add a namespace —",
           empty: cluster ? (discOf(disc, cluster) && discOf(disc, cluster).namespaces ? "no other namespace reported" : `dr-agent on ${cluster} has not reported its namespaces`) : "choose the source site first",
           // a new set of namespaces gets its PVC selector proposed again
@@ -895,17 +915,17 @@ const protectAppDialogDR = (plans, cfg) => ({
       noPvc(discovered) && {k: "nWhere", type: "note", label: noPvc(discovered)},
       discovered && nss.length > 0 && !reported(disc, cluster, nss) && {k: "nRep", type: "note", label: `dr-agent on ${cluster} has not reported ${nss.filter(n => !nsReport(disc, cluster, n)).join(", ")}: the selector and tiers cannot be checked.`},
       v.pvcOverride
-        ? {k: "pvc", label: "PVC selector (matchLabels)", type: "kv", max: 8}
-        : {k: "pvcSel", label: "PVC selector — the volumes Ramen replicates", type: "select", options: pvcOpts,
+        ? {k: "pvc", label: "PVC selector", desc: "matchLabels.", type: "kv", max: 8}
+        : {k: "pvcSel", label: "PVC selector", desc: "The volumes Ramen replicates.", type: "select", options: pvcOpts,
           sync: x => x !== undefined && !pvcOpts.some(o => o.v === x) ? proposePVCSelector(disc, cluster, nss) : undefined,
           validate: x => { const m = pvcMatches(disc, cluster, nss, parseSelector(x || "")); return m && !m.length ? `${x || "The selector"} matches no PVC in ${nss.join(", ")}: nothing would be replicated.` : null; },
           hint: x => { const m = pvcMatches(disc, cluster, nss, parseSelector(x || "")); return m ? `Replicates ${m.length}: ${m.slice(0, 6).join(", ")}${m.length > 6 ? " …" : ""}` : ""; }},
       (!reported(disc, cluster, nss) || v.pvcOverride) && {k: "pvcOverride", label: "Write the PVC selector by hand", type: "checkbox", def: false},
-      discovered && {k: "recipe", label: "Hand-written Recipe (name, optional; replaces the tiers)", type: "text", placeholder: "leave empty to let the hub generate one from tiers",
+      discovered && {k: "recipe", label: "Hand-written Recipe", desc: "A Recipe's name. Replaces the tiers.", type: "text",
         validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label." : null},
       ...(discovered && !(v.recipe || "").trim() ? tierFields(v, disc, cluster, nss, target, siteOf) : []),
-      {k: "probes", label: "Health probes — what a move waits for on the target", type: "rows", cols: PROBE_COLS, max: 8, addLabel: "Add probe",
-        add: () => ({name: "", type: "http", target: "", timeout: "15s", expectStatus: ""}),
+      {k: "probes", label: "Health probes", desc: "What a move waits for on the target.", type: "rows", cols: PROBE_COLS, max: 8, addLabel: "Add probe",
+        add: newProbe, rowError: probeRowError, rowsBlock: true,
         hint: "Test runs a probe now, by dr-agent on the source site, against the running application.",
         rowAction: {label: "Test", title: "dr-agent runs this probe on the source site now", run: (row, fv) => {
           if (!fv.plan || !fv.source) throw new Error("Choose the plan and the source site first.");
@@ -929,6 +949,406 @@ const protectAppDialogDR = (plans, cfg) => ({
     return drhub.createApp({name: v.name.trim(), namespace: v.appKind === "managed" ? (v.namespace || "").trim() : opsNs, spec});
   }
 });
+// Quick protect: one form for one discovered application. It creates what
+// the separate forms create (plan, paths, DHCP servers, site bindings, the
+// protected application) and reuses whatever exists for the two clusters.
+const QP_INTERVALS = ["1m", "2m", "5m", "10m", "15m", "30m", "1h"].map(x => ({v: x, l: x}));
+// A DHCP server found on a network but not registered yet: "found:<ns>/<configMap>".
+const QP_FOUND = "found:";
+const qpPlans = (plans, src, dst) => (plans || []).filter(p => !p.sync && p.sites.some(s => s.cluster === src) && p.sites.some(s => s.cluster === dst));
+// The plan the form works with: an existing one of the two clusters, else
+// the one it creates (sites named after their clusters).
+const qpPlan = (plans, v) => {
+  const have = qpPlans(plans, v.src, v.dst);
+  if (have.length) return have.find(p => p.name === v.plan) || have[0];
+  return v.src && v.dst ? {name: (v.planName || "").trim(), sites: [{name: v.src, cluster: v.src}, {name: v.dst, cluster: v.dst}], methods: [], created: true} : null;
+};
+const qpSite = (plan, cluster) => ((plan && plan.sites.find(s => s.cluster === cluster)) || {}).name || cluster;
+const qpProfile = (profiles, cluster) => (profiles || []).find(p => p.name === cluster);
+// The NADs the namespaces' VMs use on a cluster.
+const qpVMNads = (disc, cluster, nss) => uniqSorted(((discOf(disc, cluster) || {}).vms || []).filter(vm => nss.includes(vm.namespace))
+  .flatMap(vm => (vm.networks || []).map(n => n.nad)).filter(Boolean));
+// The role a source NAD plays: its binding on the source site, else the one
+// another site's profile suggests, else "app".
+const qpRole = (disc, profiles, src, nad) => {
+  const own = ((qpProfile(profiles, src) || {}).spec || {}).logicalNetworks || [];
+  const bound = own.find(l => l.nad === nad);
+  if (bound) return bound.role;
+  const others = (profiles || []).filter(p => p.name !== src).map(p => ({name: p.name, spec: p.spec}));
+  return (proposeRoles(disc, src, others).find(x => x.nad === nad) || {}).role || "app";
+};
+const qpBound = (profiles, cluster, role) => {
+  const sp = (qpProfile(profiles, cluster) || {}).spec || {};
+  return (sp.logicalNetworks || []).some(l => l.role === role && l.nad) && (sp.guestNetworks || []).some(g => g.role === role && g.cidr);
+};
+// A cluster's row for a role: its NAD, guest subnet, reserved host ids and
+// DHCP server, from the site's profile where bound, else proposed from the NAD.
+const qpNetRow = (disc, profiles, servers, paths, cluster, role, nad) => {
+  const sp = (qpProfile(profiles, cluster) || {}).spec || {};
+  const g = (sp.guestNetworks || []).find(x => x.role === role);
+  const cidr = g ? g.cidr : nad ? nadSubnet(disc, cluster, nad).cidr : "";
+  const mine = (servers || []).filter(x => x.site === cluster);
+  const pr = proposeDHCPServer(disc, cluster, [nad], mine, testNadsOf(disc, cluster, paths));
+  // the cluster's only registered server when none is seen on the NAD
+  const dhcp = srvRef(g && g.dhcpServerRef) || srvRef(sp.dhcpServerRef) || pr.registered ||
+    (pr.discovered ? `${QP_FOUND}${pr.discovered.namespace}/${pr.discovered.hostsConfigMap}` : mine.length === 1 ? mine[0].name : "");
+  return {site: cluster, role, nad: nad || "", _nad: nad || "", cidr, dhcp,
+    reservedHostIDs: g ? (g.reservedHostIDs || []).join(", ") : cidr ? proposedReserved(disc, cluster, nad, cidr).join(", ") : "1"};
+};
+// The source row and the target's, its NAD bound already or proposed from the
+// source site's roles (all of them, so each target NAD pairs with its best match).
+const qpNetRows = (disc, profiles, servers, paths, src, dst, nad, role) => {
+  const dstNad = (((qpProfile(profiles, dst) || {}).spec || {}).logicalNetworks || []).find(l => l.role === role);
+  const srcNets = (((qpProfile(profiles, src) || {}).spec || {}).logicalNetworks || []).filter(l => l.nad !== nad).concat([{role, nad}]);
+  const proposed = proposeRoles(disc, dst, [{name: src, spec: {logicalNetworks: srcNets}}]).find(x => x.role === role);
+  return [qpNetRow(disc, profiles, servers, paths, src, role, nad),
+    qpNetRow(disc, profiles, servers, paths, dst, role, dstNad ? dstNad.nad : proposed ? proposed.nad : "")];
+};
+// The DHCP servers a row can name: the cluster's registered ones, and those
+// found on its networks that can be registered on create.
+const qpDHCPChoices = (disc, servers, paths, cluster) => {
+  const mine = (servers || []).filter(x => x.site === cluster);
+  const found = (((discOf(disc, cluster) || {}).dhcpServers) || []).filter(f => f.hostsConfigMap && !isBubbleServer(disc, cluster, f, testNadsOf(disc, cluster, paths))
+    && !mine.some(x => x.dnsmasq && x.dnsmasq.namespace === f.namespace && x.dnsmasq.configMap === f.hostsConfigMap));
+  return mine.map(x => ({v: x.name, l: x.name})).concat(found.map(f => ({v: `${QP_FOUND}${f.namespace}/${f.hostsConfigMap}`, l: `${f.namespace}/${f.owner || f.pod} (registered on create)`})));
+};
+// The select starts on its first option: the isolated test network when the
+// cluster has one, else none (never a production network).
+const qpTestNad = (disc, paths, cluster, label, k) => {
+  const ch = testNadChoices(disc, cluster, paths).map(c => ({v: c.v, l: c.l, isolated: c.isolated}));
+  const none = {v: "", l: "— none —"};
+  return {k, label, type: "select", options: ch.length && ch[0].isolated ? ch.concat([none]) : [none].concat(ch),
+    validate: x => x ? testNadError(disc, cluster, paths, x) : null,
+    hint: "Isolated network for test failovers. Test VMs keep their production addresses."};
+};
+// Quick protect in two steps. Step 1 sets the pair up: the plan, a path each
+// way (with Test where a test network is chosen), the DHCP servers and the VM
+// network bindings; it then waits for the plan to be Ready and the paths
+// Valid, so the paths can be checked and tested before anything is protected.
+// Step 2 protects the application on that plan.
+// The source NADs of the namespaces' VMs, each with its role and whether both sites bind it already.
+const qpNetsOf = (v, prep) => qpVMNads(prep.disc, v.src, v.namespaces || []).map((nad, i) => {
+  const role = qpRole(prep.disc, prep.profiles, v.src, nad);
+  return {nad, role, k: `net${i}`, bound: qpBound(prep.profiles, v.src, role) && qpBound(prep.profiles, v.dst, role)};
+});
+const qpPathsOf = (v, prep, plan) => {
+  const find = (a, b) => !plan || plan.created ? null : (prep.paths || []).find(p => p.planName === plan.name && p.from === qpSite(plan, a) && p.to === qpSite(plan, b));
+  return {fwd: find(v.src, v.dst), rev: find(v.dst, v.src)};
+};
+const qpPathName = (plan, a, b) => `${qpSite(plan, a)}-to-${qpSite(plan, b)}`.slice(0, 63);
+// Runs one creation; a failure names what was created before it.
+const qpStepper = () => {
+  const done = [];
+  const step = async (what, fn) => {
+    try { const r = await fn(); done.push(what); return r; }
+    catch (e) { throw new Error(`${what}: ${(e && e.message) || e}${done.length ? `. Created so far: ${done.join(", ")}.` : ""}`); }
+  };
+  return {step, done};
+};
+
+const quickSetupDialog = plans => {
+  // what prepare loaded, for run
+  let P = {};
+  return {
+  title: "Quick protect", confirm: "Set up", wide: true,
+  desc: "Step 1 of 2: the plan, its paths and the VM networks. Existing ones are reused.",
+  prepare: () => Promise.all([drhub.discovery(), drhub.paths().catch(() => []), drhub.siteProfiles().catch(() => []), drhub.dhcpServers().catch(() => [])])
+    .then(([disc, paths, profiles, servers]) => (P = {disc, paths, profiles, servers})),
+  fields: (v, prep) => {
+    const {disc, paths = [], servers = []} = prep || {};
+    const nss = v.namespaces || [];
+    const clusters = clusterOptions(disc);
+    const have = qpPlans(plans, v.src, v.dst);
+    const plan = qpPlan(plans, v);
+    const siteOf = c => qpSite(plan, c);
+    const {fwd, rev} = qpPathsOf(v, prep || {}, plan);
+    const nets = v.src && v.dst && prep ? qpNetsOf(v, prep) : [];
+    const toRegister = uniqSorted(nets.filter(n => !n.bound).flatMap(n => (v[n.k] || []).filter(r => (r.dhcp || "").startsWith(QP_FOUND)).map(r => `${r.site}: ${r.dhcp.slice(QP_FOUND.length)}`)));
+    const creates = [plan && plan.created && `plan ${plan.name}`, plan && !fwd && `path ${siteOf(v.src)}-to-${siteOf(v.dst)}`, plan && !rev && `path ${siteOf(v.dst)}-to-${siteOf(v.src)}`,
+      ...toRegister.map(x => `DHCP server ${x}`), ...uniqSorted(nets.filter(n => !n.bound).flatMap(n => (v[n.k] || []).map(r => r.site))).map(c => `bindings on ${c}`)].filter(Boolean);
+    const reuses = [plan && !plan.created && `plan ${plan.name}`, fwd && `path ${fwd.name}`, rev && `path ${rev.name}`, ...nets.filter(n => n.bound).map(n => `role ${n.role} bindings`)].filter(Boolean);
+    return [
+      {k: "sApp", type: "section", label: "Application", summary: `${nss.join(", ") || "no namespace"} on ${v.src || "—"}`},
+      {k: "src", label: "Source cluster", type: "select", required: true, options: clusters, empty: "No managed cluster reported."},
+      {k: "namespaces", label: "Namespaces", type: "chips", required: true, def: [], options: namespaceOptions(disc, v.src, v.src), addLabel: "— add a namespace —",
+        desc: "The networks of their VMs are mapped in this step; the application is protected in step 2.",
+        empty: v.src ? `dr-agent on ${v.src} has not reported its namespaces` : "choose the source cluster first"},
+
+      {k: "sTo", type: "section", label: "Protect to", summary: !v.dst ? "choose the target" : `${v.dst} · ${plan && !plan.created ? `plan ${plan.name}` : `new plan, every ${v.interval || "5m"}`}${!fwd || !rev ? ` · ${[fwd, rev].filter(x => !x).length} new path${!fwd && !rev ? "s" : ""}` : ""}`},
+      {k: "dst", label: "Target cluster", type: "select", required: true, options: clusters.filter(o => o.v !== v.src), empty: "No other managed cluster reported."},
+      have.length > 0 && {k: "plan", label: "Plan", type: "select", required: true,
+        options: have.map(p => ({v: p.name, l: `${p.name} · ${p.methods.map(m => m.interval ? `${m.type} ${m.interval}` : m.type).join(", ")} · ${p.status}`}))},
+      !have.length && {k: "planName", label: "Plan name", type: "text", required: true,
+        // follows the clusters until changed by hand
+        sync: (x, vv) => { const auto = vv.src && vv.dst && vv.src !== vv.dst ? dns63(`dr-${[vv.src, vv.dst].sort().join("-")}`) : "";
+          return auto && (!x || /^dr-/.test(x)) && x !== auto ? auto : undefined; },
+        validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label: lower-case letters, digits and \"-\"." : x && plans.some(p => p.name === x) ? `A plan named ${x} exists already.` : null,
+        hint: v.src && v.dst ? `New plan for ${v.src} and ${v.dst}, with a path each way.` : null},
+      !have.length && {k: "interval", label: "Replication interval", type: "select", required: true, def: "5m", options: QP_INTERVALS, hint: "Target RPO"},
+      !have.length && {k: "cg", label: "Consistency groups", type: "checkbox", def: true, hint: "Replicates and fails over an application's volumes together."},
+      !have.length && {k: "s3", label: "S3 stores", type: "rows", cols: S3_SITE_COLS, fixed: true, def: [],
+        sync: x => syncStores(x, [v.src, v.dst].filter(Boolean)), rowAction: S3_ROW_TEST, rowsBlock: true,
+        rowError: r => !nb(r.bucket) ? "Bucket required." : !nb(r.endpoint) ? "Endpoint required." : !nb(r.region) ? "Region required." : null,
+        hint: "One per site, for the application's Kubernetes objects."},
+      plan && !fwd && v.dst && qpTestNad(disc, paths, v.dst, `Test failover network on ${v.dst}`, "testFwd"),
+      plan && !rev && v.src && qpTestNad(disc, paths, v.src, `Test failover network on ${v.src}`, "testRev"),
+
+      {k: "sNet", type: "section", label: "VM networks", summary: !nets.length ? "no VMs" : nets.map(n => n.bound ? `${n.role}: bound` : `${n.role}: ${(v[n.k] || []).map(r => r.nad || "?").join(" → ")}`).join(" · ")},
+      !nets.length && {k: "nNoVM", type: "note", icon: "check", label: nss.length && v.dst ? `No VMs in ${nss.join(", ")}: nothing to map.` : "Choose the namespaces and the target cluster first."},
+      ...nets.map(n => n.bound
+        ? {k: `n${n.k}`, type: "note", icon: "check", label: `Role ${n.role}: bound on ${v.src} and ${v.dst}.`}
+        : {k: n.k, label: `Role ${n.role} (${n.nad} on ${v.src})`, type: "rows", fixed: true,
+          // fresh rows for a new pair of clusters; a row whose NAD was changed
+          // gets that NAD's subnet, reserved ids and DHCP server proposed
+          sync: x => {
+            const key = `${v.src}|${v.dst}|${n.nad}`;
+            if (!(x && x.length === 2 && x[0]._key === key))
+              return qpNetRows(disc, prep.profiles, servers, paths, v.src, v.dst, n.nad, n.role).map(r => Object.assign(r, {_key: key}));
+            if (x.every(r => r.nad === r._nad)) return undefined;
+            return x.map(r => r.nad === r._nad ? r : Object.assign({}, r, qpNetRow(disc, [], servers, paths, r.site, n.role, r.nad), {_key: key}));
+          },
+          cols: [{k: "site", label: "Cluster", readonly: true, flex: 0.8},
+            {k: "nad", label: "Network", type: "select", blank: "— network —", flex: 1.6,
+              options: r => r.site === v.src ? [{v: n.nad, l: n.nad}] : testNadChoices(disc, r.site, paths).filter(c => !c.isolated).map(c => ({v: c.v, l: c.v}))},
+            {k: "cidr", label: "Guest subnet", flex: 1.1},
+            {k: "reservedHostIDs", label: "Reserved host IDs", note: "comma-separated host numbers, for example 1, 2.", flex: 0.8},
+            {k: "dhcp", label: "DHCP server", type: "select", blank: "— none —", options: r => qpDHCPChoices(disc, servers, paths, r.site), flex: 1.5}],
+          rowError: r => !r.nad ? "Network required." : !nb(r.cidr) ? "Guest subnet required." : guestRowError(disc, r.site, {cidr: r.cidr, reservedHostIDs: r.reservedHostIDs}, r.nad, null),
+          rowsBlock: true, hint: "Subnets prefilled from current VM addresses."}),
+
+      {k: "sReview", type: "section", label: "Review", open: true},
+      creates.length > 0 && {k: "nCreate", type: "note", icon: "plus", label: `Creates: ${creates.join(", ")}.`},
+      reuses.length > 0 && {k: "nReuse", type: "note", icon: "check", label: `Reuses: ${reuses.join(", ")}.`}
+    ].filter(Boolean);
+  },
+  run: async v => {
+    const {disc, profiles = [], servers = []} = P;
+    const plan = qpPlan(plans, v);
+    if (!plan) throw new Error("Choose the source and target clusters.");
+    const {step, done} = qpStepper();
+    if (plan.created) {
+      const sites = plan.sites.map(s => ({name: s.name, cluster: s.cluster}));
+      const vel = veleroProposal(disc, sites.map(s => s.cluster));
+      const stores = s3Profiles(v.s3);
+      checkStores(sites, stores);
+      const missing = scMissing(disc, sites, DEFAULT_SC_SELECTOR);
+      const spec = {sites: vel.disagree ? sites.map(s => vel.perCluster[s.cluster] && vel.perCluster[s.cluster] !== vel.value ? Object.assign({}, s, {veleroNamespace: vel.perCluster[s.cluster]}) : s) : sites,
+        methods: [{name: `async-${v.interval}`, type: "async", schedulingInterval: v.interval}],
+        storageProfile: Object.assign({storageClassSelector: {matchLabels: DEFAULT_SC_SELECTOR}, consistencyGroups: v.cg ? "Enabled" : "Disabled"},
+          missing.length ? {provision: {name: DEFAULT_SC_NAME}} : {}),
+        s3Profiles: stores, veleroNamespace: vel.value || "velero"};
+      await step(`plan ${plan.name}`, () => drhub.createPlan({name: plan.name, spec}));
+    }
+    // DHCP servers found on the networks, each registered once; then each
+    // site's bindings: the form's roles replace the profile's rows for them
+    const regs = {}, per = {};
+    for (const n of qpNetsOf(v, P).filter(x => !x.bound)) {
+      for (const r of v[n.k] || []) {
+        let dhcp = r.dhcp || "";
+        if (dhcp.startsWith(QP_FOUND)) {
+          const key = `${r.site}|${dhcp}`;
+          if (!regs[key]) {
+            const [ns, cm] = dhcp.slice(QP_FOUND.length).split("/");
+            const f = (((discOf(disc, r.site) || {}).dhcpServers) || []).find(x => x.namespace === ns && x.hostsConfigMap === cm);
+            if (!f) throw new Error(`The DHCP server ${ns}/${cm} is no longer reported on ${r.site}.`);
+            const name = dhcpServerName(r.site, f);
+            await step(`DHCP server ${name}`, () => drhub.createDHCPServer({name, site: r.site, namespace: ns, configMap: cm}));
+            regs[key] = name;
+          }
+          dhcp = regs[key];
+        }
+        const p = per[r.site] || (per[r.site] = {roles: [], lnets: [], gnets: []});
+        p.roles.push(n.role);
+        p.lnets.push({role: n.role, nad: r.nad});
+        p.gnets.push({role: n.role, cidr: r.cidr, reservedHostIDs: r.reservedHostIDs, dhcpServerRef: dhcp});
+      }
+    }
+    // a new plan's site profiles are made by the hub after it, so the list
+    // loaded with the form lacks them: read it again until they appear
+    let profs = profiles;
+    for (let t = 0; Object.keys(per).some(s => !qpProfile(profs, s)) && t < 30; t++) {
+      await new Promise(r => setTimeout(r, 2000));
+      profs = await drhub.siteProfiles().catch(() => profs);
+    }
+    for (const [site, p] of Object.entries(per)) {
+      const prof = qpProfile(profs, site);
+      if (!prof) throw new Error(`No site profile for ${site}: its dr-agent has not reported yet.${done.length ? ` Created so far: ${done.join(", ")}.` : ""}`);
+      const sp = prof.spec || {};
+      const lnets = lnetRows(sp).filter(l => !p.roles.includes(l.role)).concat(p.lnets);
+      const gnets = gnetRows(sp).filter(g => !p.roles.includes(g.role)).concat(p.gnets);
+      const dhcp = srvRef(sp.dhcpServerRef) || (p.gnets.find(g => g.dhcpServerRef) || {}).dhcpServerRef || "";
+      await step(`bindings on ${site}`, () => drhub.patchSiteProfile(prof, bindingsSpec({lnets, gnets, dhcp})));
+    }
+    const {fwd, rev} = qpPathsOf(v, P, plan);
+    const path = async (a, b, nad) => {
+      const from = qpSite(plan, a), to = qpSite(plan, b), name = qpPathName(plan, a, b);
+      const dhcp = nad ? testDHCPChoice(disc, servers, b, nad).recommended : "";
+      await step(`path ${name}`, () => drhub.createPath({name, spec: pathBody(plan, {from, to, actions: ["Failover", "Relocate"].concat(nad ? ["Test"] : []), nad, dhcp, recent: "720h"})}));
+    };
+    if (!fwd) await path(v.src, v.dst, v.testFwd);
+    if (!rev) await path(v.dst, v.src, v.testRev);
+    // what step 2 starts from; the page shows the setup's progress (spec.result)
+    return {plan: plan.name, planCreated: !!plan.created, paths: [fwd ? fwd.name : qpPathName(plan, v.src, v.dst), rev ? rev.name : qpPathName(plan, v.dst, v.src)],
+      src: v.src, dst: v.dst, namespaces: v.namespaces || [], nets: qpNetsOf(v, P).length > 0};
+  }
+  };
+};
+
+// Step 2: the application on the plan step 1 set up (setup: what it returned).
+const quickAppDialog = (plans, cfg, setup) => {
+  const opsNs = (cfg && cfg.ramen && cfg.ramen.opsNamespace) || DR_NS();
+  const plan = plans.find(p => p.name === setup.plan);
+  const nss = setup.namespaces, src = setup.src;
+  const siteOf = c => qpSite(plan, c);
+  return {
+  title: "Quick protect", confirm: "Protect", done: "Protection created", wide: true,
+  desc: `Step 2 of 2: the application, on plan ${setup.plan} from ${setup.src} to ${setup.dst}.`,
+  prepare: () => Promise.all([drhub.discovery(), drhub.apps().catch(() => [])]).then(([disc, apps]) => ({disc, apps})),
+  fields: (v, prep) => {
+    const {disc, apps = []} = prep || {};
+    const pvcOpts = pvcSelectorOptions(disc, src, nss);
+    const target = () => ({site: siteOf(src), namespaces: nss, plan: setup.plan});
+    return [
+      {k: "sApp", type: "section", label: "Application", summary: `${nss.join(", ")} on ${src}${v.name ? ` · ${v.name}` : ""}`},
+      {k: "nSetup", type: "note", icon: "check", label: `Plan ${setup.plan} and paths ${setup.paths.join(", ")} are set up. Namespaces: ${nss.join(", ")}.`},
+      {k: "name", label: "Name", type: "text", required: true, def: dns63(nss[0] || ""),
+        validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label: lower-case letters, digits and \"-\"." : x && apps.some(a => a.name === x && a.namespace === opsNs) ? `${x} is protected already.` : null},
+      {k: "pvcSel", label: "PVC selector", type: "select", options: pvcOpts,
+        sync: x => disc && (x === undefined || !pvcOpts.some(o => o.v === x)) ? proposePVCSelector(disc, src, nss) : undefined,
+        validate: x => { const m = pvcMatches(disc, src, nss, parseSelector(x || "")); return m && !m.length ? `Matches no PVC in ${nss.join(", ")}.` : null; },
+        hint: x => { const m = pvcMatches(disc, src, nss, parseSelector(x || "")); return m ? `${m.length} PVC${m.length === 1 ? "" : "s"}: ${m.slice(0, 6).join(", ")}${m.length > 6 ? " …" : ""}` : ""; }},
+
+      {k: "sOrder", type: "section", label: "Recovery order", summary: `${(v.tiers || []).map(t => t.name).filter(Boolean).join(" → ") || "no tiers"} · ${(v.probes || []).length} health check${(v.probes || []).length === 1 ? "" : "s"}`},
+      ...tierFields(v, disc, src, nss, target, siteOf),
+      {k: "probes", label: "Health checks", type: "rows", cols: PROBE_COLS, max: 8, addLabel: "Add check",
+        add: newProbe, rowError: probeRowError, rowsBlock: true,
+        rowAction: {label: "Test", title: "dr-agent runs this probe on the source cluster now", run: row => drhub.probeHealth(Object.assign(target(), {probes: probeRowSpec(row)})).then(healthAnswer)}},
+
+      {k: "sReview", type: "section", label: "Review", open: true},
+      v.name && {k: "nCreate", type: "note", icon: "plus", label: `Creates: application ${v.name}.`}
+    ].filter(Boolean);
+  },
+  run: async v => {
+    if (!plan) throw new Error(`Plan ${setup.plan} is no longer listed.`);
+    const {step} = qpStepper();
+    const sel = parseSelector(v.pvcSel || "");
+    const tiers = tierEditorSpec(v.tiers, v.gates), probes = probesSpec(v.probes);
+    const asyncMethod = plan.methods.length > 1 ? (plan.methods.find(m => /^async/.test(m.type)) || {}).name : "";
+    const spec = Object.assign({planRef: plan.name, source: siteOf(src), target: siteOf(setup.dst), kind: "discovered"},
+      asyncMethod ? {method: asyncMethod} : {}, tiers.length ? {tiers} : {}, probes.length ? {health: {probes}} : {},
+      {discovered: {protectedNamespaces: nss, pvcSelector: Object.keys(sel.matchLabels || {}).length ? {matchLabels: sel.matchLabels} : {}}});
+    await step(`application ${v.name.trim()}`, () => drhub.createApp({name: v.name.trim(), namespace: opsNs, spec}));
+    return {plan: setup.plan, planCreated: setup.planCreated, paths: setup.paths, app: v.name.trim(), namespace: opsNs, nets: setup.nets};
+  },
+  result: (watch, close) => <ProtectProgress {...watch} inline onClose={close} />
+  };
+};
+
+// Quick protect as a page of its own under Disaster recovery: step 1's form,
+// then its progress in the same place, then step 2's form and its progress.
+function QuickProtectPage({nav}) {
+  const [load, setLoad] = useState(null);
+  const [setup, setSetup] = useState(null);
+  const [err, setErr] = useState(null);
+  const read = () => Promise.all([drhub.plans(), drhub.config().catch(() => null)])
+    .then(([plans, cfg]) => ({plans, cfg}), e => { setErr((e && e.message) || String(e)); return null; });
+  useEffect(() => { read().then(x => x && setLoad(x)); }, []);
+  // step 2 reads the plans again: step 1 may have created the plan
+  const next = s => read().then(x => { if (x) { setLoad(x); setSetup(s); } });
+  if (err) return <div className="scroll"><div className="empty"><Icon n="alert" s={22} c="var(--bad)" /><b>Cannot read the protection plans</b><span>{err}</span></div></div>;
+  if (!load) return <div className="scroll"><div className="fskel" style={{marginTop: 18}}></div></div>;
+  if (setup) return <Dialog key="app" page spec={quickAppDialog(load.plans, load.cfg, setup)} obj={{kind: "papp", id: "new"}} onClose={() => nav.dr()} />;
+  const spec = Object.assign(quickSetupDialog(load.plans), {result: (s, close) => <ProtectProgress {...s} inline setupOnly onClose={close} onNext={() => next(s)} />});
+  return <Dialog key="setup" page spec={spec} obj={{kind: "pplan", id: "new"}} onClose={() => nav.dr()} />;
+}
+
+// What Quick protect created, read back until the application can move: the
+// plan Ready, its paths Valid, the site mapping resolved, the application
+// bound and protected, a first replication, a Ready path.
+const QP_POLL_MS = 4000;
+// inline: on the Quick protect page, where the form was; otherwise a modal.
+// setupOnly: Quick protect's step 1, the plan and its paths, then onNext.
+function ProtectProgress({plan, planCreated, paths, app, namespace, nets, onClose, inline, setupOnly, onNext}) {
+  const [st, setSt] = useState(null);
+  useEffect(() => {
+    let alive = true, timer = null;
+    const tick = () => Promise.all([drhub.plans(), drhub.paths(), drhub.apps()])
+      .then(([ps, pa, as]) => alive && setSt({plan: ps.find(p => p.name === plan), paths: paths.map(n => pa.find(p => p.name === n)),
+        app: as.find(a => a.name === app && a.namespace === namespace), err: null}),
+        e => alive && setSt(s => Object.assign({}, s, {err: (e && e.message) || String(e)})))
+      .then(() => { if (alive) timer = setTimeout(tick, QP_POLL_MS); });
+    tick();
+    return () => { alive = false; clearTimeout(timer); };
+  }, []);
+  const p = st && st.plan, a = st && st.app, ps = (st && st.paths) || [];
+  const yes = x => x === true ? "yes" : x === false ? "no" : "not yet";
+  const steps = [
+    {label: `Plan ${plan}`, note: planCreated ? "created" : "existing", done: !!p && p.status === "Ready",
+      detail: !p ? "not listed yet" : p.status === "Ready" ? "Ready" : p.pairs.some(x => x.peerClassesResolved) ? p.status : "waiting for peer classes, about 8 minutes"},
+    // Inconsistent: valid, the two site profiles differ (shown on the path)
+    {label: "Paths", done: ps.length > 0 && ps.every(x => x && (x.status === "Valid" || x.status === "Inconsistent")),
+      detail: paths.map((n, i) => `${n}: ${(ps[i] || {}).status || "not listed yet"}`).join(" · ")},
+    nets && {label: "Site mapping", done: !!a && a.siteMapping === "Resolved",
+      detail: !a ? "—" : a.siteMapping === "Open" ? `${a.counts.openFindings} open finding${a.counts.openFindings === 1 ? "" : "s"}` : a.siteMapping},
+    {label: `Application ${app}`, done: !!a && a.bound === true && a.protected === true,
+      detail: !a ? "not listed yet" : `bound: ${yes(a.bound)} · protected: ${yes(a.protected)}`},
+    {label: "First replication", done: !!(a && a.replication), detail: a && a.replication ? `last sync ${fmtAgo(a.replication.lastSyncTime)}` : "waiting"},
+    {label: "Ready to move", done: !!a && (a.verdict === "Ready" || a.verdict === "Degraded"), detail: a ? a.verdict : "—"}
+  ].filter(Boolean).slice(0, setupOnly ? 2 : undefined);
+  const current = steps.findIndex(s => !s.done);
+  const all = current < 0;
+  const body = <>
+    <ol className="qpsteps">
+      {steps.map((s, i) => (
+        <li key={s.label} className={s.done ? "done" : i === current ? "cur" : ""}>
+          <span className="qpmark">{s.done ? <Icon n="check" s={13} /> : i === current ? <Icon n="refresh" s={12} /> : <i></i>}</span>
+          <span className="qptext"><span><b>{s.label}</b>{s.note && <em> · {s.note}</em>}</span><small>{s.detail}</small></span>
+        </li>))}
+    </ol>
+    {st && st.err && <div className="banner" style={{marginTop: 10, marginBottom: 0}}><Icon n="alert" s={14} />{st.err}</div>}
+  </>;
+  const open = () => { onClose(); window.__nav && window.__nav.detail(a); };
+  if (setupOnly) return (
+    <div className="fpdone">
+      <h2>{all ? `Plan ${plan} and its paths are ready` : `Setting up plan ${plan}`}</h2>
+      {body}
+      <div className="fpdonebtns">
+        <button className="btn" onClick={onClose}>Back to disaster recovery</button>
+        <button className="btn" disabled={!p} onClick={() => { onClose(); window.__nav && window.__nav.detail(p); }}>Open the plan</button>
+        <button className="btn primary" disabled={!all} onClick={onNext}>Continue to the application</button>
+      </div>
+    </div>
+  );
+  if (inline) return (
+    <div className="fpdone">
+      <h2>{all ? `${app} is protected` : `Protecting ${app}`}</h2>
+      {body}
+      <div className="fpdonebtns">
+        <button className="btn" onClick={onClose}>Back to disaster recovery</button>
+        <button className="btn primary" disabled={!a} onClick={open}>Open the application</button>
+      </div>
+    </div>
+  );
+  return (
+    <div className="ovl" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="mhead">
+          <h3>{all ? `${app} is protected` : `Protecting ${app}`}</h3>
+          <button className="tbtn" style={{color: "var(--dim)"}} onClick={onClose}><Icon n="x" s={13} /></button>
+        </div>
+        <div className="mbody">
+          <p className="mdesc">Progress also shows on the application's page.</p>
+          {body}
+        </div>
+        <div className="mfoot">
+          <button className="btn" onClick={onClose}>Close</button>
+          <button className="btn primary" disabled={!a} onClick={open}>Open the application</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const editTiersDialog = a => {
   const ed = tierEditorRows(a.tiers);
   return {
@@ -945,7 +1365,7 @@ const editTiersDialog = a => {
         ...tierFields(v, disc, cluster, nss, target).map(f => f.k === "tiers" ? Object.assign({}, f, {def: ed.rows, sync: undefined})
           : f.k === "gates" ? Object.assign({}, f, {def: ed.gates, sync: undefined}) : f),
         {k: "probes", label: "Health probes", type: "rows", cols: PROBE_COLS, max: 8, addLabel: "Add probe", def: probeRows(a.probes),
-          add: () => ({name: "", type: "http", target: "", timeout: "15s", expectStatus: ""}),
+          add: newProbe, rowError: probeRowError, rowsBlock: true,
           rowAction: {label: "Test", title: "dr-agent runs this probe where the application runs, now", run: row => drhub.probeHealth({app: a, probes: probeRowSpec(row)}).then(healthAnswer)}},
         {k: "ptest", type: "check", label: "All probes as edited", button: "Test all probes",
           hint: `dr-agent evaluates them on ${a.currentCluster || "the application's site"} now; nothing is saved.`,
@@ -974,7 +1394,7 @@ const rplanFields = (v, paths, apps, fixedPath) => {
         : chosenNs.length === 1 ? `Kept in the hub namespace of the DR objects (Ramen operations namespace): ${chosenNs[0]}`
         : nss.length === 1 ? `Kept in the hub namespace of the DR objects (Ramen operations namespace): ${nss[0]}`
         : `The applications on this path are in ${nss.join(", ")}: a recovery plan holds applications of one namespace, which it is created in.`},
-    {k: "apps", label: "Applications by priority — lane 1 moves first", type: "lanes", required: true, def: [], items,
+    {k: "apps", label: "Applications by priority", desc: "Lane 1 moves first.", type: "lanes", required: true, def: [], items,
       empty: path ? `No protected application is on ${path.name}.` : "Choose the DR path first.", addLabel: "— add an application —",
       validate: x => uniqSorted((x || []).map(c => c.v.split("/")[0])).length > 1 ? "A recovery plan holds applications of one namespace: remove the others." : null,
       warn: x => { const off = (x || []).map(c => items.find(i => i.v === c.v)).filter(i => i && !i.atSource); return off.length ? `${off.map(i => i.l).join(", ")} ${off.length === 1 ? "does" : "do"} not run at ${path.from} now: a move along ${path.name} would not include ${off.length === 1 ? "it" : "them"}.` : null; },
@@ -987,7 +1407,7 @@ const rplanApps = v => (v.apps || []).map(c => ({name: c.v.split("/")[1], priori
 const newRPlanDialog = (paths, apps) => ({
   title: "New recovery plan", confirm: "Create plan", done: "RecoveryPlan created",
   desc: "An ordered set of applications moved together along one DR path: priorities run in sequence, applications of one priority in parallel. A plan action fans out one RecoveryAction per application.",
-  fields: v => [{k: "name", label: "Name", type: "text", required: true, placeholder: "tier-1", validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label." : null}]
+  fields: v => [{k: "name", label: "Name", type: "text", required: true, validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label." : null}]
     .concat(rplanFields(v, paths, apps)),
   run: v => {
     const nss = uniqSorted((v.apps || []).map(c => c.v.split("/")[0]));
@@ -1012,10 +1432,10 @@ const newScheduleDialog = (target, nsHint) => ({
   fields: v => [
     !target && {k: "n0", type: "note", label: "Open an application or recovery plan and use its Actions menu to schedule tests against it."},
     {k: "name", label: "Name", type: "text", required: true, def: target ? `${target.name}-weekly` : ""},
-    {k: "schedule", label: "Cron (UTC)", type: "text", required: true, def: "0 3 * * 0", placeholder: "0 3 * * 0"},
+    {k: "schedule", label: "Cron schedule", desc: "In UTC.", type: "text", required: true, def: "0 3 * * 0"},
     target && {k: "path", label: "DR path", type: "select", required: true, options: (target.kind === "rplan" ? [target.pathName] : target.paths.filter(p => p.actions.includes("Test")).map(p => p.name)).map(p => ({v: p, l: p}))},
     {k: "keepLast", label: "Keep last N test bubbles", type: "number", min: 1, def: 10},
-    {k: "keepFor", label: "Keep for", type: "text", placeholder: "720h"},
+    {k: "keepFor", label: "Keep for", type: "text", example: "720h"},
     {k: "suspend", label: "Create suspended", type: "checkbox", def: false}
   ].filter(Boolean),
   run: v => drhub.createSchedule({name: v.name, namespace: target ? target.namespace : nsHint, schedule: v.schedule.trim(), target, path: v.path, keepLast: v.keepLast, keepFor: v.keepFor && v.keepFor.trim(), suspend: v.suspend})
@@ -1097,16 +1517,16 @@ const editBindingsDialog = s => {
           const gnets = pairs.map(x => (vv.gnets || []).find(g => g.role === x.role) || proposedGuest(x.role, x.nad)).concat((vv.gnets || []).filter(g => !pairs.some(x => x.role === g.role)));
           return {lnets, gnets};
         }, done: "Accepted: the bindings below are filled in; review them before saving."},
-      {k: "bindOverride", label: "Bind by hand (roles, NADs and subnets as text)", type: "checkbox", def: false},
-      {k: "lnets", label: "Logical networks — role → NAD on this site", type: "rows", max: 8, addLabel: "Add network", def: lnetRows(s.spec || {}),
+      {k: "bindOverride", label: "Bind by hand", desc: "Roles, NADs and subnets as text.", type: "checkbox", def: false},
+      {k: "lnets", label: "Logical networks", desc: "Role to NAD on this site.", type: "rows", max: 8, addLabel: "Add network", def: lnetRows(s.spec || {}),
         cols: v.bindOverride ? LNET_COLS : [{k: "role", label: "Role", type: "select", blank: "— role —", options: roles.map(r => ({v: r, l: r})), flex: 0.8},
           {k: "nad", label: "NetworkAttachmentDefinition", type: "select", blank: "— NAD —", options: nadOpts, unknown: x => `${x} (not on ${s.name})`, flex: 2.4}],
         add: () => ({role: roles.find(r => !(v.lnets || []).some(l => l.role === r)) || "app", nad: ""}),
         rowError: (r, i, rows) => rows.filter(x => x.role === r.role).length > 1 ? `Role ${r.role} is bound twice.` : !v.bindOverride && r.nad && d && !nadOpts.some(o => o.v === r.nad) ? `${r.nad} is not a NAD of ${s.name}.` : null,
         rowsBlock: true},
-      {k: "gnets", label: "Guest networks — the subnet of each role here", type: "rows", max: 8, addLabel: "Add subnet", def: gnetRows(s.spec || {}),
+      {k: "gnets", label: "Guest networks", desc: "The subnet of each role here.", type: "rows", max: 8, addLabel: "Add subnet", def: gnetRows(s.spec || {}),
         cols: v.bindOverride ? gnetCols(servers) : [{k: "role", label: "Role", type: "select", blank: "— role —", options: (v.lnets || []).map(l => ({v: l.role, l: l.role})), flex: 0.7},
-          {k: "cidr", label: "Guest subnet", placeholder: "proposed from the NAD", flex: 1.3}, {k: "reservedHostIDs", label: "Reserved host ids", placeholder: "1, 2", flex: 0.9},
+          {k: "cidr", label: "Guest subnet", flex: 1.3}, {k: "reservedHostIDs", label: "Reserved host ids", note: "comma-separated host numbers, for example 1, 2.", flex: 0.9},
           servers.length > 0 && {k: "dhcpServerRef", label: "DHCP server", type: "select", blank: `site default (${siteDefault || "none"})`,
             options: servers.filter(x => !(servers.length === 1 && x.name === siteDefault)).map(x => ({v: x.name, l: x.name})),
             unknown: x => `${x} (not registered)`, flex: 1.1}].filter(Boolean),
@@ -1168,7 +1588,7 @@ const editBindingsDialog = s => {
       !servers.length && !unregistered(cur) && {k: "nNoSrv", type: "note", icon: "alert",
         label: found.length ? `No DHCP server registered for ${s.name}: "Register and use" one of the servers found above.` : `No DHCP server registered for ${s.name}, and none found on its networks: register one under Disaster recovery → DHCP servers.`},
       servers.length > 0 && !showDefault && !unregistered(cur) && {k: "nOne", type: "note", icon: "check", label: `Guest networks without their own server use ${siteDefault}, the site's DHCP server.`},
-      (servers.length > 0 || unregistered(cur)) && (showDefault || unregistered(cur)) && {k: "dhcp", label: "DHCP server of the site (default for every guest network)", type: "select", def: dhcpDef || onlyOne,
+      (servers.length > 0 || unregistered(cur)) && (showDefault || unregistered(cur)) && {k: "dhcp", label: "DHCP server", desc: "The site's default for every guest network.", type: "select", def: dhcpDef || onlyOne,
         hint: "A role's own DHCP server wins over this default. Registering a server does not use it: select it here or for a role.",
         options: [{v: "", l: "— none —"}].concat(servers.map(x => ({v: x.name, l: `${x.name} (${x.target || x.type})`})), unregistered(cur) ? [{v: cur, l: `${cur} (not registered)`}] : []),
         validate: x => unregistered(x) ? `DHCP server ${x} is not registered for ${s.name}.` : null}
@@ -1185,17 +1605,17 @@ const newDHCPServerDialog = (sites, profiles) => ({
   title: "Register a DHCP server", confirm: "Create", done: "DHCPServer created",
   desc: "A DHCP server of one site that guest addresses are reserved on. dr-hub never talks to it: it renders the reservations (<mac>,<ip>,<vm>) into the server's ConfigMap on the site, and dnsmasq reads them from its --dhcp-hostsdir. A SiteProfile's guestNetworks[role].dhcpServerRef (or spec.dhcpServerRef) names it.",
   fields: [
-    {k: "site", label: "Site (managed cluster)", type: "select", required: true, options: sites.map(s => ({v: s, l: s})), empty: "No site profile reported yet."},
+    {k: "site", label: "Site", desc: "A managed cluster.", type: "select", required: true, options: sites.map(s => ({v: s, l: s})), empty: "No site profile reported yet."},
     // named after the site unless changed: a typed name let a typo through
     // (sita-a for site-a; UI walkthrough #12)
-    {k: "name", label: "Name", type: "text", required: true, placeholder: "dhcp-site-a",
+    {k: "name", label: "Name", type: "text", required: true,
       sync: (x, vv) => vv.site && (!x || /^dhcp-/.test(x)) && x !== dns63(`dhcp-${vv.site}`) ? dns63(`dhcp-${vv.site}`) : undefined,
       validate: x => x && !DNS_LABEL_RE.test(x.trim()) ? "A DHCP server's name is a DNS label: lower-case letters, digits and \"-\"." : null,
       hint: (x, vv) => vv && vv.site && x && !x.includes(vv.site) ? `The name does not mention ${vv.site}; site profiles and paths refer to it by name.` : null},
     {k: "type", label: "Type", type: "select", options: [{v: "dnsmasq", l: "dnsmasq — reservations ConfigMap mounted as --dhcp-hostsdir"}]},
-    {k: "namespace", label: "ConfigMap namespace (on the site)", type: "text", required: true, placeholder: "dhcp"},
-    {k: "configMap", label: "ConfigMap name", type: "text", required: true, placeholder: "sitemap-hosts"},
-    {k: "bind", label: "Bind it as the site's DHCP server (the site profile's default and every guest network without one)", type: "checkbox", def: true},
+    {k: "namespace", label: "ConfigMap namespace", desc: "On the site.", type: "text", required: true},
+    {k: "configMap", label: "ConfigMap name", type: "text", required: true},
+    {k: "bind", label: "Bind as the site's DHCP server", desc: "The site profile's default, and every guest network without one.", type: "checkbox", def: true},
     {k: "n1", type: "note", label: "Guests need a pinned MAC and an address inside the role's guest subnet to get a reservation; the subnets are the site profile's bindings."}
   ],
   run: v => drhub.createDHCPServer({name: v.name.trim(), site: v.site, namespace: v.namespace.trim(), configMap: v.configMap.trim()}).then(r => {
@@ -1212,13 +1632,13 @@ const newDHCPServerDialog = (sites, profiles) => ({
 // carries the request there through OCM. The console writes the request, the
 // sizing and the approval, and reads back the projected draft and cluster.
 const sizingFields = z => [
-  {k: "name", label: "Storage cluster name", type: "text", def: (z && z.name) || "", placeholder: "sb-site-a"},
-  {k: "vcpuCount", label: "vCPUs per storage node", type: "number", def: z && z.vcpuCount != null ? z.vcpuCount : "", min: 1, placeholder: "8"},
-  {k: "minHugePagesSize", label: "Hugepages per storage node", type: "text", def: (z && z.minHugePagesSize) || "", placeholder: "8G"},
-  {k: "maxSubsystemCount", label: "NVMe-oF subsystems per node", type: "number", def: z && z.maxSubsystemCount != null ? z.maxSubsystemCount : "", min: 1, placeholder: "30"},
-  {k: "dataChunks", label: "Erasure coding: data chunks", type: "number", def: z && z.stripe && z.stripe.dataChunks != null ? z.stripe.dataChunks : "", min: 1, placeholder: "1"},
-  {k: "parityChunks", label: "Erasure coding: parity chunks", type: "number", def: z && z.stripe && z.stripe.parityChunks != null ? z.stripe.parityChunks : "", min: 0, placeholder: "1"},
-  {k: "enableDriveFormat", label: "Format the devices it takes (data on them is lost)", type: "checkbox", def: !!(z && z.enableDriveFormat)}
+  {k: "name", label: "Storage cluster name", type: "text", def: (z && z.name) || ""},
+  {k: "vcpuCount", label: "vCPUs per storage node", type: "number", def: z && z.vcpuCount != null ? z.vcpuCount : "", min: 1},
+  {k: "minHugePagesSize", label: "Hugepages per storage node", type: "text", def: (z && z.minHugePagesSize) || "", example: "8G"},
+  {k: "maxSubsystemCount", label: "NVMe-oF subsystems per node", type: "number", def: z && z.maxSubsystemCount != null ? z.maxSubsystemCount : "", min: 1},
+  {k: "dataChunks", label: "Erasure coding: data chunks", type: "number", def: z && z.stripe && z.stripe.dataChunks != null ? z.stripe.dataChunks : "", min: 1},
+  {k: "parityChunks", label: "Erasure coding: parity chunks", type: "number", def: z && z.stripe && z.stripe.parityChunks != null ? z.stripe.parityChunks : "", min: 0},
+  {k: "enableDriveFormat", label: "Format the devices it takes", desc: "Data on them is lost.", type: "checkbox", def: !!(z && z.enableDriveFormat)}
 ];
 const num = v => v === "" || v == null ? null : Number(v);
 const sizingOf = v => {
@@ -1236,10 +1656,10 @@ const deploySiteDialog = (sites, taken) => ({
   title: "Deploy storage on a managed site", confirm: "Discover", done: "StorageSiteDeployment created — discovery requested on the site",
   desc: "The operator on this hub runs a discovery on the site through Open Cluster Management and writes a draft deployment document there. You review the draft here, with the sizing below applied, and approve it; nothing is configured on any node before the approval.",
   fields: [
-    {k: "site", label: "Site (managed cluster)", type: "select", required: true, options: sites.filter(s => !taken.includes(s)).map(s => ({v: s, l: s})), empty: "Every managed cluster has a storage deployment already, or none has joined the hub."},
+    {k: "site", label: "Site", desc: "A managed cluster.", type: "select", required: true, options: sites.filter(s => !taken.includes(s)).map(s => ({v: s, l: s})), empty: "Every managed cluster has a storage deployment already, or none has joined the hub."},
     {k: "namespace", label: "Namespace of the request on the hub", type: "text", required: true, def: (window.SB_CONFIG || {}).namespace || "simplyblock"},
-    {k: "enableControlPlaneNodes", label: "Include control-plane nodes in the discovery (every node of a small site is one)", type: "checkbox", def: true},
-    {k: "workers", label: "Limit to these nodes (comma-separated; empty = every node)", type: "text", placeholder: ""},
+    {k: "enableControlPlaneNodes", label: "Include control-plane nodes", desc: "Every node of a small site is one.", type: "checkbox", def: true},
+    {k: "workers", label: "Limit to these nodes", desc: "Comma-separated. Empty means every node.", type: "text"},
     ...sizingFields(null),
     {k: "n1", type: "note", label: "Approval is one-way and reboots the site's storage nodes to set hugepages and core isolation."}
   ],
@@ -2173,10 +2593,11 @@ function DrHubHome({nav}) {
         <div className="dsub">Plans declare sites and replication; DR paths declare directions; applications are protected along them. Every screen is a CR on the hub, every write a CR write with your RBAC.</div>
       </div>
         <div style={{display: "flex", gap: 8, flexWrap: "wrap"}}>
+          {gate(mayApp, <button className="btn primary" onClick={() => nav.quickProtect()}><Icon n="shield" s={12} />Quick protect</button>, acc.why("create", "drhub", {kind: "papp", namespace: DR_NS()}))}
           {gate(mayApp, <button className="btn" onClick={() => window.__ui.dialog(protectAppDialogDR(ps, c), {kind: "papp", id: "new"})}><Icon n="shield" s={12} />Protect application</button>, acc.why("create", "drhub", {kind: "papp", namespace: DR_NS()}))}
           {gate(mayPath, <button className="btn" onClick={() => window.__ui.dialog(newPathDialog(ps), {kind: "drpath", id: "new"})}><Icon n="swap" s={12} />Declare path</button>, acc.why("create", "drhub", {kind: "drpath"}))}
           {gate(mayPath, <button className="btn proposepaths" onClick={() => window.__ui.dialog(proposePathsDialog(ps), {kind: "drpath", id: "new"})}><Icon n="swap" s={12} />Propose paths</button>, acc.why("create", "drhub", {kind: "drpath"}))}
-          {gate(mayPlan, <button className="btn primary" onClick={() => window.__ui.dialog(newPlanDialog(), {kind: "pplan", id: "new"})}><Icon n="plus" s={12} />New plan</button>, acc.why("create", "drhub", {kind: "pplan"}))}
+          {gate(mayPlan, <button className="btn" onClick={() => window.__ui.dialog(newPlanDialog(), {kind: "pplan", id: "new"})}><Icon n="plus" s={12} />New plan</button>, acc.why("create", "drhub", {kind: "pplan"}))}
         </div></div>
       {err && <div className="banner"><Icon n="alert" s={15} /><span><b>Cannot read the DR hub.</b> {err.message}{err.status === 404 ? " — the dr.simplyblock.io CRDs are not installed on this cluster." : err.status === 403 ? " — the console's identity lacks list on dr.simplyblock.io; bind dr-viewer or a wider role." : ""}</span></div>}
       {c && c.counts.agents > 0 && c.counts.agentsAvailable < c.counts.agents && <div className="banner"><Icon n="alert" s={15} /><span><b>{c.counts.agents - c.counts.agentsAvailable} site{c.counts.agents - c.counts.agentsAvailable === 1 ? "" : "s"} without dr-agent.</b> {c.agents.filter(a => !a.available).map(a => a.cluster).join(", ")} — hooks, probes, tests and zone moves cannot run there.</span></div>}
@@ -2245,7 +2666,7 @@ function DrHubHome({nav}) {
 
 // shared with discover.jsx (AI-assisted discovery)
 Object.assign(window, {DrTable: Table, DrMono: Mono, DrCheckTable: CheckTable, DrConditions: Conditions, VerdictBadge});
-Object.assign(window, {DrHubHome, DRConfigView, PPlanTile, DRPathTile, PAppTile, RPlanTile, RActionTile, TBubbleTile, TSchedTile, RestoreTile, SiteProfileTile, DHCPServerTile, SiteDeployTile, SiteDeployDetail, deploySiteDialog,
+Object.assign(window, {QuickProtectPage, DrHubHome, DRConfigView, PPlanTile, DRPathTile, PAppTile, RPlanTile, RActionTile, TBubbleTile, TSchedTile, RestoreTile, SiteProfileTile, DHCPServerTile, SiteDeployTile, SiteDeployDetail, deploySiteDialog,
   PPlanDetail, DRPathDetail, PAppDetail, RPlanDetail, RActionDetail, TBubbleDetail, TSchedDetail, RestoreDetail, SiteProfileDetail, DHCPServerDetail, MappingPanel,
-  runActionDialog, runTestDialog, restoreDialog, newPPlanDialog: newPlanDialog, newPathDialog, proposePathsDialog, protectAppDialogDR, newRPlanDialog, editRPlanDialog, editTiersDialog, editPlanS3Dialog, newScheduleDialog, newDHCPServerDialog, ACTION_KIND_META, KIND_LABEL_DR,
+  runActionDialog, runTestDialog, restoreDialog, newPPlanDialog: newPlanDialog, newPathDialog, proposePathsDialog, protectAppDialogDR, quickSetupDialog, quickAppDialog, ProtectProgress, newRPlanDialog, editRPlanDialog, editTiersDialog, editPlanS3Dialog, newScheduleDialog, newDHCPServerDialog, ACTION_KIND_META, KIND_LABEL_DR,
   editPlanS3Dialog, editTiersDialog, editBindingsDialog, sitesSpec, sitesError, overrideError, missingServers});

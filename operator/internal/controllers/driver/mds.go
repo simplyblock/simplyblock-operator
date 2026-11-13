@@ -49,7 +49,7 @@ const KVMCapableValue = "true"
 
 // MDSClusterLabel carries the storage cluster's full ID on the metadata server
 // pod and its StatefulSet. The name only carries a prefix of it.
-const MDSClusterLabel = "storage.simplyblock.io/cluster-id"
+const MDSClusterLabel = utils.LabelMDSClusterID
 
 // MDSTemplateHashAnnotation records MDSTemplateHash on the metadata server
 // StatefulSet, so an operator release can tell whether the pod template is the
@@ -341,7 +341,7 @@ func MDSObjects(
 			hostPathVolume("kvm", "/dev/kvm", ptr.To(corev1.HostPathCharDev)),
 			hostPathVolume("tun", "/dev/net/tun", ptr.To(corev1.HostPathCharDev)),
 			configMapVolume("csi-config", n.configMap, false),
-			secretVolume("csi-secret", n.secretV2),
+			credentialsVolume(n.secretV2),
 		},
 		linkVolumes(),
 	)

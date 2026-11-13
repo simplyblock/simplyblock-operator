@@ -101,6 +101,17 @@ func BuildStorageNodeDaemonSet(
 		}},
 		{Name: "CPU_TOPOLOGY_ENABLED", Value: ptr.StringOrDefault(wl.EnableCpuTopology, "false")},
 	}
+	// The agent is in the pod network, where its interfaces are not the host's, so
+	// the control plane takes the worker's address from here.
+	mainEnv = append(mainEnv,
+		corev1.EnvVar{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"},
+		}},
+		// The node-preparation job calls the agent, which is not at the worker's
+		// address.
+		corev1.EnvVar{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
+		}})
 	if wl.NodeProvisioningBudget != nil {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "MAX_PARALLEL_NODE_ADDS", Value: fmt.Sprintf("%d", *wl.NodeProvisioningBudget)})
 	}
@@ -247,12 +258,12 @@ func BuildStorageNodeDaemonSet(
 	}
 
 	if tlsMutualEnabled {
-		// kubelet does not present a client certificate, so an HTTPS probe
-		// would be rejected by the snode API. Fall back to a TCP check.
+		// kubelet cannot present a client certificate, so an HTTPS probe would
+		// be rejected by the snode API. Run the check in the container
+		// instead, where the agent's own certificate is mounted alongside it.
+		readinessProbe.TimeoutSeconds = 5
 		readinessProbe.ProbeHandler = corev1.ProbeHandler{
-			TCPSocket: &corev1.TCPSocketAction{
-				Port: intstr.FromInt(5000),
-			},
+			Exec: &corev1.ExecAction{Command: []string{"python3", "-c", storageNodeAgentTLSAnswerCheck}},
 		}
 	} else if tlsEnabled {
 		readinessProbe.HTTPGet.Scheme = corev1.URISchemeHTTPS
@@ -306,8 +317,11 @@ func BuildStorageNodeDaemonSet(
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "simplyblock-storage-node-sa",
-					HostNetwork:        true,
-					Tolerations:        storageNodeAgentTolerations(sn, wl),
+					// Off the host network, and in its PID namespace: the agent reads
+					// the host's interfaces and opens its connections by entering
+					// PID 1's network namespace.
+					HostPID:     true,
+					Tolerations: storageNodeAgentTolerations(sn, wl),
 					NodeSelector: map[string]string{
 						kube.LabelStorageNodeSet: sn.Name,
 					},
@@ -360,6 +374,14 @@ func BuildStorageNodeDaemonSet(
 							Name:            "s-node-api-container",
 							Image:           image,
 							ImagePullPolicy: imagePullPolicy,
+							// Published on the worker's port 5000, where a control plane on
+							// another cluster dials it (Workload.NodeAddress).
+							Ports: []corev1.ContainerPort{{
+								Name:          "node-api",
+								ContainerPort: 5000,
+								HostPort:      5000,
+								Protocol:      corev1.ProtocolTCP,
+							}},
 							// The entry is sourced and one variable is exported
 							// out of it, because sourcing alone sets a shell
 							// variable and exec only inherits what is exported.
@@ -391,21 +413,22 @@ exec python3 simplyblock_web/node_webapp.py storage_node_k8s`,
 }
 
 // storageNodeAgentTLSAnswerCheck exits 0 when the node agent on port 5000
-// answers a TLS ClientHello within three seconds. A TLS alert counts as an
-// answer: under mutual TLS the agent rejects this certificate-less client,
-// and rejecting it proves its accept loop is running. A timeout or a refused
-// connection exits non-zero.
+// completes a full, mutually authenticated TLS handshake within three
+// seconds. It runs inside the agent's own container, where the agent's
+// serving certificate is mounted at /etc/simplyblock/tls alongside the CA
+// that issued it, so the check can present that certificate as its client
+// identity and the agent's CA check accepts it. A timeout, a refused
+// connection, or a certificate failure all exit non-zero, since none of them
+// is distinguishable from the agent genuinely being unhealthy once the check
+// authenticates both ends instead of merely eliciting a rejection.
 const storageNodeAgentTLSAnswerCheck = `import socket, ssl
 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
+ctx.verify_mode = ssl.CERT_REQUIRED
+ctx.load_verify_locations("/etc/simplyblock/tls/ca.crt")
+ctx.load_cert_chain("/etc/simplyblock/tls/tls.crt", "/etc/simplyblock/tls/tls.key")
 sock = socket.create_connection(("127.0.0.1", 5000), timeout=3)
-try:
-    ctx.wrap_socket(sock).close()
-except TimeoutError:
-    raise
-except ssl.SSLError:
-    pass
+ctx.wrap_socket(sock).close()
 `
 
 // buildStorageNodeAgentLivenessProbe returns the probe that restarts a node
@@ -421,7 +444,8 @@ except ssl.SSLError:
 //
 // Without mutual TLS the kubelet asks the readiness endpoint over HTTP(S).
 // With it the kubelet's request is refused for lacking a client certificate,
-// so the check runs inside the container and settles for any TLS answer.
+// so the check runs inside the container instead, presenting the agent's own
+// certificate to complete a real handshake rather than provoke a rejection.
 func buildStorageNodeAgentLivenessProbe(httpGet *corev1.HTTPGetAction, tlsMutualEnabled bool) *corev1.Probe {
 	probe := &corev1.Probe{
 		InitialDelaySeconds: 30,
@@ -482,8 +506,16 @@ func buildStorageNodeSetTLSVolume(tlsProvider, secretName string) corev1.Volume 
 	}
 }
 
-func BuildStorageNodeSetServiceAccount(namespace string) *corev1.ServiceAccount {
-	return &corev1.ServiceAccount{
+// EKSRoleARNAnnotation is the key Amazon EKS's pod-identity webhook reads on a
+// ServiceAccount, injecting AWS_ROLE_ARN, AWS_WEB_IDENTITY_TOKEN_FILE, and the
+// projected token volume into every pod that runs as the account it is on.
+const EKSRoleARNAnnotation = "eks.amazonaws.com/role-arn"
+
+// BuildStorageNodeSetServiceAccount is the account the storage-node pods run
+// as. eksRoleARN, when set, is the IAM role they assume on Amazon EKS; empty
+// leaves the account with no such annotation.
+func BuildStorageNodeSetServiceAccount(namespace, eksRoleARN string) *corev1.ServiceAccount {
+	sa := &corev1.ServiceAccount{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "ServiceAccount",
 			APIVersion: "v1",
@@ -493,6 +525,10 @@ func BuildStorageNodeSetServiceAccount(namespace string) *corev1.ServiceAccount 
 			Namespace: namespace,
 		},
 	}
+	if eksRoleARN != "" {
+		sa.Annotations = map[string]string{EKSRoleARNAnnotation: eksRoleARN}
+	}
+	return sa
 }
 
 func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
@@ -501,6 +537,14 @@ func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 			APIGroups: []string{""},
 			Resources: []string{"pods", "pods/exec"},
 			Verbs:     []string{"list", "get", "create", "delete", "watch"},
+		},
+		{
+			// The Service in front of an SPDK pod on the pod network: created
+			// with the pod, its ports set as the node's are allotted, deleted
+			// with the node.
+			APIGroups: []string{""},
+			Resources: []string{"services"},
+			Verbs:     []string{"get", "create", "update", "delete"},
 		},
 		{
 			APIGroups: []string{"apps"},
@@ -544,7 +588,7 @@ func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 // the cluster control-plane uses to reach a storage-node-api pod backing the
 // given worker node, in the Service the cluster's workload names name.
 func StorageNodeSetAPIAddress(workerNode, namespace string, names kube.WorkloadNames) string {
-	return fmt.Sprintf("%s.%s:5000", names.Hostname(workerNode), ServiceFQDN(names.NodeAPIService, namespace))
+	return fmt.Sprintf("%s.%s:5000", names.Hostname(workerNode), ServiceDNSName(names.NodeAPIService, namespace))
 }
 
 // BuildStorageNodeService is the headless Service the storage-node API pods'

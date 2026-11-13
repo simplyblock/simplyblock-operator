@@ -109,7 +109,7 @@ constructing one directly.
 | DEV-17 | An iSCSI LUN beside virtio disks, block run, no allow list  | Only the virtio disks. A LUN is storage across a network and is never taken by default      | `CM`    |
 | DEV-18 | The same worker with the allow list naming the LUN          | Both disks. Naming it is the decision a run cannot make for a fleet                         | `CM`    |
 | DEV-19 | An iSCSI LUN on an NVMe run                                 | Refused for being the other class, before the iSCSI rule is reached                         | `CM`    |
-| DEV-20 | 4 equal virtio disks, block run, forceJournalDevice unset   | Refused: nothing says which disk carries the journal, and the class has no partitioned one  | `CM`    |
+| DEV-20 | 4 equal virtio disks, block run, forceJournalDevice unset   | Drafted with the journal split: enableJournalDevice unset, every disk carries data | `CM`    |
 | DEV-21 | Blank, formatted, and unread partitions, block run          | Regression: the blank one only. `TestPlanProposesABlankPartitionInABlockRun`                | `GO`    |
 
 ## 3. NUMA topology
@@ -379,7 +379,7 @@ The question each unratified rung is really asking:
 | NET-55 | The node's `InternalIP` on one of two equal 25G NICs at MTU 9000                             | The one holding it named for management and the other for data                                                                                                                                 | `CM`    |
 | NET-56 | No node address, and the only addressed interface a 25G NIC at MTU 9000                      | The same as NET-54, reached by the ranking instead of the address                                                                                                                              | `CM`    |
 | NET-57 | Two workers with identical disks, only one with a 25G NIC at MTU 9000                        | One group, no data interface: one worker of two is no majority for a data network. See §14, gap G-29                                                                                           | `CM`    |
-| NET-58 | Four workers, three managing on 10.10.10.0/24 and the fourth on 10.10.20.0/24                | The fourth refused: management runs on the network most workers share                                                                                                                          | `CM`    |
+| NET-58 | Four workers, three managing on 10.10.10.0/24 and the fourth on 10.10.20.0/24                | The fourth refused: with no node address to go by, management runs on the network most workers share                                                                                           | `CM`    |
 | NET-59 | Two workers managing on 10.10.10.0/24 and 10.10.20.0/24                                      | **Contested.** The second refused: a tie goes to the lower network, which is determinism rather than a reading                                                                                 | `CM`    |
 | NET-60 | Three workers whose management addresses are each a /32, as GCP assigns them                 | All three kept: a host route names no network to compare                                                                                                                                       | `CM`    |
 | NET-61 | Four workers with a 25G data NIC, three on 10.20.0.0/24 and the fourth on 10.21.0.0/24       | The fourth refused: the data networks are the ones most workers share                                                                                                                          | `CM`    |
@@ -392,6 +392,14 @@ The question each unratified rung is really asking:
 | NET-68 | Two workers, one with a data NIC holding a /32 and the other with no data NIC                | No data interface on either: data runs on management everywhere unless every worker names a data interface                                                                                     | `CM`    |
 | NET-69 | Two workers whose data NICs hold 10.20.0.0/24 and 10.21.0.0/24 first and 10.30.0.0/24 second | No data interface on either: the control plane listens on the first IPv4 address, so only that one is compared                                                                                 | `CM`    |
 | NET-70 | A data NIC whose first IPv4 address is link-local, a routable one second                     | No data interface: the control plane would listen on the link-local address. The 25G still named for management, whose ladder reads every address                                              | `CM`    |
+| NET-71 | A run naming the definition `storage-mgmt`, a macvlan on `eth0`, which every worker has      | `networkAttachment.management` names it in every group, and no group names an interface: data flows through the management attachment                                                          | `CM`    |
+| NET-72 | A run naming `storage-mgmt` on `eth0` and `storage-data`, an ipvlan on `eth1`                | `networkAttachment` names both in every group, and no group names an interface                                                                                                                 | `CM`    |
+| NET-73 | A run naming `storage-mgmt` on a cluster that does not serve NetworkAttachmentDefinitions    | Host networking, as without the field, and a `NetworkAttachmentsUnavailable` Warning saying the run asked for an attachment the cluster cannot provide                                         | `CM`    |
+| NET-74 | A run naming `storage-nope` in a namespace holding `storage-data` and `storage-mgmt`         | Inspecting fails the run before probing. At writing, every worker is refused by the network attachment rule, naming the missing and the held definitions                                       | `CM`    |
+| NET-75 | Two workers and a run naming `storage-data` on `eth1`, with one worker having no `eth1`      | The worker without `eth1` refused by the network attachment rule, naming the definition and the interface. The other drafted                                                                   | `CM`    |
+| NET-76 | Three workers the cluster reaches on 10.248.192.0/23, 10.248.194.0/23, and 10.248.196.0/23   | All three kept: each is managed on its node address, so the subnets are routed, as one for each availability zone is                                                                           | `CM`    |
+| NET-77 | Four workers the cluster reaches, three on 10.10.10.0/24 and the fourth on 10.10.20.0/24     | All four kept: the minority is managed on its node address as well, and a majority decides nothing the cluster already settled                                                                 | `CM`    |
+| NET-78 | Three workers reached on three subnets and a fourth, with no node address, on 172.16.0.0/24  | The fourth refused, naming the three networks the cluster reaches the others on. Its interface is a ranking's choice and is on none of them                                                    | `CM`    |
 
 ## 8. Node roles and node sets
 
@@ -442,6 +450,7 @@ The question each unratified rung is really asking:
 | HELD-09 | 16 loopback devices and 4 free disks                               | The 4 disks drafted. The loopbacks absent from `Explain` and present in `RefusalLines`                                             | `CM`    |
 | HELD-10 | Half the controllers idle and half in use, no block devices        | Only the idle half is offered                                                                                                      | `CM`    |
 | HELD-11 | Userspace controllers whose process table the probe could not read | Refused, and the message says whether anything is driving them could not be established. An unchecked controller is not a free one | `CM`    |
+| HELD-12 | Every local SSD a member of the RAID array GKE assembled           | The worker refused, each disk a RAID member naming `md0` and its level, and the message blames the pool's ephemeral-storage SSDs   | `CM`    |
 
 ## 11. Refusal cases
 

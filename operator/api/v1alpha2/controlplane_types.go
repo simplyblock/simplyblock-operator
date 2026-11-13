@@ -47,7 +47,7 @@ const (
 
 // ControlPlaneStep is one step of the installation path. There is one graph
 // rather than a MultiConfig, because an entity has no spec.action to key one on.
-// +kubebuilder:validation:Enum=ApplyingFoundationDB;AwaitingFoundationDB;BuildingIndices;ApplyingDatastore;ApplyingAPI;AwaitingAPI
+// +kubebuilder:validation:Enum=ApplyingFoundationDB;AwaitingFoundationDB;BuildingIndices;ApplyingDatastore;ApplyingAPI;AwaitingAPI;Installed
 type ControlPlaneStep string
 
 const (
@@ -75,6 +75,9 @@ const (
 	// ControlPlaneStepAwaitingAPI holds until the readiness probe succeeds,
 	// which is what ends the installation.
 	ControlPlaneStepAwaitingAPI ControlPlaneStep = "AwaitingAPI"
+	// ControlPlaneStepInstalled is the terminal step: the installation is
+	// complete, and the phase reports the control plane's health from here on.
+	ControlPlaneStepInstalled ControlPlaneStep = "Installed"
 )
 
 // FoundationDBSpec is the sizing of the FoundationDB the operator installs.
@@ -283,6 +286,112 @@ type LocalControlPlane struct {
 	// monitoring off.
 	// +optional
 	Observability *ControlPlaneObservability `json:"observability,omitempty"`
+
+	// Prerequisites says which cluster add-ons the operator installs when the
+	// cluster lacks them. One left false is checked for and never installed.
+	// +kubebuilder:default={}
+	// +optional
+	Prerequisites ControlPlanePrerequisites `json:"prerequisites,omitempty"`
+
+	// EKSRoleARN is the IAM role this control plane's pods and every
+	// StorageCluster's storage-node pods in this namespace assume, through a
+	// service account annotated with it (eks.amazonaws.com/role-arn). Amazon
+	// EKS's pod-identity webhook reads that annotation and injects the
+	// credentials the AWS SDK's default provider chain picks up from there,
+	// which is what lets a StorageCluster's backup.credentials name
+	// ProviderChain on EKS.
+	//
+	// Left unset, the service accounts this operator creates carry no such
+	// annotation, which is correct off Amazon EKS and on an EKS cluster whose
+	// pods authenticate another way.
+	// +kubebuilder:validation:Pattern=`^arn:aws[a-zA-Z0-9-]*:iam::[0-9]{12}:role/.+$`
+	// +optional
+	EKSRoleARN string `json:"eksRoleARN,omitempty"`
+}
+
+// ControlPlanePrerequisites lists the add-ons a control plane needs before
+// installing. Each is detected first and installed only when it is missing and
+// its flag is on; with the flag off, a missing add-on holds the install.
+// Installed add-ons are cluster-wide and outlive the ControlPlane.
+type ControlPlanePrerequisites struct {
+	// InstallFoundationDBCRDs applies the apps.foundationdb.org CRDs when
+	// apps.foundationdb.org/v1beta2 is not served. Unset is on.
+	// +kubebuilder:default=true
+	// +optional
+	InstallFoundationDBCRDs *bool `json:"installFoundationDBCRDs,omitempty"`
+
+	// InstallCertManager installs cert-manager when cert-manager.io/v1 is not
+	// served. It is consulted only when the control plane serves TLS issued by
+	// cert-manager. Unset is on.
+	// +kubebuilder:default=true
+	// +optional
+	InstallCertManager *bool `json:"installCertManager,omitempty"`
+
+	// InstallLocalPathProvisioner installs local-path-provisioner when no
+	// StorageClass uses rancher.io/local-path. Its class is made the default
+	// only when the cluster has no default class. Unset is on.
+	// +kubebuilder:default=true
+	// +optional
+	InstallLocalPathProvisioner *bool `json:"installLocalPathProvisioner,omitempty"`
+
+	// InstallSnapshotController installs the CSI snapshot CRDs and
+	// snapshot-controller when snapshot.storage.k8s.io/v1 is not served. Unset
+	// is on.
+	// +kubebuilder:default=true
+	// +optional
+	InstallSnapshotController *bool `json:"installSnapshotController,omitempty"`
+
+	// InstallEBSCSIDriver installs the AWS EBS CSI driver on Amazon EKS when
+	// the cluster has no CSIDriver ebs.csi.aws.com, neither the EKS add-on nor
+	// a driver installed some other way. It is consulted only on EKS, and only
+	// while the control plane's volumes name no StorageClass. The node role, or
+	// the role in eksRoleARN, needs the AWS managed policy
+	// AmazonEBSCSIDriverPolicy. Unset is on.
+	// +kubebuilder:default=true
+	// +optional
+	InstallEBSCSIDriver *bool `json:"installEBSCSIDriver,omitempty"`
+
+	// InstallEBSStorageClass creates the gp3 StorageClass simplyblock-gp3 on
+	// Amazon EKS when no StorageClass of the EBS CSI driver provisions gp3
+	// volumes. An existing one, under any name, is used instead. The class is
+	// made the default only when the cluster has no default class. Unset is on.
+	// +kubebuilder:default=true
+	// +optional
+	InstallEBSStorageClass *bool `json:"installEBSStorageClass,omitempty"`
+}
+
+// on reads a defaulted-true flag, treating unset as true.
+func on(b *bool) bool { return b == nil || *b }
+
+// InstallsFoundationDBCRDs reports whether missing FoundationDB CRDs are installed.
+func (p ControlPlanePrerequisites) InstallsFoundationDBCRDs() bool {
+	return on(p.InstallFoundationDBCRDs)
+}
+
+// InstallsCertManager reports whether a missing cert-manager is installed.
+func (p ControlPlanePrerequisites) InstallsCertManager() bool { return on(p.InstallCertManager) }
+
+// InstallsLocalPathProvisioner reports whether a missing local-path-provisioner is installed.
+func (p ControlPlanePrerequisites) InstallsLocalPathProvisioner() bool {
+	return on(p.InstallLocalPathProvisioner)
+}
+
+// InstallsSnapshotController reports whether a missing snapshot controller is installed.
+func (p ControlPlanePrerequisites) InstallsSnapshotController() bool {
+	return on(p.InstallSnapshotController)
+}
+
+// InstallsEBSCSIDriver reports whether a missing EBS CSI driver is installed on EKS.
+func (p ControlPlanePrerequisites) InstallsEBSCSIDriver() bool { return on(p.InstallEBSCSIDriver) }
+
+// InstallsEBSStorageClass reports whether a missing gp3 StorageClass is created on EKS.
+func (p ControlPlanePrerequisites) InstallsEBSStorageClass() bool {
+	return on(p.InstallEBSStorageClass)
+}
+
+// NeedsCertManager reports whether this control plane's TLS is issued by cert-manager.
+func (l *LocalControlPlane) NeedsCertManager() bool {
+	return l.ServesTLS() && l.TLSProvider() == ControlPlaneTLSCertManager
 }
 
 // ControlPlaneObservability is whether the control plane provisions the
@@ -440,10 +549,10 @@ type ControlPlaneStatus struct {
 	// +optional
 	Phase ControlPlanePhase `json:"phase,omitempty"`
 
-	// Step is the position of the installation machine within Installing. The
-	// rule repeats the ControlPlaneStep enum because a marker cannot reach a
-	// field of the shared snapshot type.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ApplyingFoundationDB','AwaitingFoundationDB','BuildingIndices','ApplyingDatastore','ApplyingAPI','AwaitingAPI']",message="unknown step"
+	// Step is the position of the installation machine, and Installed once the
+	// installation is complete. The rule repeats the ControlPlaneStep enum
+	// because a marker cannot reach a field of the shared snapshot type.
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ApplyingFoundationDB','AwaitingFoundationDB','BuildingIndices','ApplyingDatastore','ApplyingAPI','AwaitingAPI','Installed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
@@ -457,6 +566,15 @@ type ControlPlaneStatus struct {
 	// Version is the version the management API reports.
 	// +optional
 	Version string `json:"version,omitempty"`
+
+	// StorageClassName is the StorageClass the operator chose for the control
+	// plane's volumes (FoundationDB, the object store, and Prometheus) when
+	// spec.source.local.foundationDB.storageClassName names none: on Amazon
+	// EKS, a gp3 class of the EBS CSI driver. It is chosen once, before the
+	// database is first applied, and never changed afterwards, because the
+	// volumes cannot move to another class.
+	// +optional
+	StorageClassName string `json:"storageClassName,omitempty"`
 
 	// LastChecked is when the readiness probe last ran.
 	// +optional

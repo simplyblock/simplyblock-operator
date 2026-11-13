@@ -17,6 +17,11 @@ metadata:
     app.kubernetes.io/name: simplyblock-operator
     app.kubernetes.io/managed-by: kustomize
 spec:
+  # Recreate: readiness waits for a webhook certificate only the leader writes, so a
+  # rolled pod never becomes ready. TODO: decouple readiness from that certificate,
+  # since Recreate leaves the webhooks down for the duration of an upgrade.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       control-plane: controller-manager
@@ -79,6 +84,28 @@ spec:
           value: controller:latest
         - name: SB_NODEPROBE_IMAGE
           value: controller:latest
+        # The NUMA device plugin the ControlPlane runs. Pinned by digest so a
+        # disconnected cluster can mirror it; `make bundle` re-resolves it.
+        - name: SB_NUMA_PLUGIN_IMAGE
+          value: quay.io/simplyblock-io/numa-resource-plugin@sha256:c45c5dfc2156422d5ad7ca0727ae67116bb9e4d67a9d44f41f7099c04c5c9a66
+        # The accounts below carry config/default's namePrefix. The management
+        # API trusts only the accounts it is told to, and the chart's operator
+        # account is built in, so a bundle install names its own.
+        - name: SB_NODEPROBE_SERVICE_ACCOUNT
+          value: simplyblock-operator-nodeprobe
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: SB_EXTRA_ADMIN_SERVICE_ACCOUNTS
+          value: system:serviceaccount:$(POD_NAMESPACE):simplyblock-operator-controller-manager
+        # The CA and client certificate the operator reaches the management API
+        # with. Optional, because the operator issues the Secret itself once a
+        # ControlPlane exists; kubelet fills the volume when it appears.
+        volumeMounts:
+        - name: tls
+          mountPath: /etc/simplyblock/tls
+          readOnly: true
         securityContext:
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
@@ -107,4 +134,9 @@ spec:
             cpu: 10m
             memory: 64Mi
       serviceAccountName: controller-manager
+      volumes:
+      - name: tls
+        secret:
+          secretName: simplyblock-operator-client-tls
+          optional: true
       terminationGracePeriodSeconds: 10

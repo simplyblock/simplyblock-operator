@@ -55,8 +55,9 @@ const finalizerStorageSiteDeployment = "storage.simplyblock.io/storagesitedeploy
 
 // hubDeployFieldManager is the field manager the work agent applies the
 // draft's sizing and approval with, so the discovery's own fields on the draft
-// are left to their owner.
-const hubDeployFieldManager = "hub-deploy"
+// are left to their owner. OCM admits a work's field manager only with the
+// prefix work-agent.
+const hubDeployFieldManager = "work-agent-hub-deploy"
 
 // storageSiteDeploymentRequeue is how long the reconcile waits before reading
 // the site's views again while the request is in progress.

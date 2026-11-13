@@ -127,10 +127,12 @@ func TestTheValuesFileIsTheOverridesOnly(t *testing.T) {
 	}
 }
 
-func TestTheFirstValueCarriesItsOwnCommentNotTheFilesHeader(t *testing.T) {
-	f := field(t, Fields(), "clusterDnsDomain")
-	if !strings.HasPrefix(f.Help, "The cluster's DNS domain") || strings.Contains(f.Help, "SPDX") || strings.Contains(f.Help, "Copyright") {
-		t.Errorf("clusterDnsDomain's help is %q", f.Help)
+// image, the file's first value, has no comment of its own, so its help is
+// empty rather than the license header above it.
+func TestTheFirstValueDoesNotCarryTheFilesHeader(t *testing.T) {
+	f := field(t, Fields(), "image")
+	if f.Help != "" {
+		t.Errorf("image's help is %q", f.Help)
 	}
 }
 
@@ -179,18 +181,18 @@ func fieldAt(fields []Field, segments []string) *Field {
 }
 
 func TestAKeyHoldingDotsIsOneSegment(t *testing.T) {
-	segments := []string{"prometheus", "server", "podAnnotations", "reloader.stakater.com/auto"}
+	segments := []string{"prometheus", "server", "extraArgs", "storage.tsdb.min-block-duration"}
 	f := fieldAt(Fields(), segments)
-	if f == nil || f.Key != "reloader.stakater.com/auto" {
+	if f == nil || f.Key != "storage.tsdb.min-block-duration" {
 		t.Fatalf("no field at %v: %+v", segments, f)
 	}
 
 	overrides := map[string]any{}
-	if err := SetYAML(overrides, segments, `"false"`); err != nil {
+	if err := SetYAML(overrides, segments, `"4h"`); err != nil {
 		t.Fatal(err)
 	}
-	annotations := overrides["prometheus"].(map[string]any)["server"].(map[string]any)["podAnnotations"].(map[string]any)
-	if annotations["reloader.stakater.com/auto"] != "false" {
+	args := overrides["prometheus"].(map[string]any)["server"].(map[string]any)["extraArgs"].(map[string]any)
+	if args["storage.tsdb.min-block-duration"] != "4h" {
 		t.Errorf("the value was set at %v", overrides)
 	}
 }

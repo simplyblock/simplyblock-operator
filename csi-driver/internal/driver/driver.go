@@ -39,15 +39,20 @@ import (
 
 	"github.com/simplyblock/atlas/conntrack"
 	"github.com/simplyblock/atlas/conntrack/conntrackrpc"
+	"github.com/simplyblock/atlas/inventory"
 	"github.com/simplyblock/atlas/link"
+	"github.com/simplyblock/atlas/netcheck"
+	"github.com/simplyblock/atlas/netcheck/netcheckrpc"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/storage"
 	"github.com/simplyblock/atlas/storage/storagerpc"
 
+	"github.com/simplyblock/csi-driver/internal/clusters"
 	"github.com/simplyblock/csi-driver/internal/config"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/csi-driver/internal/csi/controller"
 	csiaddonsidentityserver "github.com/simplyblock/csi-driver/internal/csi/csiaddons/identity"
+	"github.com/simplyblock/csi-driver/internal/csi/fence"
 	"github.com/simplyblock/csi-driver/internal/csi/identity"
 	"github.com/simplyblock/csi-driver/internal/csi/node"
 	"github.com/simplyblock/csi-driver/internal/csilink"
@@ -73,9 +78,10 @@ func Run(conf *config.Config) {
 			// csi.ControllerServiceCapability_RPC_LIST_VOLUMES,
 			csi.ControllerServiceCapability_RPC_VOLUME_CONDITION,
 		}
-		// A ReadWriteMany claim needs this advertised or it cannot bind. It is
-		// served by a pNFS export, and CreateVolume refuses it on any other
-		// fsType. The other multi-node modes are deliberately absent.
+		// A ReadWriteMany claim needs this advertised or it cannot bind. A
+		// filesystem one is served by a pNFS export, and CreateVolume refuses it
+		// on any other fsType. A raw-block one takes the block path. The other
+		// multi-node modes are deliberately absent.
 		volumeModes = []csi.VolumeCapability_AccessMode_Mode{
 			csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
 			csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
@@ -160,6 +166,20 @@ func Run(conf *config.Config) {
 		}
 	}
 
+	// The site link, on a controller plugin of a stretched cluster's member.
+	// Like the operator link it is independent of the CSI server.
+	if conf.SiteLinkEnabled && conf.IsControllerServer && kubeClient != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		csilink.StartSiteLink(ctx, kubeClient, csilink.SiteLinkConfig{
+			Address:        conf.SiteLinkAddress,
+			AgentNamespace: conf.SiteLinkNamespace,
+			TokenFile:      conf.SiteLinkTokenFile,
+			ID:             link.ControllerPeer(conf.PodName),
+			InstanceUID:    conf.PodUID,
+		})
+	}
+
 	// The csi-addons Identity and Replication services register alongside the
 	// CSI services on the same socket. Identity is always registered (it just
 	// answers capability probes); Replication only when this process serves
@@ -179,6 +199,13 @@ func Run(conf *config.Config) {
 		register = append(register, func(gs *grpc.Server) {
 			csiaddonsvolumegroup.RegisterControllerServer(gs, cs)
 		})
+		// The csi-addons NetworkFence service (design-stretched-sync-replication-
+		// ramen.md §10.2): Ramen fences a lost site of a stretched cluster
+		// through it before failing over.
+		fences := fence.New(func(clusterID string) (fence.Backend, error) {
+			return clusters.ReplicationClient(context.Background(), clusterID)
+		}, soleSyncCluster)
+		register = append(register, func(gs *grpc.Server) { fences.Register(gs) })
 	}
 
 	s := csicommon.NewNonBlockingGRPCServer()
@@ -224,14 +251,29 @@ func startLink(ctx context.Context, conf *config.Config) (*link.Agent, error) {
 		if err != nil {
 			return nil, fmt.Errorf("node flows: %w", err)
 		}
+		// The node answers the operator's host checks: the addresses of a NIC
+		// before a storage pod takes it, and whether a connection from the host
+		// to a storage listener succeeds. Both read the host's namespace, which
+		// is this process's.
+		checks, err := netcheckrpc.NewServer(
+			func(sel netcheck.Selector) (netcheck.Report, error) {
+				return netcheck.Interface(inventory.Config{}, sel)
+			},
+			netcheck.Connect,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("node host checks: %w", err)
+		}
 		// No export service: exports are assembled in the metadata server's
 		// guest, never on a node.
 		cfg.ID = link.NodePeer(conf.NodeID)
 		cfg.Register = func(r grpc.ServiceRegistrar) {
 			srv.Register(r)
 			flows.Register(r)
+			checks.Register(r)
 		}
 		cfg.Capabilities = append(storagerpc.Capabilities(), conntrackrpc.Capabilities()...)
+		cfg.Capabilities = append(cfg.Capabilities, netcheckrpc.Capabilities()...)
 
 	case conf.IsControllerServer:
 		if conf.PodName == "" {
@@ -339,4 +381,24 @@ func markBroken(g *guardian.Guardian) func(string) {
 		return nil
 	}
 	return g.MarkBrokenLvol
+}
+
+// soleSyncCluster is the cluster a fence naming none fences: the one
+// sync-replicated cluster in the driver's secret.
+func soleSyncCluster() (string, error) {
+	ids, err := clusters.List()
+	if err != nil {
+		return "", err
+	}
+	var sync []string
+	for _, id := range ids {
+		if _, ok, err := clusters.SyncSite(id); err == nil && ok {
+			sync = append(sync, id)
+		}
+	}
+	if len(sync) != 1 {
+		return "", fmt.Errorf(
+			"the secret has %d sync-replicated clusters; the fence must name one in parameter clusterID", len(sync))
+	}
+	return sync[0], nil
 }

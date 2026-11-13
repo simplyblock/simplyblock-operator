@@ -13,6 +13,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"k8s.io/client-go/rest"
 )
 
 // noEnv is the environment of a probe run by hand, with none of what the Job
@@ -163,5 +165,27 @@ func TestParseOptionsLetsAProbeRunByHandReadTheMachineItIsOn(t *testing.T) {
 	}
 	if opts.roots.HostRoot != "" {
 		t.Errorf("the host root defaults to %q, want the inventory's own default", opts.roots.HostRoot)
+	}
+}
+
+// The definitions are listed in the namespace the report goes to, which is the
+// one the probe's Role is granted in and the one the draft's storage nodes are
+// created in.
+func TestWithClusterReadsTheNetworkAttachmentsOfTheRunsNamespace(t *testing.T) {
+	opts := options{namespace: "simplyblock"}
+
+	opts, err := withCluster(opts, &rest.Config{Host: "https://cluster.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := opts.roots.Kubernetes.NetworkAttachments
+	if source.Dynamic == nil || source.Discovery == nil {
+		t.Errorf("the source is %+v, want a dynamic and a discovery client", source)
+	}
+	if source.Namespace != "simplyblock" {
+		t.Errorf("the definitions are listed in %q, want the run's namespace", source.Namespace)
+	}
+	if opts.roots.Kubernetes.Discovery != nil || len(opts.roots.Kubernetes.Nodes) > 0 {
+		t.Error("the probe asks for the environment, which the run concludes once from the API")
 	}
 }

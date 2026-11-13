@@ -224,3 +224,67 @@ func TestASingleNodeClusterIsCreatedWithoutHA(t *testing.T) {
 		}
 	}
 }
+
+// A stretched cluster is created with sync replication and names its creating
+// site the leader; the backend accepts both at create only. Any other cluster
+// sends neither key.
+func TestAStretchedClusterIsCreatedWithSyncReplicationAndItsLeaderSite(t *testing.T) {
+	for _, tc := range []struct {
+		params               CreateClusterParams
+		wantSync, wantLeader any
+	}{
+		{CreateClusterParams{SyncReplication: true, LeaderSite: "site-a"}, true, "site-a"},
+		{CreateClusterParams{}, nil, nil},
+	} {
+		var body map[string]any
+		c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			raw, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(raw, &body)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(clusterDTO))
+		})
+
+		tc.params.Name, tc.params.MaxSubsys, tc.params.SpdkVCPUCount = "prod", 20, 8
+		if _, err := c.CreateCluster(context.Background(), tc.params); err != nil {
+			t.Fatal(err)
+		}
+
+		if body["sync_replication"] != tc.wantSync || body["leader_site"] != tc.wantLeader {
+			t.Errorf("sync_replication = %v, leader_site = %v; want %v, %v",
+				body["sync_replication"], body["leader_site"], tc.wantSync, tc.wantLeader)
+		}
+	}
+}
+
+// A stretched cluster reports that it is sync-replicated, which site leads it,
+// and which site is out and how far its drain or fence got, which the sites'
+// operators read; a control plane that does not report them reads as none.
+func TestClientGetClusterReadsSyncReplicationAndTheLeaderSite(t *testing.T) {
+	for _, tc := range []struct {
+		body                 string
+		wantSync             bool
+		wantLeader, wantLost string
+		wantLostState        string
+	}{
+		{clusterDTO[:len(clusterDTO)-1] + `,"sync_replication":true,"leader_site":"site-a",` +
+			`"lost_site":"site-b","lost_site_state":"done"}`, true, "site-a", "site-b", "done"},
+		{clusterDTO, false, "", "", ""},
+	} {
+		c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tc.body))
+		})
+
+		got, err := c.GetCluster(context.Background(), testCluster)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.SyncReplication != tc.wantSync || got.LeaderSite != tc.wantLeader ||
+			got.LostSite != tc.wantLost || got.LostSiteState != tc.wantLostState {
+			t.Errorf("SyncReplication = %v, LeaderSite = %q, LostSite = %q, LostSiteState = %q; want %v, %q, %q, %q",
+				got.SyncReplication, got.LeaderSite, got.LostSite, got.LostSiteState,
+				tc.wantSync, tc.wantLeader, tc.wantLost, tc.wantLostState)
+		}
+	}
+}

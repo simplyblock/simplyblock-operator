@@ -40,7 +40,32 @@ func findConsumerNode(ctx context.Context, reader client.Reader, volumeID string
 	if pvcName == "" {
 		return "", nil
 	}
+	return findPVCConsumerNode(ctx, reader, pvcNamespace, pvcName)
+}
 
+// findSlotConsumerNode returns the node of the first Running pod that mounts
+// the slot's PVC. A PV's volume handle is immutable: once a volume has
+// migrated, the handle keeps naming the original volume while the slot
+// tracks the volume where it lives now, so a lookup by volume ID finds no
+// consumer, the preconnect is skipped and the cutover leaves the client
+// without a path to the target (A -> B -> A on the EKS bed 2026-10-26: IO
+// hung on both volumes moved back). The handle match by volumeID stays as
+// the fallback for slots without a PVC reference.
+func findSlotConsumerNode(
+	ctx context.Context, reader client.Reader, namespace, pvcName, volumeID string,
+) (string, error) {
+	if pvcName != "" {
+		node, err := findPVCConsumerNode(ctx, reader, namespace, pvcName)
+		if err != nil || node != "" {
+			return node, err
+		}
+	}
+	return findConsumerNode(ctx, reader, volumeID)
+}
+
+// findPVCConsumerNode returns the node of the first (by name) Running pod in
+// pvcNamespace that mounts pvcName, or "".
+func findPVCConsumerNode(ctx context.Context, reader client.Reader, pvcNamespace, pvcName string) (string, error) {
 	var podList corev1.PodList
 	if err := reader.List(ctx, &podList, client.InNamespace(pvcNamespace)); err != nil {
 		return "", fmt.Errorf("list pods in %s: %w", pvcNamespace, err)

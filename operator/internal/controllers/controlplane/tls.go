@@ -18,8 +18,6 @@
 package controlplane
 
 import (
-	"fmt"
-
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -278,12 +276,10 @@ func fdbPeerCertificate(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 		return nil
 	}
 
-	names := []any{
-		ComponentFDBCluster,
-		fmt.Sprintf("%s.%s", ComponentFDBCluster, cp.Namespace),
-		fmt.Sprintf("%s.%s.svc", ComponentFDBCluster, cp.Namespace),
-		utils.ServiceFQDN(ComponentFDBCluster, cp.Namespace),
-		"*." + utils.ServiceFQDN(ComponentFDBCluster, cp.Namespace),
+	certNames := utils.ServiceCertificateNames(ComponentFDBCluster, cp.Namespace)
+	names := make([]any, len(certNames))
+	for i, name := range certNames {
+		names[i] = name
 	}
 
 	certificate := &unstructured.Unstructured{Object: map[string]any{

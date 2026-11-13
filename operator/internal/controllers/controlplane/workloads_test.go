@@ -376,11 +376,10 @@ func TestTheExporterDoesNotRunTheControlPlanesImage(t *testing.T) {
 	}
 }
 
-// Every service container reaches the database through the cluster file, and
-// every pod that mounts it is annotated for restart when it changes. A
-// coordinator change rewrites that ConfigMap, and a pod holding a connection to
-// the old coordinator has to be restarted to notice.
-func TestEveryWorkloadThatReachesTheDatabaseIsRolledWhenItMoves(t *testing.T) {
+// Every service container reaches the database through the cluster file. The
+// stamp that rolls them when it changes is tested in clusterfile_test.go, and it
+// reaches only the workloads this test finds mounting the file.
+func TestEveryWorkloadThatReachesTheDatabaseMountsTheClusterFile(t *testing.T) {
 	cp := localControlPlane()
 
 	for _, name := range []string{
@@ -400,10 +399,6 @@ func TestEveryWorkloadThatReachesTheDatabaseIsRolledWhenItMoves(t *testing.T) {
 		if !mountsClusterFile {
 			t.Errorf("%s mounts no cluster file, so it cannot reach the database", name)
 			continue
-		}
-		if d.Annotations["reloader.stakater.com/configmap"] != clusterFileConfigMapName {
-			t.Errorf("%s is not rolled when the cluster file changes, so a coordinator move "+
-				"leaves it connected to a coordinator that is gone", name)
 		}
 	}
 }
@@ -506,6 +501,33 @@ func TestTheBackupMergeRunnerNamesItsRealModule(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no tasks-runner-backup-merge container in the tasks deployment")
+	}
+}
+
+// Regression: 2026-10-08 — the sync-replication promote and resync runners must
+// be in the tasks pod naming the modules the control-plane image ships, or a
+// sync promote polls "in progress" forever and no resync ever starts (design
+// sync-replication §8.4). As with backup-merge, a wrong module name crash-loops
+// the whole tasks pod, so pin both names.
+func TestTheSyncReplicationRunnersAreRegistered(t *testing.T) {
+	cp := localControlPlane()
+	d := findDeployment(t, managementAPIObjects(cp), ComponentTasks)
+	want := map[string]string{
+		"tasks-runner-sync-promote": "simplyblock_core/services/tasks_runner_sync_promote.py",
+		"tasks-runner-sync-resync":  "simplyblock_core/services/tasks_runner_sync_resync.py",
+	}
+	for _, container := range d.Spec.Template.Spec.Containers {
+		module, tracked := want[container.Name]
+		if !tracked {
+			continue
+		}
+		if len(container.Command) != 2 || container.Command[1] != module {
+			t.Errorf("%s runs %v, want python3 %q", container.Name, container.Command, module)
+		}
+		delete(want, container.Name)
+	}
+	for name := range want {
+		t.Errorf("no %s container in the tasks deployment", name)
 	}
 }
 

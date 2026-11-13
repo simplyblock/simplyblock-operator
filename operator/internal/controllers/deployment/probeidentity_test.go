@@ -60,8 +60,9 @@ func accountOf(jobs []batchv1.Job) string {
 	return jobs[0].Spec.Template.Spec.ServiceAccountName
 }
 
-// The Role grants the two verbs on the one kind the probe needs, and nothing
-// else: a probe that could delete reports could delete another worker's.
+// The Role grants the two verbs on the one kind the report needs, and list on
+// the network attachments the report carries, and nothing else: a probe that
+// could delete reports could delete another worker's.
 func TestTheProbeRoleGrantsOnlyWhatTheReportNeeds(t *testing.T) {
 	r := reachedProbing(t)
 
@@ -70,14 +71,21 @@ func TestTheProbeRoleGrantsOnlyWhatTheReportNeeds(t *testing.T) {
 	if err := r.client.Get(context.Background(), key, &role); err != nil {
 		t.Fatalf("the probe's Role was not created: %v", err)
 	}
-	if len(role.Rules) != 1 {
-		t.Fatalf("the Role has %d rules, want exactly one", len(role.Rules))
+	if len(role.Rules) != 2 {
+		t.Fatalf("the Role has %d rules, want exactly two", len(role.Rules))
 	}
 	rule := role.Rules[0]
 	if len(rule.Resources) != 1 || rule.Resources[0] != "configmaps" ||
 		len(rule.Verbs) != 2 || rule.Verbs[0] != "create" || rule.Verbs[1] != "update" {
 		t.Errorf("the Role grants %v on %v, want create and update on configmaps",
 			rule.Verbs, rule.Resources)
+	}
+	rule = role.Rules[1]
+	if len(rule.APIGroups) != 1 || rule.APIGroups[0] != "k8s.cni.cncf.io" ||
+		len(rule.Resources) != 1 || rule.Resources[0] != "network-attachment-definitions" ||
+		len(rule.Verbs) != 1 || rule.Verbs[0] != "list" {
+		t.Errorf("the Role grants %v on %v/%v, want list on k8s.cni.cncf.io/network-attachment-definitions",
+			rule.Verbs, rule.APIGroups, rule.Resources)
 	}
 }
 

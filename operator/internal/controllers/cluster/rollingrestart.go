@@ -105,9 +105,9 @@ func (r *StorageClusterOpsReconciler) performNodeStep(
 	case stepShuttingDownNode:
 		return r.shutDownNode(ctx, ops, clusterID, nodes, nodeID)
 	case stepRefreshingPod:
-		return r.refreshPod(ctx, ops, nodes, nodeID)
+		return r.refreshPod(ctx, ops, clusterID, nodes, nodeID)
 	case stepAwaitingPod:
-		return r.awaitPod(ctx, ops, nodes, nodeID)
+		return r.awaitPod(ctx, ops, clusterID, nodes, nodeID)
 	case stepRestartingNode:
 		return r.restartNode(ctx, ops, clusterID, nodes, nodeID)
 	case stepRebalancing:
@@ -278,9 +278,19 @@ func (r *StorageClusterOpsReconciler) shutDownNode(
 func (r *StorageClusterOpsReconciler) refreshPod(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageClusterOps,
+	clusterID string,
 	nodes []utils.NodeStatusResponse,
 	nodeID string,
 ) (bool, error) {
+	if peerCluster, remote, err := r.remoteNodeSite(ctx, ops, nodeID); err != nil || remote {
+		if err != nil {
+			return false, err
+		}
+		// Asking is the step: the other site deletes the pod if it predates
+		// the operation, and the next step waits for its replacement.
+		_, err := r.refreshOnPeer(ctx, ops, peerCluster, clusterID, nodeID)
+		return err == nil, err
+	}
 	pod, err := r.storageNodePod(ctx, ops, nodes, nodeID)
 	if err != nil {
 		return false, err
@@ -292,10 +302,23 @@ func (r *StorageClusterOpsReconciler) refreshPod(
 		// Already going. Waiting for it to finish is this step's whole job.
 		return false, nil
 	}
+	// The DaemonSet replaces a deleted pod at once, so the step never sees the
+	// node without one. A pod created after the walk started is that
+	// replacement, and deleting it too would replace the pod again on every
+	// pass until the step's deadline.
+	if refreshedSince(pod, ops) {
+		return true, nil
+	}
 	if err := r.Delete(ctx, pod); err != nil {
 		return false, client.IgnoreNotFound(err)
 	}
 	return false, nil
+}
+
+// refreshedSince reports whether pod was created after the operation started,
+// which is what makes it the replacement rather than the pod to replace.
+func refreshedSince(pod *corev1.Pod, ops *simplyblockv1alpha2.StorageClusterOps) bool {
+	return !pod.CreationTimestamp.Time.Before(ops.CreationTimestamp.Time)
 }
 
 // awaitPod waits for the replacement pod to be Ready. It performs no side
@@ -303,14 +326,21 @@ func (r *StorageClusterOpsReconciler) refreshPod(
 func (r *StorageClusterOpsReconciler) awaitPod(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageClusterOps,
+	clusterID string,
 	nodes []utils.NodeStatusResponse,
 	nodeID string,
 ) (bool, error) {
+	if peerCluster, remote, err := r.remoteNodeSite(ctx, ops, nodeID); err != nil || remote {
+		if err != nil {
+			return false, err
+		}
+		return r.refreshOnPeer(ctx, ops, peerCluster, clusterID, nodeID)
+	}
 	pod, err := r.storageNodePod(ctx, ops, nodes, nodeID)
 	if err != nil {
 		return false, err
 	}
-	if pod == nil || !pod.DeletionTimestamp.IsZero() {
+	if pod == nil || !pod.DeletionTimestamp.IsZero() || !refreshedSince(pod, ops) {
 		return false, nil
 	}
 	for _, condition := range pod.Status.Conditions {
@@ -494,6 +524,47 @@ func (r *StorageClusterOpsReconciler) storageNodePod(
 		}
 	}
 	return nil, nil
+}
+
+// remoteNodeSite reports whether nodeID is a node of the other site of a
+// stretched cluster, whose pod runs there, and that site's managed cluster.
+func (r *StorageClusterOpsReconciler) remoteNodeSite(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps, nodeID string,
+) (string, bool, error) {
+	var cluster simplyblockv1alpha2.StorageCluster
+	if err := r.Get(ctx, client.ObjectKey{Namespace: ops.Namespace, Name: ops.Spec.ClusterRef}, &cluster); err != nil {
+		return "", false, client.IgnoreNotFound(err)
+	}
+	if cluster.Spec.Stretched == nil {
+		return "", false, nil
+	}
+	var storageNodes simplyblockv1alpha2.StorageNodeList
+	if err := r.List(ctx, &storageNodes, client.InNamespace(ops.Namespace)); err != nil {
+		return "", false, fmt.Errorf("list the storage nodes: %w", err)
+	}
+	for i := range storageNodes.Items {
+		if n := &storageNodes.Items[i]; n.Status.UUID == nodeID {
+			return cluster.Spec.Stretched.PeerCluster, n.IsRemote(), nil
+		}
+	}
+	return "", false, nil
+}
+
+// refreshOnPeer asks the other site's operator to refresh the node's pod, with
+// the operation's start as the line the replacement must be newer than, which
+// makes asking again harmless. It reports whether that replacement is Ready.
+func (r *StorageClusterOpsReconciler) refreshOnPeer(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps, peerCluster, clusterID, nodeID string,
+) (bool, error) {
+	if r.Peer == nil || peerCluster == "" {
+		return false, fmt.Errorf("node %s runs on the other site, whose operator only the site link reaches, "+
+			"and this operator has no site link to it", nodeID)
+	}
+	refreshed, err := r.Peer.RefreshNode(ctx, peerCluster, clusterID, nodeID, ops.CreationTimestamp.Time)
+	if err != nil {
+		return false, fmt.Errorf("refresh the pod of node %s on the other site: %w", nodeID, err)
+	}
+	return refreshed, nil
 }
 
 // walkFinished reports a walk whose index has reached the end of its list,

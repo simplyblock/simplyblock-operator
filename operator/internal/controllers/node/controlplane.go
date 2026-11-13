@@ -65,6 +65,9 @@ type NodeReading struct {
 	// the digits: the control plane's own vocabulary is what it is, and the
 	// operator does not invent a name the control plane never said (§3.3).
 	FailureDomain int `json:"failure_domain"`
+	// Site is the node's sync-replication site, empty off a sync cluster. A
+	// stretched cluster's site tells its own nodes from the other site's by it.
+	Site string `json:"site"`
 
 	// SecondaryNodeID and TertiaryNodeID are the nodes holding this node's
 	// lvstore replicas, empty when it has none. A volume whose primary is this

@@ -139,6 +139,7 @@ would be the old `Degraded` under a new name.
 | U-32      | `AwaitingFoundationDB` with the cluster available: advances                                                                                                                                              | Positive | —                                                                     |
 | U-33      | `AwaitingAPI` with a failing probe: holds                                                                                                                                                                | Negative | —                                                                     |
 | U-34      | `AwaitingAPI` with a passing probe: the phase becomes `Available`                                                                                                                                        | Positive | —                                                                     |
+| U-34a     | In steady state the step is `Installed` with no deadline, also for one recorded at `AwaitingAPI`                                                                                                         | Positive | —                                                                     |
 | U-35      | A step's deadline expires: `StepDeadlineExceeded`, and the phase does not advance                                                                                                                        | Boundary | —                                                                     |
 | U-36      | A step value the graph does not declare: `ErrUnknownState`, naming the declared set                                                                                                                      | Negative | —                                                                     |
 | U-37      | An empty `status.step`: restores to `ApplyingFoundationDB`                                                                                                                                               | Boundary | —                                                                     |
@@ -210,8 +211,8 @@ File: `operator/internal/controllers/controlplane/dnsdomain_test.go`
 | #     | Scenario                                                                          | Type       | Test                                                          |
 |-------|-----------------------------------------------------------------------------------|------------|---------------------------------------------------------------|
 | U-519 | The database names its coordinators under the cluster DNS domain, not the default | Regression | `TestTheDatabaseNamesItsCoordinatorsUnderTheClusterDNSDomain` |
-| U-520 | The management API endpoint is under the cluster DNS domain                       | Positive   | `TestTheManagementAPIEndpointIsUnderTheClusterDNSDomain`      |
-| U-521 | The peer certificate names the database's pods under the cluster DNS domain       | Positive   | `TestThePeerCertificateNamesTheClusterDNSDomain`              |
+| U-520 | The management API endpoint carries no cluster DNS domain                         | Regression | `TestTheManagementAPIEndpointCarriesNoClusterDomain`          |
+| U-521 | The peer certificate names the database's pods in both spellings                  | Positive   | `TestThePeerCertificateNamesBothSpellings`                    |
 
 ### Deletion (design §4.4)
 
@@ -267,6 +268,12 @@ File: `operator/internal/controllers/controlplane/controlplaneops_controller_uni
 | U-109 | `Backup` with no `blobStore` and no existing backup: `Failed` with the reason                                                                      | Negative   | —                                                 |
 | U-110 | `status.backupRef` names what the run created or triggered                                                                                         | Positive   | —                                                 |
 | U-188 | A `Restart` is not finished while old pods still serve beside replacements that are not ready (2026-10-12-restart-succeeds-while-surge-pod-starts) | Regression | `TestARestartIsNotFinishedWhileOldPodsStillServe` |
+| U-189 | Every workload that mounts the cluster file carries a hash of it on its pod template (2026-10-29-drop-reloader) | Regression | `TestEveryWorkloadMountingTheClusterFileCarriesItsHash` |
+| U-190 | A changed cluster file changes the hash; an unchanged one leaves it alone | Regression | `TestAChangedClusterFileChangesTheStampAndAnUnchangedOneDoesNot` |
+| U-191 | A cluster file that does not exist yet is not an error and stamps nothing | Negative | `TestAMissingClusterFileIsNotAnErrorAndStampsNothing` |
+| U-192 | No workload carries a `reloader.stakater.com` annotation | Regression | `TestNoWorkloadCarriesAReloaderAnnotation` |
+| U-193 | A change to the cluster file wakes the ControlPlane in its namespace and nothing else | Positive | `TestAClusterFileChangeWakesTheControlPlaneInItsNamespaceOnly` |
+| U-194 | A cluster file that vanishes leaves the stamp the workloads carry, and its return with the same data changes nothing | Regression | `TestAFileThatVanishesLeavesTheStampItsWorkloadsCarry` |
 | U-57  | `Upgrade`: the image is applied and `Verifying` waits for the rollout                                                                              | Positive   | —                                                 |
 | U-58  | `Upgrade` whose rollout stalls: `ProgressDeadlineExceeded` fails it                                                                                | Negative   | —                                                 |
 | U-59  | `Upgrade` succeeding: `spec.source.managed.image` is updated to match                                                                              | Positive   | —                                                 |

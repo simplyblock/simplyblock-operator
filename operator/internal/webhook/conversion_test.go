@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/yaml"
 
+	"github.com/simplyblock/simplyblock-operator/internal/prerequisites"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -110,9 +111,11 @@ func TestManagerRoleNamesOnlyTheConvertedCRDs(t *testing.T) {
 			!slices.Contains(rule.Resources, "customresourcedefinitions") {
 			continue
 		}
+		// create cannot be scoped by name in Kubernetes; the prerequisite
+		// installer needs it to add missing CRDs. Every other write stays named.
 		writes := false
 		for _, verb := range rule.Verbs {
-			if writeVerbs[verb] {
+			if writeVerbs[verb] && verb != "create" {
 				writes = true
 			}
 		}
@@ -130,13 +133,15 @@ func TestManagerRoleNamesOnlyTheConvertedCRDs(t *testing.T) {
 		t.Fatal("no rule writes any CustomResourceDefinition, so the CA can never be injected")
 	}
 
-	want := append([]string(nil), ConvertedKindCRDNames()...)
+	// The add-ons' CRDs are the other named writes: the prerequisite installer
+	// applies and upgrades exactly the ones its embedded manifests define.
+	want := append(append([]string(nil), ConvertedKindCRDNames()...), prerequisites.CRDNames()...)
 	sort.Strings(want)
 	sort.Strings(named)
 
 	if !slices.Equal(named, want) {
-		t.Errorf("the role's writable CRDs disagree with the converted kinds:\n"+
-			"  role.yaml:      %v\n  conversion.go:  %v", named, want)
+		t.Errorf("the role's writable CRDs disagree with the converted kinds and the prerequisite CRDs:\n"+
+			"  role.yaml:  %v\n  code:       %v", named, want)
 	}
 }
 

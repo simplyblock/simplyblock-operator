@@ -567,7 +567,7 @@ func TestTheCoordinatorCountAndTheRedundancyModeAgree(t *testing.T) {
 func TestAnUnsetStorageClassIsAbsentRatherThanEmpty(t *testing.T) {
 	cp := localControlPlane()
 
-	claim := volumeClaimSpec(foundationDBSpecOf(cp))
+	claim := volumeClaimSpec(storageClassOf(cp))
 
 	if _, present := claim["storageClassName"]; present {
 		t.Error("storageClassName is written for a spec that states none")
@@ -576,7 +576,7 @@ func TestAnUnsetStorageClassIsAbsentRatherThanEmpty(t *testing.T) {
 	cp.Spec.Source.Local.FoundationDB = &simplyblockv1alpha2.FoundationDBSpec{
 		StorageClassName: "fast",
 	}
-	claim = volumeClaimSpec(foundationDBSpecOf(cp))
+	claim = volumeClaimSpec(storageClassOf(cp))
 	if claim["storageClassName"] != "fast" {
 		t.Errorf("storageClassName = %v, want fast", claim["storageClassName"])
 	}
@@ -740,5 +740,31 @@ func TestADatabaseWithNoTolerationsAnywhereCarriesNone(t *testing.T) {
 			"spec", "processes", class, "podTemplate", "spec", "tolerations"); got != nil {
 			t.Errorf("process class %s tolerates %v, want nothing", class, got)
 		}
+	}
+}
+
+// An installed control plane reports the terminal step Installed rather than the
+// last install step, including one installed before the step existed.
+func TestAnInstalledControlPlaneReportsInstalled(t *testing.T) {
+	mountedCA(t)
+	cp := localControlPlane()
+	cp.Status.Phase = simplyblockv1alpha2.ControlPlanePhaseAvailable
+	cp.Status.Step = statemachine.KubeSnapshot{State: string(stepAwaitingAPI)}
+	c := newClient(t, cp)
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t), Prober: &stubProber{ready: true}}
+
+	if _, err := r.steadyState(context.Background(), cp); err != nil {
+		t.Fatalf("steadyState: %v", err)
+	}
+
+	var got simplyblockv1alpha2.ControlPlane
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(cp), &got); err != nil {
+		t.Fatalf("read the control plane back: %v", err)
+	}
+	if got.Status.Step.State != string(simplyblockv1alpha2.ControlPlaneStepInstalled) {
+		t.Errorf("the step is %q, want %q", got.Status.Step.State, simplyblockv1alpha2.ControlPlaneStepInstalled)
+	}
+	if got.Status.Step.Deadline != nil {
+		t.Errorf("the terminal step carries a deadline %v, want none", got.Status.Step.Deadline)
 	}
 }

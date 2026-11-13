@@ -31,76 +31,76 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.LogicalVolumeCapacity":     schema_simplyblock_operator_api_metrics_v1alpha2_LogicalVolumeCapacity(ref),
-		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.LogicalVolumeMetrics":      schema_simplyblock_operator_api_metrics_v1alpha2_LogicalVolumeMetrics(ref),
-		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.LogicalVolumeMetricsList":  schema_simplyblock_operator_api_metrics_v1alpha2_LogicalVolumeMetricsList(ref),
-		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageClusterCapacity":    schema_simplyblock_operator_api_metrics_v1alpha2_StorageClusterCapacity(ref),
-		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageClusterMetrics":     schema_simplyblock_operator_api_metrics_v1alpha2_StorageClusterMetrics(ref),
-		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageClusterMetricsList": schema_simplyblock_operator_api_metrics_v1alpha2_StorageClusterMetricsList(ref),
-		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageDeviceCapacity":     schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceCapacity(ref),
-		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageDeviceMetrics":      schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceMetrics(ref),
-		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageDeviceMetricsList":  schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceMetricsList(ref),
-		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageNodeCapacity":       schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeCapacity(ref),
-		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageNodeMetrics":        schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeMetrics(ref),
-		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageNodeMetricsList":    schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeMetricsList(ref),
-		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolCapacity":       schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolCapacity(ref),
-		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolMetrics":        schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolMetrics(ref),
-		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolMetricsList":    schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolMetricsList(ref),
-		resource.Quantity{}.OpenAPIModelName():                                                       schema_apimachinery_pkg_api_resource_Quantity(ref),
-		v1.APIGroup{}.OpenAPIModelName():                                                             schema_pkg_apis_meta_v1_APIGroup(ref),
-		v1.APIGroupList{}.OpenAPIModelName():                                                         schema_pkg_apis_meta_v1_APIGroupList(ref),
-		v1.APIResource{}.OpenAPIModelName():                                                          schema_pkg_apis_meta_v1_APIResource(ref),
-		v1.APIResourceList{}.OpenAPIModelName():                                                      schema_pkg_apis_meta_v1_APIResourceList(ref),
-		v1.APIVersions{}.OpenAPIModelName():                                                          schema_pkg_apis_meta_v1_APIVersions(ref),
-		v1.ApplyOptions{}.OpenAPIModelName():                                                         schema_pkg_apis_meta_v1_ApplyOptions(ref),
-		v1.Condition{}.OpenAPIModelName():                                                            schema_pkg_apis_meta_v1_Condition(ref),
-		v1.CreateOptions{}.OpenAPIModelName():                                                        schema_pkg_apis_meta_v1_CreateOptions(ref),
-		v1.DeleteOptions{}.OpenAPIModelName():                                                        schema_pkg_apis_meta_v1_DeleteOptions(ref),
-		v1.Duration{}.OpenAPIModelName():                                                             schema_pkg_apis_meta_v1_Duration(ref),
-		v1.FieldSelectorRequirement{}.OpenAPIModelName():                                             schema_pkg_apis_meta_v1_FieldSelectorRequirement(ref),
-		v1.FieldsV1{}.OpenAPIModelName():                                                             schema_pkg_apis_meta_v1_FieldsV1(ref),
-		v1.GetOptions{}.OpenAPIModelName():                                                           schema_pkg_apis_meta_v1_GetOptions(ref),
-		v1.GroupKind{}.OpenAPIModelName():                                                            schema_pkg_apis_meta_v1_GroupKind(ref),
-		v1.GroupResource{}.OpenAPIModelName():                                                        schema_pkg_apis_meta_v1_GroupResource(ref),
-		v1.GroupVersion{}.OpenAPIModelName():                                                         schema_pkg_apis_meta_v1_GroupVersion(ref),
-		v1.GroupVersionForDiscovery{}.OpenAPIModelName():                                             schema_pkg_apis_meta_v1_GroupVersionForDiscovery(ref),
-		v1.GroupVersionKind{}.OpenAPIModelName():                                                     schema_pkg_apis_meta_v1_GroupVersionKind(ref),
-		v1.GroupVersionResource{}.OpenAPIModelName():                                                 schema_pkg_apis_meta_v1_GroupVersionResource(ref),
-		v1.InternalEvent{}.OpenAPIModelName():                                                        schema_pkg_apis_meta_v1_InternalEvent(ref),
-		v1.LabelSelector{}.OpenAPIModelName():                                                        schema_pkg_apis_meta_v1_LabelSelector(ref),
-		v1.LabelSelectorRequirement{}.OpenAPIModelName():                                             schema_pkg_apis_meta_v1_LabelSelectorRequirement(ref),
-		v1.List{}.OpenAPIModelName():                                                                 schema_pkg_apis_meta_v1_List(ref),
-		v1.ListMeta{}.OpenAPIModelName():                                                             schema_pkg_apis_meta_v1_ListMeta(ref),
-		v1.ListOptions{}.OpenAPIModelName():                                                          schema_pkg_apis_meta_v1_ListOptions(ref),
-		v1.ManagedFieldsEntry{}.OpenAPIModelName():                                                   schema_pkg_apis_meta_v1_ManagedFieldsEntry(ref),
-		v1.MicroTime{}.OpenAPIModelName():                                                            schema_pkg_apis_meta_v1_MicroTime(ref),
-		v1.ObjectMeta{}.OpenAPIModelName():                                                           schema_pkg_apis_meta_v1_ObjectMeta(ref),
-		v1.OwnerReference{}.OpenAPIModelName():                                                       schema_pkg_apis_meta_v1_OwnerReference(ref),
-		v1.PartialObjectMetadata{}.OpenAPIModelName():                                                schema_pkg_apis_meta_v1_PartialObjectMetadata(ref),
-		v1.PartialObjectMetadataList{}.OpenAPIModelName():                                            schema_pkg_apis_meta_v1_PartialObjectMetadataList(ref),
-		v1.Patch{}.OpenAPIModelName():                                                                schema_pkg_apis_meta_v1_Patch(ref),
-		v1.PatchOptions{}.OpenAPIModelName():                                                         schema_pkg_apis_meta_v1_PatchOptions(ref),
-		v1.Preconditions{}.OpenAPIModelName():                                                        schema_pkg_apis_meta_v1_Preconditions(ref),
-		v1.RootPaths{}.OpenAPIModelName():                                                            schema_pkg_apis_meta_v1_RootPaths(ref),
-		v1.ServerAddressByClientCIDR{}.OpenAPIModelName():                                            schema_pkg_apis_meta_v1_ServerAddressByClientCIDR(ref),
-		v1.ShardInfo{}.OpenAPIModelName():                                                            schema_pkg_apis_meta_v1_ShardInfo(ref),
-		v1.Status{}.OpenAPIModelName():                                                               schema_pkg_apis_meta_v1_Status(ref),
-		v1.StatusCause{}.OpenAPIModelName():                                                          schema_pkg_apis_meta_v1_StatusCause(ref),
-		v1.StatusDetails{}.OpenAPIModelName():                                                        schema_pkg_apis_meta_v1_StatusDetails(ref),
-		v1.Table{}.OpenAPIModelName():                                                                schema_pkg_apis_meta_v1_Table(ref),
-		v1.TableColumnDefinition{}.OpenAPIModelName():                                                schema_pkg_apis_meta_v1_TableColumnDefinition(ref),
-		v1.TableOptions{}.OpenAPIModelName():                                                         schema_pkg_apis_meta_v1_TableOptions(ref),
-		v1.TableRow{}.OpenAPIModelName():                                                             schema_pkg_apis_meta_v1_TableRow(ref),
-		v1.TableRowCondition{}.OpenAPIModelName():                                                    schema_pkg_apis_meta_v1_TableRowCondition(ref),
-		v1.Time{}.OpenAPIModelName():                                                                 schema_pkg_apis_meta_v1_Time(ref),
-		v1.Timestamp{}.OpenAPIModelName():                                                            schema_pkg_apis_meta_v1_Timestamp(ref),
-		v1.TypeMeta{}.OpenAPIModelName():                                                             schema_pkg_apis_meta_v1_TypeMeta(ref),
-		v1.UpdateOptions{}.OpenAPIModelName():                                                        schema_pkg_apis_meta_v1_UpdateOptions(ref),
-		v1.WatchEvent{}.OpenAPIModelName():                                                           schema_pkg_apis_meta_v1_WatchEvent(ref),
-		runtime.RawExtension{}.OpenAPIModelName():                                                    schema_k8sio_apimachinery_pkg_runtime_RawExtension(ref),
-		runtime.TypeMeta{}.OpenAPIModelName():                                                        schema_k8sio_apimachinery_pkg_runtime_TypeMeta(ref),
-		runtime.Unknown{}.OpenAPIModelName():                                                         schema_k8sio_apimachinery_pkg_runtime_Unknown(ref),
-		version.Info{}.OpenAPIModelName():                                                            schema_k8sio_apimachinery_pkg_version_Info(ref),
+		LogicalVolumeCapacity{}.OpenAPIModelName():        schema_simplyblock_operator_api_metrics_v1alpha2_LogicalVolumeCapacity(ref),
+		LogicalVolumeMetrics{}.OpenAPIModelName():         schema_simplyblock_operator_api_metrics_v1alpha2_LogicalVolumeMetrics(ref),
+		LogicalVolumeMetricsList{}.OpenAPIModelName():     schema_simplyblock_operator_api_metrics_v1alpha2_LogicalVolumeMetricsList(ref),
+		StorageClusterCapacity{}.OpenAPIModelName():       schema_simplyblock_operator_api_metrics_v1alpha2_StorageClusterCapacity(ref),
+		StorageClusterMetrics{}.OpenAPIModelName():        schema_simplyblock_operator_api_metrics_v1alpha2_StorageClusterMetrics(ref),
+		StorageClusterMetricsList{}.OpenAPIModelName():    schema_simplyblock_operator_api_metrics_v1alpha2_StorageClusterMetricsList(ref),
+		StorageDeviceCapacity{}.OpenAPIModelName():        schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceCapacity(ref),
+		StorageDeviceMetrics{}.OpenAPIModelName():         schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceMetrics(ref),
+		StorageDeviceMetricsList{}.OpenAPIModelName():     schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceMetricsList(ref),
+		StorageNodeCapacity{}.OpenAPIModelName():          schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeCapacity(ref),
+		StorageNodeMetrics{}.OpenAPIModelName():           schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeMetrics(ref),
+		StorageNodeMetricsList{}.OpenAPIModelName():       schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeMetricsList(ref),
+		StoragePoolCapacity{}.OpenAPIModelName():          schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolCapacity(ref),
+		StoragePoolMetrics{}.OpenAPIModelName():           schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolMetrics(ref),
+		StoragePoolMetricsList{}.OpenAPIModelName():       schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolMetricsList(ref),
+		resource.Quantity{}.OpenAPIModelName():            schema_apimachinery_pkg_api_resource_Quantity(ref),
+		v1.APIGroup{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_APIGroup(ref),
+		v1.APIGroupList{}.OpenAPIModelName():              schema_pkg_apis_meta_v1_APIGroupList(ref),
+		v1.APIResource{}.OpenAPIModelName():               schema_pkg_apis_meta_v1_APIResource(ref),
+		v1.APIResourceList{}.OpenAPIModelName():           schema_pkg_apis_meta_v1_APIResourceList(ref),
+		v1.APIVersions{}.OpenAPIModelName():               schema_pkg_apis_meta_v1_APIVersions(ref),
+		v1.ApplyOptions{}.OpenAPIModelName():              schema_pkg_apis_meta_v1_ApplyOptions(ref),
+		v1.Condition{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_Condition(ref),
+		v1.CreateOptions{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_CreateOptions(ref),
+		v1.DeleteOptions{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_DeleteOptions(ref),
+		v1.Duration{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_Duration(ref),
+		v1.FieldSelectorRequirement{}.OpenAPIModelName():  schema_pkg_apis_meta_v1_FieldSelectorRequirement(ref),
+		v1.FieldsV1{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_FieldsV1(ref),
+		v1.GetOptions{}.OpenAPIModelName():                schema_pkg_apis_meta_v1_GetOptions(ref),
+		v1.GroupKind{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_GroupKind(ref),
+		v1.GroupResource{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_GroupResource(ref),
+		v1.GroupVersion{}.OpenAPIModelName():              schema_pkg_apis_meta_v1_GroupVersion(ref),
+		v1.GroupVersionForDiscovery{}.OpenAPIModelName():  schema_pkg_apis_meta_v1_GroupVersionForDiscovery(ref),
+		v1.GroupVersionKind{}.OpenAPIModelName():          schema_pkg_apis_meta_v1_GroupVersionKind(ref),
+		v1.GroupVersionResource{}.OpenAPIModelName():      schema_pkg_apis_meta_v1_GroupVersionResource(ref),
+		v1.InternalEvent{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_InternalEvent(ref),
+		v1.LabelSelector{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_LabelSelector(ref),
+		v1.LabelSelectorRequirement{}.OpenAPIModelName():  schema_pkg_apis_meta_v1_LabelSelectorRequirement(ref),
+		v1.List{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_List(ref),
+		v1.ListMeta{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_ListMeta(ref),
+		v1.ListOptions{}.OpenAPIModelName():               schema_pkg_apis_meta_v1_ListOptions(ref),
+		v1.ManagedFieldsEntry{}.OpenAPIModelName():        schema_pkg_apis_meta_v1_ManagedFieldsEntry(ref),
+		v1.MicroTime{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_MicroTime(ref),
+		v1.ObjectMeta{}.OpenAPIModelName():                schema_pkg_apis_meta_v1_ObjectMeta(ref),
+		v1.OwnerReference{}.OpenAPIModelName():            schema_pkg_apis_meta_v1_OwnerReference(ref),
+		v1.PartialObjectMetadata{}.OpenAPIModelName():     schema_pkg_apis_meta_v1_PartialObjectMetadata(ref),
+		v1.PartialObjectMetadataList{}.OpenAPIModelName(): schema_pkg_apis_meta_v1_PartialObjectMetadataList(ref),
+		v1.Patch{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_Patch(ref),
+		v1.PatchOptions{}.OpenAPIModelName():              schema_pkg_apis_meta_v1_PatchOptions(ref),
+		v1.Preconditions{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_Preconditions(ref),
+		v1.RootPaths{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_RootPaths(ref),
+		v1.ServerAddressByClientCIDR{}.OpenAPIModelName(): schema_pkg_apis_meta_v1_ServerAddressByClientCIDR(ref),
+		v1.ShardInfo{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_ShardInfo(ref),
+		v1.Status{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_Status(ref),
+		v1.StatusCause{}.OpenAPIModelName():               schema_pkg_apis_meta_v1_StatusCause(ref),
+		v1.StatusDetails{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_StatusDetails(ref),
+		v1.Table{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_Table(ref),
+		v1.TableColumnDefinition{}.OpenAPIModelName():     schema_pkg_apis_meta_v1_TableColumnDefinition(ref),
+		v1.TableOptions{}.OpenAPIModelName():              schema_pkg_apis_meta_v1_TableOptions(ref),
+		v1.TableRow{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_TableRow(ref),
+		v1.TableRowCondition{}.OpenAPIModelName():         schema_pkg_apis_meta_v1_TableRowCondition(ref),
+		v1.Time{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_Time(ref),
+		v1.Timestamp{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_Timestamp(ref),
+		v1.TypeMeta{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_TypeMeta(ref),
+		v1.UpdateOptions{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_UpdateOptions(ref),
+		v1.WatchEvent{}.OpenAPIModelName():                schema_pkg_apis_meta_v1_WatchEvent(ref),
+		runtime.RawExtension{}.OpenAPIModelName():         schema_k8sio_apimachinery_pkg_runtime_RawExtension(ref),
+		runtime.TypeMeta{}.OpenAPIModelName():             schema_k8sio_apimachinery_pkg_runtime_TypeMeta(ref),
+		runtime.Unknown{}.OpenAPIModelName():              schema_k8sio_apimachinery_pkg_runtime_Unknown(ref),
+		version.Info{}.OpenAPIModelName():                 schema_k8sio_apimachinery_pkg_version_Info(ref),
 	}
 }
 
@@ -214,7 +214,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_LogicalVolumeMetrics(ref c
 						SchemaProps: spec.SchemaProps{
 							Description: "Capacity is the reading itself.",
 							Default:     map[string]interface{}{},
-							Ref:         ref("github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.LogicalVolumeCapacity"),
+							Ref:         ref(LogicalVolumeCapacity{}.OpenAPIModelName()),
 						},
 					},
 				},
@@ -222,7 +222,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_LogicalVolumeMetrics(ref c
 			},
 		},
 		Dependencies: []string{
-			"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.LogicalVolumeCapacity", v1.ObjectMeta{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
+			LogicalVolumeCapacity{}.OpenAPIModelName(), v1.ObjectMeta{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
 	}
 }
 
@@ -260,7 +260,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_LogicalVolumeMetricsList(r
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.LogicalVolumeMetrics"),
+										Ref:     ref(LogicalVolumeMetrics{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -271,7 +271,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_LogicalVolumeMetricsList(r
 			},
 		},
 		Dependencies: []string{
-			"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.LogicalVolumeMetrics", v1.ListMeta{}.OpenAPIModelName()},
+			LogicalVolumeMetrics{}.OpenAPIModelName(), v1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -376,7 +376,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageClusterMetrics(ref 
 						SchemaProps: spec.SchemaProps{
 							Description: "Capacity is the reading itself.",
 							Default:     map[string]interface{}{},
-							Ref:         ref("github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageClusterCapacity"),
+							Ref:         ref(StorageClusterCapacity{}.OpenAPIModelName()),
 						},
 					},
 				},
@@ -384,7 +384,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageClusterMetrics(ref 
 			},
 		},
 		Dependencies: []string{
-			"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageClusterCapacity", v1.ObjectMeta{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
+			StorageClusterCapacity{}.OpenAPIModelName(), v1.ObjectMeta{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
 	}
 }
 
@@ -422,7 +422,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageClusterMetricsList(
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageClusterMetrics"),
+										Ref:     ref(StorageClusterMetrics{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -433,7 +433,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageClusterMetricsList(
 			},
 		},
 		Dependencies: []string{
-			"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageClusterMetrics", v1.ListMeta{}.OpenAPIModelName()},
+			StorageClusterMetrics{}.OpenAPIModelName(), v1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -539,7 +539,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceMetrics(ref c
 						SchemaProps: spec.SchemaProps{
 							Description: "Capacity is the reading itself.",
 							Default:     map[string]interface{}{},
-							Ref:         ref("github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageDeviceCapacity"),
+							Ref:         ref(StorageDeviceCapacity{}.OpenAPIModelName()),
 						},
 					},
 				},
@@ -547,7 +547,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceMetrics(ref c
 			},
 		},
 		Dependencies: []string{
-			"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageDeviceCapacity", v1.ObjectMeta{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
+			StorageDeviceCapacity{}.OpenAPIModelName(), v1.ObjectMeta{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
 	}
 }
 
@@ -585,7 +585,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceMetricsList(r
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageDeviceMetrics"),
+										Ref:     ref(StorageDeviceMetrics{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -596,7 +596,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceMetricsList(r
 			},
 		},
 		Dependencies: []string{
-			"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageDeviceMetrics", v1.ListMeta{}.OpenAPIModelName()},
+			StorageDeviceMetrics{}.OpenAPIModelName(), v1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -709,7 +709,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeMetrics(ref com
 						SchemaProps: spec.SchemaProps{
 							Description: "Capacity is the reading itself.",
 							Default:     map[string]interface{}{},
-							Ref:         ref("github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageNodeCapacity"),
+							Ref:         ref(StorageNodeCapacity{}.OpenAPIModelName()),
 						},
 					},
 				},
@@ -717,7 +717,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeMetrics(ref com
 			},
 		},
 		Dependencies: []string{
-			"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageNodeCapacity", v1.ObjectMeta{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
+			StorageNodeCapacity{}.OpenAPIModelName(), v1.ObjectMeta{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
 	}
 }
 
@@ -755,7 +755,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeMetricsList(ref
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageNodeMetrics"),
+										Ref:     ref(StorageNodeMetrics{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -766,7 +766,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeMetricsList(ref
 			},
 		},
 		Dependencies: []string{
-			"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageNodeMetrics", v1.ListMeta{}.OpenAPIModelName()},
+			StorageNodeMetrics{}.OpenAPIModelName(), v1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -872,7 +872,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolMetrics(ref com
 						SchemaProps: spec.SchemaProps{
 							Description: "Capacity is the reading itself.",
 							Default:     map[string]interface{}{},
-							Ref:         ref("github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolCapacity"),
+							Ref:         ref(StoragePoolCapacity{}.OpenAPIModelName()),
 						},
 					},
 				},
@@ -880,7 +880,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolMetrics(ref com
 			},
 		},
 		Dependencies: []string{
-			"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolCapacity", v1.ObjectMeta{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
+			StoragePoolCapacity{}.OpenAPIModelName(), v1.ObjectMeta{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
 	}
 }
 
@@ -918,7 +918,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolMetricsList(ref
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolMetrics"),
+										Ref:     ref(StoragePoolMetrics{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -929,7 +929,7 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolMetricsList(ref
 			},
 		},
 		Dependencies: []string{
-			"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolMetrics", v1.ListMeta{}.OpenAPIModelName()},
+			StoragePoolMetrics{}.OpenAPIModelName(), v1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 

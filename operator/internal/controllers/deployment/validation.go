@@ -100,6 +100,13 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 		findings = append(findings, finding{reason: DeviceNotFound, message: found})
 	}
 
+	if found := r.missingSites(ctx, config); found != "" {
+		findings = append(findings, finding{reason: MissingSites, message: found})
+	}
+	if found := r.siteMismatches(ctx, config); found != "" {
+		findings = append(findings, finding{reason: SiteMismatch, message: found})
+	}
+
 	overflow, err := r.failureDomainOverflow(ctx, config)
 	if err != nil {
 		return nil, err
@@ -133,9 +140,6 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 		if found := conflictingInterfaces(scope.document); found != "" {
 			findings = append(findings, finding{reason: WorkerNotFound, message: scope.prefix + found})
 		}
-		if found := blockDevicesWithoutJournalDevice(scope.document); found != "" {
-			findings = append(findings, finding{reason: JournalDeviceRequired, message: scope.prefix + found})
-		}
 		if found := failureDomainLayoutRefusal(scope.document); found != "" {
 			findings = append(findings, finding{reason: FailureDomainLayout, message: scope.prefix + found})
 		}
@@ -153,7 +157,16 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 	if grown != "" {
 		findings = append(findings, finding{reason: MemberTooLarge, message: grown})
 	}
-	if groups := groupsWithoutManagementInterface(config); len(groups) > 0 {
+	if groups := groupsWithNetworkAttachments(config); len(groups) > 0 {
+		findings = append(findings, finding{
+			reason: NetworkAttachmentNotDeployable,
+			message: fmt.Sprintf(
+				"group(s) %s attach their storage nodes through NetworkAttachmentDefinitions, "+
+					"and this operator does not build storage nodes on network attachments yet",
+				strings.Join(groups, ", ")),
+		})
+	}
+	if groups := groupsWithoutManagementInterface(config); len(groups) > 0 && (!onANetwork(config) || onHostNICs(config)) {
 		findings = append(findings, finding{
 			reason: NoManagementInterface,
 			message: fmt.Sprintf(
@@ -179,7 +192,7 @@ func groupsWithoutManagementInterface(
 	var missing []string
 	for _, set := range config.Spec.NodeSets {
 		for _, group := range set.Groups {
-			if group.MgmtInterface == "" {
+			if group.MgmtInterface == "" && group.NetworkAttachment == nil {
 				missing = append(missing, group.Name)
 			}
 		}
@@ -223,8 +236,12 @@ func duplicateWorkers(config *simplyblockv1alpha2.ClusterDeploymentConfig) []str
 func conflictingInterfaces(config *simplyblockv1alpha2.ClusterDeploymentConfig) string {
 	mgmt := map[string]struct{}{}
 	data := map[string]struct{}{}
+	attachments := map[string]struct{}{}
 	for _, set := range config.Spec.NodeSets {
 		for _, group := range set.Groups {
+			if attachment := group.NetworkAttachment; attachment != nil {
+				attachments[attachmentLabel(attachment)] = struct{}{}
+			}
 			if group.MgmtInterface != "" {
 				mgmt[group.MgmtInterface] = struct{}{}
 			}
@@ -246,7 +263,21 @@ func conflictingInterfaces(config *simplyblockv1alpha2.ClusterDeploymentConfig) 
 				"every node of a cluster, so they cannot differ",
 			strings.Join(sortedKeys(data), "; "))
 	}
+	if len(attachments) > 1 {
+		return fmt.Sprintf(
+			"the groups name different network attachments (%s), and one DaemonSet serves "+
+				"every node of a cluster, so they cannot differ",
+			strings.Join(sortedKeys(attachments), "; "))
+	}
 	return ""
+}
+
+// attachmentLabel is a group's attachment as a reader compares it.
+func attachmentLabel(attachment *simplyblockv1alpha2.NetworkAttachmentSelection) string {
+	if attachment.Data == "" {
+		return "management " + attachment.Management
+	}
+	return "management " + attachment.Management + ", data " + attachment.Data
 }
 
 // missingWorkers names every worker the document lists that is not a node of this
@@ -422,6 +453,56 @@ func (r *ClusterDeploymentConfigReconciler) failureDomainsRequired(
 	return cluster.Spec.EnableFailureDomains != nil && *cluster.Spec.EnableFailureDomains
 }
 
+// missingSites reports a sync-replication document whose groups do not all
+// declare a site. Like a missing failure domain, provisioning holds on it
+// rather than failing, so a document approved without a site per group produces
+// nodes the backend refuses at add time.
+func (r *ClusterDeploymentConfigReconciler) missingSites(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) string {
+	// On a stretched cluster an empty group site is the cluster's site
+	// (groupSite), so no group can be missing one.
+	if !r.syncReplicationRequired(ctx, config) || r.stretchedSiteOf(ctx, config) != "" {
+		return ""
+	}
+
+	var found []string
+	for _, set := range config.Spec.NodeSets {
+		for _, group := range set.Groups {
+			if group.Site == "" {
+				found = append(found, set.Name+"/"+group.Name)
+			}
+		}
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"the cluster has sync replication enabled and group %s %s no site; "+
+			"provisioning holds until each declares one",
+		strings.Join(found, ", "), plural(len(found), "declares", "declare"))
+}
+
+// syncReplicationRequired reports whether the document's cluster has sync
+// replication enabled, whether the document creates the cluster or adds to one
+// that already exists.
+func (r *ClusterDeploymentConfigReconciler) syncReplicationRequired(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) bool {
+	if config.Spec.ClusterRef == "" {
+		template := config.Spec.Cluster
+		return template != nil && template.EnableSyncReplication != nil &&
+			*template.EnableSyncReplication
+	}
+
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: config.Namespace, Name: config.Spec.ClusterRef}
+	if err := r.Get(ctx, key, &cluster); err != nil {
+		return false
+	}
+	return cluster.Spec.EnableSyncReplication != nil && *cluster.Spec.EnableSyncReplication
+}
+
 // failureDomainLayoutRefusal is why the control plane would refuse to activate
 // the cluster a document creates in failure-domain mode, or nothing. The control
 // plane checks the layout at a fresh activation alone, after the cluster has
@@ -581,21 +662,71 @@ func (r *ClusterDeploymentConfigReconciler) growthLimit(
 		total.nodes()-held.nodes(), cluster.Name, held.nodes(), maxStorageNodesPerCluster), nil
 }
 
-// blockDevicesWithoutJournalDevice reports a cluster of logical block devices
-// whose template does not put the journal on a device of its own. The control
-// plane refuses every node add of such a cluster ("lblk device mode requires
-// --enable-journal-device"), which lands after the cluster exists. A growth
-// document carries no template, and its cluster's setting already holds.
-func blockDevicesWithoutJournalDevice(config *simplyblockv1alpha2.ClusterDeploymentConfig) string {
-	template := config.Spec.Cluster
-	if config.Spec.ClusterRef != "" || template == nil ||
-		DeviceClassOf(config) != simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock {
+// siteMismatches reports the node groups of a stretched cluster's document whose
+// site is not the cluster's. A stretched cluster's site is the whole Kubernetes
+// cluster it runs on, so a group naming the other site would add nodes running
+// here to the other site's half of the backend cluster. An empty site is
+// missingSites' finding, not this one.
+func (r *ClusterDeploymentConfigReconciler) siteMismatches(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) string {
+	site := r.stretchedSiteOf(ctx, config)
+	if site == "" {
 		return ""
 	}
-	if template.EnableJournalDevice != nil && *template.EnableJournalDevice {
+
+	var found []string
+	for _, set := range config.Spec.NodeSets {
+		for _, group := range set.Groups {
+			if group.Site != "" && group.Site != site {
+				found = append(found, fmt.Sprintf("%s/%s (site %s)", set.Name, group.Name, group.Site))
+			}
+		}
+	}
+	if len(found) == 0 {
 		return ""
 	}
-	return "the groups name logical block devices, and the control plane runs those only with " +
-		"the journal on a device of its own: set spec.cluster.enableJournalDevice, which takes " +
-		"one of each worker's devices, and choose a stripe the rest carry"
+	return fmt.Sprintf(
+		"this document deploys site %s of a stretched cluster, and group %s %s another site; "+
+			"every group must be on site %s",
+		site, strings.Join(found, ", "), plural(len(found), "names", "name"), site)
+}
+
+// stretchedSiteOf is the site of the stretched cluster the document creates or
+// grows, empty when the cluster is not one site of a stretched cluster.
+func (r *ClusterDeploymentConfigReconciler) stretchedSiteOf(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) string {
+	if config.Spec.ClusterRef == "" {
+		if template := config.Spec.Cluster; template != nil && template.Stretched != nil {
+			return template.Stretched.Site
+		}
+		return ""
+	}
+
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: config.Namespace, Name: config.Spec.ClusterRef}
+	if err := r.Get(ctx, key, &cluster); err != nil {
+		return ""
+	}
+	return cluster.StretchedSite()
+}
+
+// groupsWithNetworkAttachments names the groups that attach their storage nodes
+// through NetworkAttachmentDefinitions.
+//
+// The document states the attachment and the storage nodes are not yet built
+// with it: they run on host networking and would bind no management interface,
+// which the control plane refuses inside node_add. Holding the document here
+// says so before anything is created.
+func groupsWithNetworkAttachments(config *simplyblockv1alpha2.ClusterDeploymentConfig) []string {
+	var attached []string
+	for _, set := range config.Spec.NodeSets {
+		for _, group := range set.Groups {
+			if group.NetworkAttachment != nil {
+				attached = append(attached, group.Name)
+			}
+		}
+	}
+	return attached
 }

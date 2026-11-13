@@ -122,6 +122,23 @@ func (w *Workload) ReleaseSelf(ctx context.Context, namespace string) error {
 	return nil
 }
 
+// ReleaseSelfOn is the mirror of ProtectSelf: it releases the manager's own
+// eviction when the worker is the one the manager runs on, and does nothing
+// otherwise.
+//
+// A window that ends calls ReleaseSelf regardless of its worker, because a
+// budget a dead manager left has to go whoever raised it. A window that is
+// merely standing its guard down while it waits is not ending, and the budget
+// is one object for the namespace: taking it down from another worker's window
+// would take it out from under the one on the manager's own worker that is
+// shutting its node down behind it.
+func (w *Workload) ReleaseSelfOn(ctx context.Context, namespace, worker string) error {
+	if w.ManagerNode == "" || w.ManagerNode != worker {
+		return nil
+	}
+	return w.ReleaseSelf(ctx, namespace)
+}
+
 // ClearStaleSelfBudget removes a self-budget left by a manager that crashed
 // while holding one.
 //

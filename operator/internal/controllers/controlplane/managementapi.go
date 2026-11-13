@@ -24,6 +24,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,18 +41,6 @@ import (
 // reason the database's images are.
 const fdbExporterImage = "aikoven/foundationdb-exporter:3.1.0"
 
-// restartOnClusterFileChange is what makes a coordinator change reach the pods
-// that hold a connection to the old one. The reloader watches the ConfigMap the
-// FoundationDB operator writes and rolls whatever carries this annotation.
-//
-// The reloader itself is a chart dependency and stays one. A control plane
-// installed without it keeps working and takes a coordinator change on the next
-// restart instead of at once, which is a degradation rather than a break.
-var restartOnClusterFileChange = map[string]string{
-	"reloader.stakater.com/auto":      "true",
-	"reloader.stakater.com/configmap": clusterFileConfigMapName,
-}
-
 // managementAPIObjects is everything the ApplyingAPI step writes, in the order it
 // depends on itself: the account and the configuration, then the roles that name
 // the account, then the workloads that run under it, then the Service in front
@@ -60,7 +49,7 @@ func managementAPIObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object 
 	ns := cp.Namespace
 	//nolint:prealloc // the literal is the declaration; the append below is the conditional set
 	objects := []client.Object{
-		serviceAccount(ns, serviceAccountName),
+		serviceAccount(ns, serviceAccountName, eksRoleARNAnnotation(cp)),
 		sharedConfigMap(ns),
 		controlPlaneClusterRole(),
 		controlPlaneClusterRoleBinding(ns),
@@ -70,13 +59,26 @@ func managementAPIObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object 
 		serviceReaderClusterRoleBinding(ns),
 		webAPIDeployment(cp),
 		webAPIService(cp),
+		webAPIDisruptionBudget(ns),
 		tasksDeployment(cp),
 		monitoringDeployment(cp),
 		adminControlDeployment(cp),
 		fdbExporterDeployment(cp),
 		fdbExporterService(ns),
 	}
+	objects = append(objects, prometheusObjects(cp)...)
 	return append(objects, servingCertificateObjects(cp)...)
+}
+
+// eksRoleARNAnnotation is the annotation that makes serviceAccountName
+// authenticate through its IAM role on Amazon EKS, read from the local
+// control plane's spec.source.local.eksRoleARN, or nil when it carries none.
+func eksRoleARNAnnotation(cp *simplyblockv1alpha2.ControlPlane) map[string]string {
+	local := cp.Spec.Source.Local
+	if local == nil || local.EKSRoleARN == "" {
+		return nil
+	}
+	return map[string]string{utils.EKSRoleARNAnnotation: local.EKSRoleARN}
 }
 
 // managementAPIClusterScoped is the half of that set the garbage collector will
@@ -172,9 +174,9 @@ func controlPlaneClusterRole() *rbacv1.ClusterRole {
 	}
 }
 
-// podTeardownRole is the delete half of what the control plane does to pods,
-// and it is separate because it is the half that never leaves the install
-// namespace.
+// podTeardownRole is the delete half of what the control plane does to a
+// storage node's pod and Service, and it is separate because it is the half
+// that never leaves the install namespace.
 //
 // rbac-justified: a node add that fails after spdk_process_start has already
 // created snode-spdk-pod-<port>-<cluster> deletes it straight through the API
@@ -184,17 +186,23 @@ func controlPlaneClusterRole() *rbacv1.ClusterRole {
 // substitute. Left behind, the pod holds the host's hugepages, so every later
 // add on that host stays Pending on an "Insufficient hugepages-2Mi" event.
 //
-// Containment: delete on pods in one namespace, with no create beside it. The
-// account cannot replace what it removes, and the workloads it can remove are
-// recreated by their own controllers. It is capped by the manager's own
-// cluster-wide delete on pods, which the storage node and cluster Ops
-// reconcilers already hold.
+// A node on the pod network has a Service in front of that pod,
+// snode-spdk-svc-<port>-<cluster>, which the agent creates before the pod so
+// the pod can report the Service's address. The same abort, and a node removal,
+// delete it the same way (_delete_spdk_service_via_k8s), for the same reason.
+// Without the verb the teardown logs a 403 and the Service outlives the add.
+//
+// Containment: delete on pods and services in one namespace, with no create
+// beside it. The account cannot replace what it removes, and the workloads it
+// can remove are recreated by their own controllers. It is capped by the
+// manager's own cluster-wide delete on pods and services, which the storage
+// node and control plane reconcilers already hold.
 func podTeardownRole(namespace string) *rbacv1.Role {
 	return &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{Name: podTeardownRoleName, Namespace: namespace},
 		Rules: []rbacv1.PolicyRule{{
 			APIGroups: []string{""},
-			Resources: []string{"pods"},
+			Resources: []string{"pods", "services"},
 			Verbs:     []string{"delete"},
 		}},
 	}
@@ -310,7 +318,19 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 			Env:             env,
 			VolumeMounts:    append([]corev1.VolumeMount{clusterFileMount()}, tlsMount(managed)...),
 			Resources:       webAPIResources(managed),
+			LivenessProbe:   webAPILivenessProbe(managed),
+			ReadinessProbe:  webAPIReadinessProbe(managed),
+			// Removing a pod from the Service and stopping it start together, and
+			// the endpoint update takes a moment to reach every node. The pod keeps
+			// serving through webAPIDrainSeconds so that no request reaches a
+			// process that already stopped.
+			// An exec rather than the sleep action, which a cluster before
+			// Kubernetes 1.30 does not admit.
+			Lifecycle: &corev1.Lifecycle{PreStop: &corev1.LifecycleHandler{
+				Exec: &corev1.ExecAction{Command: []string{"sleep", strconv.Itoa(webAPIDrainSeconds)}},
+			}},
 		}},
+		TerminationGracePeriodSeconds: ptr.To(int64(webAPIDrainSeconds + webAPIShutdownSeconds)),
 		Volumes: append([]corev1.Volume{clusterFileVolumeSource()},
 			tlsVolume(managed)...),
 	}
@@ -318,9 +338,8 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        ComponentWebAPI,
-			Namespace:   cp.Namespace,
-			Annotations: restartOnClusterFileChange,
+			Name:      ComponentWebAPI,
+			Namespace: cp.Namespace,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr.To(apiReplicas(managed)),
@@ -339,6 +358,91 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 				},
 				Spec: spec,
 			},
+		},
+	}
+}
+
+// webAPIHealthPath answers whether the process itself is up, with no database
+// involved. webAPIReadyPath is the one that also reads FoundationDB, so a pod
+// passes it only once it can do something meaningful. Both are the v2 API's
+// /_meta mount; the v1 API had one endpoint conflating the two questions.
+const (
+	webAPIHealthPath = "/api/v2/_meta/health"
+	webAPIReadyPath  = "/api/v2/_meta/ready"
+)
+
+// webAPILivenessProbe asks only whether the process answers. It must not depend
+// on FoundationDB: a stall there is the readiness probe's job to act on, and a
+// liveness probe that also failed on it would restart every replica into the
+// same outage instead of just taking them out of the Service.
+func webAPILivenessProbe(managed *simplyblockv1alpha2.LocalControlPlane) *corev1.Probe {
+	return webAPIProbe(managed, webAPIHealthPath)
+}
+
+// webAPIReadinessProbe keeps the Service from routing to a pod that does not
+// answer yet. Without it a replacement pod receives connections the moment its
+// container starts, before the API listens, and callers see connection refused
+// for the seconds that takes; a rollout or a drain does this to every pod.
+//
+// Six failures five seconds apart take a pod out: a FoundationDB recovery or a
+// replacement moving roles pauses the database for seconds, and a probe that
+// failed both replicas on that would empty the Service and turn a slow answer
+// into a refused connection. A pod that never comes up, the case the probe is
+// for, still stays out of the Service until it answers.
+func webAPIReadinessProbe(managed *simplyblockv1alpha2.LocalControlPlane) *corev1.Probe {
+	return webAPIProbe(managed, webAPIReadyPath)
+}
+
+// webAPIProbe is the transport the liveness and readiness probes share, aimed
+// at whichever of the two endpoints the caller asks for.
+//
+// The kubelet cannot present a client certificate, so under mutual TLS the
+// probe runs curl in the container with the pod's own certificate. The server
+// is not verified: the probe connects to its own pod over loopback, and the
+// serving certificate does not name 127.0.0.1. Without mutual TLS the kubelet
+// probes directly, over HTTPS when the API serves TLS.
+func webAPIProbe(managed *simplyblockv1alpha2.LocalControlPlane, path string) *corev1.Probe {
+	probe := &corev1.Probe{
+		PeriodSeconds:    5,
+		TimeoutSeconds:   4,
+		FailureThreshold: 6,
+		SuccessThreshold: 1,
+	}
+	switch {
+	case managed.RequiresClientCertificate():
+		probe.Exec = &corev1.ExecAction{Command: []string{
+			"curl", "--fail", "--silent", "--show-error", "--insecure", "--max-time", "3",
+			"--output", "/dev/null",
+			"--cert", tlsMountPath + "/tls.crt", "--key", tlsMountPath + "/tls.key",
+			"https://127.0.0.1:" + strconv.Itoa(webAPIPort) + path,
+		}}
+	case managed.ServesTLS():
+		probe.HTTPGet = &corev1.HTTPGetAction{
+			Path: path, Port: intstr.FromInt32(webAPIPort), Scheme: corev1.URISchemeHTTPS,
+		}
+	default:
+		probe.HTTPGet = &corev1.HTTPGetAction{Path: path, Port: intstr.FromInt32(webAPIPort)}
+	}
+	return probe
+}
+
+// webAPIDrainSeconds is how long a stopping management API pod keeps serving,
+// and webAPIShutdownSeconds how long it then has to finish what it is doing.
+const (
+	webAPIDrainSeconds    = 10
+	webAPIShutdownSeconds = 20
+)
+
+// webAPIDisruptionBudget lets a drain take one management API pod at a time.
+// The replicas are on separate nodes, but an EKS node group update drains its
+// nodes one after another on a timer: without the budget the second drain can
+// evict the other replica while the first one's replacement is still starting.
+func webAPIDisruptionBudget(namespace string) *policyv1.PodDisruptionBudget {
+	return &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{Name: ComponentWebAPI, Namespace: namespace},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			MaxUnavailable: ptr.To(intstr.FromInt32(1)),
+			Selector:       &metav1.LabelSelector{MatchLabels: map[string]string{appLabel: ComponentWebAPI}},
 		},
 	}
 }
@@ -432,6 +536,8 @@ func taskServices() []service {
 		{name: "tasks-runner-port-allow", module: "simplyblock_core/services/tasks_runner_port_allow.py"},
 		{name: "tasks-runner-jc-comp-resume", module: "simplyblock_core/services/tasks_runner_jc_comp.py"},
 		{name: "tasks-runner-sync-lvol-del", module: "simplyblock_core/services/tasks_runner_sync_lvol_del.py"},
+		{name: "tasks-runner-sync-promote", module: "simplyblock_core/services/tasks_runner_sync_promote.py"},
+		{name: "tasks-runner-sync-resync", module: "simplyblock_core/services/tasks_runner_sync_resync.py"},
 		{name: "tasks-runner-cluster-expand", module: "simplyblock_core/services/tasks_runner_cluster_expand.py"},
 		{name: "tasks-runner-node-removal", module: "simplyblock_core/services/tasks_runner_node_removal.py"},
 		{name: "tasks-runner-snapshot-replication", module: "simplyblock_core/services/snapshot_replication.py"},
@@ -470,9 +576,8 @@ func servicePoolDeployment(
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        name,
-			Namespace:   cp.Namespace,
-			Annotations: restartOnClusterFileChange,
+			Name:      name,
+			Namespace: cp.Namespace,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr.To(int32(1)),
@@ -537,9 +642,8 @@ func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploy
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        ComponentAdminControl,
-			Namespace:   cp.Namespace,
-			Annotations: restartOnClusterFileChange,
+			Name:      ComponentAdminControl,
+			Namespace: cp.Namespace,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr.To(apiReplicas(managed)),
@@ -636,10 +740,9 @@ func fdbExporterDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        ComponentFDBExporter,
-			Namespace:   cp.Namespace,
-			Labels:      labels,
-			Annotations: restartOnClusterFileChange,
+			Name:      ComponentFDBExporter,
+			Namespace: cp.Namespace,
+			Labels:    labels,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr.To(int32(1)),

@@ -116,7 +116,8 @@ func (r *StorageClusterOpsReconciler) stripeNodesReady(
 	return false, nil
 }
 
-// storageNodeCount is how many storage nodes belong to one cluster.
+// storageNodeCount is how many storage nodes belong to one cluster on this
+// site. A remote node is the peer site's and is not counted.
 func storageNodeCount(
 	ctx context.Context, c client.Client, namespace, clusterName string,
 ) (int, error) {
@@ -126,7 +127,7 @@ func storageNodeCount(
 	}
 	count := 0
 	for i := range nodes.Items {
-		if nodes.Items[i].Spec.ClusterRef == clusterName {
+		if nodes.Items[i].Spec.ClusterRef == clusterName && !nodes.Items[i].IsRemote() {
 			count++
 		}
 	}

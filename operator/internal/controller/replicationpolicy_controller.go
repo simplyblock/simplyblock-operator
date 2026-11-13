@@ -171,10 +171,11 @@ func (r *ReplicationPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// Sync slot count and mark ready.
+	// Slots of every namespace: a claim in a workload namespace follows this
+	// policy by its namespace-qualified reference.
 	var slotList simplyblockv1alpha1.ReplicationSlotList
 	if err := r.List(ctx, &slotList,
-		client.InNamespace(policy.Namespace),
-		client.MatchingFields{"spec.policyRef": policy.Name},
+		client.MatchingFields{"spec.policyRef": policy.Namespace + "/" + policy.Name},
 	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list ReplicationSlots for policy %q: %w", policy.Name, err)
 	}
@@ -205,10 +206,10 @@ func (r *ReplicationPolicyReconciler) reconcileDelete(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
+	// A slot in any namespace still follows the policy and blocks its deletion.
 	var slotList simplyblockv1alpha1.ReplicationSlotList
 	if err := r.List(ctx, &slotList,
-		client.InNamespace(policy.Namespace),
-		client.MatchingFields{"spec.policyRef": policy.Name},
+		client.MatchingFields{"spec.policyRef": policy.Namespace + "/" + policy.Name},
 	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list ReplicationSlots: %w", err)
 	}
@@ -309,16 +310,24 @@ func parseDurationToMinutes(s string) (int, error) {
 	return minutes, nil
 }
 
+// slotPolicyRefIndex is the spec.policyRef index of a ReplicationSlot: the
+// policy it follows, namespace-qualified whichever spelling it was given.
+func slotPolicyRefIndex(obj client.Object) []string {
+	slot := obj.(*simplyblockv1alpha1.ReplicationSlot)
+	if slot.Spec.PolicyRef == "" {
+		return nil
+	}
+	return []string{utils.CanonicalRef(slot.Spec.PolicyRef, slot.Namespace)}
+}
+
 func (r *ReplicationPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// Index ReplicationSlots by spec.policyRef so the reconciler can quickly count slots.
+	// Index ReplicationSlots by the namespace-qualified policy they follow, so
+	// the reconciler can quickly count slots of every namespace.
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),
 		&simplyblockv1alpha1.ReplicationSlot{},
 		"spec.policyRef",
-		func(obj client.Object) []string {
-			slot := obj.(*simplyblockv1alpha1.ReplicationSlot)
-			return []string{slot.Spec.PolicyRef}
-		},
+		slotPolicyRefIndex,
 	); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
 			return err
@@ -335,9 +344,10 @@ func (r *ReplicationPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				if slot.Spec.PolicyRef == "" {
 					return nil
 				}
+				ns, name := utils.SplitRef(slot.Spec.PolicyRef, obj.GetNamespace())
 				return []reconcile.Request{{NamespacedName: types.NamespacedName{
-					Name:      slot.Spec.PolicyRef,
-					Namespace: obj.GetNamespace(),
+					Name:      name,
+					Namespace: ns,
 				}}}
 			},
 		)).

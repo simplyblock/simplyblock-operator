@@ -1,7 +1,7 @@
 // The per-pod DNS names the control plane reaches an SPDK process by.
 //
 // A node's SPDK process is created by the control plane and then driven over RPC
-// at worker-N.simplyblock-spdk-proxy.<ns>.svc.cluster.local:<rpc port>. That name
+// at worker-N.simplyblock-spdk-proxy.<ns>.svc:<rpc port>. That name
 // comes from a headless Service plus an EndpointSlice carrying one endpoint per
 // worker, with the worker's name as the endpoint hostname. The Service alone
 // resolves nothing.

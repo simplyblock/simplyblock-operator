@@ -27,6 +27,7 @@ func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func TestTheAdaptiveTransportFollowsThePolicyForTheDefaultAddress(t *testing.T) {
 	const defaultURL, otherURL = "http://simplyblock-webappapi:5000/x", "http://elsewhere.example:5000/x"
+	const redirectURL = "https://simplyblock-webappapi:5000/x/"
 
 	for name, tc := range map[string]struct {
 		policy                func(context.Context) bool
@@ -38,6 +39,10 @@ func TestTheAdaptiveTransportFollowsThePolicyForTheDefaultAddress(t *testing.T) 
 		"no policy stays plain":   {nil, defaultURL, 1, 0, ""},
 		"policy on upgrades":      {func(context.Context) bool { return true }, defaultURL, 0, 1, schemeHTTPS},
 		"another address is left": {func(context.Context) bool { return true }, otherURL, 1, 0, ""},
+		// The API answers a path without its trailing slash with a 307 to the
+		// https URL; the redirect has to stay on the verified connection.
+		"a redirect to https stays verified": {func(context.Context) bool { return true }, redirectURL, 0, 1, schemeHTTPS},
+		"https elsewhere is left":            {func(context.Context) bool { return true }, "https://elsewhere.example:5000/x", 1, 0, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			SetTLSPolicy(tc.policy)

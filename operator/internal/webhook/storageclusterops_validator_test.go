@@ -150,14 +150,15 @@ func TestStorageClusterOpsDeleteIsAllowedWithNoObjectToRead(t *testing.T) {
 	}
 }
 
-// The guard is registered on DELETE alone, and answers nothing else even if it
-// is asked.
-func TestStorageClusterOpsCreateIsNotThisGuardsBusiness(t *testing.T) {
+// The step table guards a delete and nothing else: a create of an operation is
+// never refused for the step it records. (A create is refused only for a
+// cluster-wide action on a stretched cluster's follower site, which
+// stretched_admission_test.go covers.)
+func TestStorageClusterOpsCreateIsNotJudgedByTheStepTable(t *testing.T) {
 	v := &StorageClusterOpsValidator{}
 
-	req := opsDeleteRequest(t,
+	req := createOf(t,
 		runningClusterOpsAt(simplyblockv1alpha2.StorageClusterOpsStepRestartingNode))
-	req.Operation = admissionv1.Create
 
 	if resp := v.Handle(context.Background(), req); !resp.Allowed {
 		t.Errorf("a create was refused by the delete guard: %s", resp.Result.Message)

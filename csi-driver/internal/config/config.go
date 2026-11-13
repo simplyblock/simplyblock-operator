@@ -32,6 +32,16 @@ type Config struct {
 	// operator. It must be projected with the audience the operator expects.
 	LinkTokenFile string
 
+	// SiteLinkEnabled links a controller plugin to its site's fleet agent too,
+	// on a member of a stretched cluster.
+	SiteLinkEnabled bool
+	// SiteLinkAddress is the site's fleet agent, `host:port`.
+	SiteLinkAddress string
+	// SiteLinkNamespace is the agent's namespace, where it publishes its CA.
+	SiteLinkNamespace string
+	// SiteLinkTokenFile is the projected token with the site link's audience.
+	SiteLinkTokenFile string
+
 	// PodUID identifies this process lifetime to the operator, so a restarted
 	// pod supersedes the session its predecessor left behind. From the
 	// downward API (metadata.uid).

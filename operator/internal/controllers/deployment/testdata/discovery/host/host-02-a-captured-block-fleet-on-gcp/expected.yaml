@@ -13,10 +13,12 @@ spec:
     enableJournalDevice: true
     maxSubsystemCount: 30
     name: discovered-discover-host-02-cluster
+    network:
+      spdkOnHostNetwork: true
     stripe:
       dataChunks: 1
       parityChunks: 1
-    vcpuCount: 4
+    vcpuCount: 5
   environment: K3s
   nodeSets:
   - groups:

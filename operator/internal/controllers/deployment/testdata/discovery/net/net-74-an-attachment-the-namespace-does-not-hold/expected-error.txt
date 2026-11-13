@@ -1,0 +1,1 @@
+no worker has a device this run would use: worker-01: the namespace simplyblock holds no NetworkAttachmentDefinition storage-nope, only storage-data, storage-mgmt; worker-02: the namespace simplyblock holds no NetworkAttachmentDefinition storage-nope, only storage-data, storage-mgmt

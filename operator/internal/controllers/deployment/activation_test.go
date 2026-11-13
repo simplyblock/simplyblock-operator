@@ -118,10 +118,9 @@ func TestTheActivationIsAskedForOnce(t *testing.T) {
 	}
 }
 
-// The step is the expansion's position within Expanding, so a document that
-// reaches Expanded carries none: a finished document read off `kubectl get`
-// shows no step it is still on.
-func TestAnExpandedDocumentCarriesNoStep(t *testing.T) {
+// A document that reaches Expanded reports the terminal step Completed, so
+// `kubectl get` shows no step it is still on.
+func TestAnExpandedDocumentReportsCompleted(t *testing.T) {
 	config, r := anExpandedDocument(t, simplyblockv1alpha2.StorageNodePhaseOnline)
 	config.Spec.Approved = true
 	config.Status.Phase = simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanding
@@ -138,7 +137,8 @@ func TestAnExpandedDocumentCarriesNoStep(t *testing.T) {
 	if stored.Status.Phase != simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanded {
 		t.Fatalf("phase = %q, want Expanded", stored.Status.Phase)
 	}
-	if stored.Status.Step.State != "" || stored.Status.Step.Deadline != nil {
-		t.Errorf("step = %+v, want none", stored.Status.Step)
+	if stored.Status.Step.State != string(simplyblockv1alpha2.ClusterDeploymentConfigStepCompleted) ||
+		stored.Status.Step.Deadline != nil {
+		t.Errorf("step = %+v, want Completed with no deadline", stored.Status.Step)
 	}
 }

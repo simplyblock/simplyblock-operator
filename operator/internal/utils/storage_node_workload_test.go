@@ -15,7 +15,7 @@ import (
 
 func TestStorageNodeSetAPIAddress(t *testing.T) {
 	got := StorageNodeSetAPIAddress("worker-1", "simplyblock", atlaskube.ConstantWorkloadNames())
-	want := "worker-1.simplyblock-storage-node-api.simplyblock.svc.cluster.local:5000"
+	want := "worker-1.simplyblock-storage-node-api.simplyblock.svc:5000"
 	if got != want {
 		t.Fatalf("StorageNodeSetAPIAddress = %q, want %q", got, want)
 	}
@@ -349,6 +349,43 @@ func TestTheStorageNodeAgentIsRestartedWhenItStopsAnswering(t *testing.T) {
 				if got := probe.HTTPGet.Scheme; got != tc.wantScheme && (got != "" || tc.wantScheme != corev1.URISchemeHTTP) {
 					t.Errorf("probe scheme %q, want %q", got, tc.wantScheme)
 				}
+			}
+		})
+	}
+}
+
+// Regression: 2026-11-03-snodeapi-healthcheck-log-noise. Under mutual TLS,
+// both probes only completed a bare TLS handshake and treated the agent's
+// expected certificate-less rejection as success. The agent logged every one
+// of those rejections as a handshake failure, indistinguishable from a real
+// fault, on every probe interval. The in-container exec check has the
+// agent's own certificate mounted beside it (the same volume node_webapp.py
+// serves with), so it can present one and complete a genuine, mutually
+// authenticated handshake instead of forcing a rejection.
+func TestTheStorageNodeAgentHealthChecksPresentACertificateUnderMutualTLS(t *testing.T) {
+	sn := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
+	}
+	ds := BuildStorageNodeDaemonSet(sn, true, true, "", "", "")
+	container := ds.Spec.Template.Spec.Containers[0]
+
+	for _, tc := range []struct {
+		name  string
+		probe *corev1.Probe
+	}{
+		{"readiness", container.ReadinessProbe},
+		{"liveness", container.LivenessProbe},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.probe == nil || tc.probe.Exec == nil {
+				t.Fatalf("expected an exec probe under mutual TLS, got %#v", tc.probe)
+			}
+			script := strings.Join(tc.probe.Exec.Command, " ")
+			if !strings.Contains(script, "load_cert_chain") {
+				t.Errorf("the probe never presents the agent's own certificate: %s", script)
+			}
+			if strings.Contains(script, "CERT_NONE") {
+				t.Errorf("the probe still accepts, rather than authenticates, the handshake: %s", script)
 			}
 		})
 	}

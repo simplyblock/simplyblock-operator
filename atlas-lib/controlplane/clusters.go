@@ -27,6 +27,16 @@ type Cluster struct {
 	NPCS              int
 	MaxFaultTolerance int
 	WorkloadNames     ClusterWorkloadNames
+	// SyncReplication is whether the cluster spans two sites, every write
+	// landing on both before it is acknowledged.
+	SyncReplication bool
+	// LeaderSite is the site the cluster record names as leader; empty when
+	// none is recorded.
+	LeaderSite string
+	// LostSite is the site recorded as out of service, empty while both are
+	// in, and LostSiteState how far its drain or fence got.
+	LostSite      string
+	LostSiteState string
 }
 
 // ClusterWorkloadNames are the Services a cluster's storage nodes are reached
@@ -85,6 +95,13 @@ type CreateClusterParams struct {
 	// without HA.
 	SingleNode    bool
 	WorkloadNames ClusterWorkloadNames
+	// SyncReplication creates a cluster whose writes land on both of its
+	// sites before they are acknowledged. The backend accepts it at create
+	// only.
+	SyncReplication bool
+	// LeaderSite names the creating site the leader of a sync-replicated
+	// cluster; empty leaves it unset.
+	LeaderSite string
 }
 
 // ClusterCapacityReading is one capacity sample of a cluster, in bytes.
@@ -194,6 +211,10 @@ func clusterFromDTO(d cpapi.ClusterDTO) Cluster {
 			SpdkProxyTLSSecret: d.SpdkProxyTlsSecret,
 			NodeLabelSuffix:    d.NodeLabelSuffix,
 		},
+		SyncReplication: ptr.BoolFromOrFalse(d.SyncReplication),
+		LeaderSite:      ptr.From(d.LeaderSite, ""),
+		LostSite:        ptr.From(d.LostSite, ""),
+		LostSiteState:   ptr.From(d.LostSiteState, ""),
 	}
 }
 
@@ -224,6 +245,8 @@ func clusterParamsOf(p CreateClusterParams) cpapi.ClusterParams {
 		InlineChecksum:         isTrue(p.InlineChecksum),
 		Atomic4k:               isTrue(p.Atomic4K),
 		IsSingleNode:           isTrue(p.SingleNode),
+		SyncReplication:        isTrue(p.SyncReplication),
+		LeaderSite:             nonEmpty(p.LeaderSite),
 		SnodeApiService:        nonEmpty(p.WorkloadNames.NodeAPIService),
 		SpdkProxyService:       nonEmpty(p.WorkloadNames.SpdkProxyService),
 		SpdkProxyTlsSecret:     nonEmpty(p.WorkloadNames.SpdkProxyTLSSecret),

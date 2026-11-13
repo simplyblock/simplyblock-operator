@@ -188,7 +188,6 @@ func TestASuperclusterDocumentCreatesTheSuperclusterAndAMemberPerNodeSet(t *test
 	if len(recorded.Status.Members) != 2 {
 		t.Fatalf("status.members = %+v, want one per node set", recorded.Status.Members)
 	}
-	interfaces := map[string]string{"fast": "eth1", "dense": "eth3"}
 	for _, entry := range recorded.Status.Members {
 		if !strings.HasPrefix(entry.Cluster, theCluster+"-"+entry.NodeSet+"-") || len(entry.Cluster) != len(theCluster+"-"+entry.NodeSet+"-xyz") {
 			t.Errorf("member of node set %s is named %q, want %s-%s-<suffix>", entry.NodeSet, entry.Cluster, theCluster, entry.NodeSet)
@@ -201,10 +200,6 @@ func TestASuperclusterDocumentCreatesTheSuperclusterAndAMemberPerNodeSet(t *test
 			member.Spec.DeviceClass != simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock {
 			t.Errorf("member %s: mode %q class %q, want the template's Single and its node set's block",
 				member.Name, member.Spec.ClusterMode, member.Spec.DeviceClass)
-		}
-		if member.Spec.StorageNodes == nil || member.Spec.StorageNodes.MgmtInterface != interfaces[entry.NodeSet] {
-			t.Errorf("member %s does not run on its node set's interface %s: %+v",
-				member.Name, interfaces[entry.NodeSet], member.Spec.StorageNodes)
 		}
 	}
 }
@@ -474,27 +469,25 @@ func TestTheLaterStepsRefuseASuperclusterWithoutItsMemberRecord(t *testing.T) {
 	}
 }
 
-// The control plane runs logical block devices only with a dedicated journal
-// device, and refuses each node add without one, after the cluster exists. A
-// document that names block devices without the journal device says so while
-// it can still be corrected.
-func TestBlockDevicesWithoutAJournalDeviceAreReported(t *testing.T) {
+// A logical block-device node carries its journal in a partition carved from
+// its own smallest device by default (the journal split), and the split is per
+// node, so it holds with several storage nodes per worker too. A document
+// without a dedicated journal device therefore draws no finding, whatever the
+// node count, and neither does one with it.
+func TestBlockDevicesWithoutAJournalDeviceAreAccepted(t *testing.T) {
 	config := aSuperclusterDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
 		c.Spec.Cluster.EnableJournalDevice = ptr.To(false)
 	})
-
-	found := findingsOf(t, config, workers("worker-1", "worker-2")...)
-	if len(found) != 2 {
-		t.Fatalf("findings = %+v, want one JournalDeviceRequired per member", found)
-	}
-	for _, f := range found {
-		if f.reason != JournalDeviceRequired || !strings.Contains(f.message, "enableJournalDevice") {
-			t.Errorf("finding %+v, want JournalDeviceRequired naming the field to set", f)
+	for _, nodes := range []int32{1, 2} {
+		config.Spec.Cluster.NodesPerSocket = ptr.To(nodes)
+		for _, journal := range []bool{false, true} {
+			config.Spec.Cluster.EnableJournalDevice = ptr.To(journal)
+			for _, f := range findingsOf(t, config, workers("worker-1", "worker-2")...) {
+				if strings.Contains(strings.ToLower(f.message), "journal") {
+					t.Errorf("finding %+v with %d nodes per worker and enableJournalDevice=%v, want "+
+						"none about the journal", f, nodes, journal)
+				}
+			}
 		}
-	}
-
-	config.Spec.Cluster.EnableJournalDevice = ptr.To(true)
-	if found := findingsOf(t, config, workers("worker-1", "worker-2")...); len(found) > 0 {
-		t.Errorf("findings = %+v with the journal device on, want none", found)
 	}
 }

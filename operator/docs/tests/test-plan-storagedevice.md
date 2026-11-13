@@ -179,14 +179,15 @@ File: `operator/internal/metricsapi/devicestorage_test.go`
 
 File: `operator/internal/metricsapi/scheme_test.go`
 
-| #     | Scenario                                                                     | Type     | Test                                         |
-|-------|------------------------------------------------------------------------------|----------|----------------------------------------------|
-| U-112 | Every kind of the metrics group is registered at the version it is served at | Positive | `TestSchemeKnowsTheServedKinds`              |
-| U-113 | The group serves one version, and it is `v1alpha2`                           | Boundary | `TestTheGroupServesOneVersion`               |
-| U-114 | A reading round-trips through the codec with its kind intact                 | Positive | `TestCodecRoundTripsADeviceReading`          |
-| U-115 | The group installs with both resources under its version                     | Positive | `TestAPIGroupInstalls`                       |
-| U-116 | The OpenAPI definitions cover every served kind                              | Boundary | `TestOpenAPIDefinitionsCoverEveryServedKind` |
-| U-117 | Every served version has an `APIService` whose CA bundle is injected         | Boundary | `TestEveryServedVersionGetsItsCABundle`      |
+| #     | Scenario                                                                                                          | Type       | Test                                         |
+|-------|-------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------|
+| U-112 | Every kind of the metrics group is registered at the version it is served at                                      | Positive   | `TestSchemeKnowsTheServedKinds`              |
+| U-113 | The group serves one version, and it is `v1alpha2`                                                                | Boundary   | `TestTheGroupServesOneVersion`               |
+| U-114 | A reading round-trips through the codec with its kind intact                                                      | Positive   | `TestCodecRoundTripsADeviceReading`          |
+| U-115 | The group installs with both resources under its version                                                          | Positive   | `TestAPIGroupInstalls`                       |
+| U-116 | The OpenAPI definitions cover every served kind                                                                   | Boundary   | `TestOpenAPIDefinitionsCoverEveryServedKind` |
+| U-117 | Every served version has an `APIService` whose CA bundle is injected                                              | Boundary   | `TestEveryServedVersionGetsItsCABundle`      |
+| U-153 | The served `/openapi/v2` resolves every model reference, so Argo CD can parse the cluster's document (2026-10-28) | Regression | `TestOpenAPIV2DocumentParses`                |
 
 ### StorageDeviceOps: Restart and Test (design §6)
 

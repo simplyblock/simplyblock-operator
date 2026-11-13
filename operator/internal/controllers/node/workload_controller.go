@@ -46,6 +46,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	atlaskube "github.com/simplyblock/atlas/kube"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -125,6 +126,11 @@ func (r *StorageNodeWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error
 		Watches(&corev1.Pod{},
 			handler.EnqueueRequestsFromMapFunc(r.clusterOfProxyPod),
 			builder.WithPredicates(isSpdkProxyPod())).
+		// The agent's endpoint carries the pod's own address once the cluster
+		// declares a network, and a restarted pod comes back on a new one.
+		Watches(&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(r.clusterOfAgentPod),
+			builder.WithPredicates(isAgentPod())).
 		Complete(r)
 }
 
@@ -151,6 +157,30 @@ func isSpdkProxyPod() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(object client.Object) bool {
 		return object.GetLabels()["role"] == utils.LabelSpdkProxyRole
 	})
+}
+
+// isAgentPod admits the storage-node agent pods, which carry the app label the
+// DaemonSet sets.
+func isAgentPod() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(object client.Object) bool {
+		return object.GetLabels()[atlaskube.LabelApp] == atlaskube.AppStorageNode
+	})
+}
+
+// clusterOfAgentPod maps an agent pod to the cluster its DaemonSet belongs to,
+// which the pod's own label names.
+func (r *StorageNodeWorkloadReconciler) clusterOfAgentPod(
+	_ context.Context, object client.Object,
+) []reconcile.Request {
+	labels := object.GetLabels()
+	cluster := labels[atlaskube.LabelSimplyblockCluster]
+	if labels[atlaskube.LabelApp] != atlaskube.AppStorageNode || cluster == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Name:      cluster,
+		Namespace: object.GetNamespace(),
+	}}}
 }
 
 // clusterOfProxyPod maps an spdk-proxy pod to the clusters whose workload pass
@@ -440,6 +470,26 @@ func (r *StorageNodeWorkloadReconciler) image(
 		SingletonControlPlaneName)
 }
 
+// eksRoleARN is the IAM role the storage-node service account assumes on
+// Amazon EKS, read from the ControlPlane singleton's spec.source.local, the
+// same object and the same fallback image() reads. Empty, without error, when
+// the singleton is absent or its control plane is managed elsewhere: neither
+// is this operator's to annotate an account for.
+func (r *StorageNodeWorkloadReconciler) eksRoleARN(ctx context.Context) (string, error) {
+	var controlPlane simplyblockv1alpha2.ControlPlane
+	key := types.NamespacedName{Namespace: r.Namespace, Name: SingletonControlPlaneName}
+	if err := r.Get(ctx, key, &controlPlane); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read ControlPlane %s: %w", SingletonControlPlaneName, err)
+	}
+	if local := controlPlane.Spec.Source.Local; local != nil {
+		return local.EKSRoleARN, nil
+	}
+	return "", nil
+}
+
 // tlsSecretVersion is what a certificate rotation is noticed by.
 func (r *StorageNodeWorkloadReconciler) tlsSecretVersion(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
@@ -475,11 +525,10 @@ func (r *StorageNodeWorkloadReconciler) reconcileService(
 // reconcileEndpointSlice publishes one per-pod DNS name per worker the cluster's
 // nodes run on, plus the target of each migration that is running.
 //
-// The slice is built from the pass's one reading of the cluster's StorageNodes
-// (clusterNodes), so a node on its way out drops its worker here exactly where the
-// ConfigMap and the enrollment drop it. The nodes are what say which workers are
-// in the storage plane now: a relocation adds the target before the node's own spec.workerNode moves,
-// so the Migrate operations are read as well.
+// The slice is built from the StorageNode objects rather than from a list on the
+// cluster, because the nodes are what say which workers are in the storage plane
+// now: a relocation adds the target before the node's own spec.workerNode moves.
+// A remote node is the peer site's, runs on no worker here, and is not published.
 func (r *StorageNodeWorkloadReconciler) reconcileEndpointSlice(
 	ctx context.Context,
 	cluster *simplyblockv1alpha2.StorageCluster,
@@ -499,7 +548,7 @@ func (r *StorageNodeWorkloadReconciler) reconcileEndpointSlice(
 			if _, known := addresses[worker]; known || worker == "" {
 				continue
 			}
-			address, err := r.workerAddress(ctx, worker)
+			address, err := r.agentAddress(ctx, cluster, worker)
 			if err != nil || address == "" {
 				log.V(1).Info("a worker has no internal address yet and is not published",
 					"worker", worker)
@@ -592,17 +641,24 @@ func (r *StorageNodeWorkloadReconciler) clusterOfOperation(
 	return r.clusterOf(ctx, &node)
 }
 
-// workerAddress is the worker's internal IP, which is what an endpoint carries.
-func (r *StorageNodeWorkloadReconciler) workerAddress(
-	ctx context.Context, worker string,
+// agentAddress is what the storage-node API endpoint of a worker carries: the
+// agent pod's own IP, because the agent is in the pod network.
+func (r *StorageNodeWorkloadReconciler) agentAddress(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, worker string,
 ) (string, error) {
-	var object corev1.Node
-	if err := r.Get(ctx, types.NamespacedName{Name: worker}, &object); err != nil {
-		return "", client.IgnoreNotFound(err)
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods,
+		client.InNamespace(cluster.Namespace),
+		client.MatchingLabels{
+			atlaskube.LabelApp:                atlaskube.AppStorageNode,
+			atlaskube.LabelSimplyblockCluster: cluster.Name,
+		},
+	); err != nil {
+		return "", fmt.Errorf("list the storage-node agent pods: %w", err)
 	}
-	for _, address := range object.Status.Addresses {
-		if address.Type == corev1.NodeInternalIP {
-			return address.Address, nil
+	for i := range pods.Items {
+		if pods.Items[i].Spec.NodeName == worker {
+			return pods.Items[i].Status.PodIP, nil
 		}
 	}
 	return "", nil
@@ -630,7 +686,8 @@ func (r *StorageNodeWorkloadReconciler) reconcileRBAC(
 }
 
 // shareServiceAccount makes the cluster an owner of the ServiceAccount the
-// storage-node pods run as.
+// storage-node pods run as, and keeps its EKS role annotation equal to what
+// the ControlPlane singleton states.
 //
 // The control plane's SPDK pod template names the account, so every cluster in a
 // namespace runs as the same one. Each cluster owns it without controlling it,
@@ -641,7 +698,11 @@ func (r *StorageNodeWorkloadReconciler) reconcileRBAC(
 func (r *StorageNodeWorkloadReconciler) shareServiceAccount(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
-	account := utils.BuildStorageNodeSetServiceAccount(cluster.Namespace)
+	roleARN, err := r.eksRoleARN(ctx)
+	if err != nil {
+		return err
+	}
+	account := utils.BuildStorageNodeSetServiceAccount(cluster.Namespace, roleARN)
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var existing corev1.ServiceAccount
 		err := r.Get(ctx, client.ObjectKeyFromObject(account), &existing)
@@ -663,11 +724,34 @@ func (r *StorageNodeWorkloadReconciler) shareServiceAccount(
 		for i := range existing.OwnerReferences {
 			existing.OwnerReferences[i].Controller = nil
 		}
-		if len(existing.OwnerReferences) == before && !controlled {
+		annotationChanged := setEKSRoleARNAnnotation(&existing, roleARN)
+		if len(existing.OwnerReferences) == before && !controlled && !annotationChanged {
 			return nil
 		}
 		return r.Update(ctx, &existing)
 	})
+}
+
+// setEKSRoleARNAnnotation keeps sa's EKS role annotation equal to roleARN,
+// added, changed, or removed as roleARN requires, and reports whether it
+// changed anything. Every other annotation is left alone.
+func setEKSRoleARNAnnotation(sa *corev1.ServiceAccount, roleARN string) bool {
+	current, ok := sa.Annotations[utils.EKSRoleARNAnnotation]
+	if roleARN == "" {
+		if !ok {
+			return false
+		}
+		delete(sa.Annotations, utils.EKSRoleARNAnnotation)
+		return true
+	}
+	if ok && current == roleARN {
+		return false
+	}
+	if sa.Annotations == nil {
+		sa.Annotations = map[string]string{}
+	}
+	sa.Annotations[utils.EKSRoleARNAnnotation] = roleARN
+	return true
 }
 
 // reconcileCertificates applies the serving certificates of the two Services.

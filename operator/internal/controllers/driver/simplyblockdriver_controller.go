@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 )
 
 const (
@@ -103,6 +104,10 @@ type SimplyblockDriverReconciler struct {
 	// decides both whether a VolumeSnapshotClass is applied and what
 	// status.snapshotSupport records (§4.1).
 	Snapshots SnapshotAPI
+
+	// SiteLink, when set, has the CSI controller join this site's site link,
+	// which the operator runs on a member of a stretched cluster.
+	SiteLink *SiteLinkConfig
 }
 
 func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -153,7 +158,13 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Adoption refuses on the one thing the spec cannot change. The counts are
 	// still published, because the plugins are running and what is blocked is
 	// the handover rather than the driver.
-	refusal, refused, err := r.adoptionRefusal(ctx, &d)
+	// Unset TLS fields follow the control plane in this namespace. The result
+	// is compared and applied, never written back, so the stored spec keeps following it.
+	effective, err := r.withInheritedTLS(ctx, &d)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	refusal, refused, err := r.adoptionRefusal(ctx, effective)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -197,7 +208,7 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			r.setStatus(ctx, &d, simplyblockv1alpha2.SimplyblockDriverPhaseInstalling, err.Error())
 	}
 
-	met, err := r.apply(ctx, &d)
+	met, err := r.apply(ctx, effective)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -360,7 +371,8 @@ func (r *SimplyblockDriverReconciler) desired(
 	if csiAddonsEnabled(d) {
 		objects = append(objects, csiAddonsRole(d), csiAddonsRoleBinding(d), csiAddonsAuthDelegatorBinding(d))
 	}
-	objects = append(objects, nodeDaemonSet(d, image), controllerStatefulSet(d, image), csiDriver(d))
+	objects = append(objects, clientCertificates(d)...)
+	objects = append(objects, nodeDaemonSet(d, image), withSiteLink(controllerStatefulSet(d, image), r.SiteLink), csiDriver(d))
 
 	// The class is this deployment's and is applied wherever the kinds exist,
 	// but only where they exist: a cluster serving no snapshot API has no kind
@@ -747,6 +759,9 @@ func (r *SimplyblockDriverReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// A storage node's listener port is one the mds-proxy may dial, so a
 		// node that comes or changes its port rewrites the proxy's ports.
 		Watches(&simplyblockv1alpha2.StorageNode{}, handler.EnqueueRequestsFromMapFunc(r.driversWithMDS)).
+		// A driver that states no TLS follows the control plane's, so the control
+		// plane appearing re-reconciles the drivers beside it.
+		Watches(&simplyblockv1alpha2.ControlPlane{}, handler.EnqueueRequestsFromMapFunc(r.driversInNamespace)).
 		Named("simplyblockdriver").
 		Complete(r)
 }
@@ -765,4 +780,37 @@ func (r *SimplyblockDriverReconciler) driversWithMDS(ctx context.Context, _ clie
 		}
 	}
 	return requests
+}
+
+// driversInNamespace maps a ControlPlane event to every driver in its namespace.
+func (r *SimplyblockDriverReconciler) driversInNamespace(ctx context.Context, obj client.Object) []reconcile.Request {
+	var drivers simplyblockv1alpha2.SimplyblockDriverList
+	if err := r.List(ctx, &drivers, client.InNamespace(obj.GetNamespace())); err != nil {
+		log.FromContext(ctx).Error(err, "listing drivers for a ControlPlane event")
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(drivers.Items))
+	for _, d := range drivers.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&d)})
+	}
+	return requests
+}
+
+// withInheritedTLS returns a copy of d whose unset TLS fields are filled from
+// the ControlPlane in its namespace, or off where there is none.
+func (r *SimplyblockDriverReconciler) withInheritedTLS(
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
+) (*simplyblockv1alpha2.SimplyblockDriver, error) {
+	var cp *simplyblockv1alpha2.ControlPlane
+	found := &simplyblockv1alpha2.ControlPlane{}
+	err := r.Get(ctx, client.ObjectKey{Namespace: d.Namespace, Name: controlplane.SingletonName}, found)
+	switch {
+	case err == nil:
+		cp = found
+	case !errors.IsNotFound(err):
+		return nil, fmt.Errorf("reading the ControlPlane the driver's TLS follows: %w", err)
+	}
+	out := d.DeepCopy()
+	out.Spec.TLS = inheritTLS(d.Spec.TLS, cp)
+	return out, nil
 }

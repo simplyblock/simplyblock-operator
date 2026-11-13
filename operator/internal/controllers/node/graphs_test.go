@@ -71,7 +71,7 @@ func TestTheNodeStepEnumAndRuleCoverTheProvisioningGraph(t *testing.T) {
 	declared := statemachine.DeclaredStates(provisioningGraph())
 	want := []string{
 		"Adopting", "AwaitingSlot", "AwaitingWorker", "CheckingConfig", "CheckingHost",
-		"Posting", "Resolving",
+		"CheckingNetwork", "Posting", "Resolving",
 	}
 	if diff := cmp.Diff(want, declared); diff != "" {
 		t.Errorf("the provisioning graph and the Enum marker disagree (-marker +graph):\n%s", diff)
@@ -108,7 +108,7 @@ const opsStepCELRule = "!has(self.state) || self.state in " +
 	"'ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']"
 
 const nodeStepCELRule = "!has(self.state) || self.state in " +
-	"['CheckingHost','CheckingConfig','AwaitingSlot','Posting','Resolving','Adopting'," +
+	"['CheckingHost','CheckingConfig','CheckingNetwork','AwaitingSlot','Posting','Resolving','Adopting'," +
 	"'AwaitingWorker']"
 
 // Every action the API accepts needs a graph, or an operation of that action fails
@@ -288,7 +288,7 @@ func assertLine(t *testing.T, a simplyblockv1alpha2.StorageNodeOpsAction, want [
 // has is a second add.
 func TestAdoptionIsReachableFromEveryGateBeforeTheAdd(t *testing.T) {
 	ctx := context.Background()
-	for _, from := range []nodeStep{stepCheckingHost, stepCheckingConfig, stepAwaitingSlot} {
+	for _, from := range []nodeStep{stepCheckingHost, stepCheckingConfig, stepCheckingNetwork, stepAwaitingSlot} {
 		config := provisioningGraph()
 		machine, err := statemachine.NewFromSnapshot(ctx, config,
 			statemachine.Snapshot[nodeStep]{State: from})
@@ -316,5 +316,27 @@ func TestAwaitingSlotMayGoStraightToResolving(t *testing.T) {
 
 	if err := machine.TransitionTo(ctx, stepResolving); err != nil {
 		t.Errorf("a sibling's claim cannot be read as a slot already posted: %v", err)
+	}
+}
+
+// The network probe sits between the configuration gate and the queue for a
+// slot, so a node holds no slot while the probe runs and the probe's address is
+// free again before the add.
+func TestTheNetworkProbeSitsBetweenTheConfigurationGateAndTheQueue(t *testing.T) {
+	ctx := context.Background()
+	for _, edge := range [][2]nodeStep{
+		{stepCheckingConfig, stepCheckingNetwork},
+		{stepCheckingNetwork, stepAwaitingSlot},
+		{stepCheckingConfig, stepAwaitingSlot},
+	} {
+		machine, err := statemachine.NewFromSnapshot(ctx, provisioningGraph(),
+			statemachine.Snapshot[nodeStep]{State: edge[0]})
+		if err != nil {
+			t.Fatalf("build the provisioning machine at %q: %v", edge[0], err)
+		}
+		if err := machine.TransitionTo(ctx, edge[1]); err != nil {
+			t.Errorf("%q cannot go to %q: %v", edge[0], edge[1], err)
+		}
+		machine.Close()
 	}
 }

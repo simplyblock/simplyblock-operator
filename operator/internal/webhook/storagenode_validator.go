@@ -93,6 +93,16 @@ func (v *StorageNodeValidator) Handle(
 func (v *StorageNodeValidator) admitCreate(
 	ctx context.Context, node *simplyblockv1alpha2.StorageNode, byOperator bool,
 ) admission.Response {
+	// A remote node is the other site's node, which the operator lists from the
+	// control plane. One written by anyone else is a record of a node no site
+	// manages, and migration and placement would resolve a peer-site UUID to it.
+	if node.IsRemote() && !byOperator {
+		return admission.Denied(fmt.Sprintf(
+			"RemoteNode: StorageNode %s is marked spec.stretched.remote, and only the operator lists "+
+				"the other site's nodes; create a node of this site without the mark instead",
+			node.Name))
+	}
+
 	// The reference is immutable from creation, which is what makes admission the
 	// right place. A node naming a cluster that is not there can never be
 	// corrected — the field cannot be edited, so the only remedy is to delete the
@@ -109,6 +119,9 @@ func (v *StorageNodeValidator) admitCreate(
 	}
 
 	if denial := deviceClassDenial(&node.Spec.Config, &cluster); denial != "" {
+		return admission.Denied(denial)
+	}
+	if denial := dataInterfacesDenial(&node.Spec.Config, &cluster); denial != "" {
 		return admission.Denied(denial)
 	}
 
@@ -337,4 +350,19 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// dataInterfacesDenial refuses a node that names host NICs on a cluster whose SPDK
+// pods are not on the host network. A cluster that states no network is the legacy
+// host-network mode, so it admits them.
+func dataInterfacesDenial(config *simplyblockv1alpha2.StorageNodeConfig, cluster *simplyblockv1alpha2.StorageCluster) string {
+	if len(config.DataInterfaces) == 0 || cluster.Spec.StorageNodes == nil {
+		return ""
+	}
+	network := cluster.Spec.StorageNodes.Network
+	if network == nil || network.SpdkOnHostNetwork {
+		return ""
+	}
+	return fmt.Sprintf("spec.config.dataInterfaces is allowed only when StorageCluster %q runs its SPDK pods "+
+		"on the host network (spec.storageNodes.network.spdkOnHostNetwork)", cluster.Name)
 }

@@ -145,6 +145,111 @@ func TestSomeWorkersWithoutAFailureDomainAreReported(t *testing.T) {
 	}
 }
 
+// zonedPlanFD is zonedPlan with the run's enableFailureDomains override set.
+func zonedPlanFD(enable *bool, labels map[string]map[string]string) Plan {
+	nodes := make([]corev1.Node, 0, len(labels))
+	for name, set := range labels {
+		nodes = append(nodes, withLabels(name, set))
+	}
+	run := &simplyblockv1alpha2.DiscoverSpec{EnableFailureDomains: enable}
+	return Planner{KubeNodes: KubeNodesOf(nodes)}.Plan(uniformFleet(len(labels)), run)
+}
+
+// groupCount is how many hardware groups a plan drafted, across its node sets.
+func groupCount(plan Plan) int {
+	n := 0
+	for _, set := range plan.NodeSets {
+		n += len(set.Groups)
+	}
+	return n
+}
+
+// enableFailureDomains:false reads no topology at all, so a fleet in three zones
+// is drafted as one group with no failure domain, which is what a deployment that
+// does not want its zones treated as failure domains states.
+func TestFailureDomainsDisabledGroupsTheFleetAsOne(t *testing.T) {
+	plan := zonedPlanFD(ptr.To(false), map[string]map[string]string{
+		"worker-1": {corev1.LabelTopologyZone: "a"},
+		"worker-2": {corev1.LabelTopologyZone: "b"},
+		"worker-3": {corev1.LabelTopologyZone: "c"},
+	})
+
+	if plan.FailureDomains {
+		t.Error("enableFailureDomains:false still enabled failure domains")
+	}
+	if n := groupCount(plan); n != 1 {
+		t.Fatalf("drafted %d groups, want one flat group", n)
+	}
+	for worker, domain := range domainsByWorker(plan) {
+		if domain != "" {
+			t.Errorf("worker %s carries failure domain %q, want none", worker, domain)
+		}
+	}
+}
+
+// With the mode disabled, the draft states enableFailureDomains false rather than
+// leaving it unset, so a reviewer sees the choice was made.
+func TestFailureDomainsDisabledWritesFalseOnTheDraft(t *testing.T) {
+	plan := zonedPlanFD(ptr.To(false), map[string]map[string]string{
+		"worker-1": {corev1.LabelTopologyZone: "a"},
+		"worker-2": {corev1.LabelTopologyZone: "b"},
+		"worker-3": {corev1.LabelTopologyZone: "c"},
+	})
+
+	template, err := ClusterTemplateFor("c", plan, TemplateOptions{EnableFailureDomains: ptr.To(false)})
+	if err != nil {
+		t.Fatalf("ClusterTemplateFor: %v", err)
+	}
+	if template.Template.EnableFailureDomains == nil || *template.Template.EnableFailureDomains {
+		t.Errorf("enableFailureDomains = %v, want an explicit false", template.Template.EnableFailureDomains)
+	}
+}
+
+// Forcing the mode on where the topology cannot support it — one shared zone,
+// so one failure domain — writes the mode on as the run states, and a note that
+// the control plane will refuse to activate it until there are enough domains.
+func TestFailureDomainsForcedOnWithoutEnoughDomainsIsNoted(t *testing.T) {
+	plan := zonedPlanFD(ptr.To(true), map[string]map[string]string{
+		"worker-1": {corev1.LabelTopologyZone: "a"},
+		"worker-2": {corev1.LabelTopologyZone: "a"},
+		"worker-3": {corev1.LabelTopologyZone: "a"},
+	})
+
+	template, err := ClusterTemplateFor("c", plan, TemplateOptions{EnableFailureDomains: ptr.To(true)})
+	if err != nil {
+		t.Fatalf("ClusterTemplateFor: %v", err)
+	}
+	if template.Template.EnableFailureDomains == nil || !*template.Template.EnableFailureDomains {
+		t.Errorf("enableFailureDomains = %v, want true as the run states", template.Template.EnableFailureDomains)
+	}
+	noted := false
+	for _, note := range template.Notes {
+		if strings.Contains(note, "enableFailureDomains") && strings.Contains(note, "refuse to activate") {
+			noted = true
+		}
+	}
+	if !noted {
+		t.Errorf("notes = %v, want one saying the control plane will refuse to activate", template.Notes)
+	}
+}
+
+// enableFailureDomains:true reads the topology and proposes the mode on, the same
+// as the auto decision for a labeled fleet.
+func TestFailureDomainsForcedOnReadsTheTopology(t *testing.T) {
+	plan := zonedPlanFD(ptr.To(true), map[string]map[string]string{
+		"worker-1": {corev1.LabelTopologyZone: "a"},
+		"worker-2": {corev1.LabelTopologyZone: "b"},
+		"worker-3": {corev1.LabelTopologyZone: "c"},
+	})
+
+	if !plan.FailureDomains {
+		t.Error("enableFailureDomains:true did not read the workers' failure domains")
+	}
+	if got := domainsByWorker(plan); got["worker-1"] != "a" || got["worker-3"] != "c" {
+		t.Errorf("failure domains = %v, want each worker's zone", got)
+	}
+}
+
 // fastGroup is the placement-group value the tests label most workers with.
 const fastGroup = "fast"
 

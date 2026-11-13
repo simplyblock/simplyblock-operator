@@ -338,14 +338,21 @@ func (r *StorageNodeOpsReconciler) peerTargets(
 	}
 
 	var drained NodeReading
-	peers := make([]string, 0, len(readings))
-	replicatesOntoDrained := map[string]bool{}
 	for _, reading := range readings {
 		if reading.UUID == nodeID {
 			drained = reading
+			break
+		}
+	}
+	// On a stretched cluster the list carries both sites' nodes, and a volume
+	// moved to the other site leaves this one, so only same-site peers qualify.
+	peers := make([]string, 0, len(readings))
+	replicatesOntoDrained := map[string]bool{}
+	for _, reading := range readings {
+		if reading.UUID == nodeID || reading.Status != nodeStatusOnline {
 			continue
 		}
-		if reading.Status != nodeStatusOnline {
+		if drained.Site != "" && reading.Site != drained.Site {
 			continue
 		}
 		peers = append(peers, reading.UUID)

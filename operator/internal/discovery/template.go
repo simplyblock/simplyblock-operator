@@ -31,15 +31,38 @@ const (
 	// the schema rather than reviewed.
 	MinimumVCPUCount int32 = 4
 
+	// SystemReservedCPUs is what the draft keeps back from a memory node's
+	// logical CPUs: the two the node preparation reserves for the kubelet and
+	// the system (reservedSystemCPUs "0,1") where CPU topology is on. The SPDK
+	// pod requests its whole core count, so a draft that keeps back less than
+	// the reserve asks for more than the node's allocatable CPU and the pod
+	// never schedules. It is also past the control plane's own floor of one
+	// CPU beyond the count.
+	SystemReservedCPUs = 2
+
+	// DefaultVCPUSharePercent is the share of a socket's logical CPUs a draft
+	// gives SPDK when the installation states no vcpuCount. Storage shares its
+	// workers with the kubelet, the platform, and, hyper-converged, with the
+	// applications; handing SPDK the whole socket starves all of them, and on a
+	// large socket asks for more allocatable CPU than any worker has left, so
+	// the SPDK pod never schedules.
+	DefaultVCPUSharePercent = 10
+
+	// DefaultMinimumVCPUCount is the smallest vcpuCount a draft proposes on its
+	// own. Ten percent of a small socket is too little for a storage node to
+	// carry its pollers.
+	DefaultMinimumVCPUCount = 5
+
 	// DefaultMaxSubsystemCount is what a draft proposes for the number of
 	// NVMe-oF subsystems each storage node serves.
 	//
 	// Nothing a probe reports bears on it: it is a function of how many volumes
 	// the deployment expects to serve and how they are spread, which is a
-	// question about the workload rather than about the hardware. The API's
-	// range is 10 to 75, and this is the middle of it, chosen so that a
-	// reviewer who has not thought about it gets a working cluster and one who
-	// has can see the number was not derived.
+	// question about the workload rather than about the hardware. The API
+	// accepts 10 to 500, and this is a modest value within it, chosen so that
+	// a reviewer who has not thought about it gets a working cluster without
+	// the huge pages of a large one, and one who has can see the number was
+	// not derived.
 	DefaultMaxSubsystemCount int32 = 30
 )
 
@@ -71,6 +94,17 @@ type TemplateOptions struct {
 	// fleet's disks do not say which one. journalDeviceFor is what it does, and
 	// what it does not.
 	ForceJournalDevice bool
+
+	// Network is the network the discovery run itself states, in its
+	// spec.discover.network. It overrides both the seed's and the one the plan
+	// would propose.
+	Network *simplyblockv1alpha2.StorageNetworkSpec
+
+	// EnableFailureDomains is the run's spec.discover.enableFailureDomains, which
+	// overrides the run's own decision whether to propose failure-domain mode:
+	// false off, true on, nil the auto decision. It takes precedence over the
+	// seed's value.
+	EnableFailureDomains *bool
 }
 
 // ClusterTemplateFor proposes the cluster for a plan.
@@ -92,6 +126,26 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 		seed = &simplyblockv1alpha2.ClusterTemplate{}
 	}
 
+	switch {
+	case opts.Network != nil:
+		out.Template.Network = opts.Network.DeepCopy()
+		out.Notes = append(out.Notes, "network is the one this run states in spec.discover.network, "+
+			"rather than the one derived from the workers' interfaces. A cluster's network is fixed when it "+
+			"is created, so this is the line to correct now or never")
+	case seed.Network != nil:
+		out.Template.Network = seed.Network.DeepCopy()
+		out.Notes = append(out.Notes, statedNote("network", "the one the installation stated"))
+	case plan.DataNetworks > 0:
+		out.Template.Network = hostNetwork()
+		out.Notes = append(out.Notes, "network runs the SPDK pods on the host network, because most workers of the "+
+			"draft have a data interface. Each group names its own NICs. A cluster's network is fixed when it is "+
+			"created, so this is the line to correct now or never")
+	case plan.Unattached:
+		out.Template.Network = hostNetwork()
+		out.Notes = append(out.Notes, "network runs the SPDK pods on the host network, on the primary NIC, because no worker has a data interface of its own. "+
+			"A cluster's network is fixed when it is created, so this is the line to correct now or never")
+	}
+
 	if seed.EnableDriveFormat != nil {
 		out.Template.EnableDriveFormat = seed.EnableDriveFormat
 		out.Notes = append(out.Notes, statedNote("enableDriveFormat",
@@ -105,13 +159,17 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 				"alone.")
 	}
 
-	// Not seeded, and deliberately: the count is taken from the smallest worker
-	// the run found, because the control plane assumes it uniform across a
-	// cluster's nodes, and the probes know the fleet better than an installation
-	// decided before it had seen one.
-	vcpus, note := vcpuCountFor(plan)
-	out.Template.VCPUCount = ptr.To(vcpus)
-	out.Notes = append(out.Notes, note)
+	// A stated count is taken as stated. Otherwise the count is a share of the
+	// smallest worker's socket, because the control plane assumes it uniform
+	// across a cluster's nodes.
+	if seed.VCPUCount != nil {
+		out.Template.VCPUCount = seed.VCPUCount
+		out.Notes = append(out.Notes, statedNote("vcpuCount", fmt.Sprintf("%d", *seed.VCPUCount)))
+	} else {
+		vcpus, note := vcpuCountFor(plan, ptr.IntFrom(seed.NodesPerSocket, 1))
+		out.Template.VCPUCount = ptr.To(vcpus)
+		out.Notes = append(out.Notes, note)
+	}
 
 	if seed.MaxSubsystemCount != nil {
 		out.Template.MaxSubsystemCount = seed.MaxSubsystemCount
@@ -183,10 +241,30 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 		out.Template.NodesPerSocket = seed.NodesPerSocket
 		out.Notes = append(out.Notes, statedNote("nodesPerSocket", fmt.Sprintf("%d", *seed.NodesPerSocket)))
 	}
-	if seed.EnableFailureDomains != nil {
-		out.Template.EnableFailureDomains = seed.EnableFailureDomains
-		out.Notes = append(out.Notes, statedNote("enableFailureDomains", enabled(*seed.EnableFailureDomains)))
-	} else if plan.FailureDomains {
+	// The run's own flag wins over the installation's seed, and either is a
+	// statement the auto decision gives way to.
+	forced := opts.EnableFailureDomains
+	if forced == nil {
+		forced = seed.EnableFailureDomains
+	}
+	switch {
+	case forced != nil && !*forced:
+		out.Template.EnableFailureDomains = ptr.To(false)
+		out.Notes = append(out.Notes, statedNote("enableFailureDomains", enabled(false))+
+			" No failure domains are read, so the fleet is grouped by hardware alone.")
+	case forced != nil && *forced:
+		// Stated on, but the layout still has to be one the control plane
+		// activates: a run that forces the mode onto a topology too flat for it
+		// (one shared zone is one domain) gets the mode and a note that it will
+		// not activate until the topology provides enough domains.
+		out.Template.EnableFailureDomains = ptr.To(true)
+		if refused := failureDomainLayoutRefusal(plan, erasurecoding.SchemeOf(out.Template.Stripe)); refused != "" {
+			out.Notes = append(out.Notes, "enableFailureDomains is on as the run states, but the control "+
+				"plane will refuse to activate the cluster until the topology provides enough domains: "+refused)
+		} else {
+			out.Notes = append(out.Notes, statedNote("enableFailureDomains", enabled(true)))
+		}
+	case plan.FailureDomains:
 		if refused := failureDomainLayoutRefusal(plan, erasurecoding.SchemeOf(out.Template.Stripe)); refused != "" {
 			out.Notes = append(out.Notes, "enableFailureDomains is off although every worker carries "+
 				"a failure domain, because the control plane would refuse to activate the cluster: "+
@@ -498,48 +576,65 @@ func fleetSize(plan Plan) int {
 	return len(workers)
 }
 
-// vcpuCountFor is the smallest chosen memory node's core count across the
-// fleet, floored at the API's minimum.
-func vcpuCountFor(plan Plan) (int32, string) {
+// vcpuCountFor proposes the vCPUs of each storage node: DefaultVCPUSharePercent
+// of the logical CPUs of the smallest chosen memory node (socket) across the
+// fleet, divided among the storage nodes that socket runs, and at least
+// DefaultMinimumVCPUCount. It never asks for more than the socket has beyond
+// the system reserve, and never less than the API's minimum.
+//
+// The control plane counts logical CPUs, refuses a node without one CPU beyond
+// the cluster's vCPU count, and schedules the SPDK pod only within the node's
+// allocatable CPU.
+func vcpuCountFor(plan Plan, nodesPerSocket int) (int32, string) {
+	if nodesPerSocket < 1 {
+		nodesPerSocket = 1
+	}
 	smallest, smallestWorker := 0, ""
 	for _, worker := range plan.Workers {
-		cores := chosenNodeCores(worker)
-		if cores == 0 {
+		cpus := chosenNodeCPUs(worker)
+		if cpus == 0 {
 			continue
 		}
-		if smallest == 0 || cores < smallest {
-			smallest, smallestWorker = cores, worker.Name
+		if smallestWorker == "" || cpus < smallest {
+			smallest, smallestWorker = cpus, worker.Name
 		}
 	}
 
-	if smallest == 0 {
-		return MinimumVCPUCount, fmt.Sprintf(
-			"vcpuCount is the API's minimum of %d, because no worker reported the cores of "+
-				"the memory node it was placed on", MinimumVCPUCount)
+	if smallestWorker == "" {
+		return DefaultMinimumVCPUCount, fmt.Sprintf(
+			"vcpuCount is the default minimum of %d, because no worker reported the cores of "+
+				"the memory node it was placed on", DefaultMinimumVCPUCount)
 	}
-	if int32(smallest) < MinimumVCPUCount {
+
+	spare := smallest - SystemReservedCPUs
+	if int32(spare) < MinimumVCPUCount {
 		return MinimumVCPUCount, fmt.Sprintf(
 			"vcpuCount is the API's minimum of %d, and the smallest placement (%s) has only "+
-				"%d cores, so this cluster asks for more than that worker has",
-			MinimumVCPUCount, smallestWorker, smallest)
+				"%d CPUs to spare for SPDK, so this cluster asks for more than that worker has",
+			MinimumVCPUCount, smallestWorker, max(spare, 0))
 	}
-	return int32(smallest), fmt.Sprintf(
-		"vcpuCount is %d, the cores of the memory node chosen on %s, which is the smallest "+
-			"of the fleet: the control plane assumes this uniform across a cluster's nodes",
-		smallest, smallestWorker)
+
+	vcpus := max(smallest*DefaultVCPUSharePercent/100/nodesPerSocket, DefaultMinimumVCPUCount)
+	vcpus = min(vcpus, spare/nodesPerSocket)
+	vcpus = max(vcpus, int(MinimumVCPUCount))
+	return int32(vcpus), fmt.Sprintf(
+		"vcpuCount is %d, %d%% of the %d logical CPUs of the memory node chosen on %s (the smallest of the "+
+			"fleet) per storage node, at least %d: the control plane assumes this uniform across a cluster's "+
+			"nodes. Raise it for a dedicated storage node or an I/O-heavy workload",
+		vcpus, DefaultVCPUSharePercent, smallest, smallestWorker, DefaultMinimumVCPUCount)
 }
 
-// chosenNodeCores is the physical cores of the memory node a worker's chosen
+// chosenNodeCPUs is the logical CPUs of the memory node a worker's chosen
 // devices hang off. A worker whose devices span nodes, which AllDevices
 // produces, has no single answer and reports none.
-func chosenNodeCores(worker Worker) int {
+func chosenNodeCPUs(worker Worker) int {
 	node, single := chosenNode(worker)
 	if !single {
 		return 0
 	}
 	for _, cpus := range worker.Report.CPU.NUMANodes {
 		if cpus.Node == node {
-			return cpus.PhysicalCores
+			return len(cpus.OnlineCPUs)
 		}
 	}
 	return 0
@@ -636,15 +731,13 @@ func chosenNodeHugePageBytes(worker Worker) uint64 {
 // a disk of no size, because an unsized disk is smaller than anything and the
 // generator invents those for claimed userspace controllers.
 //
-// The two classes part company on what happens then. An NVMe cluster with no
-// dedicated journal device carves a journal partition out of every device, so
-// leaving the field unset is a layout the backend builds and the fleet keeps
-// every disk. A logical block-device cluster has no such fallback: the control
-// plane refuses partitioned-journal mode for the class outright, so an unset
-// field is a document that cannot deploy — every worker's node_add fails on it,
-// after the cluster has been created and the drives formatted. A block run
-// therefore refuses the fleet rather than drafting it, which is the same
-// judgment made where it costs nothing.
+// Leaving the field unset is a layout both classes build, and the fleet keeps
+// every disk. An NVMe cluster with no dedicated journal device carves a journal
+// partition out of every device.
+//
+// A logical block-device cluster is decided by blockJournalDeviceFor instead:
+// its default is the journal split, one journal partition carved from each
+// node's smallest device at configure time, whatever the disks look like.
 //
 // TemplateOptions.ForceJournalDevice overrides the tie, and only the tie. It
 // breaks it by address, ascending, so two runs over one unchanged fleet name the
@@ -663,6 +756,9 @@ func journalDeviceFor(plan Plan, force bool) (bool, string, error) {
 	if len(plan.Workers) == 0 {
 		return false, "", nil
 	}
+	if plan.Class == ClassBlock {
+		return blockJournalDeviceFor(plan, force)
+	}
 
 	var smallest uint64
 	var onWorker, named string
@@ -676,15 +772,6 @@ func journalDeviceFor(plan Plan, force bool) (bool, string, error) {
 			// No answer to force. The worker hands over fewer than two disks, or
 			// its disks report no size, and dedicating one either leaves it
 			// nothing to store on or dedicates a disk nobody could measure.
-			if plan.Class == ClassBlock {
-				return false, "", fmt.Errorf(
-					"%s hands over no disk that could carry the journal, and a %s cluster has "+
-						"no other journal layout: the control plane refuses the partitioned "+
-						"journal for this class, so a document leaving enableJournalDevice "+
-						"unset creates the cluster, formats its drives, and then fails every "+
-						"node_add. Give the worker a second disk, or deploy it as %s",
-					worker.Name, ClassBlock, ClassNVMe)
-			}
 			return false, fmt.Sprintf(
 				"enableJournalDevice is left unset: %s hands over no single disk smaller than "+
 					"its others, so there is none to dedicate. Setting it would give up a disk "+
@@ -694,17 +781,6 @@ func journalDeviceFor(plan Plan, force bool) (bool, string, error) {
 		case verdict == journalDiskTied && !force:
 			// The fleet declines to say which of several equal disks to take,
 			// and nothing here decides for it.
-			if plan.Class == ClassBlock {
-				return false, "", fmt.Errorf(
-					"%s hands over no disk smaller than its others, so nothing says which one "+
-						"carries the journal, and a %s cluster has no other journal layout: "+
-						"the control plane refuses the partitioned journal for this class, so "+
-						"a document leaving enableJournalDevice unset creates the cluster, "+
-						"formats its drives, and then fails every node_add. Set "+
-						"spec.discover.forceJournalDevice to dedicate one of the equal disks "+
-						"anyway, which spends %s of this worker's capacity on the journal",
-					worker.Name, ClassBlock, humanBytes(size))
-			}
 			return false, fmt.Sprintf(
 				"enableJournalDevice is left unset: %s hands over no single disk smaller than "+
 					"its others, so there is none to dedicate. Setting it would give up a disk "+
@@ -736,6 +812,47 @@ func journalDeviceFor(plan Plan, force bool) (bool, string, error) {
 			"others, the smallest being %s (%s) on %s, and the control plane dedicates that "+
 			"disk to the journal manager instead of carving a journal partition out of every "+
 			"disk. This is the line to remove if the disk was meant to carry data",
+		humanBytes(smallest), named, onWorker), nil
+}
+
+// blockJournalDeviceFor decides the journal of a logical block-device draft.
+//
+// The default is the journal split: the configure of every storage node carves
+// a journal partition out of the node's smallest device, so every disk carries
+// data, whatever sizes the disks have. That is also the only layout for a
+// worker with a single disk, such as one RAID-protected LUN of a storage array.
+//
+// ForceJournalDevice asks for the smallest disk of every node to be dedicated
+// to the journal instead. It is honoured only where every worker hands over at
+// least two disks of known size; otherwise the draft keeps the split and says
+// which worker could not give up a disk.
+func blockJournalDeviceFor(plan Plan, force bool) (bool, string, error) {
+	if !force {
+		return false, "enableJournalDevice is left unset: the journal of every storage node " +
+			"is a partition carved from its smallest disk when the node is configured, and " +
+			"every disk carries data. Set spec.discover.forceJournalDevice to dedicate the " +
+			"smallest disk of every node to the journal instead", nil
+	}
+	var smallest uint64
+	var onWorker, named string
+	for _, worker := range plan.Workers {
+		size, address, verdict := smallestDisk(worker)
+		if verdict == journalDiskImpossible {
+			return false, fmt.Sprintf(
+				"enableJournalDevice is left unset although spec.discover.forceJournalDevice "+
+					"asks for it: %s hands over no second disk of known size, so dedicating one "+
+					"would leave it nothing to store on. The journal of every storage node is a "+
+					"partition carved from its smallest disk instead", worker.Name), nil
+		}
+		if onWorker == "" || size < smallest {
+			smallest, onWorker, named = size, worker.Name, address
+		}
+	}
+	return true, fmt.Sprintf(
+		"enableJournalDevice is set because spec.discover.forceJournalDevice asked for it: "+
+			"the smallest disk of every node carries the journal instead of data, the "+
+			"smallest named being %s (%s) on %s. This is the line to remove to carve the "+
+			"journal from a partition instead",
 		humanBytes(smallest), named, onWorker), nil
 }
 
@@ -814,4 +931,10 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// hostNetwork is the network of a cluster whose SPDK pods bind host NICs. The NICs
+// themselves are named by each group.
+func hostNetwork() *simplyblockv1alpha2.StorageNetworkSpec {
+	return &simplyblockv1alpha2.StorageNetworkSpec{SpdkOnHostNetwork: true}
 }

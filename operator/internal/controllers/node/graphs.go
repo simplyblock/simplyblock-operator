@@ -59,12 +59,13 @@ const (
 type nodeStep = simplyblockv1alpha2.StorageNodeStep
 
 const (
-	stepCheckingHost   = simplyblockv1alpha2.StorageNodeStepCheckingHost
-	stepCheckingConfig = simplyblockv1alpha2.StorageNodeStepCheckingConfig
-	stepAwaitingSlot   = simplyblockv1alpha2.StorageNodeStepAwaitingSlot
-	stepPosting        = simplyblockv1alpha2.StorageNodeStepPosting
-	stepResolving      = simplyblockv1alpha2.StorageNodeStepResolving
-	stepAdopting       = simplyblockv1alpha2.StorageNodeStepAdopting
+	stepCheckingHost    = simplyblockv1alpha2.StorageNodeStepCheckingHost
+	stepCheckingConfig  = simplyblockv1alpha2.StorageNodeStepCheckingConfig
+	stepCheckingNetwork = simplyblockv1alpha2.StorageNodeStepCheckingNetwork
+	stepAwaitingSlot    = simplyblockv1alpha2.StorageNodeStepAwaitingSlot
+	stepPosting         = simplyblockv1alpha2.StorageNodeStepPosting
+	stepResolving       = simplyblockv1alpha2.StorageNodeStepResolving
+	stepAdopting        = simplyblockv1alpha2.StorageNodeStepAdopting
 
 	stepAwaitingWorker = simplyblockv1alpha2.StorageNodeStepAwaitingWorker
 )
@@ -149,10 +150,13 @@ const (
 const (
 	checkingHostDeadline   = 30 * time.Minute
 	checkingConfigDeadline = 24 * time.Hour
-	awaitingSlotDeadline   = 4 * time.Hour
-	postingDeadline        = 10 * time.Minute
-	resolvingDeadline      = 45 * time.Minute
-	adoptingDeadline       = 10 * time.Minute
+	// checkingNetworkDeadline is as long as the configuration gate's, because a
+	// definition the administrator has not created yet holds the node the same way.
+	checkingNetworkDeadline = 24 * time.Hour
+	awaitingSlotDeadline    = 4 * time.Hour
+	postingDeadline         = 10 * time.Minute
+	resolvingDeadline       = 45 * time.Minute
+	adoptingDeadline        = 10 * time.Minute
 
 	// A worker comes back from a MachineConfig reboot in minutes: the cordon,
 	// the drain, the reboot itself and the uncordon took eleven of them on the
@@ -340,8 +344,14 @@ func provisioningGraph() statemachine.Config[nodeStep] {
 				OnEnter: deadline[nodeStep](checkingHostDeadline),
 			},
 			stepCheckingConfig: {
-				To:      []nodeStep{stepAwaitingSlot, stepAdopting},
+				To:      []nodeStep{stepCheckingNetwork, stepAwaitingSlot, stepAdopting},
 				OnEnter: deadline[nodeStep](checkingConfigDeadline),
+			},
+			stepCheckingNetwork: {
+				// Adopting is an exit for the reason AwaitingSlot has it: a backend
+				// node can appear while the probe holds the node.
+				To:      []nodeStep{stepAwaitingSlot, stepAdopting},
+				OnEnter: deadline[nodeStep](checkingNetworkDeadline),
 			},
 			stepAwaitingSlot: {
 				// Adopting is an exit because the backend node a queuing node

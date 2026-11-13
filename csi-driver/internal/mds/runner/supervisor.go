@@ -3,7 +3,8 @@
 // down when the pod is told to stop.
 //
 // The pod is the unit of recovery. Whatever ends the guest (a panic, a power
-// off from inside, a missed boot deadline) ends Run with an error, the runner
+// off from inside, a missed boot deadline, a booted guest unhealthy past
+// UnhealthyDeadline) ends Run with an error, the runner
 // exits, and kubelet restarts the pod into a cold boot that the operator then
 // resyncs. The supervisor therefore never restarts QEMU itself. QEMU, the
 // health probe, and the power button are injected, so the lifecycle is tested
@@ -26,6 +27,10 @@ import (
 // ErrBootDeadline is returned when the guest did not turn healthy in time.
 var ErrBootDeadline = errors.New("guest did not turn healthy within the boot deadline")
 
+// ErrGuestUnhealthy is returned when a booted guest stayed unhealthy past
+// UnhealthyDeadline.
+var ErrGuestUnhealthy = errors.New("guest stayed unhealthy past the unhealthy deadline")
+
 // ErrGuestExited is returned when QEMU ended without being asked to.
 var ErrGuestExited = errors.New("guest exited")
 
@@ -38,6 +43,11 @@ type Process interface {
 
 // Supervisor runs one guest.
 type Supervisor struct {
+	// StoragePath starts what carries the guest's connections to its storage,
+	// before QEMU, and serves it until ctx ends. Run hands it a context that
+	// outlives Run's own and ends only once QEMU has exited, because a guest
+	// powering down still flushes and unmounts through it. Optional.
+	StoragePath func(ctx context.Context) error
 	// Start starts QEMU.
 	Start func(ctx context.Context) (Process, error)
 	// Probe returns nil while the guest is healthy.
@@ -51,8 +61,11 @@ type Supervisor struct {
 	// after Drain.
 	DrainWait time.Duration
 
-	BootDeadline  time.Duration
-	ProbeInterval time.Duration
+	BootDeadline time.Duration
+	// UnhealthyDeadline is how long a guest that has booted may stay unhealthy
+	// before QEMU is killed and Run fails. Zero never gives up.
+	UnhealthyDeadline time.Duration
+	ProbeInterval     time.Duration
 	// ShutdownGrace is how long a powered-down guest gets to exit before
 	// QEMU is killed. It has to fit in the pod's termination grace period.
 	ShutdownGrace time.Duration
@@ -64,6 +77,13 @@ type Supervisor struct {
 // it down, or until it fails. It returns nil only for a shutdown that was
 // asked for.
 func (s *Supervisor) Run(ctx context.Context) error {
+	if s.StoragePath != nil {
+		storage, stopStorage := context.WithCancel(context.WithoutCancel(ctx))
+		defer stopStorage()
+		if err := s.StoragePath(storage); err != nil {
+			return fmt.Errorf("starting the guest's storage path: %w", err)
+		}
+	}
 	proc, err := s.Start(ctx)
 	if err != nil {
 		return fmt.Errorf("starting QEMU: %w", err)
@@ -77,6 +97,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	probe := time.NewTicker(s.ProbeInterval)
 	defer probe.Stop()
 	booted := false
+	var unhealthySince time.Time
 
 	for {
 		select {
@@ -97,6 +118,17 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			if healthy && !booted {
 				booted = true
 				boot.Stop()
+			}
+			if !booted || healthy {
+				unhealthySince = time.Time{}
+				continue
+			}
+			if unhealthySince.IsZero() {
+				unhealthySince = time.Now()
+			}
+			if s.UnhealthyDeadline > 0 && time.Since(unhealthySince) >= s.UnhealthyDeadline {
+				kill(proc, exited)
+				return fmt.Errorf("%w (%s)", ErrGuestUnhealthy, s.UnhealthyDeadline)
 			}
 		}
 	}

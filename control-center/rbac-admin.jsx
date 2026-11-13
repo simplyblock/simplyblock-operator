@@ -179,7 +179,7 @@ function GrantForm({roles, scopes, preNs, onDone, onCancel}) {
     <div className="card editor"><h3>Add grant</h3><div className="bd">
       <div className="frow">
         <label className="fl">Subject<div className="seg">{["Group", "User"].map(k => <button key={k} className={f.kind === k ? "on" : ""} onClick={() => setF({...f, kind: k})}>{k}</button>)}</div></label>
-        <label className="fl" style={{flex: 2}}>{`${f.kind} name`}<input className="finput mono" value={f.name} placeholder={f.kind === "User" ? "oidc:alice@corp.example" : "oidc:team-a-oncall"} onChange={e => setF({...f, name: e.target.value})} />
+        <label className="fl" style={{flex: 2}}>{`${f.kind} name`}<span className="sub">{f.kind === "User" ? "for example oidc:alice@corp.example" : "for example oidc:team-a-oncall"}</span><input className="finput mono" value={f.name} onChange={e => setF({...f, name: e.target.value})} />
           <span className="sub">{f.kind === "User" ? <span style={{color: "var(--warn)"}}>Bind to IdP groups, not users — offboarding a user-bound grant needs a Kubernetes action.</span> : "An IdP group as the API server presents it, prefix included. Membership changes need no Kubernetes action."}</span></label>
       </div>
       <div className="frow">
@@ -198,7 +198,7 @@ function GrantForm({roles, scopes, preNs, onDone, onCancel}) {
       {sharedWith > 0 && <div className="fnote"><Icon n="alert" s={12} />{pool.name} shares namespace <span className="mono">{pool.namespace}</span> with {sharedWith} other pool{sharedWith === 1 ? "" : "s"}. RoleBindings are namespace-wide, so this grant covers them all. Per-pool isolation needs the pool in its own <span className="mono">sb-sp-*</span> namespace.</div>}
       <div className="frow">
         <label className="fl">Expires<input className="finput" type="date" value={f.expires} onChange={e => setF({...f, expires: e.target.value})} /><span className="sub">Optional. The controller removes the bindings when it passes.</span></label>
-        <label className="fl" style={{flex: 2}}>Reason<input className="finput" value={f.reason} placeholder="OPS-4821 on-call rotation" onChange={e => setF({...f, reason: e.target.value})} /></label>
+        <label className="fl" style={{flex: 2}}>Reason<input className="finput" value={f.reason} onChange={e => setF({...f, reason: e.target.value})} /></label>
       </div>
       {nss.length > 0 && <div className="sub mono" style={{color: "var(--dim2)"}}>Lands in: {nss.map(nsLabel).join(" · ")}</div>}
       {err && <div className="ferr"><Icon n="alert" s={12} />{err}</div>}
@@ -241,7 +241,7 @@ function EffectivePanel() {
         <div className="frow">
           <label className="fl">Verb<select className="sel mono" value={chk.verb} onChange={ev => setChk({...chk, verb: ev.target.value})}>{["get", "list", "watch", "create", "update", "patch", "delete", "bind"].map(v => <option key={v}>{v}</option>)}</select></label>
           <label className="fl" style={{flex: 1}}>Resource<input className="finput mono" value={chk.resource} onChange={ev => setChk({...chk, resource: ev.target.value})} /></label>
-          <label className="fl" style={{flex: 1}}>Namespace<input className="finput mono" list="ac-ns" value={chk.namespace} placeholder="empty = cluster scope" onChange={ev => setChk({...chk, namespace: ev.target.value})} />
+          <label className="fl" style={{flex: 1}}>Namespace<span className="sub">empty: cluster scope</span><input className="finput mono" list="ac-ns" value={chk.namespace} onChange={ev => setChk({...chk, namespace: ev.target.value})} />
             <datalist id="ac-ns">{nss.filter(n => n !== "*").map(n => <option key={n} value={n} />)}</datalist></label>
           <div className="fl" style={{justifyContent: "flex-end"}}><button className="btn" onClick={() => api.accessReview({subject: {kind: subject.split(":")[0], name: subject.split(":").slice(1).join(":")}, verb: chk.verb, resource: chk.resource, namespace: chk.namespace || undefined}).then(r => setRes(r[0]))}>Check</button></div>
         </div>

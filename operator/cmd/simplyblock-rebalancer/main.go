@@ -393,7 +393,7 @@ func probeNode(ctx context.Context, n autoplacement.NodeConfig, p50, p99 *promet
 func nvmeConnect(ctx context.Context, conn connConfig) error {
 	log.Printf("nvme connect addr=%s port=%s nqn=%s", conn.Addr, conn.Port, conn.NQN)
 	out, err := exec.CommandContext(ctx,
-		"sudo", "nvme", "connect",
+		"nvme", "connect",
 		"--fast_io_fail_tmo=1", "--nr-io-queues=3", "--keep-alive-tmo=4",
 		"-t", "tcp",
 		"-a", conn.Addr,
@@ -409,7 +409,7 @@ func nvmeConnect(ctx context.Context, conn connConfig) error {
 
 func nvmeDisconnect(nqn string) {
 	log.Printf("nvme disconnect nqn=%s", nqn)
-	if err := exec.Command("sudo", "nvme", "disconnect", "-n", nqn).Run(); err != nil {
+	if err := exec.Command("nvme", "disconnect", "-n", nqn).Run(); err != nil {
 		log.Printf("nvme disconnect error: %v", err)
 	}
 }
@@ -480,7 +480,7 @@ func isBlockDevice(path string) bool {
 }
 
 func findDevice(ctx context.Context, nqn string) (string, error) {
-	out, err := exec.CommandContext(ctx, "sudo", "nvme", "list", "--output-format=json", "--verbose").Output()
+	out, err := exec.CommandContext(ctx, "nvme", "list", "--output-format=json", "--verbose").Output()
 	if err != nil {
 		return "", err
 	}
@@ -502,7 +502,7 @@ func findDevice(ctx context.Context, nqn string) (string, error) {
 
 func measure(ctx context.Context, device string) (*autoplacement.LatencyResult, error) {
 	out, err := exec.CommandContext(ctx,
-		"sudo", "fio",
+		"fio",
 		"--allow_file_create=0",
 		"--name=latency",
 		"--size=512M",

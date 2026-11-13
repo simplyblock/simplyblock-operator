@@ -159,7 +159,7 @@ D 12.
   [Below 10000 Mbps, IPv6 only, or not physical, bond, or team. A jumbo-frame (MTU 9000) interface outranks a faster one. One worker without an interface on a common data network turns data interfaces off for the whole draft.],
   [D 7.3, D 7.4],
   [A worker was refused for its network], [`WorkerDeclined` with "management network" or "data network"],
-  [Its addresses are on a different prefix than most workers.],
+  [Its management interface does not hold its node address and is on a different prefix than the other workers, or a data interface is on a different prefix than most workers.],
   [R 5.2, D 7.4],
   [The workers are split into several groups], [Compare the workers' reports],
   [Workers share a group only with the same device names, management interface, data interfaces, and failure domain. In NVMe mode the device names are PCI addresses, so different slots make different groups.],

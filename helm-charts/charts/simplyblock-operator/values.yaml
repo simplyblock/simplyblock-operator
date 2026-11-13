@@ -2,16 +2,6 @@
 # Copyright (c) Arm Limited and Contributors
 # Copyright (c) Intel Corporation
 ---
-# The cluster's DNS domain: the suffix after <service>.<namespace>.svc. Change
-# it only on a cluster set up with a domain other than cluster.local. Every
-# in-cluster address and certificate name the operator and this chart build
-# uses it, and so does the FoundationDB cluster file, whose coordinators do not
-# resolve under the wrong domain.
-# -- DNS domain of the Kubernetes cluster, the suffix after `<service>.<namespace>.svc`. Every
-# in-cluster address and certificate name, and the FoundationDB cluster file, use it. Change it only
-# on a cluster set up with a domain other than `cluster.local`.
-clusterDnsDomain: cluster.local
-
 image:
   csiSnapshotterController:
     # -- CSI snapshot controller image, used when `snapshotcontroller.create` is `true`.
@@ -60,9 +50,7 @@ image:
     # -- NUMA resource plugin image.
     repository: quay.io/simplyblock-io/numa-resource-plugin
     # -- NUMA resource plugin image tag.
-    tag: latest
-    # -- NUMA resource plugin image pull policy.
-    pullPolicy: Always
+    tag: v1.0.0
 rbac:
   # Specifies whether RBAC resources should be created
   # -- RBAC switch. Not read by the chart templates.
@@ -134,7 +122,11 @@ deployment:
   #
   # standalone hosts its own control plane. The operator installs FoundationDB,
   # the object store, and the management API from the ControlPlane object this
-  # chart writes.
+  # chart hands it. The chart does not render the ControlPlane, the
+  # SimplyblockDriver, or the discovery run as release resources: it renders them
+  # into the simplyblock-bootstrap-objects ConfigMap and the operator applies them,
+  # because Helm cannot map objects of a CRD the same install creates until the
+  # API server lists it. Removing one from the values does not delete it.
   #
   # managed registers this cluster's storage with a control plane elsewhere,
   # named by controlplane.managed below. Nothing is installed here.
@@ -159,7 +151,8 @@ deployment:
 
 # The one discovery run a fresh install performs.
 #
-# The chart renders an OperatorOps with action Discover. The operator inspects
+# The chart renders an OperatorOps with action Discover, which the operator
+# applies from the simplyblock-bootstrap-objects ConfigMap. The operator inspects
 # every schedulable worker and writes a ClusterDeploymentConfig in Draft. Nothing
 # is deployed until somebody reads that draft and sets `approved: true` on it.
 #
@@ -295,6 +288,51 @@ discovery:
   # carves journal partitions out of every device, and a discovery run over logical block devices
   # fails. The draft notes which disk was taken.
   forceJournalDevice: false
+
+  # Override whether the draft proposes failure-domain mode, which the run
+  # otherwise decides from the workers' topology: on when every worker carries a
+  # failure-domain label in a layout the control plane accepts, off otherwise.
+  #
+  # Set false to turn the mode off and read no failure domains at all, so a fleet
+  # spread over zones it does not want treated as failure domains is grouped by
+  # hardware alone into one cluster. Set true to propose the mode on; the layout
+  # must still pass the control plane's activation rules. Left out (the default),
+  # the run decides.
+  #   enableFailureDomains: false
+  # -- Overrides whether the draft proposes failure-domain mode. `false` reads no failure domains and
+  # groups the fleet as one cluster; `true` proposes the mode on. Omitted leaves the decision to the run.
+
+  # The cluster network the draft proposes. With neither set, the SPDK pods run on
+  # the host network. The two are exclusive.
+  network:
+    # -- Runs the SPDK pods on the host network. The default when neither is set.
+    spdkOnHostNetwork: false
+    # -- Runs the SPDK pods on the pod network instead of the host network.
+    podNetwork: false
+
+  # Attach the proposed storage nodes through Multus NetworkAttachmentDefinitions
+  # instead of host networking. Both are names of definitions in the run's
+  # namespace. With neither set, the storage nodes stay on host networking. With
+  # management alone, it carries both management and data traffic, as one
+  # network interface does. With both set, the draft names both. The two modes
+  # do not mix: a draft attaches every storage node or none.
+  #
+  # The run checks the names against the cluster. A cluster that does not serve
+  # the NetworkAttachmentDefinition kind keeps host networking and says so, a
+  # name the namespace does not hold fails the run before any worker is probed,
+  # naming the definitions it does hold, and a worker without the host
+  # interface a definition builds on is left out.
+  #
+  #   networkAttachment:
+  #     management: storage-mgmt
+  #     data: storage-data
+  networkAttachment:
+    # -- NetworkAttachmentDefinition, in the discovery namespace, that the storage nodes' management
+    # traffic is attached through. Empty keeps host networking. Alone, it carries data traffic as well.
+    management: ""
+    # -- NetworkAttachmentDefinition, in the discovery namespace, that the storage nodes' data traffic
+    # is attached through. Requires `management`.
+    data: ""
 
   # Which of an inspected worker's devices reach the draft. What is filtered out
   # here never appears in the document, so this is the place to keep a boot disk
@@ -609,6 +647,33 @@ controlplane:
     # remote cluster with the `managed` profile names the same token in
     # `controlplane.managed.credentialsSecretRef`. Empty grants no additional credential.
     adminTokenSecretRef: ""
+    # Cluster add-ons the operator installs from its embedded manifests when
+    # the cluster lacks them. One set to false is only checked for: when it is
+    # missing, the install holds and the ControlPlane status names it (the
+    # snapshot controller only raises a warning event). Installed add-ons are
+    # cluster-wide and outlive the ControlPlane.
+    prerequisites:
+      # -- Installs the FoundationDB CRDs when `apps.foundationdb.org/v1beta2` is not served.
+      installFoundationDBCRDs: true
+      # -- Installs cert-manager when `cert-manager.io/v1` is not served and TLS is issued by cert-manager.
+      installCertManager: true
+      # -- Installs local-path-provisioner when no StorageClass uses `rancher.io/local-path` and
+      # `controlplane.storageclass.name` is empty.
+      installLocalPathProvisioner: true
+      # -- Installs the CSI snapshot CRDs and snapshot-controller when `snapshot.storage.k8s.io/v1` is
+      # not served.
+      installSnapshotController: true
+
+    # The IAM role this control plane's pods and every StorageCluster's
+    # storage-node pods in this namespace assume, through a ServiceAccount
+    # annotated with it (eks.amazonaws.com/role-arn). It is what lets a
+    # StorageCluster's spec.backup.credentials name ProviderChain on Amazon
+    # EKS, with no access key stored anywhere in Kubernetes. Empty leaves the
+    # accounts this chart creates without the annotation, which is correct
+    # off EKS.
+    # -- IAM role ARN to annotate this release's ServiceAccounts with (`eks.amazonaws.com/role-arn`), for
+    # S3 backup credentials through Amazon EKS's pod-identity webhook. Empty adds no annotation.
+    eksRoleARN: ""
 
   # Where the control plane is, for deployment.profile: managed.
   managed:
@@ -893,6 +958,14 @@ volumeMigration:
 # connection open, so the operator can query a node's storage state without
 # anything listening on the node. Always on: the operator serves the endpoint
 # and both plugins dial it.
+# The site end of a stretched cluster's site link (the fleet agent's local
+# Service on this member). Off unless the member runs the simplyblock fleet
+# add-on and its StorageCluster is one site of a stretched cluster.
+siteLink:
+  enabled: false
+  address: simplyblock-site-link.open-cluster-management-agent-addon.svc:9443
+  agentNamespace: open-cluster-management-agent-addon
+
 csiLink:
   # Port the operator listens on, and the Service that fronts it.
   # -- Port the operator listens on, and the port of its Service.
@@ -1062,39 +1135,12 @@ opensearch:
     # -- Enables the OpenSearch security configuration.
     enabled: false
 
-reloader:
-  # Rolls the workloads mounting the FoundationDB cluster file when coordinators
-  # move. Off means they pick the change up on their next restart instead.
-  # -- Rolls the workloads mounting the FoundationDB cluster file when the coordinators move. With
-  # `false`, they pick up the change on their next restart.
-  enabled: true
-  # -- Name override.
-  nameOverride: simplyblock-reloader
-  # -- Full name override.
-  fullnameOverride: simplyblock-reloader
-  reloader:
-    deployment:
-      image:
-        # -- Reloader image.
-        name: quay.io/simplyblock-io/reloader
-        # -- Reloader image tag.
-        tag: v1.3.0
-      pod:
-        # Ships the pod's logs to Graylog through the chart's fluent-bit.
-        # -- Reloader pod annotations. The default ships the pod logs to Graylog.
-        annotations:
-          log-collector/enabled: "true"
-      # -- Node selector for Reloader.
-      nodeSelector: {}
-      # -- Tolerations for Reloader.
-      tolerations: []
-
 prometheus:
-  # Where the control plane pushes what it measures. A managed deployment
-  # reports to the control plane administering it, so it can turn this off.
-  # -- Installs the Prometheus subchart. A `managed` deployment that reports to its remote control
-  # plane can turn it off.
-  enabled: true
+  # The operator runs Prometheus and its Thanos sidecar as a ControlPlane
+  # component, so the subchart stays off; enabling it creates a second
+  # simplyblock-prometheus that the operator and Helm fight over.
+  # -- Installs the Prometheus subchart. Off: the ControlPlane installs Prometheus.
+  enabled: false
   simplyblock:
     # -- Prometheus service name the Control Center queries when `controlCenter.prometheusUrl` is
     # empty.
@@ -1122,11 +1168,9 @@ prometheus:
     # -- Prometheus pod labels.
     podLabels:
       app: simplyblock-prometheus
-    # -- Prometheus pod annotations, for log collection and Reloader triggers.
+    # -- Prometheus pod annotations, for log collection.
     podAnnotations:
       log-collector/enabled: "true"
-      reloader.stakater.com/auto: "true"
-      reloader.stakater.com/configmap: "simplyblock-prometheus-config"
     # -- Node selector for the Prometheus server.
     nodeSelector: {}
     # -- Tolerations for the Prometheus server.
@@ -1214,7 +1258,7 @@ prometheus:
     # -- Path of the simplyblock Prometheus configuration.
     configPath: /etc/simplyblock-config/prometheus.yml
     # -- Additional volumes of the Prometheus pod: the scrape configuration, the object store
-    # configuration, and the TLS client certificate and CA.
+    # configuration, and the TLS CA.
     extraVolumes:
       - name: simplyblock-prometheus-config
         configMap:
@@ -1222,14 +1266,8 @@ prometheus:
       - name: objstore-config
         configMap:
           name: simplyblock-objstore-config
-      - name: prometheus-client-tls
-        secret:
-          secretName: simplyblock-prometheus-client-tls
-          optional: true
-      # The CA the control plane's certificate is verified against. It is its
-      # own volume because the client certificate above is issued only for
-      # mutual TLS, and a scrape that encrypts without verifying is one an
-      # in-cluster impersonator answers.
+      # The CA the control plane's certificate is verified against: a scrape
+      # that encrypts without verifying is one an in-cluster impersonator answers.
       - name: prometheus-ca-tls
         secret:
           secretName: simplyblock-ca-bundle-tls
@@ -1238,9 +1276,6 @@ prometheus:
     extraVolumeMounts:
       - name: simplyblock-prometheus-config
         mountPath: /etc/simplyblock-config
-      - name: prometheus-client-tls
-        mountPath: /etc/prometheus/certs
-        readOnly: true
       - name: prometheus-ca-tls
         mountPath: /etc/prometheus/ca
         readOnly: true
@@ -1266,6 +1301,17 @@ prometheus:
         repository: quay.io/simplyblock-io/prometheus-config-reloader
         # -- Configuration reloader image tag.
         tag: v0.72.0
+      # The scrape configuration is not the subchart's own ConfigMap: it is
+      # `simplyblock-prometheus-config`, mounted at `configPath`. Without this
+      # the sidecar watches a directory nothing writes to.
+      # -- Mounts of the reloader sidecar. The scrape configuration, so that a change reloads it.
+      extraVolumeMounts:
+        - name: simplyblock-prometheus-config
+          mountPath: /etc/simplyblock-config
+          readOnly: true
+      # -- Directories the reloader sidecar watches, beside the subchart's own.
+      extraVolumeDirs:
+        - /etc/simplyblock-config
 
   defaultBackend:
     # -- Deploys the default backend.
@@ -1644,19 +1690,13 @@ tls:
   # Required if provider == cert-manager. Names a ClusterIssuer used to mint
   # the chart's own CA Certificate.
   cert-manager:
-    # When true, the chart creates a self-signed ClusterIssuer whose name is
+    # When true, the operator creates a self-signed ClusterIssuer whose name is
     # given by cluster-issuer. Set to false to use an issuer you created yourself.
     # -- Creates a self-signed ClusterIssuer named by `cluster-issuer`. `false` uses an existing
     # issuer.
     createSelfSignedIssuer: true
     # -- ClusterIssuer the chart mints its CA certificate from.
     cluster-issuer: selfsigned
-    # Namespace where cert-manager is installed. The chart's CA secret is placed
-    # here so that the ClusterIssuer can locate it (ClusterIssuers always read CA
-    # secrets from the cert-manager controller namespace).
-    # -- Namespace cert-manager runs in. The chart places its CA Secret there so the ClusterIssuer can
-    # read it.
-    namespace: cert-manager
 
   # Mutual TLS (clients present and verify certificates). Only allowed when
   # provider == cert-manager. On by default, with tls.enabled: the chart issues a

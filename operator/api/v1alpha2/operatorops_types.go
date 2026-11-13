@@ -49,7 +49,7 @@ const (
 // OperatorOpsStep is one step of a running operator operation. Which steps
 // belong to which action is declared by that action's graph rather than by this
 // type, which is why the enum stays flat as actions are added.
-// +kubebuilder:validation:Enum=Inspecting;Probing;Writing
+// +kubebuilder:validation:Enum=Inspecting;Probing;Writing;Completed
 type OperatorOpsStep string
 
 const (
@@ -63,6 +63,8 @@ const (
 
 	// OperatorOpsStepWriting turns the reports into a ClusterDeploymentConfig.
 	OperatorOpsStepWriting OperatorOpsStep = "Writing"
+	// OperatorOpsStepCompleted is the terminal step of an operation that succeeded.
+	OperatorOpsStepCompleted OperatorOpsStep = "Completed"
 )
 
 // DeviceFilter narrows what a discovery run reports as a candidate device. It is
@@ -135,6 +137,7 @@ type DeviceFilter struct {
 // +kubebuilder:validation:XValidation:rule="!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.deviceFilter) || !(has(self.deviceFilter.pcieAllowList) || has(self.deviceFilter.pcieDenyList) || has(self.deviceFilter.pcieModel))",message="the PCI filters select NVMe devices and cannot be combined with enableLogicalBlockDevices; use blockAllowList and blockDenyList"
 // +kubebuilder:validation:XValidation:rule="(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.deviceFilter) || !(has(self.deviceFilter.blockAllowList) || has(self.deviceFilter.blockDenyList))",message="blockAllowList and blockDenyList select logical block devices and require enableLogicalBlockDevices"
 // +kubebuilder:validation:XValidation:rule="!(has(self.workers) && size(self.workers) > 0 && has(self.nodeSelector) && size(self.nodeSelector) > 0)",message="spec.discover names workers and also carries a nodeSelector; state one or the other"
+// +kubebuilder:validation:XValidation:rule="!has(self.network) || !has(self.network.spdkOnHostNetwork) || !self.network.spdkOnHostNetwork || !has(self.networkAttachment)",message="network.spdkOnHostNetwork cannot be combined with networkAttachment, which attaches the storage nodes through Multus"
 type DiscoverSpec struct {
 	// ConfigName is the ClusterDeploymentConfig to write. Absent generates one
 	// from the run's timestamp, so that a second discovery never overwrites the
@@ -209,6 +212,20 @@ type DiscoverSpec struct {
 	// +optional
 	FailureDomainLabel string `json:"failureDomainLabel,omitempty"`
 
+	// EnableFailureDomains overrides whether the draft proposes failure-domain
+	// mode, which a run otherwise decides from the workers' topology: on when
+	// every worker carries a failure-domain label in a layout the control plane
+	// accepts, and off otherwise.
+	//
+	// false turns the mode off and reads no failure domains at all, so a fleet
+	// spread over zones it does not want treated as failure domains is grouped by
+	// hardware alone, into one cluster the draft marks enableFailureDomains false.
+	// true proposes the mode on; the layout still has to pass the control plane's
+	// activation rules, which approval checks. Unset leaves the decision to the
+	// run, and is the usual first run.
+	// +optional
+	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
+
 	// EnableLogicalBlockDevices scans a worker's available logical block devices
 	// instead of its available NVMe devices. It selects the class rather than
 	// adding one, because the draft a run writes describes one cluster and a
@@ -247,15 +264,17 @@ type DiscoverSpec struct {
 	// aside: on a worker with ten 10 TB disks that is 10 TB, silently. So the run
 	// does not guess.
 	//
-	// What it does instead depends on the class. An NVMe cluster with no
-	// dedicated journal device carves a journal partition out of every device, so
-	// the run leaves the field unset, says so, and every disk stays storage. A
-	// logical block-device cluster has no such layout — the control plane refuses
-	// the partitioned journal for the class — so the run fails rather than
-	// writing a document that creates the cluster, formats its drives, and then
-	// fails every node_add. Setting this is what asks for one of the equal disks
-	// to be taken anyway, and the draft says the disk was taken rather than
-	// offered.
+	// An NVMe cluster with no dedicated journal device carves a journal
+	// partition out of every device, so the run leaves the field unset, says so,
+	// and every disk stays storage. Setting this is what asks for one of the
+	// equal disks to be taken anyway, and the draft says the disk was taken
+	// rather than offered.
+	//
+	// A logical block-device cluster never proposes a dedicated journal device
+	// on its own: by default each storage node's journal is a partition carved
+	// from its smallest device (the journal split), and every disk carries data.
+	// For that class, setting this dedicates the smallest disk of every node to
+	// the journal, provided every worker hands over at least two disks.
 	//
 	// It does not force the cases that are impossible rather than ambiguous. A
 	// worker handing over a single disk is refused with it or without it, because
@@ -265,6 +284,27 @@ type DiscoverSpec struct {
 	// document.
 	// +optional
 	ForceJournalDevice *bool `json:"forceJournalDevice,omitempty"`
+
+	// NetworkAttachment attaches the proposed storage nodes through Multus
+	// NetworkAttachmentDefinitions in the run's namespace instead of host
+	// networking. Absent keeps host networking, and the draft names each
+	// group's interfaces.
+	//
+	// The draft names the definitions in place of interfaces, and a worker
+	// whose host lacks the interface a definition builds on is left out with
+	// the reason. A definition the namespace does not hold fails the run before
+	// any worker is probed, naming the definitions the namespace does hold. A
+	// cluster that does not serve the NetworkAttachmentDefinition kind keeps
+	// host networking, and the run says so with a Warning event.
+	// +optional
+	NetworkAttachment *NetworkAttachmentSelection `json:"networkAttachment,omitempty"`
+
+	// Network states the cluster network the draft proposes. Absent, a run
+	// proposes spdkOnHostNetwork, binding the host's primary NIC on workers with
+	// no additional interface. Set podNetwork: true to run the SPDK pods on the
+	// pod network instead. A cluster's network is fixed once it is created.
+	// +optional
+	Network *StorageNetworkSpec `json:"network,omitempty"`
 
 	// DeviceFilter narrows which of an inspected worker's devices reach the
 	// draft. Empty reports every device the worker advertises, including the one
@@ -314,7 +354,7 @@ type OperatorOpsStatus struct {
 	Phase OperatorOpsPhase `json:"phase,omitempty"`
 
 	// Step is the position of the running action's state machine.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Inspecting','Probing','Writing']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Inspecting','Probing','Writing','Completed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

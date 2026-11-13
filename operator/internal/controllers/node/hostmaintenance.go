@@ -36,6 +36,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -81,6 +82,10 @@ func (r *StorageNodeOpsReconciler) performMaintenanceStep(
 
 // maintenanceHold is the concurrency gate, and it is a cluster-wide count.
 //
+// The window guards its worker before it asks the gate anything, for the reason
+// guardWaitingWindow gives: a window waiting for its turn with no budget up is a
+// queue the drain does not stand in.
+//
 // How many workers may be in maintenance at once is
 // StorageCluster.status.maxConcurrentWorkerRestarts, which is the smaller of what
 // the cluster asks for and the fault tolerance the control plane reports. Counting
@@ -99,6 +104,10 @@ func (r *StorageNodeOpsReconciler) maintenanceHold(
 		return false, fmt.Errorf("read cluster %s: %w", node.Spec.ClusterRef, err)
 	}
 
+	if err := r.guardWorker(ctx, node); err != nil {
+		return false, err
+	}
+
 	limit := int32(1)
 	if effective := cluster.Status.MaxConcurrentWorkerRestarts; effective != nil && *effective > 0 {
 		limit = *effective
@@ -114,6 +123,107 @@ func (r *StorageNodeOpsReconciler) maintenanceHold(
 			len(inFlight), limit, inFlight)
 	}
 	return true, nil
+}
+
+// guardWaitingWindow holds the eviction of a maintenance window's worker while
+// the window waits to be admitted.
+//
+// A window is raised because its worker was cordoned, and the drain that follows
+// the cordon does not wait for the window's turn: it evicts the SPDK pod as soon
+// as nothing stops it. The window itself waits twice before ShuttingDown raises
+// the budget. It waits in Pending while the cluster gate holds it, and the gate
+// holds it in exactly the state the previous worker's window leaves behind: a
+// cluster degraded until that node is back, then rebalancing. It waits again in
+// Holding while the concurrency gate counts the slots.
+//
+// Nothing guarded the worker during either wait, so the queue held the window and
+// not the drain. The drain took the queued worker's node down while the previous
+// worker's node was still on its way back, which is two nodes down at once and a
+// suspended cluster at fault tolerance one. Guarding the worker from the first
+// pass is what makes the drain stand in the queue too.
+//
+// The guard is not lost on the way in or out. ShuttingDown raises the same budget
+// again, idempotently, and Releasing is still what lets the drain through. An
+// abort or a failure takes it down through clearMaintenanceMarkers, and so does
+// deleting a window that never ran (teardown).
+//
+// Regression: 2026-11-05-a-queued-window-leaves-its-worker-drainable.
+func (r *StorageNodeOpsReconciler) guardWaitingWindow(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps,
+) error {
+	if ops.Spec.Action != simplyblockv1alpha2.StorageNodeOpsActionHostMaintenance ||
+		running(ops) || ops.Spec.Abort {
+		return nil
+	}
+	node, err := r.node(ctx, ops)
+	if apierrors.IsNotFound(err) {
+		// The lock fails an operation on a node that does not exist.
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if node.IsRemote() {
+		// A remote node's worker is the peer site's to guard.
+		return nil
+	}
+	if nodeAlreadyDown(node.Status.Status) {
+		// A node that is already down has no SPDK process to protect, and its
+		// cluster stays unready because of it, so a guard would hold the drain
+		// for as long as the node stays down — including the maintenance that
+		// is meant to bring it back. A guard raised while it was still up comes
+		// down, unless a sibling socket's window on the same worker needs it.
+		//
+		// Both budgets come down. The manager's own would otherwise stand until
+		// the window reached Releasing, which it cannot while the gate holds it
+		// on this very node: on a converged worker that is the same drain
+		// blocked one object over.
+		guarded, err := r.workerStillGuarded(ctx, ops, node)
+		if err != nil || guarded {
+			return err
+		}
+		if err := r.Workload.ReleaseSelfOn(ctx, node.Namespace, node.Spec.WorkerNode); err != nil {
+			return err
+		}
+		return r.Workload.AllowEviction(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode)
+	}
+	return r.guardWorker(ctx, node)
+}
+
+// nodeAlreadyDown reports a node, by the lifecycle the control plane reports
+// for it, whose SPDK process is gone or going and which no drain can therefore
+// harm: shut down, or leaving the cluster.
+//
+// It is the control plane's status rather than the phase, because the phase
+// folds in nodes a drain would still hurt. A suspended node reads as Offline
+// and still runs SPDK — ShuttingDown sends it a graceful shutdown for that
+// reason, and so must not have let the drain kill it first. An unreachable or
+// timed-out node reads as Failed and is usually a blip; a guard that came down
+// on one would hand the pod to the drain's next retry, and going back up a pass
+// later is too late. Those keep their guard, and the window waits with them.
+//
+// An unknown or empty status is a node this cannot vouch for, and it is guarded.
+func nodeAlreadyDown(status string) bool {
+	return status == nodeStatusOffline || status == nodeStatusInShutdown ||
+		utils.NodeIsLeaving(status)
+}
+
+// guardWorker raises the budgets that make a drain of the node's worker wait.
+//
+// The manager's own budget goes up first, for the reason maintenanceShutDown
+// gives: on a converged worker the drain may reach the manager before the
+// storage pod, and then nothing is left to raise the storage pod's budget.
+func (r *StorageNodeOpsReconciler) guardWorker(
+	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
+) error {
+	if err := r.Workload.ProtectSelf(ctx, node.Namespace, node.Spec.WorkerNode); err != nil {
+		return err
+	}
+	err := r.Workload.BlockEviction(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode)
+	if err != nil {
+		return fmt.Errorf("hold the eviction of worker %s: %w", node.Spec.WorkerNode, err)
+	}
+	return nil
 }
 
 // workersInMaintenance names the distinct workers whose maintenance window has

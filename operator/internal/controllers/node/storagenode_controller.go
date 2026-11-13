@@ -84,6 +84,11 @@ type StorageNodeReconciler struct {
 	Recorder events.EventRecorder
 	API      ControlPlane
 
+	// HostCheck asks the CSI node plugins, which run on the host network of
+	// their worker, to read a NIC's address and to test a connection to the SPDK
+	// listener (design §8.1). Unset, a node on a network waits for it.
+	HostCheck HostChecker
+
 	// Nodes is the storage-node stream's cache, which steady state is read from
 	// and which adoption matches against. It is optional: a deployment without the
 	// control-plane informer falls back to reading the control plane directly.
@@ -251,6 +256,13 @@ func (r *StorageNodeReconciler) Reconcile(
 	if cluster != nil {
 		secret, err := clusterSecretByName(ctx, r.Client, cluster.Namespace, cluster.Name)
 		ctx = authenticatedContext(ctx, secret, err)
+	}
+
+	// A stretched cluster's other-site node is listed here as a record: it runs
+	// no workload on this cluster, holds no finalizer, and its deletion removes
+	// nothing from the control plane (remote_controller.go).
+	if node.IsRemote() {
+		return r.reconcileRemote(ctx, &node, cluster)
 	}
 
 	if !node.DeletionTimestamp.IsZero() {
@@ -457,6 +469,8 @@ func (r *StorageNodeReconciler) performNodeStep(
 		return r.checkConfig(ctx, node, cluster)
 	case stepAwaitingSlot:
 		return r.awaitSlot(ctx, node, cluster)
+	case stepCheckingNetwork:
+		return r.checkNetwork(ctx, node, cluster)
 	case stepPosting:
 		return stepResolving, true, r.postNode(ctx, node, cluster)
 	case stepResolving:
@@ -537,7 +551,12 @@ func (r *StorageNodeReconciler) checkHost(
 	// which is the migration route off a Helm deployment. It diverts before the
 	// host check, because an adopted node is already running and its API answering
 	// is not this operator's precondition to establish.
-	if r.upgradeAdoption(ctx, node.Namespace, cluster.Name) {
+	//
+	// A stretched follower carries the same Secret for another purpose: the hub
+	// delivers it to adopt the leader's backend cluster, and the follower's own
+	// nodes are new and are added. A follower node that is already in the backend
+	// is still found by its address below.
+	if !cluster.IsStretchedFollower() && r.upgradeAdoption(ctx, node.Namespace, cluster.Name) {
 		return stepAdopting, true, nil
 	}
 
@@ -581,6 +600,15 @@ func (r *StorageNodeReconciler) checkConfig(
 		return stepCheckingConfig, false, blockedf(FailureDomainMissing,
 			"cluster %s requires a fault group and this node declares none; "+
 				"set spec.config.failureDomain", cluster.Name)
+	}
+	if ptr.BoolFromOrFalse(cluster.Spec.EnableSyncReplication) &&
+		node.Spec.Config.Site == "" {
+		return stepCheckingConfig, false, blockedf(SiteMissing,
+			"cluster %s requires a site and this node declares none; "+
+				"set spec.config.site", cluster.Name)
+	}
+	if declaresDefinitions(networkOf(cluster)) {
+		return stepCheckingNetwork, true, nil
 	}
 	return stepAwaitingSlot, true, nil
 }
@@ -775,6 +803,12 @@ func (r *StorageNodeReconciler) postNode(
 	cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
 	params := r.addParams(ctx, node, cluster)
+	networks, err := r.networkParams(node, cluster)
+	if err != nil {
+		return fmt.Errorf("add node %s on worker %s: %w", node.Name, node.Spec.WorkerNode, err)
+	}
+	params.Networks = networks
+	params.PodNetwork = onPodNetwork(cluster)
 	taskID, err := r.API.AddNode(ctx, cluster.Status.UUID, params)
 	if err != nil {
 		return fmt.Errorf("add node %s on worker %s: %w",
@@ -1000,6 +1034,11 @@ func (r *StorageNodeReconciler) syncStatus(
 	err = r.writeStatus(ctx, node, func(status *simplyblockv1alpha2.StorageNodeStatus) {
 		applyReading(status, reading)
 		status.Phase = phaseOf(reading)
+		// A node on a network is not online until the CSI node plugins reach its
+		// listener: a volume cannot attach to one they cannot reach.
+		if status.Phase == simplyblockv1alpha2.StorageNodePhaseOnline && r.networkGateHolds(node, cluster) {
+			status.Phase = simplyblockv1alpha2.StorageNodePhaseProvisioning
+		}
 		if sampled && worthWriting(status.Resources.Capacity, sample) {
 			status.Resources.Capacity = &simplyblockv1alpha2.StorageNodeCapacity{
 				TotalBytes: ptr.To(sample.Total),
@@ -1010,6 +1049,10 @@ func (r *StorageNodeReconciler) syncStatus(
 	})
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+
+	if err := r.syncNetwork(ctx, node, cluster); err != nil {
+		return ctrl.Result{RequeueAfter: nodeRetry}, err
 	}
 
 	if !wasOnline && node.Status.Phase == simplyblockv1alpha2.StorageNodePhaseOnline {
@@ -1595,13 +1638,13 @@ func (r *StorageNodeReconciler) addParams(
 
 	params := utils.StorageNodeSetAddParams{
 		NodeAddress:      r.Workload.NodeAddress(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode),
-		InterfaceName:    workload.MgmtInterface,
+		InterfaceName:    firstNonEmpty(config.MgmtInterface, workload.MgmtInterface),
 		SPDKImage:        config.SpdkImage,
 		SPDKProxyImage:   config.SpdkProxyImage,
-		DataNics:         workload.DataInterfaces,
+		DataNics:         nicsOf(config.DataInterfaces, workload.DataInterfaces),
 		Namespace:        node.Namespace,
 		JMPercent:        journalPercent(config.JournalManager),
-		Partitions:       partitionsPerDevice(workload),
+		Partitions:       partitionsPerDevice(workload, cluster.Spec.DeviceClass),
 		HaJMCount:        journalCount(config.JournalManager),
 		CRName:           cluster.Name,
 		CRNameSpace:      cluster.Namespace,
@@ -1609,6 +1652,7 @@ func (r *StorageNodeReconciler) addParams(
 		Format4K:         ptr.BoolFromOrFalse(workload.EnableFormat4K),
 		SpdkSystemMemory: config.SpdkSystemMemory,
 		Expand:           ptr.BoolFromOrFalse(config.Expand),
+		Site:             config.Site,
 	}
 
 	// The control plane's failure domain is an integer, and this API's is a label.
@@ -1623,6 +1667,23 @@ func (r *StorageNodeReconciler) addParams(
 		params.FailureDomain = index
 	}
 	return params
+}
+
+// firstNonEmpty is the node's own NIC name, or the cluster's for a node created
+// before NICs were stated per node.
+func firstNonEmpty(node, cluster string) string {
+	if node != "" {
+		return node
+	}
+	return cluster
+}
+
+// nicsOf is the node's own data NICs, or the cluster's for a node that names none.
+func nicsOf(node, cluster []string) []string {
+	if len(node) > 0 {
+		return node
+	}
+	return cluster
 }
 
 // domainIndex is the integer the control plane's own field takes for a
@@ -1666,7 +1727,17 @@ func domainIndex(domain string, mapping []simplyblockv1alpha2.FailureDomainIndex
 // has claimed — which is every device of a machine that has run this product
 // before. A count one higher than the fleet was built with therefore does not
 // lay the disks out differently; it makes the node impossible to add.
-func partitionsPerDevice(workload *simplyblockv1alpha2.StorageNodesSpec) int {
+//
+// A logical block-device cluster always answers 0. Its journal is either the
+// dedicated device or, without enableJournalDevice, the journal partition the
+// node's configure carved from its smallest device; the control plane flags
+// that partition in the node's configuration and adds it as the journal
+// device, and it refuses the per-device journal partitions for this class.
+func partitionsPerDevice(workload *simplyblockv1alpha2.StorageNodesSpec,
+	class simplyblockv1alpha2.StorageClusterDeviceClass) int {
+	if class == simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock {
+		return 0
+	}
 	if ptr.BoolFromOrFalse(workload.EnableJournalDevice) {
 		return 0
 	}
@@ -1823,7 +1894,8 @@ func equalNodeStatus(a, b simplyblockv1alpha2.StorageNodeStatus) bool {
 		a.Step.State != b.Step.State || !equalTime(a.Step.Deadline, b.Step.Deadline) {
 		return false
 	}
-	return equalResources(a.Resources, b.Resources) && equalPorts(a.Ports, b.Ports)
+	return equalResources(a.Resources, b.Resources) && equalPorts(a.Ports, b.Ports) &&
+		equalNetworkStatus(a.Network, b.Network)
 }
 
 func equalResources(a, b *simplyblockv1alpha2.StorageNodeResources) bool {
