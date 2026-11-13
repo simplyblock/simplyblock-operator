@@ -130,6 +130,58 @@ func TestAVanillaDocumentStatesItsNodeFlags(t *testing.T) {
 	}
 }
 
+// An OpenShift fleet that manages its pool's KubeletConfig itself keeps CPU
+// topology and turns the storage nodes' kubelet configuration off. The document
+// is what says so, and the expansion carries it to the nodes rather than the
+// environment's default.
+func TestAnOpenShiftDocumentCanLeaveTheKubeletToTheFleet(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentOpenShift
+		c.Spec.Cluster.EnableKubeletConfiguration = ptr.To(false)
+		c.Spec.Cluster.EnableCpuTopology = ptr.To(true)
+	})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if workload.EnableKubeletConfiguration == nil || *workload.EnableKubeletConfiguration {
+		t.Errorf("the kubelet flag is %v, want the document's false over OpenShift's true",
+			workload.EnableKubeletConfiguration)
+	}
+	if workload.EnableCpuTopology == nil || !*workload.EnableCpuTopology {
+		t.Errorf("the CPU topology flag is %v, want true", workload.EnableCpuTopology)
+	}
+	if workload.OpenShift == nil {
+		t.Error("stating the flags dropped the OpenShift block the environment sets")
+	}
+}
+
+// A stated flag replaces the environment's decision on every environment, the
+// managed services included: the schema admits it everywhere, and a flag
+// admitted and then ignored would be a setting the reviewer approved that the
+// cluster never got.
+func TestAStatedFlagReplacesTheEnvironmentsDecisionEverywhere(t *testing.T) {
+	for _, environment := range []simplyblockv1alpha2.KubernetesEnvironment{
+		simplyblockv1alpha2.KubernetesEnvironmentTalos,
+		simplyblockv1alpha2.KubernetesEnvironmentEKS,
+		simplyblockv1alpha2.KubernetesEnvironmentRancher,
+	} {
+		config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+			c.Spec.Environment = environment
+			c.Spec.Cluster.EnableKubeletConfiguration = ptr.To(true)
+			c.Spec.Cluster.EnableCpuTopology = ptr.To(true)
+		})
+
+		workload := reconcilerFor(t).buildWorkload(config)
+		if workload.EnableKubeletConfiguration == nil || !*workload.EnableKubeletConfiguration {
+			t.Errorf("%s: the kubelet flag is %v, want the document's true",
+				environment, workload.EnableKubeletConfiguration)
+		}
+		if workload.EnableCpuTopology == nil || !*workload.EnableCpuTopology {
+			t.Errorf("%s: the CPU topology flag is %v, want the document's true",
+				environment, workload.EnableCpuTopology)
+		}
+	}
+}
+
 // A document that states neither leaves both to the environment, as before.
 func TestUnstatedNodeFlagsAreTheEnvironments(t *testing.T) {
 	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
