@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -39,7 +40,13 @@ func Unmounted(rootDir string) ([]string, error) {
 
 	var unmounted []string
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		// A hidden entry is never a bucket: no valid S3 bucket name starts
+		// with a dot (buckets.go's CreateBucket enforces DNS-1123), while
+		// versitygw's posix backend creates `.vgwlocks` directly under the
+		// root at startup (backend/posix/objlock.go) before any bucket
+		// exists. Counting it as an unmounted bucket failed readiness
+		// forever on a gateway that had never been delivered one yet.
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
 		dev, err := device(filepath.Join(rootDir, entry.Name()))
