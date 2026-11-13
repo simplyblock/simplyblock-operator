@@ -13,14 +13,22 @@ externallyManagedSecret.create=false means the Secret comes from elsewhere, not
 that the driver cannot reach the cluster. A cluster without a pool gets no
 class, since pool_name is what scopes a volume to a pool. The cluster ID is
 checked to be a UUID, which is the only form the driver's volume handle takes.
+
+stripeWidth and stripeSize make the class's volumes striped
+(csi-driver/docs/striped-volumes.md): stripeWidth logical volumes, each on a
+different storage node of the cluster, striped into one device on the node that
+consumes the volume. A width of 0 or 1 is an ordinary volume and writes nothing.
+The chart checks what it can without the cluster: a width from 2 to 128, and a
+stripeSize that is one the driver accepts. Whether the cluster has that many
+storage nodes is the driver's to refuse, per claim.
 */}}
 {{- $entries := list }}
 {{- if .Values.multiCluster.enable }}
 {{- range (default (list) .Values.multiCluster.clusters) }}
-{{- $entries = append $entries (dict "clusterID" .cluster_id "pool" .pool "name" .storageClassName) }}
+{{- $entries = append $entries (dict "clusterID" .cluster_id "pool" .pool "name" .storageClassName "stripeWidth" .stripeWidth "stripeSize" .stripeSize) }}
 {{- end }}
 {{- else if .Values.csiConfig.simplybk.uuid }}
-{{- $entries = append $entries (dict "clusterID" .Values.csiConfig.simplybk.uuid "pool" .Values.csiConfig.simplybk.pool "name" .Values.csiConfig.simplybk.storageClassName) }}
+{{- $entries = append $entries (dict "clusterID" .Values.csiConfig.simplybk.uuid "pool" .Values.csiConfig.simplybk.pool "name" .Values.csiConfig.simplybk.storageClassName "stripeWidth" .Values.csiConfig.simplybk.stripeWidth "stripeSize" .Values.csiConfig.simplybk.stripeSize) }}
 {{- end }}
 {{- $seen := dict }}
 {{- range $entries }}
@@ -34,6 +42,22 @@ checked to be a UUID, which is the only form the driver's volume handle takes.
 {{- fail (printf "StorageClass %s is rendered for two clusters; set storageClassName on one of them" $name) }}
 {{- end }}
 {{- $_ := set $seen $name true }}
+{{- $width := 0 }}
+{{- if not (kindIs "invalid" .stripeWidth) }}
+{{- if not (regexMatch "^[0-9]+$" (toString .stripeWidth)) }}
+{{- fail (printf "stripeWidth %v of pool %v is not a whole number" .stripeWidth .pool) }}
+{{- end }}
+{{- $width = int (toString .stripeWidth) }}
+{{- end }}
+{{- if gt $width 128 }}
+{{- fail (printf "stripeWidth %d of pool %v is above 128, the most members LVM stripes across" $width .pool) }}
+{{- end }}
+{{- if and .stripeSize (lt $width 2) }}
+{{- fail (printf "stripeSize of pool %v requires a stripeWidth of 2 or more" .pool) }}
+{{- end }}
+{{- if and .stripeSize (not (has (toString .stripeSize) (list "4Ki" "8Ki" "16Ki" "32Ki" "64Ki" "128Ki" "256Ki" "512Ki" "1Mi"))) }}
+{{- fail (printf "stripeSize %v of pool %v is not a power of two from 4Ki to 1Mi" .stripeSize .pool) }}
+{{- end }}
 ---
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
@@ -43,6 +67,12 @@ provisioner: {{ $.Values.driver.driverName | quote }}
 parameters:
   cluster_id: {{ $clusterID | quote }}
   pool_name: {{ .pool | toString | quote }}
+  {{- if ge $width 2 }}
+  stripe_width: {{ $width | toString | quote }}
+  {{- if .stripeSize }}
+  stripe_size: {{ .stripeSize | toString | quote }}
+  {{- end }}
+  {{- end }}
 reclaimPolicy: Delete
 volumeBindingMode: Immediate
 allowVolumeExpansion: true

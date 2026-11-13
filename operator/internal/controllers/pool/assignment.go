@@ -207,6 +207,14 @@ func ClassParameters(p *simplyblockv1alpha2.StoragePool, clusterUUID string) map
 	if defaults.Tune2fsReservedBlocks != "" {
 		params[paramTune2fsReservedBlocks] = defaults.Tune2fsReservedBlocks
 	}
+	// A width of 0 or 1 is an ordinary volume, and the class then says nothing
+	// about striping, so it reads exactly like one from before striping existed.
+	if defaults.StripeWidth != nil && *defaults.StripeWidth >= 2 {
+		setInt(kube.ParamStripeWidth, defaults.StripeWidth)
+		if defaults.StripeSize != "" {
+			params[kube.ParamStripeSize] = defaults.StripeSize
+		}
+	}
 
 	// DHCHAP restricts the pool's volumes to the nodes it allows, through one
 	// label per pool on each of them, and the class republishes the key so the

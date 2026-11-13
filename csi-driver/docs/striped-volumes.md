@@ -9,7 +9,37 @@ instead of being served by one.
 Striping is opted into per StorageClass and is off by default. A class that does
 not set `stripe_width`, or sets it to `0` or `1`, provisions exactly as before.
 
-### StorageClass
+### Turning it on
+
+**Through a StoragePool.** The operator writes the class of a pool it manages from
+the pool's `spec.volumeDefaults`, and `stripeWidth` and `stripeSize` there become
+`stripe_width` and `stripe_size`:
+
+```yaml
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StoragePool
+metadata:
+  name: fast
+spec:
+  clusterRef: production
+  volumeDefaults:
+    stripeWidth: 4
+    stripeSize: 64Ki
+```
+
+The CRD refuses a `stripeWidth` above 128, a `stripeSize` that is not a power of
+two from 4Ki to 1Mi or that is set without a `stripeWidth` of 2 or more, and a
+striped pool with client-side compression or deduplication or with replication.
+The StoragePool admission webhook refuses a striped pool on a stretched cluster,
+and one wider than the cluster's storage nodes (or, on a supercluster, than any
+member that takes new volumes) once the cluster has nodes to count.
+`volumeDefaults` is immutable, so a pool's width is fixed when it is created.
+
+**Through the Helm chart.** For a cluster given in `csiConfig.simplybk` or
+`multiCluster.clusters`, which has no StoragePool, the chart's class takes
+`stripeWidth` and `stripeSize` beside `pool`, with the same bounds.
+
+**By hand:**
 
 ```yaml
 apiVersion: storage.k8s.io/v1
@@ -159,6 +189,7 @@ already device-mapper.
   device for a raw block volume sits on the published device, which for a
   striped volume is the striped logical volume and never a member, so it does
   not duplicate a member's physical-volume label.
-- `operator/docs/designs/design-pnfs-striped.md` plans a `stripe_count`
-  parameter for striped pNFS exports. The two describe the same quantity and
-  should share one name before either ships.
+- Striped pNFS exports (`operator/docs/designs/design-pnfs-striped.md`) use the
+  same parameter, member naming, and handle marker. They differ on snapshots:
+  that design refuses them for exports, because pNFS clients write to the
+  members directly and a freeze on the metadata server does not stop them.

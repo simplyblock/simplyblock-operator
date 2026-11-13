@@ -204,6 +204,15 @@ Naming the groups for what they limit is what makes that legible.
 takes the `enable` form, and it moves under `spec.volumeDefaults` because it is a
 property of the volumes the pool creates rather than of the pool.
 
+**`stripeWidth` and `stripeSize` stripe the pool's volumes**
+([`csi-driver/docs/striped-volumes.md`](../../../../csi-driver/docs/striped-volumes.md)).
+They are written as `stripe_width` and `stripe_size`, and a width of 0 or 1 writes
+neither. CEL rules on `VolumeDefaults` refuse what the CSI driver would refuse for
+every claim: a `stripeSize` without a width of 2 or more, and a striped pool with
+client-side compression, deduplication, or replication. What depends on the
+cluster, its storage-node count and whether it is stretched, is the admission
+webhook's (§3.4).
+
 ### 3.2 Immutability
 
 | Field            | Optionality | Semantics                                                           |
