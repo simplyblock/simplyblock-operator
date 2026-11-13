@@ -201,6 +201,40 @@ func TestGeneratedParametersIncludeClientSideVDO(t *testing.T) {
 	}
 }
 
+// A striped pool's class carries stripe_width and stripe_size for the CSI
+// driver, and a width of 0 or 1 writes neither, so the class reads exactly like
+// one from before striping existed.
+func TestGeneratedParametersIncludeTheStripe(t *testing.T) {
+	cases := []struct {
+		name                string
+		width               *int32
+		size                string
+		wantWidth, wantSize string
+	}{
+		{name: "striped with a chunk", width: ptr.To(int32(4)), size: "128Ki", wantWidth: "4", wantSize: "128Ki"},
+		{name: "striped at the driver's chunk", width: ptr.To(int32(2)), wantWidth: "2"},
+		{name: "a width of 1 is no stripe", width: ptr.To(int32(1))},
+		{name: "a width of 0 is no stripe", width: ptr.To(int32(0))},
+		{name: "unset"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPool("tenant-a", func(p *simplyblockv1alpha2.StoragePool) {
+				p.Spec.VolumeDefaults = &simplyblockv1alpha2.VolumeDefaults{StripeWidth: tc.width, StripeSize: tc.size}
+			})
+			params := ClassParameters(p, testClusterUUID)
+			width, hasWidth := params[kube.ParamStripeWidth]
+			size, hasSize := params[kube.ParamStripeSize]
+			if width != tc.wantWidth || hasWidth != (tc.wantWidth != "") {
+				t.Errorf("stripe_width = %q (present %t), want %q", width, hasWidth, tc.wantWidth)
+			}
+			if size != tc.wantSize || hasSize != (tc.wantSize != "") {
+				t.Errorf("stripe_size = %q (present %t), want %q", size, hasSize, tc.wantSize)
+			}
+		})
+	}
+}
+
 // ConsumingClassName prefers the class the operator wrote for a default pool and
 // otherwise takes the first assigned class. A pool with none is reported rather
 // than answered with an invented name.

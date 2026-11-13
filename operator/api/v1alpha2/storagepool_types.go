@@ -101,6 +101,14 @@ type PoolLimits struct {
 // immutable once set for that reason: StorageClass.parameters is immutable in
 // the Kubernetes API, so a pool whose defaults changed would have a class the
 // operator cannot update and a spec that no longer describes it.
+//
+// The striping rules repeat what the CSI driver refuses at CreateVolume, so a
+// pool that could never provision a volume is refused when it is written rather
+// than on every claim. Whether the width fits the cluster is the admission
+// webhook's, since it needs the cluster's storage nodes.
+// +kubebuilder:validation:XValidation:rule="!has(self.stripeSize) || (has(self.stripeWidth) && self.stripeWidth >= 2)",message="stripeSize requires a stripeWidth of 2 or more"
+// +kubebuilder:validation:XValidation:rule="!has(self.stripeWidth) || self.stripeWidth < 2 || !((has(self.enableClientCompression) && self.enableClientCompression) || (has(self.enableClientDeduplication) && self.enableClientDeduplication))",message="a striped volume (stripeWidth of 2 or more) cannot use client-side compression or deduplication"
+// +kubebuilder:validation:XValidation:rule="!has(self.stripeWidth) || self.stripeWidth < 2 || !(has(self.enableReplication) && self.enableReplication)",message="a striped volume (stripeWidth of 2 or more) cannot be replicated"
 type VolumeDefaults struct {
 	// IOPS is each volume's ceiling on operations per second, both directions
 	// together. Zero is unlimited. It is written into the class as max_iops.
@@ -175,6 +183,26 @@ type VolumeDefaults struct {
 	// empty, and runs `tune2fs -m 0` when it is `0`.
 	// +optional
 	Tune2fsReservedBlocks string `json:"tune2fsReservedBlocks,omitempty"`
+
+	// StripeWidth stripes each volume across this many storage nodes of the
+	// cluster: the CSI driver creates that many logical volumes of equal size,
+	// each on a different node, and the node consuming the volume stripes them
+	// into one device with LVM. Omitted, 0, or 1 is an ordinary volume. It has to
+	// be no more than the cluster's storage nodes, or every claim is refused, and
+	// it cannot be combined with client-side compression or deduplication or with
+	// replication. Written into the class as stripe_width
+	// (csi-driver/docs/striped-volumes.md).
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=128
+	// +optional
+	StripeWidth *int32 `json:"stripeWidth,omitempty"`
+
+	// StripeSize is how much of a striped volume each member takes before the
+	// next one does. Omitted, the CSI driver uses 64Ki. Requires a StripeWidth of
+	// 2 or more. Written into the class as stripe_size.
+	// +kubebuilder:validation:Enum="4Ki";"8Ki";"16Ki";"32Ki";"64Ki";"128Ki";"256Ki";"512Ki";"1Mi"
+	// +optional
+	StripeSize string `json:"stripeSize,omitempty"`
 }
 
 // StoragePoolSpec is the desired state of one tenancy unit within a cluster.
