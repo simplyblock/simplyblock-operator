@@ -43,7 +43,8 @@ func reportWithMTU(t *testing.T, node string, mtu int) *corev1.ConfigMap {
 func runWithMTUs(t *testing.T, spec *simplyblockv1alpha2.DiscoverSpec, mtus ...int) *simplyblockv1alpha2.OperatorOps {
 	t.Helper()
 	names := []string{"worker-1", "worker-2", "worker-3"}[:len(mtus)]
-	objects := []client.Object{discoverRun(spec)}
+	objects := make([]client.Object, 0, 1+len(names))
+	objects = append(objects, discoverRun(spec))
 	for _, name := range names {
 		objects = append(objects, worker(name))
 	}

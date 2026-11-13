@@ -15,9 +15,9 @@ import (
 
 const testRun = "discover-1"
 
-// writtenBy marks a draft as written by the named discovery run.
-func writtenBy(config *simplyblockv1alpha2.ClusterDeploymentConfig, run string) *simplyblockv1alpha2.ClusterDeploymentConfig {
-	config.Labels = map[string]string{nodeprobe.LabelRun: run}
+// writtenBy marks a draft as written by the test's discovery run.
+func writtenBy(config *simplyblockv1alpha2.ClusterDeploymentConfig) *simplyblockv1alpha2.ClusterDeploymentConfig {
+	config.Labels = map[string]string{nodeprobe.LabelRun: testRun}
 	return config
 }
 
@@ -44,25 +44,25 @@ func preflightExisting(run *simplyblockv1alpha2.OperatorOps) []client.Object {
 }
 
 func TestApprovingADraftWithAFailFindingIsRefused(t *testing.T) {
-	config := writtenBy(testConfig(), testRun)
+	config := writtenBy(testConfig())
 	mustDeny(t, approve(t, preflightExisting(runFinding(simplyblockv1alpha2.PreflightSeverityFail)), config),
 		"StorageMTUMismatch", "worker-1", "ignoreFindings")
 }
 
 func TestApprovingADraftWithAWaivedFailIsAdmitted(t *testing.T) {
-	config := writtenBy(testConfig(), testRun)
+	config := writtenBy(testConfig())
 	mustAllow(t, approve(t, preflightExisting(
 		runFinding(simplyblockv1alpha2.PreflightSeverityFail, "StorageMTUMismatch")), config))
 }
 
 func TestApprovingADraftWithOnlyWarningsIsAdmitted(t *testing.T) {
-	config := writtenBy(testConfig(), testRun)
+	config := writtenBy(testConfig())
 	mustAllow(t, approve(t, preflightExisting(runFinding(simplyblockv1alpha2.PreflightSeverityWarn)), config))
 }
 
 func TestApprovingADraftWhoseRunIsGoneIsAdmitted(t *testing.T) {
 	// A run deleted after review leaves nothing to gate on, and a hand-written
 	// document never had one.
-	config := writtenBy(testConfig(), testRun)
+	config := writtenBy(testConfig())
 	mustAllow(t, approve(t, []client.Object{testWorker("worker-1")}, config))
 }
