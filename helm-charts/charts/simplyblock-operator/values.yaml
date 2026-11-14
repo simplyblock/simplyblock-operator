@@ -96,6 +96,13 @@ csiConfig:
     # -- Name of the StorageClass rendered for `csiConfig.simplybk.pool`. Empty uses
     # `simplyblock-<pool>`.
     storageClassName:
+    # -- Stripes each volume of the rendered StorageClass across this many storage nodes of the
+    # cluster, 2 to 128 (`stripe_width`). Empty, 0, or 1 is an ordinary volume. See
+    # csi-driver/docs/striped-volumes.md.
+    stripeWidth:
+    # -- Chunk each member of a striped volume takes, a power of two from `4Ki` to `1Mi`
+    # (`stripe_size`). Empty uses the driver's 64Ki. Requires stripeWidth of 2 or more.
+    stripeSize:
 
 # Configuration for the csiSecret
 csiSecret:
@@ -107,15 +114,17 @@ multiCluster:
   # -- Writes one entry per item in `multiCluster.clusters` instead of the single cluster above.
   enable: false
   # -- Storage clusters the CSI driver connects to, when `multiCluster.enable` is `true`. Each entry
-  # has `cluster_id`, `secret`, `workers`, `pool`, and `storageClassName`, with the same meaning as
-  # the matching `csiConfig` and `csiSecret` values.
+  # has `cluster_id`, `secret`, `workers`, `pool`, `storageClassName`, `stripeWidth`, and
+  # `stripeSize`, with the same meaning as the matching `csiConfig` and `csiSecret` values.
   clusters:
   - cluster_id:
     secret:
     workers:
-    # As csiConfig.simplybk.pool and storageClassName, for this cluster.
+    # As csiConfig.simplybk.pool, storageClassName, stripeWidth, and stripeSize, for this cluster.
     pool:
     storageClassName:
+    stripeWidth:
+    stripeSize:
       
 deployment:
   # One of: standalone, managed, empty.

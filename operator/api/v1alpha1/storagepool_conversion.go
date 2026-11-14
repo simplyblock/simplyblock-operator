@@ -74,6 +74,8 @@ const (
 	annoEnableClientDeduplication = "storage.simplyblock.io/conversion-spec.volumeDefaults.enableClientDeduplication"
 	annoEnableReplication         = "storage.simplyblock.io/conversion-spec.volumeDefaults.enableReplication"
 	annoPriorityClass             = "storage.simplyblock.io/conversion-spec.volumeDefaults.priorityClass"
+	annoStripeWidth               = "storage.simplyblock.io/conversion-spec.volumeDefaults.stripeWidth"
+	annoStripeSize                = "storage.simplyblock.io/conversion-spec.volumeDefaults.stripeSize"
 	annoStatusPhase               = "storage.simplyblock.io/conversion-status.phase"
 	annoStatusClassNames          = "storage.simplyblock.io/conversion-status.storageClassNames"
 	annoStatusDefaultClassName    = "storage.simplyblock.io/conversion-status.defaultStorageClassName"
@@ -177,11 +179,17 @@ func stashHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StoragePool) error {
 		if err := stash(meta, annoEnableDHCHAP, d.EnableDHCHAP); err != nil {
 			return err
 		}
+		if err := stash(meta, annoStripeWidth, d.StripeWidth); err != nil {
+			return err
+		}
+		if err := stash(meta, annoStripeSize, d.StripeSize); err != nil {
+			return err
+		}
 	} else {
 		// The block itself is gone, so any value stashed from an earlier write
 		// is stale: leaving it would restore defaults the hub no longer states.
 		clear(meta, annoEnableCompression, annoEnableClientCompression, annoEnableClientDeduplication,
-			annoEnableReplication, annoPriorityClass, annoEnableDHCHAP)
+			annoEnableReplication, annoPriorityClass, annoEnableDHCHAP, annoStripeWidth, annoStripeSize)
 	}
 
 	status := src.Status
@@ -216,6 +224,8 @@ func restoreHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StoragePool) error {
 		replication         *bool
 		dhchap              *bool
 		priority            string
+		stripeWidth         *int32
+		stripeSize          string
 	)
 	if err := unstash(meta, annoEnableCompression, &compression); err != nil {
 		return err
@@ -235,8 +245,14 @@ func restoreHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StoragePool) error {
 	if err := unstash(meta, annoEnableDHCHAP, &dhchap); err != nil {
 		return err
 	}
+	if err := unstash(meta, annoStripeWidth, &stripeWidth); err != nil {
+		return err
+	}
+	if err := unstash(meta, annoStripeSize, &stripeSize); err != nil {
+		return err
+	}
 	if compression != nil || clientCompression != nil || clientDeduplication != nil ||
-		replication != nil || dhchap != nil || priority != "" {
+		replication != nil || dhchap != nil || priority != "" || stripeWidth != nil || stripeSize != "" {
 		// The block is allocated only when something restored into it, for the
 		// reason volumeDefaultsToHub returns nil rather than an empty struct.
 		if dst.Spec.VolumeDefaults == nil {
@@ -247,6 +263,8 @@ func restoreHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StoragePool) error {
 		dst.Spec.VolumeDefaults.EnableClientDeduplication = clientDeduplication
 		dst.Spec.VolumeDefaults.EnableReplication = replication
 		dst.Spec.VolumeDefaults.PriorityClass = priority
+		dst.Spec.VolumeDefaults.StripeWidth = stripeWidth
+		dst.Spec.VolumeDefaults.StripeSize = stripeSize
 		// The stash is the authority when there is one, because it can say
 		// false and spec.dhchap cannot. An object a real v1alpha1 client wrote
 		// carries no stash, and volumeDefaultsToHub has already read its

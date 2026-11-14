@@ -72,7 +72,9 @@ func (cs *Server) CreateVolume(
 		return nil, err
 	}
 
-	csiVolume, err := cs.createVolume(ctx, req, sbClient)
+	// A class with a stripe_width of 2 or more makes a striped volume
+	// (striped.go). Any other class takes createVolume, unchanged.
+	csiVolume, err := cs.provisionVolume(ctx, req, sbClient, pnfs)
 	if err != nil {
 		klog.Errorf("failed to create volume, volumeID: %s err: %v", volumeID, err)
 		if _, isStatus := status.FromError(err); isStatus {
@@ -205,6 +207,13 @@ func (cs *Server) DeleteVolume(
 
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
+
+	// A striped volume is deleted member by member. It is never relocated or
+	// replicated, so neither of the cleanups below has anything to find.
+	if width := csicommon.StripeWidth(volumeID); width > 1 {
+		handle, _ := csicommon.ParseVolumeHandle(volumeID)
+		return cs.deleteStripedVolume(ctx, volumeID, handle, width)
+	}
 
 	// A volume a Relocate moved is served by the volume its PV's mark names,
 	// which this handle no longer reaches; it goes with the PV.

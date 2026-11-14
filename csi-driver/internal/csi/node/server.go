@@ -8,6 +8,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/freeze"
 	"github.com/simplyblock/atlas/lvol"
 	export "github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/nvme"
@@ -48,9 +49,12 @@ type Server struct {
 	ensureInitiator func(ctx context.Context) error
 	unstagePNFSFn   func(context.Context, string, export.Spec) error
 	volumeLocks     *csicommon.VolumeLocks
-	kubeClient      kubernetes.Interface
-	manager         *sbkube.Manager
-	guardian        *guardian.Guardian
+	// freezes are the striped volumes suspended on this node for a snapshot
+	// (freeze.go).
+	freezes    *freeze.Holds
+	kubeClient kubernetes.Interface
+	manager    *sbkube.Manager
+	guardian   *guardian.Guardian
 
 	// The stretched cluster's stage gate (syncgate.go): this node's site and
 	// whether a cluster is sync, and where a volume is led from. Seams, so the
@@ -75,6 +79,7 @@ func New(d *csicommon.CSIDriver, kubeClient kubernetes.Interface, manager *sbkub
 		identifyStaged:    stagedIdentity(nvme.SysfsConfig{}),
 		ensureInitiator:   hostInitiatorCheck().ensure,
 		volumeLocks:       csicommon.NewVolumeLocks(),
+		freezes:           newFreezes(),
 		kubeClient:        kubeClient,
 		manager:           manager,
 		syncSite:          clusters.SyncSite,

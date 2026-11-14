@@ -104,3 +104,28 @@ func TestSectorsReadsBlockdev(t *testing.T) {
 		t.Fatalf("Sectors = %d, %v", n, err)
 	}
 }
+
+// Suspend and Resume name the mapping and nothing else: a bare suspend is the
+// one that freezes a filesystem on top (lockfs), which is what makes the image
+// underneath consistent, and --nolockfs would silently drop that.
+func TestSuspendAndResumeCommands(t *testing.T) {
+	r := &recorder{}
+	m := New(r.run)
+	if err := m.Suspend(context.Background(), "vol--a-lv--a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Resume(context.Background(), "vol--a-lv--a"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"dmsetup suspend vol--a-lv--a", "dmsetup resume vol--a-lv--a"}
+	if strings.Join(r.calls, "|") != strings.Join(want, "|") {
+		t.Errorf("calls = %q, want %q", r.calls, want)
+	}
+}
+
+func TestSuspendReportsTheFailure(t *testing.T) {
+	r := &recorder{err: map[string]error{"dmsetup suspend": errors.New("exit status 1")}}
+	if err := New(r.run).Suspend(context.Background(), "x"); err == nil {
+		t.Fatal("a failed suspend was reported as success")
+	}
+}
