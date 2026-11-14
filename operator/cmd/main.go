@@ -168,6 +168,20 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
+// serverHasGroup reports whether the API server serves the named API group.
+func serverHasGroup(discoveryClient serverGroupsGetter, name string) (bool, error) {
+	groupList, err := discoveryClient.ServerGroups()
+	if err != nil {
+		return false, fmt.Errorf("discover API groups: %w", err)
+	}
+	for _, group := range groupList.Groups {
+		if group.Name == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func validateTLSConfiguration(discoveryClient serverGroupsGetter, providerSet bool, tlsProvider string) error {
 	if !providerSet {
 		return nil
@@ -184,14 +198,12 @@ func validateTLSConfiguration(discoveryClient serverGroupsGetter, providerSet bo
 		requiredGroup = openShiftConfigAPIGroup
 	}
 
-	groupList, err := discoveryClient.ServerGroups()
+	served, err := serverHasGroup(discoveryClient, requiredGroup)
 	if err != nil {
-		return fmt.Errorf("discover API groups: %w", err)
+		return err
 	}
-	for _, group := range groupList.Groups {
-		if group.Name == requiredGroup {
-			return nil
-		}
+	if served {
+		return nil
 	}
 	return fmt.Errorf("SB_TLS_PROVIDER=%q requires API group %q", tlsProvider, requiredGroup)
 }
@@ -743,6 +755,21 @@ func main() {
 	controlPlaneCredential := controlplanecontroller.NewCredentialResolver(
 		mgr.GetClient(), operatorNamespace)
 
+	// OpenShift is read from the API groups the cluster serves. A wrong answer
+	// gives the NUMA device plugin an SELinux type it cannot register with, or one
+	// OpenShift does not admit, so a cluster that cannot be asked stops the
+	// operator rather than being guessed at.
+	controlPlaneDiscovery, err := discovery.NewDiscoveryClientForConfig(cfg)
+	if err != nil {
+		setupLog.Error(err, "unable to build a discovery client")
+		os.Exit(1)
+	}
+	isOpenShift, err := serverHasGroup(controlPlaneDiscovery, openShiftConfigAPIGroup)
+	if err != nil {
+		setupLog.Error(err, "unable to tell whether this is an OpenShift cluster")
+		os.Exit(1)
+	}
+
 	if err := (&controlplanecontroller.ControlPlaneReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -751,6 +778,7 @@ func main() {
 		ImageMirrorRegistry: os.Getenv("SB_IMAGE_MIRROR_REGISTRY"),
 
 		NUMAPluginImage: os.Getenv(controlplanecontroller.NUMAPluginImageEnv),
+		OpenShift:       isOpenShift,
 	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlane")
 		os.Exit(1)

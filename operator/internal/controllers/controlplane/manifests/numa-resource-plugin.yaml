@@ -56,6 +56,8 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            # The type OpenShift's policy lets register with its kubelet. Off
+            # OpenShift the operator replaces it (numaplugin.go).
             seLinuxOptions:
               type: container_device_plugin_t
           env:
