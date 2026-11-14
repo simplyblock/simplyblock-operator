@@ -63,15 +63,15 @@ func TestJudgeMintReportsOnlyFailuresNotRecordedUnderIssues(t *testing.T) {
 // The SSE-C records are the ones run 43597961456 reported: the gateway answers
 // 501 before reading the body, so the client sees a reset instead.
 const mintSSECSample = `=== mint log.json ===
-{"name":"minio-go: testEncryptedSSECToUnencryptedCopyObject","function":"CopyObject(destination, source)","status":"FAIL","error":"write: connection reset by peer"}
-{"name":"minio-go: testDecryptedCopyObject","function":"CopyObject(destination, source)","status":"FAIL","error":"write: connection reset by peer"}
-{"name":"minio-go: testSSECEncryptedToSSECCopyObjectPart","function":"CopyObjectPart(destination, source)","status":"FAIL","error":"write: connection reset by peer"}
-{"name":"minio-go: testSSECEncryptedToUnencryptedCopyPart","function":"CopyObjectPart(destination, source)","status":"FAIL","error":"write: connection reset by peer"}
-{"name":"minio-go: testEncryptedSSECToSSES3CopyObject","function":"CopyObject(destination, source)","status":"FAIL","error":"write: connection reset by peer"}
-{"name":"minio-go: testEncryptedSSES3ToSSECCopyObject","function":"CopyObject(destination, source)","status":"FAIL","error":"write: connection reset by peer"}
-{"name":"minio-go: testSSECEncryptedToSSES3CopyObjectPart","function":"CopyObjectPart(destination, source)","status":"FAIL","error":"write: connection reset by peer"}
-{"name":"minio-go: testSSES3EncryptedToSSECCopyObjectPart","function":"CopyObjectPart(destination, source)","status":"FAIL","error":"write: connection reset by peer"}
-{"name":"minio-go: testPutObject","function":"PutObject(bucketName, objectName, reader, size, opts)","status":"FAIL","error":"write: connection reset by peer"}
+{"name":"minio-go: testEncryptedSSECToUnencryptedCopyObject","status":"FAIL","error":"connection reset by peer"}
+{"name":"minio-go: testDecryptedCopyObject","status":"FAIL","error":"connection reset by peer"}
+{"name":"minio-go: testSSECEncryptedToSSECCopyObjectPart","status":"FAIL","error":"connection reset by peer"}
+{"name":"minio-go: testSSECEncryptedToUnencryptedCopyPart","status":"FAIL","error":"connection reset by peer"}
+{"name":"minio-go: testEncryptedSSECToSSES3CopyObject","status":"FAIL","error":"connection reset by peer"}
+{"name":"minio-go: testEncryptedSSES3ToSSECCopyObject","status":"FAIL","error":"connection reset by peer"}
+{"name":"minio-go: testSSECEncryptedToSSES3CopyObjectPart","status":"FAIL","error":"connection reset by peer"}
+{"name":"minio-go: testSSES3EncryptedToSSECCopyObjectPart","status":"FAIL","error":"connection reset by peer"}
+{"name":"minio-go: testPutObject","status":"FAIL","error":"connection reset by peer"}
 `
 
 func TestJudgeMintKnowsSSECIsUnsupported(t *testing.T) {
