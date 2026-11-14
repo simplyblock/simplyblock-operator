@@ -101,6 +101,45 @@ func TestTheNUMAPluginRunsAsRoot(t *testing.T) {
 	}
 }
 
+// numaPluginSELinuxTypeOn is the SELinux type of the plugin's container as the
+// reconciler of an OpenShift cluster, or of any other, builds it.
+func numaPluginSELinuxTypeOn(t *testing.T, openShift bool) string {
+	t.Helper()
+	r := &ControlPlaneReconciler{OpenShift: openShift}
+	objs, err := r.numaPluginObjects(localControlPlane())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := objs[1].(*appsv1.DaemonSet).Spec.Template.Spec.Containers[0].SecurityContext
+	if sc == nil || sc.SELinuxOptions == nil {
+		t.Fatalf("securityContext = %+v, want an SELinux type stated", sc)
+	}
+	if sc.Privileged == nil || *sc.Privileged || sc.Capabilities == nil || len(sc.Capabilities.Drop) == 0 {
+		t.Error("the SELinux type must not widen the rest: privileged stays false and every capability stays dropped")
+	}
+	return sc.SELinuxOptions.Type
+}
+
+// Regression: 2026-11-13, RKE2 1.36 on Rocky 9.5 with SELinux enforcing. RKE2 runs
+// its kubelet as container_runtime_t, and container_device_plugin_t may not
+// connect to its socket (avc: denied { connectto } ... kubelet.sock), so the
+// plugin never registered and the node advertised no numa-align. With spc_t on the
+// same node it registered.
+func TestTheNUMAPluginIsNotConfinedToOpenShiftsKubeletOffOpenShift(t *testing.T) {
+	if got := numaPluginSELinuxTypeOn(t, false); got != "spc_t" {
+		t.Errorf("SELinux type off OpenShift = %q, want spc_t", got)
+	}
+}
+
+// OpenShift's policy allows container_device_plugin_t to register with its
+// kubelet, and its security context constraints do not hand out spc_t to an
+// unprivileged pod.
+func TestTheNUMAPluginKeepsTheDevicePluginTypeOnOpenShift(t *testing.T) {
+	if got := numaPluginSELinuxTypeOn(t, true); got != "container_device_plugin_t" {
+		t.Errorf("SELinux type on OpenShift = %q, want container_device_plugin_t", got)
+	}
+}
+
 // Without SB_NUMA_PLUGIN_IMAGE the plugin runs a pinned release, never latest:
 // the DaemonSet pulls on every restart, so a moving tag reaches every cluster.
 func TestTheNUMAPluginDefaultsToAPinnedRelease(t *testing.T) {
