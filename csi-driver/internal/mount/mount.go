@@ -130,6 +130,19 @@ func FormatOptions(fsType string, volumeContext map[string]string, vdo bool) []s
 	}
 }
 
+// StripedFormatOptions returns the mkfs options for fsType on a striped
+// volume: the filesystem's feature options and nothing about stripe geometry.
+// The volume stack's filesystem layer passes the striped logical volume's own
+// geometry (mkfs.xfs -d su=<chunk>,sw=<stripes>), which is the one that is
+// true of the device, and mkfs.xfs refuses a command line that states su
+// twice. So the class's xfs_su/xfs_sw, and their default, have no place here.
+func StripedFormatOptions(fsType string) []string {
+	if fsType == "xfs" {
+		return append([]string{}, xfsFeatureOptions()...)
+	}
+	return nil
+}
+
 // defaultXFSStripeUnit and defaultXFSStripeWidth are the fallback mkfs.xfs
 // stripe geometry used when the StorageClass does not override xfs_su/xfs_sw.
 // These are a starting point based on initial testing, not a computed value

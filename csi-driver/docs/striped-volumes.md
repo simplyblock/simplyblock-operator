@@ -123,8 +123,11 @@ for its own metadata.
 up), so the volume as a whole is held to the class's numbers. The volume context
 records the class's numbers.
 
-**XFS geometry.** When the class does not set `xfs_su` and `xfs_sw`, the
-controller sets them to the stripe: `su = stripe_size`, `sw = stripe_width`.
+**XFS geometry.** The node's filesystem layer formats XFS with the striped
+logical volume's own geometry (`-d su=<stripe_size>,sw=<stripe_width>`). The
+class's `xfs_su`/`xfs_sw` and the driver's default stripe hints are not used for
+a striped volume: mkfs.xfs refuses a command line that states the stripe unit
+twice.
 
 ### Operations
 

@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -347,5 +348,27 @@ func TestTeardownOfAStripedVolumeWithoutItsContextNamesTheGroup(t *testing.T) {
 	volume := teardownVolume(pvcTestHandle+":s3", "/staging", map[string]string{})
 	if got := volume.VolumeGroup(); got != "vol-"+pvcTestLvol {
 		t.Errorf("the teardown releases volume group %q, want the first member's", got)
+	}
+}
+
+// Regression: the first bed run of PR #918 (2026-11-14). mkfs.xfs on a striped
+// volume failed with "-d su option respecified": the filesystem layer passes
+// the striped logical volume's own geometry (-d su=<chunk>,sw=<stripes>), and
+// the driver's XFS stripe hints (the class's xfs_su/xfs_sw, or their default)
+// went on the same command line. A striped volume takes its geometry from the
+// stripe and nothing else.
+func TestAStripedVolumeIsFormattedWithTheStripesGeometryOnly(t *testing.T) {
+	vc := stripedContext()
+	vc["xfs_su"] = "64k"
+	vc["xfs_sw"] = "3"
+	options := stackVolume("/staging", vc, xfsCapability()).FormatOptions
+	for _, o := range options {
+		if strings.Contains(o, "su=") || strings.Contains(o, "sw=") {
+			t.Errorf("a striped volume carries driver stripe hints %q, which mkfs.xfs refuses beside the layer's own: %v",
+				o, options)
+		}
+	}
+	if slices.Contains(options, "-K") {
+		t.Errorf("a striped volume skipped the discard: %v", options)
 	}
 }
