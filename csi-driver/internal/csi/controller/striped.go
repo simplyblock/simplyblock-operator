@@ -193,18 +193,12 @@ func stripeMemberBytes(capacity int64, width int) int64 {
 // into its volume context. The member order written here is the order the node
 // stripes them in and is never rewritten.
 //
-// It also gives XFS the stripe's geometry, a stripe unit of one chunk and a
-// width of one per member, when the class does not set xfs_su and xfs_sw
-// itself. The node's default for them describes one erasure-coded logical
-// volume, which a striped device is not.
+// XFS gets the stripe's geometry from the node's filesystem layer, which reads
+// it off the striped logical volume, so nothing about it is written here.
 func setStripeContext(vc map[string]string, members []string, spec stripeSpec) {
 	vc[csicommon.CtxStripeWidth] = strconv.Itoa(spec.width)
 	vc[csicommon.CtxStripeMembers] = strings.Join(members, ",")
 	vc[csicommon.CtxStripeChunkBytes] = strconv.FormatInt(spec.chunkBytes, 10)
-	if vc["xfs_su"] == "" && vc["xfs_sw"] == "" {
-		vc["xfs_su"] = strconv.FormatInt(spec.chunkBytes/1024, 10) + "k"
-		vc["xfs_sw"] = strconv.Itoa(spec.width)
-	}
 }
 
 // listStorageNodes reads a cluster's storage nodes from its control plane.

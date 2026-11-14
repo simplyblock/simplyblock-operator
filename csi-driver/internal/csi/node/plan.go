@@ -222,10 +222,20 @@ func stackVolume(
 		FsType:                fsType,
 		DefaultFsType:         "ext4",
 		MountFlags:            volumeMountFlags(volCap),
-		FormatOptions:         mount.FormatOptions(fsTypeOrDefault(volCap), vc, wantsVDO(vc)),
+		FormatOptions:         formatOptions(volCap, vc),
 		ReservedBlocksPercent: vc["tune2fs_reserved_blocks"],
 		Encrypted:             boolFromContext(vc[csicommon.ParamEncryption]),
 	}
+}
+
+// formatOptions is what mkfs is given beyond what the filesystem layer derives
+// itself. A striped volume's geometry is the layer's to state, from the striped
+// logical volume, so it gets no stripe hints of the driver's (mount.StripedFormatOptions).
+func formatOptions(volCap *csi.VolumeCapability, vc map[string]string) []string {
+	if stripeWidth(vc) > 1 {
+		return mount.StripedFormatOptions(fsTypeOrDefault(volCap))
+	}
+	return mount.FormatOptions(fsTypeOrDefault(volCap), vc, wantsVDO(vc))
 }
 
 // boolFromContext reads a flag the context carries as text, answering false for

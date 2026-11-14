@@ -284,8 +284,8 @@ func TestCreateStripedVolume(t *testing.T) {
 		vc[csicommon.CtxStripeChunkBytes] != strconv.Itoa(64<<10) {
 		t.Errorf("volume context = %v, want the width, the members in order, and the chunk", vc)
 	}
-	if vc["xfs_su"] != "64k" || vc["xfs_sw"] != "3" {
-		t.Errorf("XFS geometry = su %q, sw %q; want the stripe's, 64k and 3", vc["xfs_su"], vc["xfs_sw"])
+	if _, ok := vc["xfs_su"]; ok {
+		t.Errorf("the controller wrote xfs_su %q; the node's filesystem layer states the stripe's geometry", vc["xfs_su"])
 	}
 }
 
