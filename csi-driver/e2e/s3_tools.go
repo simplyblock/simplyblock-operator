@@ -64,6 +64,10 @@ var mintKnownFailures = []mintKnownFailure{
 	{suite: "minio-go", match: "testTrailingChecksums", issue: "14: trailing checksums are not returned"},
 	{suite: "minio-go", match: "Unexpected object version ID", issue: "15: version ID without versioning"},
 	{suite: "minio-go", match: "testPresignedPostPolicy", issue: "16: presigned POST is rejected"},
+	// versitygw's posix backend answers SSE-C with 501 before reading the body,
+	// so minio-go sees a connection reset rather than the 501.
+	{suite: "minio-go", match: "SSEC", issue: "12: SSE-C is unsupported by design"},
+	{suite: "minio-go", match: "testDecryptedCopyObject", issue: "12: SSE-C is unsupported by design"},
 }
 
 // mintSuites are the mint suites run, out of the image's /mint/run/core: the

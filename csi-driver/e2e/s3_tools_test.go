@@ -60,6 +60,32 @@ func TestJudgeMintReportsOnlyFailuresNotRecordedUnderIssues(t *testing.T) {
 	}
 }
 
+// The SSE-C records are the ones run 43597961456 reported: the gateway answers
+// 501 before reading the body, so the client sees a reset instead.
+const mintSSECSample = `=== mint log.json ===
+{"name":"minio-go: testEncryptedSSECToUnencryptedCopyObject","function":"CopyObject(destination, source)","status":"FAIL","error":"write: connection reset by peer"}
+{"name":"minio-go: testDecryptedCopyObject","function":"CopyObject(destination, source)","status":"FAIL","error":"write: connection reset by peer"}
+{"name":"minio-go: testSSECEncryptedToSSECCopyObjectPart","function":"CopyObjectPart(destination, source)","status":"FAIL","error":"write: connection reset by peer"}
+{"name":"minio-go: testSSECEncryptedToUnencryptedCopyPart","function":"CopyObjectPart(destination, source)","status":"FAIL","error":"write: connection reset by peer"}
+{"name":"minio-go: testEncryptedSSECToSSES3CopyObject","function":"CopyObject(destination, source)","status":"FAIL","error":"write: connection reset by peer"}
+{"name":"minio-go: testEncryptedSSES3ToSSECCopyObject","function":"CopyObject(destination, source)","status":"FAIL","error":"write: connection reset by peer"}
+{"name":"minio-go: testSSECEncryptedToSSES3CopyObjectPart","function":"CopyObjectPart(destination, source)","status":"FAIL","error":"write: connection reset by peer"}
+{"name":"minio-go: testSSES3EncryptedToSSECCopyObjectPart","function":"CopyObjectPart(destination, source)","status":"FAIL","error":"write: connection reset by peer"}
+{"name":"minio-go: testPutObject","function":"PutObject(bucketName, objectName, reader, size, opts)","status":"FAIL","error":"write: connection reset by peer"}
+`
+
+func TestJudgeMintKnowsSSECIsUnsupported(t *testing.T) {
+	records, err := parseMintLog(mintSSECSample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unexpected := judgeMint(records)
+	// A reset on a test that uses no SSE-C is still a failure.
+	if len(unexpected) != 1 || !strings.HasPrefix(unexpected[0], "minio-go: testPutObject ") {
+		t.Fatalf("unexpected failures %v, want only minio-go: testPutObject", unexpected)
+	}
+}
+
 func TestWarpErrorsMatchesNonzeroCountsOnly(t *testing.T) {
 	for out, want := range map[string]bool{
 		"Report: PUT. Concurrency: 16.\n * Errors: 3\n": true,
