@@ -649,18 +649,19 @@ Two of the cluster's fields are required by the API and cannot be read off a
 worker. The file that derives them states its own standard: nothing there has to
 be right, it has to be plausible, stated, and easy to correct.
 
-| Field                  | Value                                                          | Provenance |
-|------------------------|----------------------------------------------------------------|------------|
-| `name`                 | the document's name plus `-cluster`                            | `ASSERTED` |
-| `maxSubsystemCount`    | always 30                                                      | `GROUNDED` |
-| `enableDriveFormat`    | always true                                                    | `GROUNDED` |
-| `vcpuCount`            | the smallest chosen memory node's physical cores, floored at 4 | `GROUNDED` |
-| `minHugePagesSize`     | the smallest free huge pages on any chosen node, or unset      | `ASSERTED` |
-| `socketsToUse`         | never set                                                      | `INVENTED` |
-| `nodesPerSocket`       | never set                                                      | `INVENTED` |
-| `stripe`               | never set                                                      | `INVENTED` |
-| `fabricType`           | never set                                                      | `INVENTED` |
-| `enableFailureDomains` | never set                                                      | `INVENTED` |
+| Field                  | Value                                                             | Provenance |
+|------------------------|-------------------------------------------------------------------|------------|
+| `name`                 | the document's name plus `-cluster`                               | `ASSERTED` |
+| `maxSubsystemCount`    | always 30                                                         | `GROUNDED` |
+| `enableDriveFormat`    | always true                                                       | `GROUNDED` |
+| `vcpuCount`            | the smallest chosen memory node's physical cores, floored at 4    | `GROUNDED` |
+| `minHugePagesSize`     | the smallest free huge pages on any chosen node, or unset         | `ASSERTED` |
+| `socketsToUse`         | never set                                                         | `INVENTED` |
+| `nodesPerSocket`       | never set                                                         | `INVENTED` |
+| `stripe`               | never set                                                         | `INVENTED` |
+| `fabricType`           | never set                                                         | `INVENTED` |
+| `enableFailureDomains` | never set                                                         | `INVENTED` |
+| `enableNodeAffinity`   | true when the stripe is 1+1, otherwise unset; a seed's value wins | `ASSERTED` |
 
 **`maxSubsystemCount`** is the middle of the API's range, chosen so that a
 reviewer who has not thought about it gets a working cluster and one who has can
