@@ -32,10 +32,7 @@ const (
 	mcVolB     = "716869d3-119a-449c-bfa6-47852a5b3b8c" // where the cutover put it, on B
 )
 
-var (
-	mcHandleA = mcClusterA + ":" + mcPoolA + ":" + mcVolA
-	mcHandleB = mcClusterB + ":" + mcPoolB + ":" + mcVolB
-)
+var mcHandleA = mcClusterA + ":" + mcPoolA + ":" + mcVolA
 
 // movedBackend is a fake control plane for a volume that may have moved from
 // A to B. The source's replication read and volume read answer as set; the
