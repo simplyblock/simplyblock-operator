@@ -140,6 +140,61 @@ func TestDetectEnvironmentReadsRKE2AsRancher(t *testing.T) {
 	}
 }
 
+// Regression: 2026-11-13, RKE2 v1.36.6+rke2r1. RKE2 is built on the K3s code and
+// serves the k3s.cattle.io API group, for its add-ons and etcd snapshot records.
+// The group was read as K3s outright and K3s precedes Rancher, so the discovery
+// wrote `environment: K3s` for an RKE2 cluster.
+func TestDetectEnvironmentReadsAnRKE2ClusterThatServesTheK3sGroupAsRancher(t *testing.T) {
+	env := DetectEnvironment(
+		[]string{"apps", "helm.cattle.io", "k3s.cattle.io"},
+		[]corev1.Node{
+			node("server-1", kubelet("v1.36.6+rke2r1"), annotated("rke2.io/node-args", "[\"server\"]")),
+			node("agent-1", kubelet("v1.36.6+rke2r1")),
+		},
+	)
+
+	if env.Distribution != DistributionRancher {
+		t.Errorf("concluded %q, want %q", env.Distribution, DistributionRancher)
+	}
+	// The K3s finding stays on the record for a reviewer.
+	if !evidenceFor(env, DistributionK3s) {
+		t.Error("the k3s.cattle.io group is not in the evidence")
+	}
+}
+
+// The group alone says "K3s or RKE2". With no kubelet to ask, the precedence
+// decides as before.
+func TestDetectEnvironmentReadsTheK3sGroupAloneAsK3s(t *testing.T) {
+	env := DetectEnvironment([]string{"apps", "k3s.cattle.io"}, nil)
+
+	if env.Distribution != DistributionK3s {
+		t.Errorf("concluded %q, want %q", env.Distribution, DistributionK3s)
+	}
+}
+
+// A kubelet that K3s built keeps the cluster K3s, whatever else is on it: the
+// Rancher-managed K3s cluster the precedence was written for, and a cluster
+// whose nodes were built by both.
+func TestDetectEnvironmentKeepsK3sWhereAK3sKubeletRuns(t *testing.T) {
+	cases := map[string][]corev1.Node{
+		"K3s under Rancher management": {
+			node("worker-1", kubelet("v1.31.4+k3s1"), annotated("management.cattle.io/pod-limits", "{}")),
+		},
+		"kubelets of both": {
+			node("worker-1", kubelet("v1.31.4+k3s1")),
+			node("worker-2", kubelet("v1.31.4+rke2r1")),
+		},
+	}
+	for name, nodes := range cases {
+		t.Run(name, func(t *testing.T) {
+			env := DetectEnvironment([]string{"k3s.cattle.io", "management.cattle.io"}, nodes)
+			if env.Distribution != DistributionK3s {
+				t.Errorf("concluded %q, want %q", env.Distribution, DistributionK3s)
+			}
+		})
+	}
+}
+
 func TestDetectEnvironmentRecognizesRancherManagement(t *testing.T) {
 	env := DetectEnvironment(
 		[]string{"apps", "management.cattle.io"},
