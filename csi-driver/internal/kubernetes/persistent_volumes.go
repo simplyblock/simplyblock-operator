@@ -2,8 +2,10 @@ package kubernetes
 
 import (
 	"context"
+	"strings"
 
 	"github.com/simplyblock/atlas/lvol"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,11 +30,26 @@ func indexPersistentVolumeByLvolID(obj interface{}) ([]string, error) {
 	if !ok || pv.Spec.CSI == nil {
 		return nil, nil
 	}
+	return pvLvolIDs(pv), nil
+}
+
+// pvLvolIDs is every lvol ID a PersistentVolume stands for: the one in its
+// volume handle and, for a striped volume, each member its volume attributes
+// list (csicommon.CtxStripeMembers). The handle names only the first member,
+// so without the attribute the other members' subsystems would look foreign
+// to this node, and the reconnect loop would never restore a path they lose.
+func pvLvolIDs(pv *corev1.PersistentVolume) []string {
 	vh, _, ok := lvol.ParseStripedHandle(lvol.VolumeHandle(pv.Spec.CSI.VolumeHandle))
 	if !ok {
-		return nil, nil
+		return nil
 	}
-	return []string{vh.VolumeID}, nil
+	ids := []string{vh.VolumeID}
+	for _, m := range strings.Split(pv.Spec.CSI.VolumeAttributes[csicommon.CtxStripeMembers], ",") {
+		if m = strings.TrimSpace(m); m != "" && m != vh.VolumeID {
+			ids = append(ids, m)
+		}
+	}
+	return ids
 }
 
 // PersistentVolumesByDriver returns every PersistentVolume provisioned by the
@@ -134,8 +151,10 @@ func (m *Manager) PersistentVolumeByLogicalVolumeID(
 		if pv.Spec.CSI == nil {
 			continue
 		}
-		if vh, _, ok := lvol.ParseStripedHandle(lvol.VolumeHandle(pv.Spec.CSI.VolumeHandle)); ok && vh.VolumeID == lvolID {
-			return pv, nil
+		for _, id := range pvLvolIDs(pv) {
+			if id == lvolID {
+				return pv, nil
+			}
 		}
 	}
 	return nil, apierrors.NewNotFound(corev1.Resource("persistentvolumes"), lvolID)
