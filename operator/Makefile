@@ -14,11 +14,14 @@ ECR_REBALANCER_IMG      ?= $(ECR_REBALANCER_IMG_BASE):$(IMG_TAG)
 BUNDLE_IMG ?= quay.io/simplyblock-io/simplyblock-operator-bundle:$(VERSION)
 OPENSHIFT_VERSION ?= v4.19
 
-# Related images deployed by the operator (used in relatedImages for airgap support)
+# Related images deployed by the operator (used in relatedImages for airgap support).
+# The simplyblock and ultra tags follow the operator's: no "v", and a hotfix dash
+# as a dot (v26.3.2-1 is 26.3.2.1), as helm-charts/scripts/stamp-release-version.sh maps them.
+RELEASE_IMAGE_TAG  := $(shell printf '%s' '$(IMG_TAG)' | sed -E 's/^v//; s/-([0-9]+)$$/.\1/')
 CLUSTER_IMAGE_BASE ?= quay.io/simplyblock-io/simplyblock
-CLUSTER_IMAGE_TAG  ?= 26.4.0-beta4
+CLUSTER_IMAGE_TAG  ?= $(RELEASE_IMAGE_TAG)
 SPDK_IMAGE_BASE    ?= quay.io/simplyblock-io/ultra
-SPDK_IMAGE_TAG     ?= 26.4.0-beta4
+SPDK_IMAGE_TAG     ?= $(RELEASE_IMAGE_TAG)
 NUMA_PLUGIN_IMAGE_BASE ?= quay.io/simplyblock-io/numa-resource-plugin
 NUMA_PLUGIN_IMAGE_TAG  ?= v1.0.0
 
@@ -31,7 +34,9 @@ YQ_CSV_EXPR = .metadata.annotations.containerImage = strenv(OPERATOR_IMG) \
   | (.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[] | select(.name == "SB_NODEPROBE_IMAGE")).value = strenv(OPERATOR_IMG) \
   | (.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[] | select(.name == "SB_OPERATOR_IMAGE")).value = strenv(OPERATOR_TAGGED_IMG) \
   | (.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[] | select(.name == "SB_NUMA_PLUGIN_IMAGE")).value = strenv(NUMA_PLUGIN_IMG) \
-  | .spec.install.spec.deployments[0].spec.template.spec.containers[0].env += [{"name": "SIMPLYBLOCK_REBALANCER_IMAGE", "value": strenv(REBALANCER_IMG)}]
+  | .spec.install.spec.deployments[0].spec.template.spec.containers[0].env += [{"name": "SIMPLYBLOCK_REBALANCER_IMAGE", "value": strenv(REBALANCER_IMG)}] \
+  | .metadata.annotations."operatorframework.io/initialization-resource" |= (from_json | .spec.source.local.image = strenv(CLUSTER_IMG) | to_json(0)) \
+  | .metadata.annotations."alm-examples" |= (from_json | (.[] | select(.kind == "ControlPlane") | .spec.source.local.image) = strenv(CLUSTER_IMG) | to_json)
 YQ_ANNOTATIONS_EXPR = .annotations."com.redhat.openshift.versions" = strenv(OPENSHIFT_VERSION)
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)

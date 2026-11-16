@@ -74,6 +74,10 @@ jobs:
       - name: Validate bundle
         run: make bundle-validate
 
+      # Red Hat's certification fails a bundle that names any image by tag alone.
+      - name: Check every bundle image is pinned to this release
+        run: hack/check-bundle-pinned.sh bundle ${{ steps.version.outputs.tag }}
+
       - name: Log in to Quay.io
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
