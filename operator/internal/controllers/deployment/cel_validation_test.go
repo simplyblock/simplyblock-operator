@@ -331,30 +331,28 @@ func TestAnOpenShiftBlockNeedsAnOpenShiftEnvironment(t *testing.T) {
 	}
 }
 
-// The kubelet and CPU topology flags are the environment's to decide everywhere
-// but Vanilla, whose workers it does not describe, so a document states them
-// only for a Vanilla fleet.
-func TestTheKubeletAndTopologyFlagsNeedAVanillaEnvironment(t *testing.T) {
+// The kubelet and CPU topology flags may be stated on every environment. The
+// schema used to refuse them everywhere but Vanilla, to keep a reviewer from
+// overriding a decision they did not understand, and that kept fleets that
+// manage their own kubelet configuration from saying so.
+func TestTheKubeletAndTopologyFlagsAreAcceptedOnEveryEnvironment(t *testing.T) {
 	apiClient := apiServer(t)
 	for _, set := range []func(*simplyblockv1alpha2.ClusterTemplate){
 		func(c *simplyblockv1alpha2.ClusterTemplate) { c.EnableKubeletConfiguration = ptr.To(false) },
 		func(c *simplyblockv1alpha2.ClusterTemplate) { c.EnableCpuTopology = ptr.To(true) },
 	} {
-		config := aStoredDocument(t, apiClient, fmt.Sprintf("vanilla-flags-%d", time.Now().UnixNano()))
+		config := aStoredDocument(t, apiClient, fmt.Sprintf("node-flags-%d", time.Now().UnixNano()))
 		set(config.Spec.Cluster)
-		config.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentTalos
-
-		err := apiClient.Update(context.Background(), config)
-		if err == nil {
-			t.Fatal("a Talos document stated a flag Talos decides")
-		}
-		if !strings.Contains(err.Error(), "Vanilla") {
-			t.Errorf("the refusal does not say what is wrong: %v", err)
-		}
-
-		config.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentVanilla
-		if err := apiClient.Update(context.Background(), config); err != nil {
-			t.Fatalf("a Vanilla document was refused the flag: %v", err)
+		for _, environment := range []simplyblockv1alpha2.KubernetesEnvironment{
+			simplyblockv1alpha2.KubernetesEnvironmentTalos,
+			simplyblockv1alpha2.KubernetesEnvironmentEKS,
+			simplyblockv1alpha2.KubernetesEnvironmentOpenShift,
+			simplyblockv1alpha2.KubernetesEnvironmentVanilla,
+		} {
+			config.Spec.Environment = environment
+			if err := apiClient.Update(context.Background(), config); err != nil {
+				t.Fatalf("a %s document was refused the flag: %v", environment, err)
+			}
 		}
 	}
 }
