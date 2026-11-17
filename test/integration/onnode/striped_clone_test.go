@@ -455,7 +455,6 @@ func TestStripedStackRestagesItsSourceBesideAnUnresolvedClone(t *testing.T) {
 	source, copies := h.targets[:2], h.targets[2:4]
 	want := []byte("written to the source before the snapshot")
 	h.stripedSource(ctx, t, source, "source", want)
-	h.cloneMembers(ctx, t, source, copies)
 
 	// Whatever a failed bring-up left of the source is released last, once the
 	// clone is gone again and its duplicates with it, so that a red run does not
@@ -464,15 +463,19 @@ func TestStripedStackRestagesItsSourceBesideAnUnresolvedClone(t *testing.T) {
 	plan := h.node.Striped(connections(source), h.volume, stripedOptions(len(source)))
 	t.Cleanup(func() { _ = h.runner().Down(context.WithoutCancel(ctx), h.handle(), plan) })
 
-	// The clone attached and nothing more: its members carry the source's
-	// identities, byte for byte.
-	clones, detach := h.attachRaw(ctx, t, "unresolved", copies...)
-	t.Cleanup(func() {
-		detach()
-		h.disconnect(context.WithoutCancel(ctx), t, copies...)
-	})
+	// The backend's clone, done on the node, and then left attached and not
+	// re-identified: its members carry the source's identities, byte for byte.
+	// They stay connected after the detach, which never disconnects here
+	// (cloneMembers), and are reaped when the case ends.
+	devices, detach := h.attachRaw(ctx, t, "unresolved", append(slices.Clone(source), copies...)...)
+	for i := range source {
+		copyDevice(t, devices[i], devices[len(source)+i])
+	}
+	clones := devices[len(source):]
 	const head = 1 << 20
 	before := [][]byte{readHead(t, clones[0], head), readHead(t, clones[1], head)}
+	detach()
+	t.Cleanup(func() { h.disconnect(context.WithoutCancel(ctx), t, copies...) })
 
 	art, err := h.runner().Up(ctx, h.handle(), plan)
 	if err != nil {
