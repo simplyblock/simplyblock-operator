@@ -157,6 +157,40 @@ func readHead(t *testing.T, dev blockdev.Device, n int64) []byte {
 	return head
 }
 
+// cloneMembers is the backend's snapshot and clone, done on the node: each
+// source member's bytes onto a namespace of its own, which is then left
+// disconnected, so that a case attaches the clone when it means to.
+//
+// Disconnected by name, because a detach does not: nvmet subsystems can hold
+// more than one namespace, and the fabric layer never disconnects a subsystem
+// that could be shared (nvmeof.DetachDevice). Reaping one is the explicit act
+// this is.
+func (h *harness) cloneMembers(ctx context.Context, t *testing.T, source, copies []Target) {
+	t.Helper()
+	var copied []string
+	func() {
+		devices, detach := h.attachRaw(ctx, t, "copy", append(slices.Clone(source), copies...)...)
+		defer detach()
+		for i := range source {
+			copyDevice(t, devices[i], devices[len(source)+i])
+			copied = append(copied, devices[len(source)+i].Path)
+		}
+	}()
+	h.disconnect(ctx, t, copies...)
+	awaitGone(t, copied)
+}
+
+// disconnect reaps the targets' subsystems, which a detach never does here.
+func (h *harness) disconnect(ctx context.Context, t *testing.T, targets ...Target) {
+	t.Helper()
+	connector := nvmeof.NewCLIConnector(nvme.NewSysfsSubsystemResolver(nvme.SysfsConfig{}))
+	for _, target := range targets {
+		if err := connector.Disconnect(ctx, target.NQN); err != nil {
+			t.Fatalf("disconnect %s: %v", target.NQN, err)
+		}
+	}
+}
+
 // awaitGone waits for detached devices to leave /dev, and fails the case with
 // what is still there when they do not: a namespace the harness believes it
 // detached and LVM still scans is a fixture fault, not a finding about the stack.
@@ -353,31 +387,11 @@ func TestStripedStackStagesACloneBesideItsSource(t *testing.T) {
 	want := []byte("written to the source before the snapshot")
 	h.stripedSource(ctx, t, source, "source", want)
 
-	// The backend's snapshot and clone, done on the node: each member's bytes
-	// onto a namespace of its own.
-	var copied []string
-	func() {
-		devices, detach := h.attachRaw(ctx, t, "copy", h.targets[:4]...)
-		defer detach()
-		copyDevice(t, devices[0], devices[2])
-		copyDevice(t, devices[1], devices[3])
-		copied = []string{devices[2].Path, devices[3].Path}
-	}()
 	// The source is staged with the copies detached, so that what this case
 	// tests is the clone attaching beside a live source, and not the source
-	// re-staging beside a clone nobody has re-identified yet.
-	//
-	// Disconnected by name, because a detach does not: nvmet subsystems can
-	// hold more than one namespace, and the fabric layer never disconnects a
-	// subsystem that could be shared (nvmeof.DetachDevice). Reaping one is the
-	// explicit act this is.
-	connector := nvmeof.NewCLIConnector(nvme.NewSysfsSubsystemResolver(nvme.SysfsConfig{}))
-	for _, target := range copies {
-		if err := connector.Disconnect(ctx, target.NQN); err != nil {
-			t.Fatalf("disconnect the copy %s: %v", target.NQN, err)
-		}
-	}
-	awaitGone(t, copied)
+	// re-staging beside a clone nobody has re-identified yet
+	// (TestStripedStackRestagesItsSourceBesideAnUnresolvedClone).
+	h.cloneMembers(ctx, t, source, copies)
 
 	sourcePlan := h.node.Striped(connections(source), h.volume, stripedOptions(len(source)))
 	sourceArt := h.up(ctx, sourcePlan)
@@ -411,5 +425,72 @@ func TestStripedStackStagesACloneBesideItsSource(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(sourceArt.Path, "clone-only")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a file written to the clone is visible in the source: %v", err)
+	}
+}
+
+// A source re-staged on a host where a clone of it is attached and not yet
+// re-identified: a clone stage between its attach and its import, or one whose
+// import was refused and left its members attached. Until the import, every
+// source member's physical-volume identity is on two devices. The source's own
+// bring-up names its own devices, so it is unaffected: it comes up, serves its
+// data, and goes down again, and the clone's members are left exactly as they
+// were.
+//
+// Regression: 2026-11-17-striped-activation-unscoped (PR #922 review). The
+// volume-group layer activates and deactivates its group by name alone, so LVM
+// considers every device carrying the group's physical volumes, finds each one
+// twice, and refuses ("Cannot activate LVs in VG ... while PVs appear on
+// duplicate devices"). A pod on the source could not be restarted on that node
+// while its clone was being staged there. Found by accident in the first run of
+// TestStripedStackStagesACloneBesideItsSource.
+func TestStripedStackRestagesItsSourceBesideAnUnresolvedClone(t *testing.T) {
+	requireLVM(t)
+	h := newHarness(t)
+	if len(h.targets) < 4 {
+		t.Skip("a clone beside its source needs four namespaces, and SB_TARGET4_NQN is unset")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), stackTimeout)
+	defer cancel()
+
+	source, copies := h.targets[:2], h.targets[2:4]
+	want := []byte("written to the source before the snapshot")
+	h.stripedSource(ctx, t, source, "source", want)
+	h.cloneMembers(ctx, t, source, copies)
+
+	// Whatever a failed bring-up left of the source is released last, once the
+	// clone is gone again and its duplicates with it, so that a red run does not
+	// leave the next case a host with a half-staged stack on it. Cleanups run in
+	// reverse, so this is registered first.
+	plan := h.node.Striped(connections(source), h.volume, stripedOptions(len(source)))
+	t.Cleanup(func() { _ = h.runner().Down(context.WithoutCancel(ctx), h.handle(), plan) })
+
+	// The clone attached and nothing more: its members carry the source's
+	// identities, byte for byte.
+	clones, detach := h.attachRaw(ctx, t, "unresolved", copies...)
+	t.Cleanup(func() {
+		detach()
+		h.disconnect(context.WithoutCancel(ctx), t, copies...)
+	})
+	const head = 1 << 20
+	before := [][]byte{readHead(t, clones[0], head), readHead(t, clones[1], head)}
+
+	art, err := h.runner().Up(ctx, h.handle(), plan)
+	if err != nil {
+		t.Fatalf("the source could not be staged beside an attached clone of it: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(art.Path, "source")) //nolint:gosec // a path the test made
+	if err != nil {
+		t.Errorf("the re-staged source does not hold its data: %v", err)
+	} else if !bytes.Equal(got, want) {
+		t.Errorf("the re-staged source reads %q, want %q", got, want)
+	}
+	if err := h.runner().Down(ctx, h.handle(), plan); err != nil {
+		t.Fatalf("the source could not be released beside an attached clone of it: %v", err)
+	}
+
+	for i, dev := range clones {
+		if after := readHead(t, dev, head); !bytes.Equal(after, before[i]) {
+			t.Errorf("staging the source rewrote the clone's member %d (%s)", i, dev.Path)
+		}
 	}
 }
