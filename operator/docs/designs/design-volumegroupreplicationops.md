@@ -9,10 +9,10 @@
 
 ## Phasing Overview
 
-| Phase                    | Status  | Scope                                       | Target                                                     |
-|--------------------------|---------|---------------------------------------------|------------------------------------------------------------|
+| Phase                    | Status      | Scope                                       | Target                                                     |
+|--------------------------|-------------|---------------------------------------------|------------------------------------------------------------|
 | **Phase 1** (§4, §5, §6) | Implemented | `VolumeGroupReplicationOps`, action `Fence` | A consistency group, named by its `VolumeGroupReplication` |
-| **Phase 2** (§5.4)       | Planned | `PersistentVolumeOps`, action `Fence`       | One volume, named by its `PersistentVolume`                |
+| **Phase 2** (§5.4)       | Planned     | `PersistentVolumeOps`, action `Fence`       | One volume, named by its `PersistentVolume`                |
 
 Each phase ships on its own. Phase 1 covers every application protected as a
 consistency group. Phase 2 covers a volume protected on its own, through a
@@ -22,11 +22,11 @@ consistency group. Phase 2 covers a volume protected on its own, through a
 
 ## Phase 0 — External Prerequisites
 
-| #    | Prerequisite                                                                                                                                                                                     | Kind                    | Blocks              | Status                                                             |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|---------------------|--------------------------------------------------------------------|
-| P0-1 | `superseded=true` on `POST .../consistency-groups/{group}/replication/demote` and on `POST .../volumes/{volume}/replication/demote`: fence, stop replication, no final snapshot, idempotent (§8) | Control plane (`sbcli`) | Phase 1, Phase 2    | Implemented on `feat/cp-split-peer-steps` (cf31a5d6), not released |
-| P0-2 | The new primary refuses a replicated copy of a volume it failed over (`LandingRequest.source_lvol_id`), so a source that ships before its fence lands nothing (§3)                               | Control plane (`sbcli`) | Phase 1 correctness | Implemented on the same branch (cf31a5d6)                          |
-| P0-3 | The csi-addons `VolumeGroupReplication` and `VolumeGroupReplicationContent` kinds served on the site                                                                                             | Ecosystem               | Phase 1             | Available wherever the DR stack is installed                       |
+| #    | Prerequisite                                                                                                                                                                                                           | Kind                    | Blocks              | Status                                                             |
+|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|---------------------|--------------------------------------------------------------------|
+| P0-1 | `superseded=true` on `POST .../consistency-groups/{group}/replication/demote` and on `POST .../volumes/{volume}/replication/demote`: stop replication, mark demoted, no final snapshot, paths left up, idempotent (§8) | Control plane (`sbcli`) | Phase 1, Phase 2    | Implemented on `feat/cp-split-peer-steps` (b1387b0d), not released |
+| P0-2 | The new primary refuses a replicated copy of a volume it failed over (`LandingRequest.source_lvol_id`), so a source that ships before its fence lands nothing (§3)                                                     | Control plane (`sbcli`) | Phase 1 correctness | Implemented on the same branch (cf31a5d6)                          |
+| P0-3 | The csi-addons `VolumeGroupReplication` and `VolumeGroupReplicationContent` kinds served on the site                                                                                                                   | Ecosystem               | Phase 1             | Available wherever the DR stack is installed                       |
 
 Without P0-1 the control plane answers the fence as an ordinary demote, which
 takes a final snapshot of stale data. The operator cannot tell the two apart from
@@ -73,8 +73,16 @@ or any other component that detects it. The storage layer never decides it.
 `VolumeGroupReplicationOps` with `action: Fence` is that order, on the returning
 site. It names the application's `VolumeGroupReplication`. The operator resolves
 it to the consistency group on this site's control plane and calls the group
-demote with `superseded=true`. Every member is fenced and its replication stopped,
-and no final group snapshot is taken.
+demote with `superseded=true`. Every member's replication is stopped and the member
+is marked demoted, and no final group snapshot is taken.
+
+The fence leaves the members' paths up. It arrives when the site reconnects, while
+the application's old copy on that site may still run, and a guest whose disk paths
+all become inaccessible queues its I/O indefinitely and cannot shut down: the
+site's cleanup never completes, and Ramen never makes the site secondary. What the
+old copy writes stays on this site and is overwritten when the site becomes the
+secondary. The paths are cut by Ramen's own `DemoteVolume`, which comes once the
+workload is unmounted.
 
 The order can arrive before or after Ramen's own `DemoteVolume` for the same group,
 and the returning site's old replication tasks can resume before either. The new
@@ -303,7 +311,7 @@ any step repeats at most one call.
 |-----------------------------------------------------|------------------------|-----------------------------------------------------------------------------------|
 | Object deleted while running                        | any                    | The controller stops. The control plane keeps the state of the last accepted call |
 | Operator restart                                    | any                    | Resumes from `status.step`                                                        |
-| Site's control plane unreachable                    | `Fencing`              | Requeued every 15 seconds until the deadline, then `Failed`                           |
+| Site's control plane unreachable                    | `Fencing`              | Requeued every 15 seconds until the deadline, then `Failed`                       |
 | `VolumeGroupReplication` deleted after `Validating` | `Fencing`, `Reporting` | No effect: the operation acts on `status.groupHandle`                             |
 
 ---
@@ -357,14 +365,14 @@ with the driver.
 
 ## 9. Failure Modes and Fallback
 
-| Failure                                                         | Detection                   | Behavior                                                 |
-|-----------------------------------------------------------------|-----------------------------|----------------------------------------------------------|
-| `VolumeGroupReplication` not found                              | `Get` returns not found     | `Failed`, message names it                               |
-| csi-addons kinds not served                                     | `Get` returns no kind match | `Failed`, message names the kind                         |
-| Content object missing or its handle not `cg:<cluster>:<group>` | handle parse                | `Failed`, message quotes the handle                      |
+| Failure                                                         | Detection                   | Behavior                                                     |
+|-----------------------------------------------------------------|-----------------------------|--------------------------------------------------------------|
+| `VolumeGroupReplication` not found                              | `Get` returns not found     | `Failed`, message names it                                   |
+| csi-addons kinds not served                                     | `Get` returns no kind match | `Failed`, message names the kind                             |
+| Content object missing or its handle not `cg:<cluster>:<group>` | handle parse                | `Failed`, message quotes the handle                          |
 | Control plane unreachable, 5xx, or 409                          | client error                | Requeue every 15 seconds. `Failed` at the `Fencing` deadline |
-| Control plane answers 400 (a sync-replication cluster) or 404   | status code                 | `Failed`, message carries the control plane's detail     |
-| Member list unreadable after the fence                          | client error                | `Succeeded`, the message says the members were not read  |
+| Control plane answers 400 (a sync-replication cluster) or 404   | status code                 | `Failed`, message carries the control plane's detail         |
+| Member list unreadable after the fence                          | client error                | `Succeeded`, the message says the members were not read      |
 
 ---
 
@@ -372,11 +380,11 @@ with the driver.
 
 Events land on the `VolumeGroupReplicationOps` object.
 
-| Reason          | Type    | Emitted when                                                                                   |
-|-----------------|---------|------------------------------------------------------------------------------------------------|
-| `GroupFenced`   | Normal  | The control plane accepted the fence                                                           |
+| Reason          | Type    | Emitted when                                                                                      |
+|-----------------|---------|---------------------------------------------------------------------------------------------------|
+| `GroupFenced`   | Normal  | The control plane accepted the fence                                                              |
 | `FenceRetrying` | Warning | The control plane could not be reached or refused with a retryable code. Once per distinct reason |
-| `FenceFailed`   | Warning | The operation reached `Failed`                                                                 |
+| `FenceFailed`   | Warning | The operation reached `Failed`                                                                    |
 
 | Metric                                           | Type      | Labels                           | Meaning                                      |
 |--------------------------------------------------|-----------|----------------------------------|----------------------------------------------|

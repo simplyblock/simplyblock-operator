@@ -223,6 +223,13 @@ spec:
       kind: VolumeGroupSnapshotOps
       name: volumegroupsnapshotops.storage.simplyblock.io
       version: v1alpha2
+    - description: VolumeGroupReplicationOps is a one-shot operation on a VolumeGroupReplication's
+        consistency group. The Fence action stops the replication of a group that was
+        failed over to another cluster.
+      displayName: Volume Group Replication Ops
+      kind: VolumeGroupReplicationOps
+      name: volumegroupreplicationops.storage.simplyblock.io
+      version: v1alpha2
     - description: VolumeMigration is the Schema for the volumemigrations API.
       displayName: Volume Migration
       kind: VolumeMigration
