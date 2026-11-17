@@ -711,3 +711,44 @@ func TestFoldStripedSnapshots(t *testing.T) {
 		t.Errorf("snapshot-b = width %d, size %d; want 1 and 5", v.width, v.size)
 	}
 }
+
+// Regression: 2026-11-17-striped-multi-node (PR #922 review). A striped volume
+// is a volume group LVM activates on the host that stages it, and a multi-node
+// access mode stages it on several: a ReadWriteMany raw-block claim, such as a
+// live-migrated VM's disk, had both hosts activate the group with nothing
+// coordinating LVM's metadata between them, and every snapshot then refused it
+// as attached twice. Every multi-node mode is refused before anything is
+// created.
+func TestAStripedVolumeRefusesMultiNodeAccess(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cap  *csi.VolumeCapability
+	}{
+		{"block, many writers", &csi.VolumeCapability{
+			AccessType: &csi.VolumeCapability_Block{Block: &csi.VolumeCapability_BlockVolume{}},
+			AccessMode: &csi.VolumeCapability_AccessMode{Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER},
+		}},
+		{"block, many readers", &csi.VolumeCapability{
+			AccessType: &csi.VolumeCapability_Block{Block: &csi.VolumeCapability_BlockVolume{}},
+			AccessMode: &csi.VolumeCapability_AccessMode{Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY},
+		}},
+		{"filesystem, one writer of many", &csi.VolumeCapability{
+			AccessType: &csi.VolumeCapability_Mount{Mount: &csi.VolumeCapability_MountVolume{}},
+			AccessMode: &csi.VolumeCapability_AccessMode{Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER},
+		}},
+	} {
+		mock := newMockSBCLI()
+		cs := stripedServer(t, mock, storageNodes([]string{stripeNodeA, stripeNodeB}))
+		req := stripedRequest("pvc-striped", "2", 2*gib)
+		req.VolumeCapabilities = []*csi.VolumeCapability{tc.cap}
+
+		_, err := cs.CreateVolume(context.Background(), req)
+		if status.Code(err) != codes.InvalidArgument {
+			t.Errorf("%s: CreateVolume = %v, want InvalidArgument", tc.name, err)
+		}
+		if n := len(volumesNamed(mock)); n != 0 {
+			t.Errorf("%s: a refused striped volume left %d members", tc.name, n)
+		}
+		mock.Close()
+	}
+}

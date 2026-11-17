@@ -109,6 +109,18 @@ func refuseStripedClass(req *csi.CreateVolumeRequest, pnfs bool) error {
 	if replicate, _ := strconv.ParseBool(params[kube.ParamReplication]); replicate {
 		return refuse("replication")
 	}
+	// The members are one volume group, which LVM activates on the host that
+	// stages it and nowhere else safely: nothing coordinates LVM's metadata
+	// between hosts. A multi-node mode, a live-migrated VM's ReadWriteMany disk
+	// included, would stage it on several.
+	for _, c := range req.GetVolumeCapabilities() {
+		switch mode := c.GetAccessMode().GetMode(); mode {
+		case csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY,
+			csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER,
+			csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER:
+			return refuse(fmt.Sprintf("access mode %s", mode))
+		}
+	}
 	return nil
 }
 
