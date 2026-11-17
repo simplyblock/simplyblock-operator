@@ -6,6 +6,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -832,5 +833,36 @@ func TestARollbackRetriesADeleteAndNamesWhatItLeaves(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Regression: 2026-11-17-stripe-domain-rotation (PR #922 review). Members were
+// placed along the failure-domain interleaving rotated by a hash of the name,
+// and a rotation that began inside a domain's run put the first two members in
+// one domain while another had a free node; a pinned first member was not
+// counted at all. Each member goes to the least used domain that has a node
+// left, whatever the name, and a pinned member's domain counts.
+func TestStripeMembersSpreadAcrossFailureDomains(t *testing.T) {
+	domainOf := map[string]int{"a1": 1, "a2": 1, "a3": 1, "b1": 2}
+	nodes := make([]atlascp.StorageNode, 0, len(domainOf))
+	for id, d := range domainOf {
+		nodes = append(nodes, atlascp.StorageNode{ID: id, Status: lvolOnline, FailureDomain: d})
+	}
+	for i := range 64 {
+		name := fmt.Sprintf("pvc-%d", i)
+		hosts, err := pickStripeHosts(nodes, 2, name, "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if domainOf[hosts[0]] == domainOf[hosts[1]] {
+			t.Fatalf("%s: members on %v share a failure domain while another has a free node", name, hosts)
+		}
+	}
+	pinned, err := pickStripeHosts(nodes, 2, "pvc-pinned", "a2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned[1] != "b1" {
+		t.Errorf("a member next to one pinned in domain 1 went to %s, want the other domain's b1", pinned[1])
 	}
 }
