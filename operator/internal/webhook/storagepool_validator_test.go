@@ -340,3 +340,97 @@ func TestStoragePoolValidatorChecksTheStripeAgainstTheCluster(t *testing.T) {
 		})
 	}
 }
+
+// Regression: 2026-11-17-pool-stripe-on-update (PR #922 review). The checks a
+// striped pool is held to ran on CREATE only, and spec.volumeDefaults may be
+// set by an update on a pool created without it, so a pool could gain a stripe
+// wider than its cluster, or on a stretched one, unchecked. An update that
+// introduces the stripe is checked as a create is; one that leaves it as it
+// was is not, so a pool whose cluster shrank or went away stays editable.
+func TestAnUpdateThatStripesAPoolIsChecked(t *testing.T) {
+	small := append([]client.Object{testStorageCluster("simplyblock", "a-uuid")},
+		storageNodesOf(testValidatorCluster, 3, 0)...)
+
+	unstriped := testStoragePool("simplyblock")
+	tests := []struct {
+		name     string
+		existing []client.Object
+		old, new *simplyblockv1alpha2.StoragePool
+		allowed  bool
+	}{
+		{"the update stripes the pool wider than its cluster", small, unstriped, stripedPool(4), false},
+		{"the update stripes the pool within its cluster", small, unstriped, stripedPool(3), true},
+		{"the stripe was already there", small, stripedPool(4), stripedPool(4), true},
+		{"the cluster is gone and the stripe is unchanged", nil, stripedPool(4), stripedPool(4), true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newPoolScheme(t)
+			validator := &StoragePoolValidator{
+				Client:  fake.NewClientBuilder().WithScheme(s).WithObjects(tc.existing...).Build(),
+				Decoder: admission.NewDecoder(s),
+			}
+			response := validator.Handle(context.Background(), admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Operation: admissionv1.Update,
+					Namespace: tc.new.Namespace,
+					Object:    poolRaw(t, tc.new),
+					OldObject: poolRaw(t, tc.old),
+				},
+			})
+			if response.Allowed != tc.allowed {
+				t.Errorf("allowed = %t, want %t (%s)", response.Allowed, tc.allowed, response.Result.Message)
+			}
+		})
+	}
+}
+
+// Regression: 2026-11-17-pool-stripe-on-update. On a supercluster only the
+// supercluster's own replication flags were read, and a striped volume is
+// placed in one member and striped there, so a sync-replicated member that
+// takes new volumes was admitted. Each such member is checked; one that takes
+// none is not held against the pool.
+func TestAStripedPoolIsRefusedOnASyncReplicatedSuperclusterMember(t *testing.T) {
+	supercluster := testStorageCluster("simplyblock", "a-uuid")
+	supercluster.Spec.Supercluster = &simplyblockv1alpha2.SuperclusterSpec{}
+	member := func(name string, sync bool) *simplyblockv1alpha2.StorageCluster {
+		c := testStorageCluster("simplyblock", "m-uuid")
+		c.Name = name
+		c.Spec.EnableSyncReplication = ptr.To(sync)
+		return c
+	}
+	for _, tc := range []struct {
+		name     string
+		eligible bool
+		allowed  bool
+	}{
+		{"a sync member that takes new volumes", true, false},
+		{"a sync member that takes none", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sc := supercluster.DeepCopy()
+			sc.Status.Members = []simplyblockv1alpha2.SuperclusterMemberStatus{
+				{Name: "member-plain", PlacementEligible: true},
+				{Name: "member-sync", PlacementEligible: tc.eligible},
+			}
+			s := newPoolScheme(t)
+			validator := &StoragePoolValidator{
+				Client: fake.NewClientBuilder().WithScheme(s).
+					WithObjects(sc, member("member-plain", false), member("member-sync", true)).Build(),
+				Decoder: admission.NewDecoder(s),
+			}
+			pool := stripedPool(2)
+			response := validator.Handle(context.Background(), admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Operation: admissionv1.Create, Namespace: pool.Namespace, Object: poolRaw(t, pool),
+				},
+			})
+			if response.Allowed != tc.allowed {
+				t.Fatalf("allowed = %t, want %t (%s)", response.Allowed, tc.allowed, response.Result.Message)
+			}
+			if !tc.allowed && !strings.Contains(response.Result.Message, "member-sync") {
+				t.Errorf("the refusal %q does not name the member", response.Result.Message)
+			}
+		})
+	}
+}

@@ -45,7 +45,7 @@ import (
 // Equivalent has the API server convert the request to v1alpha2 and send it
 // here, so the guard holds whichever version was written.
 
-// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagepool,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,sideEffects=None,groups=storage.simplyblock.io,resources=storagepools,verbs=create,versions=v1alpha2,name=vstoragepool.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagepool,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,sideEffects=None,groups=storage.simplyblock.io,resources=storagepools,verbs=create;update,versions=v1alpha2,name=vstoragepool.simplyblock.io,admissionReviewVersions=v1
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch
@@ -53,10 +53,15 @@ import (
 // StoragePoolValidator refuses a StoragePool whose spec.clusterRef names no
 // StorageCluster in the pool's own namespace.
 //
-// The rule is CREATE only. spec.clusterRef is immutable, so an update cannot
-// introduce a dangling reference, and a rule over every operation would refuse
-// an edit to a pool whose cluster has since been deleted — which is exactly the
-// object somebody is trying to clean up.
+// The reference is checked on CREATE only. spec.clusterRef is immutable, so an
+// update cannot introduce a dangling reference, and a rule over every operation
+// would refuse an edit to a pool whose cluster has since been deleted, which is
+// exactly the object somebody is trying to clean up.
+//
+// The stripe is checked on CREATE and on an UPDATE that introduces it:
+// spec.volumeDefaults is immutable once set but may be set on a pool created
+// without it. An update that leaves the stripe as it was is not checked, for the
+// reason the reference is not.
 type StoragePoolValidator struct {
 	// Client reads the StorageCluster the pool names. The answer is a property
 	// of the cluster rather than of the request, so it cannot be decided from
@@ -68,7 +73,11 @@ type StoragePoolValidator struct {
 }
 
 func (v *StoragePoolValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
-	if req.Operation != admissionv1.Create {
+	switch req.Operation {
+	case admissionv1.Create:
+	case admissionv1.Update:
+		return v.handleUpdate(ctx, req)
+	default:
 		return admission.Allowed("")
 	}
 
@@ -113,6 +122,47 @@ func (v *StoragePoolValidator) Handle(ctx context.Context, req admission.Request
 	return admission.Allowed("")
 }
 
+// handleUpdate checks an update that stripes the pool, as a create would be. One
+// that leaves the stripe as it was, and one whose cluster is gone, are admitted.
+func (v *StoragePoolValidator) handleUpdate(ctx context.Context, req admission.Request) admission.Response {
+	pool := &simplyblockv1alpha2.StoragePool{}
+	if err := v.Decoder.Decode(req, pool); err != nil {
+		return admission.Errored(http.StatusBadRequest, err)
+	}
+	width := stripeWidth(pool)
+	if width < 2 || len(req.OldObject.Raw) == 0 {
+		return admission.Allowed("")
+	}
+	old := &simplyblockv1alpha2.StoragePool{}
+	if err := v.Decoder.DecodeRaw(req.OldObject, old); err != nil {
+		return admission.Errored(http.StatusBadRequest, err)
+	}
+	if stripeWidth(old) == width {
+		return admission.Allowed("")
+	}
+
+	namespace := pool.Namespace
+	if namespace == "" {
+		namespace = req.Namespace
+	}
+	var cluster simplyblockv1alpha2.StorageCluster
+	err := v.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: pool.Spec.ClusterRef}, &cluster)
+	switch {
+	case apierrors.IsNotFound(err):
+		return admission.Allowed("")
+	case err != nil:
+		return admission.Errored(http.StatusInternalServerError, err)
+	}
+	reason, err := v.stripeRefusal(ctx, namespace, &cluster, width)
+	if err != nil {
+		return admission.Errored(http.StatusInternalServerError, err)
+	}
+	if reason != "" {
+		return admission.Denied(reason)
+	}
+	return admission.Allowed("")
+}
+
 // stripeWidth is the stripe width a pool's volumes are created with, and 0 for
 // a pool whose volumes are not striped.
 func stripeWidth(pool *simplyblockv1alpha2.StoragePool) int32 {
@@ -146,11 +196,35 @@ func (v *StoragePoolValidator) stripeRefusal(
 	}
 
 	targets := []string{cluster.Name}
-	if cluster.Spec.Supercluster != nil || cluster.Status.Role == simplyblockv1alpha2.StorageClusterRoleSupercluster {
+	supercluster := cluster.Spec.Supercluster != nil ||
+		cluster.Status.Role == simplyblockv1alpha2.StorageClusterRoleSupercluster
+	if supercluster {
 		targets = targets[:0]
 		for _, member := range cluster.Status.Members {
 			if member.PlacementEligible {
 				targets = append(targets, member.Name)
+			}
+		}
+	}
+
+	// A striped volume is placed in one member and striped there, so a member
+	// that takes new volumes is held to the stretched rule as a cluster is.
+	if supercluster {
+		for _, name := range targets {
+			var member simplyblockv1alpha2.StorageCluster
+			err := v.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &member)
+			switch {
+			case apierrors.IsNotFound(err):
+				continue
+			case err != nil:
+				return "", err
+			}
+			if member.Spec.Stretched != nil ||
+				(member.Spec.EnableSyncReplication != nil && *member.Spec.EnableSyncReplication) {
+				return fmt.Sprintf(
+					"spec.volumeDefaults.stripeWidth is %d, and StorageCluster %q, a member of supercluster %q "+
+						"that takes new volumes, is synchronously replicated across sites, where striped volumes "+
+						"are not supported", width, name, cluster.Name), nil
 			}
 		}
 	}

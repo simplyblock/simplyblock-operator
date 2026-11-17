@@ -285,6 +285,16 @@ ordering, which nothing about the intent justifies.
 So the webhook answers one question, whether the named object exists, and everything
 about the cluster's readiness belongs to the reconcile.
 
+**A striped pool is checked against the cluster that will serve it.** A
+`stripeWidth` of 2 or more is refused on a stretched or sync-replicated cluster, and
+when it is wider than the cluster's storage nodes once there are nodes to count. On a
+supercluster both are checked for every member that takes new volumes, since a
+striped volume is placed in one member and striped there. These checks run on
+`CREATE` and on an `UPDATE` that introduces the stripe: `spec.volumeDefaults` is
+immutable once set, but a pool created without it may gain it. An update that leaves
+the stripe as it was is not checked, for the reason an update is not checked against
+`spec.clusterRef`.
+
 **`failurePolicy: Fail`**, for the reason
 [`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §5 gives:
 the webhook server runs in the operator pod, so while it is unavailable nothing
