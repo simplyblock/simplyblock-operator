@@ -257,17 +257,18 @@ The following are refused for a striped volume, because each acts on one
 logical volume where a striped volume has several and would silently act on the
 first member alone:
 
-| Feature                                                      | Refused with         | Where                                            |
-|--------------------------------------------------------------|----------------------|--------------------------------------------------|
-| pNFS (`csi.storage.k8s.io/fstype: pnfs`)                     | `InvalidArgument`    | `CreateVolume`                                   |
-| Client-side compression or deduplication (VDO)               | `InvalidArgument`    | `CreateVolume`                                   |
-| `replicate: "true"`                                          | `InvalidArgument`    | `CreateVolume`                                   |
-| Consistency-group label on the claim                         | `InvalidArgument`    | `CreateVolume`                                   |
-| A stretched (sync-replicated) cluster                        | `InvalidArgument`    | `CreateVolume`                                   |
-| csi-addons replication                                       | `FailedPrecondition` | every replication RPC, destination info included |
-| csi-addons volume groups                                     | `FailedPrecondition` | `CreateVolumeGroup`                              |
-| `VolumeGroupSnapshot`                                        | `FailedPrecondition` | `CreateVolumeGroupSnapshot`                      |
-| Restoring or cloning across widths, or striped into ordinary | `InvalidArgument`    | `CreateVolume` with a content source             |
+| Feature                                                                                                                          | Refused with         | Where                                            |
+|----------------------------------------------------------------------------------------------------------------------------------|----------------------|--------------------------------------------------|
+| pNFS (`csi.storage.k8s.io/fstype: pnfs`)                                                                                         | `InvalidArgument`    | `CreateVolume`                                   |
+| Client-side compression or deduplication (VDO)                                                                                   | `InvalidArgument`    | `CreateVolume`                                   |
+| `replicate: "true"`                                                                                                              | `InvalidArgument`    | `CreateVolume`                                   |
+| Consistency-group label on the claim                                                                                             | `InvalidArgument`    | `CreateVolume`                                   |
+| A stretched (sync-replicated) cluster                                                                                            | `InvalidArgument`    | `CreateVolume`                                   |
+| A multi-node access mode (`ReadWriteMany`, `ReadOnlyMany`), block or filesystem: LVM activates the volume group on one host only | `InvalidArgument`    | `CreateVolume`                                   |
+| csi-addons replication                                                                                                           | `FailedPrecondition` | every replication RPC, destination info included |
+| csi-addons volume groups                                                                                                         | `FailedPrecondition` | `CreateVolumeGroup`                              |
+| `VolumeGroupSnapshot`                                                                                                            | `FailedPrecondition` | `CreateVolumeGroupSnapshot`                      |
+| Restoring or cloning across widths, or striped into ordinary                                                                     | `InvalidArgument`    | `CreateVolume` with a content source             |
 
 Encryption, QoS, `max_namespace_per_subsys`, and placement annotations work:
 each applies to every member on its own. The dm-linear indirection
