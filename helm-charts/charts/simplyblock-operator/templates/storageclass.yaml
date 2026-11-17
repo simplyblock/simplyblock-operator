@@ -43,7 +43,7 @@ storage nodes is the driver's to refuse, per claim.
 {{- end }}
 {{- $_ := set $seen $name true }}
 {{- $width := 0 }}
-{{- if not (kindIs "invalid" .stripeWidth) }}
+{{- if and (not (kindIs "invalid" .stripeWidth)) (ne (toString .stripeWidth) "") }}
 {{- if not (regexMatch "^[0-9]+$" (toString .stripeWidth)) }}
 {{- fail (printf "stripeWidth %v of pool %v is not a whole number" .stripeWidth .pool) }}
 {{- end }}
