@@ -44,8 +44,8 @@ func (f *fakeVolumeClient) StorageNodeStatus(context.Context, string) (string, e
 	return "online", nil
 }
 
-// notInPool is what findPoolForVolume reports for a volume a cluster lacks.
-var notInPool = fmt.Errorf("failed to resolve pool for volume %s: %w", lvolMoved,
+// errNotInPool is what findPoolForVolume reports for a volume a cluster lacks.
+var errNotInPool = fmt.Errorf("failed to resolve pool for volume %s: %w", lvolMoved,
 	fmt.Errorf("volume %s not found in any pool: %w", lvolMoved, controlplane.ErrVolumeNotFound))
 
 // testResolver builds a resolver over fake clusters, counting the queries each
@@ -55,12 +55,12 @@ func testResolver(answers map[string]error, queries map[string]int) *clusterReso
 	return &clusterResolver{
 		resolved: map[string]string{},
 		newClient: func(_ context.Context, id string) (volumeClient, error) {
-			ans, ok := answers[id]
+			answer, ok := answers[id]
 			if !ok {
 				return nil, fmt.Errorf("cluster %s: %w", id, controlplane.ErrClusterNotFound)
 			}
 			queries[id]++
-			return &fakeVolumeClient{cluster: id, err: ans}, nil
+			return &fakeVolumeClient{cluster: id, err: answer}, nil
 		},
 		list: func() ([]string, error) { return ids, nil },
 	}
@@ -93,7 +93,7 @@ func TestResolverFoundInNamedCluster(t *testing.T) {
 
 func TestResolverFollowsMovedVolumeAndCaches(t *testing.T) {
 	queries := map[string]int{}
-	r := testResolver(map[string]error{clusterA: notInPool, clusterB: notInPool, clusterC: nil}, queries)
+	r := testResolver(map[string]error{clusterA: errNotInPool, clusterB: errNotInPool, clusterC: nil}, queries)
 
 	var info *controlplane.NodeInfo
 	_, id, err := r.lookup(context.Background(), clusterA, lvolMoved, nodeInfoQuery(&info))
@@ -118,7 +118,7 @@ func TestResolverFollowsMovedVolumeAndCaches(t *testing.T) {
 }
 
 func TestResolverInvalidatesOnLaterNotFound(t *testing.T) {
-	answers := map[string]error{clusterA: notInPool, clusterB: nil, clusterC: notInPool}
+	answers := map[string]error{clusterA: errNotInPool, clusterB: nil, clusterC: errNotInPool}
 	queries := map[string]int{}
 	r := testResolver(answers, queries)
 
@@ -129,7 +129,7 @@ func TestResolverInvalidatesOnLaterNotFound(t *testing.T) {
 	}
 
 	// The volume moves back to its named cluster.
-	answers[clusterB] = notInPool
+	answers[clusterB] = errNotInPool
 	answers[clusterA] = nil
 	_, id, err := r.lookup(context.Background(), clusterA, lvolMoved, nodeInfoQuery(&info))
 	if err != nil || id != clusterA {
@@ -142,11 +142,11 @@ func TestResolverInvalidatesOnLaterNotFound(t *testing.T) {
 
 func TestResolverNotFoundAnywherePreservesError(t *testing.T) {
 	queries := map[string]int{}
-	r := testResolver(map[string]error{clusterA: notInPool, clusterB: notInPool, clusterC: notInPool}, queries)
+	r := testResolver(map[string]error{clusterA: errNotInPool, clusterB: errNotInPool, clusterC: errNotInPool}, queries)
 
 	var info *controlplane.NodeInfo
 	_, _, err := r.lookup(context.Background(), clusterA, lvolMoved, nodeInfoQuery(&info))
-	if !errors.Is(err, notInPool) {
+	if !errors.Is(err, errNotInPool) {
 		t.Fatalf("error = %v, want the named cluster's own error", err)
 	}
 	if queries[clusterA] != 1 || queries[clusterB] != 1 || queries[clusterC] != 1 {
@@ -179,7 +179,7 @@ func TestResolverTransportErrorDoesNotScan(t *testing.T) {
 }
 
 func TestResolverTransportErrorKeepsCache(t *testing.T) {
-	answers := map[string]error{clusterA: notInPool, clusterB: nil, clusterC: notInPool}
+	answers := map[string]error{clusterA: errNotInPool, clusterB: nil, clusterC: errNotInPool}
 	r := testResolver(answers, map[string]int{})
 
 	var info *controlplane.NodeInfo
@@ -212,7 +212,7 @@ func TestIsVolumeNotFound(t *testing.T) {
 		err  error
 		want bool
 	}{
-		"typed":       {notInPool, true},
+		"typed":       {errNotInPool, true},
 		"raw 404":     {&controlplane.HTTPError{StatusCode: http.StatusNotFound}, true},
 		"wrapped 404": {fmt.Errorf("x: %w", &controlplane.HTTPError{StatusCode: http.StatusNotFound}), true},
 		"500":         {&controlplane.HTTPError{StatusCode: http.StatusInternalServerError}, false},
