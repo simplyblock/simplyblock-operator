@@ -293,7 +293,7 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{RequeueAfter: requeueBackend}, nil
 	}
 
-	classNames, err := r.indexAssignedClasses(ctx, p)
+	classNames, err := r.indexAssignedClasses(ctx, p, clusterUUID)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -686,7 +686,7 @@ func (r *StoragePoolReconciler) callHost(
 // authored, and what this pass owns is making the assignment visible from the
 // pool rather than only from a cluster-wide list and a mental join.
 func (r *StoragePoolReconciler) indexAssignedClasses(
-	ctx context.Context, p *simplyblockv1alpha2.StoragePool,
+	ctx context.Context, p *simplyblockv1alpha2.StoragePool, clusterUUID string,
 ) ([]string, error) {
 	classes, names, err := AssignedClasses(ctx, r.Client, p)
 	if err != nil {
@@ -709,6 +709,15 @@ func (r *StoragePoolReconciler) indexAssignedClasses(
 				"storage class %q states one ceiling under %s; %q wins and the rest are ignored, "+
 					"which is a ceiling nobody chose",
 				class.Name, strings.Join(conflict, " and "), conflict[0])
+		}
+		agreement := CompareClass(class.Parameters, p, clusterUUID)
+		for _, d := range agreement.Disagreements {
+			r.event(p, corev1.EventTypeWarning, StorageClassDisagreesWithPool,
+				"storage class %q is assigned to this pool and departs from it: %s", class.Name, d)
+		}
+		for _, o := range agreement.Overrides {
+			r.event(p, corev1.EventTypeNormal, StorageClassOverridesPoolDefault,
+				"storage class %q overrides a volume default of this pool: %s", class.Name, o)
 		}
 	}
 	return names, nil

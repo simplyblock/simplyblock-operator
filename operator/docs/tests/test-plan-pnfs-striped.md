@@ -2,7 +2,7 @@
 
 Related design: [`designs/design-pnfs-striped.md`](../designs/design-pnfs-striped.md)
 Base plan: [`test-plan-pnfs-rwx.md`](test-plan-pnfs-rwx.md), which covers
-single-volume exports. Every scenario there still applies with `stripe_count = 1`
+single-volume exports. Every scenario there still applies with `stripe_width = 1`
 and is not repeated here.
 Harness: `csi-driver` (`make -C csi-driver unit-test`, `e2e-test`) and `operator`
 (`make -C operator test`).
@@ -40,12 +40,12 @@ Mock `ClusterAPI` and mock HTTP. No cluster, no host commands.
 
 | #         | Scenario                                                                                                      | Type     | Test |
 |-----------|---------------------------------------------------------------------------------------------------------------|----------|------|
-| SU-01     | `stripe_count` absent defaults to `1` and takes the base design's single-volume path                          | Positive | —    |
-| SU-02     | `stripe_count = 4` plans four lvols of `ceil(S/4)`, each GiB-aligned                                          | Positive | —    |
+| SU-01     | `stripe_width` absent defaults to `1` and takes the base design's single-volume path                          | Positive | —    |
+| SU-02     | `stripe_width = 4` plans four lvols of `ceil(S/4)`, each GiB-aligned                                          | Positive | —    |
 | SU-03     | `S` not divisible by `n` rounds up per member, so total capacity is at least `S`                              | Boundary | —    |
-| SU-04     | `stripe_count` above the eligible node count is rejected with `InvalidArgument`                               | Negative | —    |
-| SU-05     | `stripe_count = 0` or negative is rejected                                                                    | Negative | —    |
-| SU-06     | `stripe_count > 1` on an RWO volume is rejected                                                               | Negative | —    |
+| SU-04     | `stripe_width` above the eligible node count is rejected with `InvalidArgument`                               | Negative | —    |
+| SU-05     | `stripe_width = 0` is an ordinary export, as for block volumes, and a negative width is rejected              | Negative | —    |
+| SU-06     | `stripe_width > 1` on an RWO block volume takes the block striped path (PR #918), not the export assembly     | Positive | —    |
 | SU-07     | Members are recorded on the CR with lvol id, NGUID, and size, in stable order                                 | Positive | —    |
 | ~~SU-08~~ | ~~VG and LV names derive from the volume name alone, with no host or random component~~ (superseded by SU-25) | Positive | —    |
 | SU-09     | Members landing on fewer than `n` distinct nodes fail provisioning rather than degrading                      | Negative | —    |
@@ -54,13 +54,13 @@ Mock `ClusterAPI` and mock HTTP. No cluster, no host commands.
 
 | #     | Scenario                                                                                      | Type     | Test |
 |-------|-----------------------------------------------------------------------------------------------|----------|------|
-| SU-10 | `CreateSnapshot` on a `stripe_count = 1` volume still uses the per-lvol path                  | Positive | —    |
+| SU-10 | `CreateSnapshot` on a `stripe_width = 1` volume still uses the per-lvol path                  | Positive | —    |
 | SU-11 | `CreateSnapshot` on a striped volume issues exactly one group call for all members            | Positive | —    |
 | SU-12 | Snapshot of a striped volume with no group API available is refused with `FailedPrecondition` | Negative | —    |
 | SU-13 | Snapshot id encodes the group as `{clusterID}:{poolID}:{groupSnapUUID}`                       | Positive | —    |
 | SU-14 | Resize plans a uniform per-member grow, never an uneven one                                   | Boundary | —    |
-| SU-15 | `stripe_count = 2`, the smallest true stripe, plans two members and a two-way stripe          | Boundary | —    |
-| SU-16 | `stripe_count` exactly equal to the eligible node count is accepted, not rejected             | Boundary | —    |
+| SU-15 | `stripe_width = 2`, the smallest true stripe, plans two members and a two-way stripe          | Boundary | —    |
+| SU-16 | `stripe_width` exactly equal to the eligible node count is accepted, not rejected             | Boundary | —    |
 
 ### Client plan and the `lvmFilter` layer (design §2.2, §2.4)
 

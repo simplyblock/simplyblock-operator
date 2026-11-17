@@ -44,6 +44,7 @@ const (
 	layerLVMVolumeGroup    = "lvmVolumeGroup"
 	layerLVMLogicalVolume  = "lvmLogicalVolume"
 	layerDMLinear          = "dmLinear"
+	layerMembers           = "members"
 )
 
 // vdoPoolName is the pool `lvcreate --type vdo` creates alongside the logical
@@ -82,10 +83,17 @@ const (
 	// shapePlain with the dmLinear indirection above the fabric, so a volume's
 	// namespace can move to another subsystem under a live consumer
 	// (consistency-group co-location). Chosen for a fresh stage when the node
-	// runs with SPDKCSI_DM_INDIRECTION, and afterwards by the stack record:
+	// runs with SPDKCSI_DM_INDIRECTION, and afterward by the stack record:
 	// a volume never gains or loses the layer under a staged consumer.
 	shapeIndirectRawBlock
 	shapeIndirectPlain
+
+	// shapeStriped is a striped volume: one fabric per member under the
+	// members composite, the three LVM layers striping them into one logical
+	// volume, and a filesystem on top (striped.go). shapeStripedRawBlock is the
+	// same without the filesystem.
+	shapeStriped
+	shapeStripedRawBlock
 )
 
 // planFor is the layer list one of the shapes means, built with the seams the
@@ -147,6 +155,10 @@ func dmIndirectionEnabled() bool {
 func shapeFor(vc map[string]string, volCap *csi.VolumeCapability) stackShape {
 	block := volCap.GetBlock() != nil
 	switch {
+	case stripeWidth(vc) > 1 && block:
+		return shapeStripedRawBlock
+	case stripeWidth(vc) > 1:
+		return shapeStriped
 	case wantsVDO(vc) && block:
 		return shapeLVMRawBlock
 	case wantsVDO(vc):
@@ -176,12 +188,24 @@ func wantsVDO(vc map[string]string) bool {
 func vdoOptions(vc map[string]string) plans.LogicalVolumeOptions {
 	return plans.LogicalVolumeOptions{
 		Definition: lvm.LogicalVolumeDefinition{
-			Compression:   boolFromContext(vc[kube.ParamClientCompression]),
-			Deduplication: boolFromContext(vc[kube.ParamClientDeduplication]),
+			Compression:      boolFromContext(vc[kube.ParamClientCompression]),
+			Deduplication:    boolFromContext(vc[kube.ParamClientDeduplication]),
+			LogicalSizeBytes: vdoLogicalBytes(vc),
 		},
 		PoolName:   vdoPoolName,
 		Capability: volstack.Capability(kube.LabelVDOCapable),
 	}
+}
+
+// vdoLogicalBytes is the size the controller asked the VDO volume to be
+// (csicommon.CtxVDOLogicalBytes), or zero for a context from before it named
+// one, which leaves VDO to size the volume as it always did.
+func vdoLogicalBytes(vc map[string]string) int64 {
+	n, err := strconv.ParseInt(strings.TrimSpace(vc[csicommon.CtxVDOLogicalBytes]), 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // stackVolume is the volume as the filesystem layer needs it described.
@@ -210,10 +234,20 @@ func stackVolume(
 		FsType:                fsType,
 		DefaultFsType:         "ext4",
 		MountFlags:            volumeMountFlags(volCap),
-		FormatOptions:         mount.FormatOptions(fsTypeOrDefault(volCap), vc, wantsVDO(vc)),
+		FormatOptions:         formatOptions(volCap, vc),
 		ReservedBlocksPercent: vc["tune2fs_reserved_blocks"],
 		Encrypted:             boolFromContext(vc[csicommon.ParamEncryption]),
 	}
+}
+
+// formatOptions is what mkfs is given beyond what the filesystem layer derives
+// itself. A striped volume's geometry is the layer's to state, from the striped
+// logical volume, so it gets no stripe hints of the driver's (mount.StripedFormatOptions).
+func formatOptions(volCap *csi.VolumeCapability, vc map[string]string) []string {
+	if stripeWidth(vc) > 1 {
+		return mount.StripedFormatOptions(fsTypeOrDefault(volCap))
+	}
+	return mount.FormatOptions(fsTypeOrDefault(volCap), vc, wantsVDO(vc))
 }
 
 // boolFromContext reads a flag the context carries as text, answering false for
@@ -382,6 +416,14 @@ var recordedShapes = []struct {
 		[]string{layerFabric, layerLVMPhysicalVolume, layerLVMVolumeGroup, layerLVMLogicalVolume, layerFilesystem},
 		shapeLVM,
 	},
+	{
+		[]string{layerMembers, layerLVMPhysicalVolume, layerLVMVolumeGroup, layerLVMLogicalVolume},
+		shapeStripedRawBlock,
+	},
+	{
+		[]string{layerMembers, layerLVMPhysicalVolume, layerLVMVolumeGroup, layerLVMLogicalVolume, layerFilesystem},
+		shapeStriped,
+	},
 }
 
 // knownLayers are the layer names the shapes above are made of, which is what
@@ -394,6 +436,7 @@ var knownLayers = map[string]bool{
 	layerLVMVolumeGroup:    true,
 	layerLVMLogicalVolume:  true,
 	layerDMLinear:          true,
+	layerMembers:           true,
 }
 
 // shapeFromRecord is the plan shape a recorded layer list describes.

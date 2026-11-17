@@ -78,7 +78,7 @@ atlas/
 │   ├── lvm.go              Manager, Run (the escape hatch)
 │   ├── identity.go         VolumeGroup, HasLogicalVolume, ListLogicalVolumes, Rescan
 │   ├── volume.go           Create/Activate/Deactivate/Remove a PV, VG, or LV
-│   ├── clone.go            ResolveClonedVolumeGroup (rescan + import + rename)
+│   ├── clone.go            ResolveClonedVolumeGroup(Set) (rescan + import + rename)
 │   ├── grow.go             Expand a PV, VG, or LV, read an LV's current size
 │   ├── dm.go               RemoveOrphanedDMNodes, HasOrphanedDMNodes
 │   ├── devices.go          ForgetDevice: prune the node's LVM devices file
@@ -96,11 +96,12 @@ atlas/
 │   │   ├── filesystem.go   filesystem: format if blank, mount, refuse anything else
 │   │   └── filesystem_strategy.go  FilesystemLayerStrategy: what each fs type formats, mounts, and resizes with
 │   └── plans/              The plan shapes: one constructor per row of the design's plan table
-│       ├── plans.go        RawBlock / Plain / LVM / LVMRawBlock / Striped + the LVM naming rule
+│       ├── plans.go        RawBlock / Plain / LVM / LVMRawBlock / Striped / StripedRawBlock + the LVM naming rule
 │       └── node.go         NodeConfig: the seams every plan on this host is built over
 ├── lvol/                   Logical-volume identity, control-plane + device resolution
 │   ├── volume.go           VolumeHandle, Volume
 │   ├── handle.go           Handle: a volume handle taken apart; ParseHandle, IsCanonicalUUID
+│   ├── stripe.go           The striped-volume marker: ParseStripedHandle, SplitStripeMarker, WithStripeMarker
 │   ├── normalized.go       NormalizeHandle: the annotated handle over the field's, §16.4's rule
 │   ├── groupsnapshot.go    GroupSnapshotHandle: a consistency-group generation's CSI id
 │   ├── resolver.go         Resolver: control-plane lookup (info + Connection)
@@ -114,6 +115,7 @@ atlas/
 │   ├── resolver.go         Resolver iface + ResolveBinding aggregation
 │   ├── storageclass.go     Properties: typed StorageClass provisioning params
 │   ├── params.go           String/Int/Float/BoolParam map helpers
+│   ├── stripe.go           ParseStripe: stripe_width / stripe_size, read the same by the driver and the operator
 │   ├── index.go            shared index names + pure key funcs
 │   ├── informer.go         InformerResolver: client-go informer-backed Resolver
 │   ├── live.go             LiveResolver: uncached clientset-backed Resolver
@@ -167,6 +169,11 @@ atlas/
 │   └── placementrpc/       PlacementService: served by the operator, called by the CSI controller
 │       ├── placementrpc.go NewServer(Placer), Remote(conn).Place; controllers only
 │       └── placementv1/    the PlacementService protocol (buf-generated, committed)
+├── freeze/                 Hold a device-mapper device suspended under a token, with a deadline
+│   ├── freeze.go           Holds: Freeze/Thaw/Recover, records on disk; a striped volume's snapshot freeze
+│   └── freezerpc/          FreezeService: served by the CSI node plugin, relayed by the operator
+│       ├── freezerpc.go    NewServer(Freezer), NewRelay(conn), Remote(conn).Freeze/.Thaw
+│       └── freezev1/       the FreezeService protocol (buf-generated, committed)
 ├── bucketdelivery/         Deliver an S3 bucket's mount to its gateway's node set
 │   ├── paths.go            GatewayMountRoot: the one hostPath both the CSI node plugin (bind-mounts a
 │   │                       bucket there) and the operator's ObjectStoreReconciler (mounts every gateway
@@ -201,6 +208,7 @@ atlas/
 │
 ├── internal/               Private — not importable by consumers
 │   ├── cpapi/              oapi-codegen client for the control-plane v2 API (generated)
+│   ├── recordfile/         Path: the file a per-volume record is kept in (volstack, freeze)
 │   ├── sysfs/              low-level sysfs primitives (paths, attr reads)
 │   └── version/            build metadata (stamped via -ldflags)
 │
@@ -1248,6 +1256,15 @@ name logical volumes to preserve, for the structural ones a stack names
 identically in every volume, such as VDO's pool. `ImportClonedVolumeGroup` and
 `RenameLogicalVolume` remain available for a recovery path that needs one step
 alone.
+
+A group spanning several devices, such as a striped volume's members, is
+resolved with `ResolveClonedVolumeGroupSet`, which takes every device of the
+group and imports them in one `vgimportclone`. LVM refuses to re-stamp a group
+from one of its devices while the command is scoped away from the rest, so
+calling `ResolveClonedVolumeGroup` once per member fails on the first. Devices
+that disagree about their group are `ErrSplitClone`, and nothing is changed.
+The physical-volume layer (`volstack/layers/lvmphysicalvolume.go`) is the one
+caller today.
 
 VDO is a built-in `VolumeProvisioning` handler in `lvm` itself (`vdo.go`),
 registered by this package's own `init` rather than requiring a caller to

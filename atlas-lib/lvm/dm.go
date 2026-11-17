@@ -18,6 +18,15 @@ func escapeDMName(name string) string {
 	return strings.ReplaceAll(name, "-", "--")
 }
 
+// DeviceMapperName is the name device-mapper gives an active logical volume:
+// the group and the volume, each with its dashes doubled, joined by one dash.
+// It is what dmsetup addresses the volume by, for a caller that has to reach
+// the mapping directly rather than through LVM, such as one suspending it while
+// LVM commands on the host would block on reading the suspended device.
+func DeviceMapperName(lv LogicalVolume) string {
+	return escapeDMName(lv.VolumeGroup.Name) + "-" + escapeDMName(lv.Name)
+}
+
 // matchingDMNodes lists the live device-mapper nodes whose name starts with
 // volumeGroup's (escaped internally), from a plain `dmsetup ls` naming every
 // node on the host. It is content the same way RemoveOrphanedDMNodes and

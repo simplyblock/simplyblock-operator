@@ -129,6 +129,16 @@ const (
 	ParamClientCompression   = "client_compression"
 	ParamClientDeduplication = "client_deduplication"
 
+	// ParamStripeWidth opts a volume into striping: the CSI driver creates that
+	// many logical volumes of equal size, each on a different storage node of
+	// the class's cluster, and the node stripes them into one block device with
+	// LVM. Absent, empty, 0, or 1 is an ordinary volume. ParamStripeSize is the
+	// chunk each member takes before the next one does, a power of two between
+	// 4KiB and 1MiB, 64KiB when absent. Both are read by the CSI driver alone
+	// (csi-driver/docs/striped-volumes.md).
+	ParamStripeWidth = "stripe_width"
+	ParamStripeSize  = "stripe_size"
+
 	// The QoS limits' older spelling. Empty or absent means unset (0). These are
 	// read for as long as a class carrying them exists, which is indefinitely: a
 	// class's parameters are immutable, so one an older operator generated can

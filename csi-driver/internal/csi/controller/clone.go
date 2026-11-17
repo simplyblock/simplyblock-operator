@@ -26,6 +26,9 @@ func (cs *Server) handleVolumeContentSource(
 	sizeBytes int64,
 ) (*csi.Volume, error) {
 	volumeSource := req.GetVolumeContentSource()
+	if err := refuseStripedSourceForPlainClass(volumeSource); err != nil {
+		return nil, err
+	}
 	switch volumeSource.GetType().(type) {
 	case *csi.VolumeContentSource_Snapshot:
 		return cs.handleSnapshotSource(ctx, volumeSource.GetSnapshot(), req, poolName, vol, sizeBytes)
@@ -89,7 +92,7 @@ func (cs *Server) handleSnapshotSource(
 			return nil, err
 		}
 		// 409: a clone with this name already exists, so reconcile it.
-		existingUUID, rerr := reconcileExistingVolume(ctx, sbclient, snapshotName, sizeBytes,
+		existingUUID, rerr := reconcileExistingVolume(ctx, sbclient, snapshotName, sizeBytes, 0,
 			syncCluster(sbclient.ClusterID()))
 		if rerr != nil {
 			return nil, rerr
@@ -167,7 +170,7 @@ func (cs *Server) handleVolumeSource(
 			return nil, err
 		}
 		// 409: a clone with this name already exists, so reconcile it.
-		existingUUID, rerr := reconcileExistingVolume(ctx, sbclient, cloneName, sizeBytes,
+		existingUUID, rerr := reconcileExistingVolume(ctx, sbclient, cloneName, sizeBytes, 0,
 			syncCluster(sbclient.ClusterID()))
 		if rerr != nil {
 			return nil, rerr
