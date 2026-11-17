@@ -434,3 +434,40 @@ func TestStorageClusterRoundTripsFromTheHub(t *testing.T) {
 		t.Errorf("storing and reading back changed the object (-written +read):\n%s", diff)
 	}
 }
+
+// KMIP is exactly the case the file docstring calls out: a field only the hub
+// can express. Vault survives a v1alpha1 round trip through a real field
+// (hashicorpVaultSettings); KMIP has no such field and survives only through
+// the conversion-spec.kms.kmip.endpoint annotation.
+func TestStorageClusterKMIPSurvivesTheV1Alpha1RoundTrip(t *testing.T) {
+	hub := &v1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: "sb"},
+		Spec: v1alpha2.StorageClusterSpec{
+			MaxSubsystemCount: ptr.To(int32(20)),
+			VCPUCount:         ptr.To(int32(8)),
+			DeviceClass:       v1alpha2.StorageClusterDeviceClassNVMe,
+			KMS: &v1alpha2.KMSSpec{
+				KMIP: &v1alpha2.KMIPKMS{Endpoint: "kmip.example.com:5696"},
+			},
+		},
+	}
+
+	var stored StorageCluster
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	// Unlike Vault, nothing in this version can even display the KMIP
+	// endpoint -- it travels solely as metadata on the way down.
+	if stored.Spec.HashicorpVaultSettings != nil {
+		t.Errorf("spec.hashicorpVaultSettings = %+v, want nil", stored.Spec.HashicorpVaultSettings)
+	}
+
+	var back v1alpha2.StorageCluster
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if diff := cmp.Diff(hub, &back); diff != "" {
+		t.Errorf("storing and reading back changed the object (-written +read):\n%s", diff)
+	}
+}

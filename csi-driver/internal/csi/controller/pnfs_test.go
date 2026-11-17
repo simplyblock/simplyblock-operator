@@ -322,12 +322,20 @@ func TestReadWriteManyWithoutPNFSIsRefused(t *testing.T) {
 	if _, err := isPNFSRequest(ext4); err == nil {
 		t.Error("a ReadWriteMany ext4 claim was accepted, so two nodes will mount one filesystem")
 	}
+}
 
-	// A raw-block ReadWriteMany is multi-attach, which is a different feature
-	// with a different failure mode. It is refused here too, for now.
-	block := []*csi.VolumeCapability{pnfsBlockCap()}
-	if _, err := isPNFSRequest(block); err == nil {
-		t.Error("a raw-block ReadWriteMany claim was accepted")
+// Regression: 2026-11-11-rwx-block-refused. The ReadWriteMany refusal above
+// also caught volumeMode: Block, which has no filesystem for two nodes to
+// corrupt: the application coordinates its writers. Since v26.4.0-beta2 every
+// RWX raw-block claim was refused as needing a pNFS export, although it
+// provisioned on the block path before.
+func TestReadWriteManyRawBlockTakesTheBlockPath(t *testing.T) {
+	pnfs, err := isPNFSRequest([]*csi.VolumeCapability{pnfsBlockCap()})
+	if err != nil {
+		t.Fatalf("a raw-block ReadWriteMany claim was refused: %v", err)
+	}
+	if pnfs {
+		t.Error("a raw-block ReadWriteMany claim was routed to a pNFS export")
 	}
 }
 

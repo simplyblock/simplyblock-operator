@@ -33,6 +33,14 @@ func withPeer(ctx context.Context, id PeerID) context.Context {
 	return context.WithValue(ctx, peerContextKey{}, id)
 }
 
+// ContextWithPeer is withPeer for a service called in-process, outside a hub:
+// a test of a service open to one kind of peer, which has no session to verify
+// the caller on. Nothing that crosses the network reaches it, so it grants
+// nothing a remote caller could use.
+func ContextWithPeer(ctx context.Context, id PeerID) context.Context {
+	return withPeer(ctx, id)
+}
+
 // linkServicePrefix is the full method prefix of the handshake service, the
 // one service a session may call before it is identified.
 var linkServicePrefix = "/" + linkv1.LinkService_ServiceDesc.ServiceName + "/"

@@ -50,7 +50,12 @@ func (m *Manager) RemoveVolumeGroupTag(ctx context.Context, volumeGroup VolumeGr
 // and a reading of "no marker" that came from a failed command would have it
 // refuse a recovery it was entitled to, or worse, trust one it was not.
 func (m *Manager) VolumeGroupTags(ctx context.Context, volumeGroup VolumeGroup) ([]string, error) {
-	out, err := m.exec(ctx, nil, "vgs", "--noheadings", "-o", "vg_tags", volumeGroup.Name)
+	return m.volumeGroupTagsOn(ctx, nil, volumeGroup)
+}
+
+// volumeGroupTagsOn is VolumeGroupTags scoped to devices, nil for unscoped.
+func (m *Manager) volumeGroupTagsOn(ctx context.Context, devices []string, volumeGroup VolumeGroup) ([]string, error) {
+	out, err := m.exec(ctx, devices, "vgs", "--noheadings", "-o", "vg_tags", volumeGroup.Name)
 	if err != nil {
 		return nil, fmt.Errorf("vgs -o vg_tags %s: %w", volumeGroup.Name, err)
 	}

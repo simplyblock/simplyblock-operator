@@ -2239,8 +2239,8 @@
     },
     "/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote": {
       "post": {
-        "summary": "Clusters:Storage-Nodes:Start",
-        "operationId": "clusters_storage_nodes_start_api_v2_clusters__cluster_id__storage_nodes__storage_node_id__promote_post",
+        "summary": "Clusters:Storage-Nodes:Promote",
+        "operationId": "clusters_storage_nodes_promote_api_v2_clusters__cluster_id__storage_nodes__storage_node_id__promote_post",
         "security": [
           {
             "HTTPBearer": []
@@ -2271,6 +2271,9 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "409": {
+            "description": "The promote did not finish: a device is still new or still removed; call again"
           },
           "422": {
             "description": "Validation Error",
@@ -12593,13 +12596,17 @@
                   },
                   {
                     "$ref": "#/components/schemas/HCPKeyDescriptor"
+                  },
+                  {
+                    "$ref": "#/components/schemas/KMIPKeyDescriptor"
                   }
                 ],
                 "discriminator": {
                   "propertyName": "type",
                   "mapping": {
                     "fdb": "#/components/schemas/FDBKeyDescriptor",
-                    "hcp": "#/components/schemas/HCPKeyDescriptor"
+                    "hcp": "#/components/schemas/HCPKeyDescriptor",
+                    "kmip": "#/components/schemas/KMIPKeyDescriptor"
                   }
                 }
               },
@@ -12992,6 +12999,10 @@
             "type": "boolean",
             "title": "Enable Failure Domain"
           },
+          "lvol_geometry_enabled": {
+            "type": "boolean",
+            "title": "Lvol Geometry Enabled"
+          },
           "device_mode": {
             "type": "string",
             "title": "Device Mode"
@@ -13090,6 +13101,7 @@
           "node_affinity",
           "anti_affinity",
           "enable_failure_domain",
+          "lvol_geometry_enabled",
           "device_mode",
           "inline_checksum",
           "atomic_4k",
@@ -13338,20 +13350,40 @@
               }
             ]
           },
-          "hashicorp_vault_settings": {
+          "kms_settings": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/HashicorpVaultSettings"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/VaultKMSSettings"
+                  },
+                  {
+                    "$ref": "#/components/schemas/KMIPKMSSettings"
+                  }
+                ],
+                "discriminator": {
+                  "propertyName": "provider",
+                  "mapping": {
+                    "kmip": "#/components/schemas/KMIPKMSSettings",
+                    "vault": "#/components/schemas/VaultKMSSettings"
+                  }
+                }
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Kms Settings"
           },
           "enable_failure_domain": {
             "type": "boolean",
             "title": "Enable Failure Domain",
             "default": false
+          },
+          "lvol_geometry_enabled": {
+            "type": "boolean",
+            "title": "Lvol Geometry Enabled",
+            "default": true
           },
           "sync_replication": {
             "type": "boolean",
@@ -15441,39 +15473,64 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
-      "HashicorpVaultSettings": {
+      "KMIPKMSSettings": {
         "properties": {
-          "base_url": {
+          "provider": {
+            "type": "string",
+            "const": "kmip",
+            "title": "Provider",
+            "default": "kmip"
+          },
+          "server_url": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Server Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "server_url"
+        ],
+        "title": "KMIPKMSSettings",
+        "description": "A KMIP-speaking key management appliance."
+      },
+      "KMIPKeyDescriptor": {
+        "properties": {
+          "dek_path": {
+            "type": "string",
+            "title": "Dek Path"
+          },
+          "type": {
+            "type": "string",
+            "const": "kmip",
+            "title": "Type",
+            "default": "kmip"
+          },
+          "kek_name": {
+            "type": "string",
+            "title": "Kek Name"
+          },
+          "server_url": {
             "anyOf": [
               {
-                "type": "string",
-                "minLength": 1,
-                "format": "uri"
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Base Url"
-          },
-          "transit_mount": {
-            "type": "string",
-            "title": "Transit Mount",
-            "default": "simplyblock/transit"
-          },
-          "kv_mount": {
-            "type": "string",
-            "title": "Kv Mount",
-            "default": "simplyblock/kv"
-          },
-          "cert_role": {
-            "type": "string",
-            "title": "Cert Role",
-            "default": "simplyblock-webappapi"
+            "title": "Server Url"
           }
         },
+        "additionalProperties": false,
         "type": "object",
-        "title": "HashicorpVaultSettings"
+        "required": [
+          "dek_path",
+          "kek_name"
+        ],
+        "title": "KMIPKeyDescriptor",
+        "description": "Keys held in a KMIP-speaking appliance, wrapped under a named key."
       },
       "HubAddress": {
         "properties": {
@@ -19114,6 +19171,44 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "VaultKMSSettings": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "const": "vault",
+            "title": "Provider",
+            "default": "vault"
+          },
+          "base_url": {
+            "type": "string",
+            "minLength": 1,
+            "format": "uri",
+            "title": "Base Url"
+          },
+          "transit_mount": {
+            "type": "string",
+            "title": "Transit Mount",
+            "default": "simplyblock/transit"
+          },
+          "kv_mount": {
+            "type": "string",
+            "title": "Kv Mount",
+            "default": "simplyblock/kv"
+          },
+          "cert_role": {
+            "type": "string",
+            "title": "Cert Role",
+            "default": "simplyblock-webappapi"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "base_url"
+        ],
+        "title": "VaultKMSSettings",
+        "description": "HashiCorp Vault (or an OpenBao-compatible server): a Transit mount\nwraps/unwraps DEKs, a KV mount stores the wrapped ciphertext."
       },
       "VolumeDTO": {
         "properties": {

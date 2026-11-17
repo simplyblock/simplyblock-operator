@@ -110,6 +110,7 @@ type persistedLvolState struct {
 	ClusterID    string    `json:"clusterID,omitempty"`
 	BrokenAt     time.Time `json:"brokenAt,omitempty"`
 	SubsystemNQN string    `json:"subsystemNQN,omitempty"`
+	StripeOf     string    `json:"stripeOf,omitempty"`
 }
 
 type guardianState struct {
@@ -132,6 +133,11 @@ type LvolState struct {
 	// that subsystemLvolIDs can identify siblings even after the NVMe path
 	// drops and the device disappears from sysfs.
 	SubsystemNQN string `json:"subsystemNQN,omitempty"`
+
+	// StripeOf is, for a member s1..sN of a striped volume, the lvol ID of the
+	// volume's first member: the one its volume handle names and NodeUnpublish
+	// releases. Empty for every other lvol.
+	StripeOf string `json:"stripeOf,omitempty"`
 }
 
 // Guardian tracks which pod uses which lvol and restarts affected pods
@@ -203,6 +209,7 @@ func (g *Guardian) loadState() {
 				ClusterID:    pls.ClusterID,
 				BrokenAt:     pls.BrokenAt,
 				SubsystemNQN: pls.SubsystemNQN,
+				StripeOf:     pls.StripeOf,
 			}
 		}
 	}
@@ -287,6 +294,29 @@ func Start(ctx context.Context, cfg Config, manager *sbkube.Manager) (*Guardian,
 // unknown, minutes or hours later, in a message that reads like a publish
 // ordering problem and is not one.
 func (g *Guardian) RegisterPublish(clusterID, lvolID, targetPath string) {
+	g.registerPublish(clusterID, lvolID, targetPath, "")
+}
+
+// RegisterPublishStriped records a striped volume published to a pod: its
+// first member (lvolID, the one its handle names) and every other member, each
+// its own NVMe-oF subsystem. A member that loses every path is reported to
+// MarkBrokenLvol under its own ID, so the guardian has to know it belongs to
+// the pod, or the break is dropped as an unknown lvol and the pod keeps a
+// stripe with a hole in it. The other members are released together with the
+// first by RegisterUnpublish, which only ever sees the first.
+func (g *Guardian) RegisterPublishStriped(clusterID, lvolID string, members []string, targetPath string) {
+	g.registerPublish(clusterID, lvolID, targetPath, "")
+	if lvolID == "" {
+		return
+	}
+	for _, m := range members {
+		if m != "" && m != lvolID {
+			g.registerPublish(clusterID, m, targetPath, lvolID)
+		}
+	}
+}
+
+func (g *Guardian) registerPublish(clusterID, lvolID, targetPath, stripeOf string) {
 	podUID := podUIDFromTargetPath(targetPath)
 	if lvolID == "" || podUID == "" || clusterID == "" {
 		klog.Warningf(
@@ -309,6 +339,7 @@ func (g *Guardian) RegisterPublish(clusterID, lvolID, targetPath string) {
 	}
 	st.PodUIDs[podUID] = struct{}{}
 	st.ClusterID = clusterID
+	st.StripeOf = stripeOf
 
 	if _, exists := g.clusterWasInactive[clusterID]; !exists {
 		g.clusterWasInactive[clusterID] = true
@@ -337,13 +368,15 @@ func (g *Guardian) RegisterUnpublish(lvolID, targetPath string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	st, ok := g.lvols[lvolID]
-	if !ok || st == nil || st.PodUIDs == nil {
-		return
-	}
-	delete(st.PodUIDs, podUID)
-	if len(st.PodUIDs) == 0 {
-		delete(g.lvols, lvolID)
+	// The members of a striped volume whose first member this is go with it.
+	for id, st := range g.lvols {
+		if st == nil || st.PodUIDs == nil || (id != lvolID && st.StripeOf != lvolID) {
+			continue
+		}
+		delete(st.PodUIDs, podUID)
+		if len(st.PodUIDs) == 0 {
+			delete(g.lvols, id)
+		}
 	}
 
 	g.persistLocked()
@@ -1011,6 +1044,7 @@ func (g *Guardian) persistLocked() {
 			ClusterID:    lvs.ClusterID,
 			BrokenAt:     lvs.BrokenAt,
 			SubsystemNQN: lvs.SubsystemNQN,
+			StripeOf:     lvs.StripeOf,
 		}
 		for uid := range lvs.PodUIDs {
 			pls.PodUIDs = append(pls.PodUIDs, uid)

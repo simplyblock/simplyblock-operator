@@ -18,7 +18,8 @@ CPAPI_GEN := internal/cpapi/cpapi.gen.go internal/cpapi/validation.gen.go
 # the rules take `buf` as an order-only prerequisite: it installs the toolchain
 # when absent without a phony target forcing a regeneration on every make run.
 PROTO_DIRS := link/linkv1 link/sitev1 storage/storagerpc/storagev1 nfsexport/nfsexportrpc/nfsexportv1 \
-	conntrack/conntrackrpc/conntrackv1 placement/placementrpc/placementv1 netcheck/netcheckrpc/netcheckv1
+	conntrack/conntrackrpc/conntrackv1 placement/placementrpc/placementv1 netcheck/netcheckrpc/netcheckv1 \
+	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1 freeze/freezerpc/freezev1
 PROTO_GEN := link/linkv1/link.pb.go link/linkv1/link_grpc.pb.go \
 	link/sitev1/relay.pb.go link/sitev1/relay_grpc.pb.go \
 	link/sitev1/switchover.pb.go link/sitev1/switchover_grpc.pb.go \
@@ -27,7 +28,10 @@ PROTO_GEN := link/linkv1/link.pb.go link/linkv1/link_grpc.pb.go \
 	nfsexport/nfsexportrpc/nfsexportv1/export.pb.go nfsexport/nfsexportrpc/nfsexportv1/export_grpc.pb.go \
 	conntrack/conntrackrpc/conntrackv1/flow.pb.go conntrack/conntrackrpc/conntrackv1/flow_grpc.pb.go \
 	placement/placementrpc/placementv1/placement.pb.go placement/placementrpc/placementv1/placement_grpc.pb.go \
-	netcheck/netcheckrpc/netcheckv1/check.pb.go netcheck/netcheckrpc/netcheckv1/check_grpc.pb.go
+	netcheck/netcheckrpc/netcheckv1/check.pb.go netcheck/netcheckrpc/netcheckv1/check_grpc.pb.go \
+	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.pb.go \
+	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery_grpc.pb.go \
+	freeze/freezerpc/freezev1/freeze.pb.go freeze/freezerpc/freezev1/freeze_grpc.pb.go
 
 GENERATED := $(CPAPI_GEN) $(PROTO_GEN)
 
@@ -36,7 +40,7 @@ all: build test ## Build and test the library.
 generate: $(GENERATED) ## Generate the control-plane API client, its response validation, and the link protocol.
 
 internal/cpapi/cpapi.gen.go: ../shared/openapi.json internal/cpapi/oapi-codegen.yaml \
-		internal/cpapi/gen.go
+		internal/cpapi/overlay.yaml internal/cpapi/gen.go
 	go generate ./internal/cpapi/...
 
 # The rules are checked against the spec and resolved against the client, so
@@ -93,6 +97,16 @@ netcheck/netcheckrpc/netcheckv1/check.pb.go: netcheck/netcheckrpc/netcheckv1/che
 	cd netcheck/netcheckrpc/netcheckv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
 
 netcheck/netcheckrpc/netcheckv1/check_grpc.pb.go: netcheck/netcheckrpc/netcheckv1/check.pb.go
+
+bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.pb.go: bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.proto bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/buf.gen.yaml bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/buf.yaml | buf
+	cd bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
+
+bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery_grpc.pb.go: bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.pb.go
+
+freeze/freezerpc/freezev1/freeze.pb.go: freeze/freezerpc/freezev1/freeze.proto freeze/freezerpc/freezev1/buf.gen.yaml freeze/freezerpc/freezev1/buf.yaml | buf
+	cd freeze/freezerpc/freezev1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
+
+freeze/freezerpc/freezev1/freeze_grpc.pb.go: freeze/freezerpc/freezev1/freeze.pb.go
 
 build: $(GENERATED) ## Build all packages.
 	go build ./...

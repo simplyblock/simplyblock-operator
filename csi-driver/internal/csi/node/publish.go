@@ -68,7 +68,15 @@ func (ns *Server) NodePublishVolume(
 	}
 
 	if ns.guardian != nil {
-		ns.guardian.RegisterPublish(req.VolumeContext[csicommon.ParamClusterID], req.VolumeContext["uuid"], req.TargetPath)
+		if members := stripeMembers(req.VolumeContext); len(members) > 1 {
+			// Each member is its own subsystem, and a member that loses every
+			// path is reported under its own ID. Unpublish releases them all
+			// through the first, the one the volume handle names, so that is
+			// the head here too.
+			ns.guardian.RegisterPublishStriped(req.VolumeContext[csicommon.ParamClusterID], members[0], members, req.TargetPath)
+		} else {
+			ns.guardian.RegisterPublish(req.VolumeContext[csicommon.ParamClusterID], req.VolumeContext["uuid"], req.TargetPath)
+		}
 	}
 
 	return &csi.NodePublishVolumeResponse{}, nil

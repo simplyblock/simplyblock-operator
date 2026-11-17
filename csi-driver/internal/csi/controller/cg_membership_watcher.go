@@ -161,6 +161,19 @@ func (w *cgMembershipWatcher) reconcile(ctx context.Context, pvc *corev1.Persist
 	if err != nil {
 		return nil // not a volume this driver can address; nothing to reconcile
 	}
+	if width := csicommon.StripeWidth(pv.Spec.CSI.VolumeHandle); width > 1 {
+		// The handle names the first member only, and a group is confined to
+		// one logical volume store while the members are on different nodes by
+		// construction: joining, detaching, or colocating would act on one
+		// member of the stripe. CreateVolume refuses the label for the same
+		// reason; this is the label added after the claim was bound.
+		if pvc.Labels[consistencyGroupLabel] != "" {
+			w.recorder.Eventf(pvc, corev1.EventTypeWarning, "ConsistencyGroupStripedVolume",
+				"volume is striped across %d storage nodes and cannot join consistency group %q; "+
+					"remove the label", width, pvc.Labels[consistencyGroupLabel])
+		}
+		return nil
+	}
 	// A peer cluster's volume that failed over onto this site lives on as its
 	// clone here, a member of the group the fail-over made; the other site,
 	// which may be cut off, is not asked.

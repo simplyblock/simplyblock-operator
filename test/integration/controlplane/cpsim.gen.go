@@ -433,6 +433,36 @@ func (e HubPathTrtype) Valid() bool {
 	}
 }
 
+// Defines values for KMIPKMSSettingsProvider.
+const (
+	KMIPKMSSettingsProviderKmip KMIPKMSSettingsProvider = "kmip"
+)
+
+// Valid indicates whether the value is a known member of the KMIPKMSSettingsProvider enum.
+func (e KMIPKMSSettingsProvider) Valid() bool {
+	switch e {
+	case KMIPKMSSettingsProviderKmip:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KMIPKeyDescriptorType.
+const (
+	KMIPKeyDescriptorTypeKmip KMIPKeyDescriptorType = "kmip"
+)
+
+// Valid indicates whether the value is a known member of the KMIPKeyDescriptorType enum.
+func (e KMIPKeyDescriptorType) Valid() bool {
+	switch e {
+	case KMIPKeyDescriptorTypeKmip:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LandingResponseState.
 const (
 	LandingResponseStateCounterpart LandingResponseState = "counterpart"
@@ -1075,6 +1105,21 @@ func (e UpdatableClusterParametersTwoNodeFencingAuthority) Valid() bool {
 	}
 }
 
+// Defines values for VaultKMSSettingsProvider.
+const (
+	Vault VaultKMSSettingsProvider = "vault"
+)
+
+// Valid indicates whether the value is a known member of the VaultKMSSettingsProvider enum.
+func (e VaultKMSSettingsProvider) Valid() bool {
+	switch e {
+	case Vault:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateParamsHaType.
 const (
 	CreateParamsHaTypeHa     CreateParamsHaType = "ha"
@@ -1604,6 +1649,7 @@ type ClusterDTO struct {
 	LeaderSite                  *string            `json:"leader_site,omitempty"`
 	LostSite                    *string            `json:"lost_site,omitempty"`
 	LostSiteState               *string            `json:"lost_site_state,omitempty"`
+	LvolGeometryEnabled         bool               `json:"lvol_geometry_enabled"`
 	MaxFaultTolerance           int                `json:"max_fault_tolerance"`
 	MdJournal                   *bool              `json:"md_journal,omitempty"`
 	Name                        *string            `json:"name"`
@@ -1643,49 +1689,52 @@ type ClusterLogEntryDTO struct {
 
 // ClusterParams defines model for ClusterParams.
 type ClusterParams struct {
-	Atomic4k               *bool                    `json:"atomic_4k,omitempty"`
-	BackupConfig           *UnresolvedBackupConfig  `json:"backup_config,omitempty"`
-	BlkSize                *ClusterParamsBlkSize    `json:"blk_size,omitempty"`
-	CapCrit                *int                     `json:"cap_crit,omitempty"`
-	CapWarn                *int                     `json:"cap_warn,omitempty"`
-	ClientDataNic          *string                  `json:"client_data_nic,omitempty"`
-	CrName                 *string                  `json:"cr_name,omitempty"`
-	CrNamespace            *string                  `json:"cr_namespace,omitempty"`
-	CrPlural               *string                  `json:"cr_plural,omitempty"`
-	DeviceMode             *ClusterParamsDeviceMode `json:"device_mode,omitempty"`
-	DistrBs                *int                     `json:"distr_bs,omitempty"`
-	DistrChunkBs           *int                     `json:"distr_chunk_bs,omitempty"`
-	DistrNdcs              *int                     `json:"distr_ndcs,omitempty"`
-	DistrNpcs              *int                     `json:"distr_npcs,omitempty"`
-	EnableFailureDomain    *bool                    `json:"enable_failure_domain,omitempty"`
-	EnableNodeAffinity     *bool                    `json:"enable_node_affinity,omitempty"`
-	Fabric                 *string                  `json:"fabric,omitempty"`
-	HaType                 *ClusterParamsHaType     `json:"ha_type,omitempty"`
-	HashicorpVaultSettings *HashicorpVaultSettings  `json:"hashicorp_vault_settings,omitempty"`
-	HugepagesMem           *int                     `json:"hugepages_mem,omitempty"`
-	InflightIoThreshold    *int                     `json:"inflight_io_threshold,omitempty"`
-	InlineChecksum         *bool                    `json:"inline_checksum,omitempty"`
-	IsSingleNode           *bool                    `json:"is_single_node,omitempty"`
-	LeaderSite             *string                  `json:"leader_site,omitempty"`
-	MaxQueueSize           *int                     `json:"max_queue_size,omitempty"`
-	MaxSubsys              int                      `json:"max_subsys"`
-	MdJournal              *bool                    `json:"md_journal,omitempty"`
-	Name                   *string                  `json:"name,omitempty"`
-	NodeLabelSuffix        *string                  `json:"node_label_suffix,omitempty"`
-	NvmfBasePort           *int                     `json:"nvmf_base_port,omitempty"`
-	PageCopy               *bool                    `json:"page_copy,omitempty"`
-	PageSizeInBlocks       *int                     `json:"page_size_in_blocks,omitempty"`
-	ProvCapCrit            *int                     `json:"prov_cap_crit,omitempty"`
-	ProvCapWarn            *int                     `json:"prov_cap_warn,omitempty"`
-	QpairCount             *int                     `json:"qpair_count,omitempty"`
-	RpcBasePort            *int                     `json:"rpc_base_port,omitempty"`
-	SnodeApiPort           *int                     `json:"snode_api_port,omitempty"`
-	SnodeApiService        *string                  `json:"snode_api_service,omitempty"`
-	SpdkProxyService       *string                  `json:"spdk_proxy_service,omitempty"`
-	SpdkProxyTlsSecret     *string                  `json:"spdk_proxy_tls_secret,omitempty"`
-	SpdkVcpuCount          int                      `json:"spdk_vcpu_count"`
-	StrictNodeAntiAffinity *bool                    `json:"strict_node_anti_affinity,omitempty"`
-	SyncReplication        *bool                    `json:"sync_replication,omitempty"`
+	Atomic4k            *bool                    `json:"atomic_4k,omitempty"`
+	BackupConfig        *UnresolvedBackupConfig  `json:"backup_config,omitempty"`
+	BlkSize             *ClusterParamsBlkSize    `json:"blk_size,omitempty"`
+	CapCrit             *int                     `json:"cap_crit,omitempty"`
+	CapWarn             *int                     `json:"cap_warn,omitempty"`
+	ClientDataNic       *string                  `json:"client_data_nic,omitempty"`
+	CrName              *string                  `json:"cr_name,omitempty"`
+	CrNamespace         *string                  `json:"cr_namespace,omitempty"`
+	CrPlural            *string                  `json:"cr_plural,omitempty"`
+	DeviceMode          *ClusterParamsDeviceMode `json:"device_mode,omitempty"`
+	DistrBs             *int                     `json:"distr_bs,omitempty"`
+	DistrChunkBs        *int                     `json:"distr_chunk_bs,omitempty"`
+	DistrNdcs           *int                     `json:"distr_ndcs,omitempty"`
+	DistrNpcs           *int                     `json:"distr_npcs,omitempty"`
+	EnableFailureDomain *bool                    `json:"enable_failure_domain,omitempty"`
+	EnableNodeAffinity  *bool                    `json:"enable_node_affinity,omitempty"`
+	Fabric              *string                  `json:"fabric,omitempty"`
+	HaType              *ClusterParamsHaType     `json:"ha_type,omitempty"`
+	HugepagesMem        *int                     `json:"hugepages_mem,omitempty"`
+	InflightIoThreshold *int                     `json:"inflight_io_threshold,omitempty"`
+	InlineChecksum      *bool                    `json:"inline_checksum,omitempty"`
+	IsSingleNode        *bool                    `json:"is_single_node,omitempty"`
+	KmsSettings         *struct {
+		union json.RawMessage
+	} `json:"kms_settings,omitempty"`
+	LeaderSite             *string `json:"leader_site,omitempty"`
+	LvolGeometryEnabled    *bool   `json:"lvol_geometry_enabled,omitempty"`
+	MaxQueueSize           *int    `json:"max_queue_size,omitempty"`
+	MaxSubsys              int     `json:"max_subsys"`
+	MdJournal              *bool   `json:"md_journal,omitempty"`
+	Name                   *string `json:"name,omitempty"`
+	NodeLabelSuffix        *string `json:"node_label_suffix,omitempty"`
+	NvmfBasePort           *int    `json:"nvmf_base_port,omitempty"`
+	PageCopy               *bool   `json:"page_copy,omitempty"`
+	PageSizeInBlocks       *int    `json:"page_size_in_blocks,omitempty"`
+	ProvCapCrit            *int    `json:"prov_cap_crit,omitempty"`
+	ProvCapWarn            *int    `json:"prov_cap_warn,omitempty"`
+	QpairCount             *int    `json:"qpair_count,omitempty"`
+	RpcBasePort            *int    `json:"rpc_base_port,omitempty"`
+	SnodeApiPort           *int    `json:"snode_api_port,omitempty"`
+	SnodeApiService        *string `json:"snode_api_service,omitempty"`
+	SpdkProxyService       *string `json:"spdk_proxy_service,omitempty"`
+	SpdkProxyTlsSecret     *string `json:"spdk_proxy_tls_secret,omitempty"`
+	SpdkVcpuCount          int     `json:"spdk_vcpu_count"`
+	StrictNodeAntiAffinity *bool   `json:"strict_node_anti_affinity,omitempty"`
+	SyncReplication        *bool   `json:"sync_replication,omitempty"`
 }
 
 // ClusterParamsBlkSize defines model for ClusterParams.BlkSize.
@@ -2238,14 +2287,6 @@ type HTTPValidationError struct {
 	Detail *[]ValidationError `json:"detail,omitempty"`
 }
 
-// HashicorpVaultSettings defines model for HashicorpVaultSettings.
-type HashicorpVaultSettings struct {
-	BaseUrl      *string `json:"base_url,omitempty"`
-	CertRole     *string `json:"cert_role,omitempty"`
-	KvMount      *string `json:"kv_mount,omitempty"`
-	TransitMount *string `json:"transit_mount,omitempty"`
-}
-
 // HubAddress What the source needs to attach the target's receiving hub over NVMe-oF.
 type HubAddress struct {
 	BdevName       string     `json:"bdev_name"`
@@ -2263,6 +2304,26 @@ type HubPath struct {
 
 // HubPathTrtype defines model for HubPath.Trtype.
 type HubPathTrtype string
+
+// KMIPKMSSettings A KMIP-speaking key management appliance.
+type KMIPKMSSettings struct {
+	Provider  *KMIPKMSSettingsProvider `json:"provider,omitempty"`
+	ServerUrl string                   `json:"server_url"`
+}
+
+// KMIPKMSSettingsProvider defines model for KMIPKMSSettings.Provider.
+type KMIPKMSSettingsProvider string
+
+// KMIPKeyDescriptor Keys held in a KMIP-speaking appliance, wrapped under a named key.
+type KMIPKeyDescriptor struct {
+	DekPath   string                 `json:"dek_path"`
+	KekName   string                 `json:"kek_name"`
+	ServerUrl *string                `json:"server_url,omitempty"`
+	Type      *KMIPKeyDescriptorType `json:"type,omitempty"`
+}
+
+// KMIPKeyDescriptorType defines model for KMIPKeyDescriptor.Type.
+type KMIPKeyDescriptorType string
 
 // LandingRequest Make a replicated snapshot's landing volume ready on the target.
 //
@@ -3076,6 +3137,19 @@ type ValidationErrorLoc1 = int
 type ValidationError_Loc_Item struct {
 	union json.RawMessage
 }
+
+// VaultKMSSettings HashiCorp Vault (or an OpenBao-compatible server): a Transit mount
+// wraps/unwraps DEKs, a KV mount stores the wrapped ciphertext.
+type VaultKMSSettings struct {
+	BaseUrl      string                    `json:"base_url"`
+	CertRole     *string                   `json:"cert_role,omitempty"`
+	KvMount      *string                   `json:"kv_mount,omitempty"`
+	Provider     *VaultKMSSettingsProvider `json:"provider,omitempty"`
+	TransitMount *string                   `json:"transit_mount,omitempty"`
+}
+
+// VaultKMSSettingsProvider defines model for VaultKMSSettings.Provider.
+type VaultKMSSettingsProvider string
 
 // VolumeDTO defines model for VolumeDTO.
 type VolumeDTO struct {
@@ -4770,9 +4844,9 @@ type ServerInterface interface {
 	// ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost Clusters:Storage-Nodes:Prepare-Removal
 	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/prepare-removal)
 	ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, params ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPostParams)
-	// ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost Clusters:Storage-Nodes:Start
+	// ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost Clusters:Storage-Nodes:Promote
 	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote)
-	ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
+	ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
 	// ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPost Clusters:Storage-Nodes:Restart
 	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/restart)
 	ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
@@ -9874,8 +9948,8 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesPrepareRemovalApiV2Cluste
 	handler.ServeHTTP(w, r)
 }
 
-// ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost operation middleware
-func (siw *ServerInterfaceWrapper) ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w http.ResponseWriter, r *http.Request) {
+// ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	_ = err
@@ -9899,7 +9973,7 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesStartApiV2ClustersCluster
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w, r, clusterId, storageNodeId)
+		siw.Handler.ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w, r, clusterId, storageNodeId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -13035,7 +13109,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/nics/{nic_id}/iostats", wrapper.ClustersStorageNodesNicsIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdNicsNicIdIostatsGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/prepare-removal", wrapper.ClustersStorageNodesPrepareRemovalProgressApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/prepare-removal", wrapper.ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote", wrapper.ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote", wrapper.ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/restart", wrapper.ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/resume", wrapper.ClustersStorageNodesResumeApiV2ClustersClusterIdStorageNodesStorageNodeIdResumePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/shutdown", wrapper.ClustersStorageNodesShutdownApiV2ClustersClusterIdStorageNodesStorageNodeIdShutdownPost)

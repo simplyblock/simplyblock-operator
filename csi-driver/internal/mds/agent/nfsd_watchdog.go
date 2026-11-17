@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"k8s.io/klog"
@@ -232,6 +233,9 @@ type NFSDWatchdog struct {
 	inEpisode   bool
 	episodeAt   time.Time
 	lastDump    time.Time
+	// stuckSince is episodeAt while an episode lasts, nil otherwise, for
+	// readers beside Tick.
+	stuckSince atomic.Pointer[time.Time]
 }
 
 func (w *NFSDWatchdog) now() time.Time {
@@ -268,6 +272,8 @@ func (w *NFSDWatchdog) Tick() {
 	switch {
 	case (len(stuck) > 0 || notDraining) && !w.inEpisode:
 		w.inEpisode, w.episodeAt = true, w.now()
+		at := w.episodeAt
+		w.stuckSince.Store(&at)
 		w.Log.Warningf("nfsd watchdog: nfsd looks stuck: %s", describeEpisode(stuck, notDraining))
 		w.dumpStacks(root, threads)
 	case (len(stuck) > 0 || notDraining) && w.now().Sub(w.lastDump) >= stackDumpEvery:
@@ -276,6 +282,7 @@ func (w *NFSDWatchdog) Tick() {
 		w.dumpStacks(root, threads)
 	case len(stuck) == 0 && !notDraining && w.inEpisode:
 		w.inEpisode = false
+		w.stuckSince.Store(nil)
 		w.Log.Infof("nfsd watchdog: episode ended after %s", w.now().Sub(w.episodeAt).Round(time.Second))
 	}
 }
@@ -403,4 +410,14 @@ func RunNFSDWatchdog(ctx context.Context, w *NFSDWatchdog, interval time.Duratio
 			w.Tick()
 		}
 	}
+}
+
+// StuckFor reports how long the current stuck episode has lasted, zero outside
+// one. Safe to call beside Tick.
+func (w *NFSDWatchdog) StuckFor() time.Duration {
+	since := w.stuckSince.Load()
+	if since == nil {
+		return 0
+	}
+	return w.now().Sub(*since)
 }

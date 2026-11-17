@@ -349,3 +349,29 @@ func TestTheKeeperReconcilesOneSubsystemAtATime(t *testing.T) {
 		t.Error("two exports of one subsystem were reconciled at once")
 	}
 }
+
+// Regression: 2026-11-12-pnfs-mds-stays-dead-after-state-disk-journal-abort.
+// Every export the keeper holds is checked, and a filesystem that fails statfs
+// fails the check.
+func TestAShutDownExportFilesystemFailsTheCheck(t *testing.T) {
+	k := newKeeper(&reconciles{}, &recordingLog{})
+	a := k.Wrap(&fakeAssembler{})
+	ctx := context.Background()
+	for _, path := range []string{"/exports/a", "/exports/b"} {
+		if err := a.Create(ctx, spec(path, "nqn:lvol:"+path)); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+	}
+	statfs := func(path string) error {
+		if path == "/exports/b" {
+			return errors.New("input/output error")
+		}
+		return nil
+	}
+	if err := k.CheckFilesystems(statfs); err == nil {
+		t.Error("CheckFilesystems passed with /exports/b shut down")
+	}
+	if err := k.CheckFilesystems(func(string) error { return nil }); err != nil {
+		t.Errorf("CheckFilesystems = %v with every filesystem answering, want nil", err)
+	}
+}

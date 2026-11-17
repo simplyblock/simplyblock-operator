@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -30,6 +31,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/freeze/freezerpc"
 	"github.com/simplyblock/atlas/link"
 	"github.com/simplyblock/atlas/placement/placementrpc"
 	atlasprom "github.com/simplyblock/atlas/prometheus"
@@ -80,6 +82,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	nodecontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/node"
+	objectstorecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/objectstore"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 	replicationcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/replication"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/twonode"
@@ -467,6 +470,20 @@ func main() {
 		setupLog.Error(err, "unable to build the placement service")
 		os.Exit(1)
 	}
+	// A striped volume's freeze (atlas-lib/freeze/freezerpc) is relayed from
+	// the CSI controller to the node that stages the volume: the controller has
+	// no link to a node, and both link to here. The registry the relay reaches
+	// nodes through exists once the hub does, so it is read at call time.
+	freezeRelay := freezerpc.NewRelay(func(node string) (grpc.ClientConnInterface, []string, error) {
+		if csiPeers == nil {
+			return nil, nil, errors.New("the CSI link is not running")
+		}
+		p, err := csiPeers.Peer(link.NodePeer(node))
+		if err != nil {
+			return nil, nil, err
+		}
+		return p.Conn(), p.Capabilities, nil
+	})
 	if csiLinkEnabled {
 		var certFile, keyFile string
 		if csiLinkCertPath != "" {
@@ -487,8 +504,11 @@ func main() {
 			NodeServiceAccount:       "simplyblock-csi-node-sa",
 			ControllerServiceAccount: "simplyblock-csi-controller-sa",
 			MDSServiceAccount:        "simplyblock-csi-mds-sa",
-			Register:                 placementServer.Register,
-			Capabilities:             placementrpc.Capabilities(),
+			Register: func(r grpc.ServiceRegistrar) {
+				placementServer.Register(r)
+				freezeRelay.Register(r)
+			},
+			Capabilities: append(placementrpc.Capabilities(), freezerpc.Capabilities()...),
 		})
 		if err != nil {
 			setupLog.Error(err, "unable to set up the CSI link")
@@ -619,6 +639,36 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "NFSExport")
 		os.Exit(1)
 	}
+	// S3Bucket's own delivery step (W-12) also reaches its nodes over
+	// csi-link, the same registry NFSExport assembly uses, because both run
+	// in this manager (design-bucket-provisioning.md §7.1).
+	s3BucketReconciler := &objectstorecontrollers.S3BucketReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("s3bucket-controller"),
+	}
+	if csiPeers != nil {
+		s3BucketReconciler.Registry = csiPeers
+	}
+	if err := s3BucketReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "S3Bucket")
+		os.Exit(1)
+	}
+	// The gateway workload S3Bucket's own mount delivery reaches
+	// (design-objectstore.md), in this manager rather than one of its own
+	// (0005-s3bucket-joins-the-main-operator-manager.md).
+	if err := (&objectstorecontrollers.ObjectStoreReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("objectstore-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ObjectStore")
+		os.Exit(1)
+	}
+	if err := mgr.Add(&objectstorecontrollers.Collector{Client: mgr.GetClient()}); err != nil {
+		setupLog.Error(err, "unable to add the S3Bucket/ObjectStore collector")
+		os.Exit(1)
+	}
 	if err := (&nodecontroller.StorageDeviceReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -742,6 +792,15 @@ func main() {
 		Recorder: mgr.GetEventRecorder("webapi-readiness-watchdog"),
 	}); err != nil {
 		setupLog.Error(err, "unable to add the management API readiness watchdog")
+		os.Exit(1)
+	}
+	// An MDS pod that stays unready after it has served is recreated, since
+	// only a new pod stages its state volume again (mds_watchdog.go).
+	if err := mgr.Add(&driver.MDSReadinessWatchdog{
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorder("mds-readiness-watchdog"),
+	}); err != nil {
+		setupLog.Error(err, "unable to add the pNFS metadata server readiness watchdog")
 		os.Exit(1)
 	}
 	// The site link is the elected replica's, so it runs as a leader-election
@@ -1505,6 +1564,10 @@ func main() {
 				APIClient: webapi.NewClient(),
 			}})
 		setupLog.Info("registered pinned-volume validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-k8s-io-v1-storageclass",
+			&webhook.Admission{Handler: &internalwebhook.StorageClassValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered storageclass validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-v1-pvc-vdo-size",
 			&webhook.Admission{Handler: &internalwebhook.VDOSizeFloorValidator{Client: mgr.GetClient()}})

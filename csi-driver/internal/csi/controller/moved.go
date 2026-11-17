@@ -33,10 +33,12 @@ import (
 	"github.com/simplyblock/csi-driver/internal/controlplane"
 )
 
-// notFound is a control-plane call answered 404.
+// notFound is a control-plane call answered 404, raw or as the client's
+// ErrVolumeNotFound, into which VolumeInfo and DeleteVolume translate it.
 func notFound(err error) bool {
 	var httpErr *controlplane.HTTPError
-	return errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound
+	return errors.Is(err, controlplane.ErrVolumeNotFound) ||
+		(errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound)
 }
 
 // relocatedMark is the relocated-to mark of the PersistentVolume carrying
