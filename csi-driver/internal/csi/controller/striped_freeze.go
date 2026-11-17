@@ -94,8 +94,22 @@ func (cs *Server) underFreeze(ctx context.Context, volumeID string, take func(co
 	}
 	switch len(nodes) {
 	case 0:
-		// Attached nowhere: nothing writes to the members.
-		return take(ctx)
+		// Attached nowhere: nothing writes to the members. An attachment that
+		// appears while they are taken may have a stage behind it, so one there
+		// by the end makes them nothing, and the retry freezes.
+		if err := take(ctx); err != nil {
+			return err
+		}
+		after, err := cs.stagedNodes(ctx, volumeID)
+		if err != nil {
+			return err
+		}
+		if len(after) > 0 {
+			return status.Errorf(codes.Aborted,
+				"striped volume %s was attached to %v while its members were taken without a freeze, so they "+
+					"are not one consistent image", volumeID, after)
+		}
+		return nil
 	case 1:
 	default:
 		return status.Errorf(codes.FailedPrecondition,
@@ -120,7 +134,9 @@ func (cs *Server) underFreeze(ctx context.Context, volumeID string, take func(co
 		return freezeError(volumeID, node, err)
 	}
 	if !frozen {
-		// Attached and not staged: nothing on the node writes to it either.
+		// Attached and not staged, answered by a node plugin from before a
+		// freeze held the lock of a volume it does not stage: nothing on the
+		// node writes to it yet. A current one holds its lock instead.
 		klog.Infof("striped volume %s is attached to %s and not staged there; taking it without a freeze",
 			volumeID, node)
 		return take(ctx)
@@ -190,9 +206,10 @@ func (cs *Server) stagedNodes(ctx context.Context, volumeID string) ([]string, e
 			return nil, status.Errorf(codes.Unavailable, "list VolumeAttachments: %v", err)
 		}
 		for _, va := range attachments {
-			// An attachment being torn down still counts until it is gone: the
-			// node may not have unstaged yet.
-			if (!va.Status.Attached && va.DeletionTimestamp == nil) || seen[va.Spec.NodeName] {
+			// Every attachment counts, whatever its state: one not attached yet
+			// is a stage about to start, and one being torn down a node that may
+			// not have unstaged yet.
+			if seen[va.Spec.NodeName] {
 				continue
 			}
 			seen[va.Spec.NodeName] = true

@@ -148,20 +148,31 @@ func New(cfg Config) *Holds {
 	return &Holds{cfg: cfg, holds: map[string]*hold{}}
 }
 
-// Acquire is what a Freeze takes before it suspends anything, and the release
-// it answers is called once, when the hold ends however it ends. A node uses it
-// for its per-volume lock, so nothing stages, unstages, or grows the volume
-// while it is suspended. Nil acquires nothing.
-type Acquire func(ctx context.Context) (release func(), err error)
+// Acquire is what a Freeze takes before it suspends anything: whatever the
+// hold keeps for as long as it lasts, and the device it suspends, which is
+// decided only once that is held. The release it answers is called once, when
+// the hold ends however it ends.
+//
+// A node acquires its per-volume lock, so nothing stages, unstages, or grows the
+// volume while it is held, and then reads which device the volume is staged
+// as. An empty device suspends nothing and holds only what was acquired, which
+// is how a volume not staged yet is kept from being staged under a snapshot.
+type Acquire func(ctx context.Context) (device string, release func(), err error)
 
-// Freeze suspends device under key for at most deadline, capped by the host's
-// maximum, and returns once it is suspended.
+// OnDevice acquires nothing and names device, for a caller that holds nothing
+// else.
+func OnDevice(device string) Acquire {
+	return func(context.Context) (string, func(), error) { return device, func() {}, nil }
+}
+
+// Freeze suspends the device acquire names under key for at most deadline,
+// capped by the host's maximum, and returns once it is suspended.
 //
 // A Freeze under the token of the hold already in place is that hold and
 // changes nothing, which is what a retried call needs. Under another token it
 // is ErrHeld, and the device is not suspended twice.
 func (h *Holds) Freeze(
-	ctx context.Context, key, device, token string, deadline time.Duration, acquire Acquire,
+	ctx context.Context, key, token string, deadline time.Duration, acquire Acquire,
 ) error {
 	if token == "" {
 		return errors.New("freeze: a hold needs a token")
@@ -174,7 +185,7 @@ func (h *Holds) Freeze(
 		}
 		return ErrHeld
 	}
-	hd := &hold{token: token, device: device, pending: true}
+	hd := &hold{token: token, pending: true}
 	h.holds[key] = hd
 	h.mu.Unlock()
 
@@ -187,14 +198,13 @@ func (h *Holds) Freeze(
 		return err
 	}
 
-	release := func() {}
-	if acquire != nil {
-		r, err := acquire(ctx)
-		if err != nil {
-			return fail(fmt.Errorf("freeze %s: %w", key, err))
-		}
-		release = r
+	device, release, err := acquire(ctx)
+	if err != nil {
+		return fail(fmt.Errorf("freeze %s: %w", key, err))
 	}
+	h.mu.Lock()
+	hd.device = device
+	h.mu.Unlock()
 
 	if deadline <= 0 || deadline > h.cfg.MaxDeadline {
 		deadline = h.cfg.MaxDeadline
@@ -204,7 +214,7 @@ func (h *Holds) Freeze(
 		return fail(err)
 	}
 
-	if err := h.cfg.Mapper.Suspend(ctx, device); err != nil {
+	if err := h.suspend(ctx, device); err != nil {
 		// A suspend that failed partway may still have taken effect, and
 		// resuming a device that is not suspended is harmless, so it is resumed
 		// rather than guessed about.
@@ -295,7 +305,7 @@ func (h *Holds) resume(key string, hd *hold) error {
 	var err error
 	for range resumeAttempts {
 		ctx, cancel := context.WithTimeout(context.Background(), defaultResumeTimeout)
-		err = h.cfg.Mapper.Resume(ctx, hd.device)
+		err = h.resumeDevice(ctx, hd.device)
 		cancel()
 		if err == nil {
 			break
@@ -310,6 +320,22 @@ func (h *Holds) resume(key string, hd *hold) error {
 		h.cfg.Logger.Info("thawed", "volume", key, "device", hd.device, "frozen", h.cfg.Now().Sub(hd.since))
 	}
 	return h.remove(key)
+}
+
+// suspend suspends device, and nothing for a hold without one.
+func (h *Holds) suspend(ctx context.Context, device string) error {
+	if device == "" {
+		return nil
+	}
+	return h.cfg.Mapper.Suspend(ctx, device)
+}
+
+// resumeDevice resumes device, and nothing for a hold without one.
+func (h *Holds) resumeDevice(ctx context.Context, device string) error {
+	if device == "" {
+		return nil
+	}
+	return h.cfg.Mapper.Resume(ctx, device)
 }
 
 // Recover resumes every device a previous process recorded as frozen. The

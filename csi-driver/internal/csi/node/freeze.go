@@ -55,24 +55,42 @@ func (ns *Server) RecoverFreezes(ctx context.Context) {
 	}
 }
 
-// Freeze suspends the striped device of the volume handle names, for at most
-// deadline. It reports false for a volume this node does not stage, which has
-// no writer here and nothing to suspend.
+// Freeze holds the volume handle names for at most deadline: its lock, so that
+// nothing stages, unstages, publishes, or grows it meanwhile, and, when it is
+// staged here as a stripe, its device suspended. A volume attached here and not
+// staged yet has no writer, and holding its lock is what keeps a stage from
+// starting under the snapshot. Whether it is staged is read once the lock is
+// held, since a stage in progress holds it and writes its record as it goes.
 func (ns *Server) Freeze(ctx context.Context, handle, token string, deadline time.Duration) (bool, error) {
-	device, staged, err := ns.stripedDevice(handle)
-	if err != nil || !staged {
-		return false, err
+	acquire := func(ctx context.Context) (string, func(), error) {
+		release, err := lockWithin(ctx, ns.volumeLocks, handle)
+		if err != nil {
+			return "", nil, err
+		}
+		device, staged, err := ns.stripedDevice(handle)
+		if err != nil {
+			release()
+			return "", nil, err
+		}
+		if !staged {
+			device = ""
+		}
+		return device, release, nil
 	}
-	acquire := func(ctx context.Context) (func(), error) { return lockWithin(ctx, ns.volumeLocks, handle) }
 	start := time.Now()
-	err = ns.freezes.Freeze(ctx, handle, device, token, deadline, acquire)
-	switch {
-	case errors.Is(err, freeze.ErrHeld):
-		return false, status.Error(codes.Aborted, err.Error())
-	case err != nil:
+	err := ns.freezes.Freeze(ctx, handle, token, deadline, acquire)
+	if err != nil {
+		if errors.Is(err, freeze.ErrHeld) {
+			return false, status.Error(codes.Aborted, err.Error())
+		}
+		// The stack record's own refusals keep their code; a lock not taken in
+		// time, or a suspend that failed, is worth a retry.
+		if s, ok := status.FromError(err); ok {
+			return false, s.Err()
+		}
 		return false, status.Errorf(codes.Unavailable, "freeze %s: %v", handle, err)
 	}
-	klog.Infof("froze striped volume %s (%s) in %v, for at most %v", handle, device, time.Since(start), deadline)
+	klog.Infof("froze striped volume %s in %v, for at most %v", handle, time.Since(start), deadline)
 	return true, nil
 }
 

@@ -90,12 +90,56 @@ func TestAFrozenVolumeHoldsItsLock(t *testing.T) {
 	unlock()
 }
 
-// A volume this node does not stage has no writer here: nothing is suspended.
-func TestFreezeOfAVolumeNotStagedHereFreezesNothing(t *testing.T) {
+// Regression: 2026-11-17-snapshot-under-a-starting-stage (PR #922 review). A
+// volume attached to this node and not staged here has no writer yet, and the
+// node answered that nothing was frozen, so a NodeStage that started while the
+// members were snapshotted wrote under a snapshot reported consistent. The
+// freeze holds the volume's lock instead, suspending nothing, so a stage waits
+// for the thaw.
+func TestFreezeOfAVolumeNotStagedHereHoldsItsStage(t *testing.T) {
 	ns, m := freezingServer(t)
-	frozen, err := ns.Freeze(context.Background(), pvcTestHandle+":s3", "tok", time.Second)
-	if err != nil || frozen || len(m.calls) != 0 {
-		t.Errorf("Freeze = %v, %v with %v; want nothing frozen", frozen, err, m.calls)
+	handle := pvcTestHandle + ":s3"
+	frozen, err := ns.Freeze(context.Background(), handle, "tok", time.Second)
+	if err != nil || !frozen || len(m.calls) != 0 {
+		t.Fatalf("Freeze = %v, %v with %v; want a hold that suspends nothing", frozen, err, m.calls)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := lockWithin(ctx, ns.volumeLocks, handle); err == nil {
+		t.Fatal("a stage could start while the volume was held for a snapshot")
+	}
+	if held, err := ns.Thaw(context.Background(), handle, "tok"); err != nil || !held {
+		t.Fatalf("Thaw = %v, %v", held, err)
+	}
+}
+
+// A stage already running when the freeze arrives holds the lock and may not
+// have written its record yet. Whether the volume is staged is decided once the
+// freeze has the lock, so a stage that finishes first is frozen as staged.
+func TestAFreezeWaitingOnAStageFreezesWhatTheStageBuilt(t *testing.T) {
+	ns, m := freezingServer(t)
+	handle := pvcTestHandle + ":s3"
+	unlock := ns.volumeLocks.Lock(handle)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := ns.Freeze(context.Background(), handle, "tok", 5*time.Second)
+		done <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	writeStripedRecord(t, ns.stack, handle, []string{pvcTestLvol, memberB, memberC}, true)
+	unlock()
+
+	if err := <-done; err != nil {
+		t.Fatalf("Freeze: %v", err)
+	}
+	if _, err := ns.Thaw(context.Background(), handle, "tok"); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.calls) == 0 || !strings.HasPrefix(m.calls[0], "suspend ") {
+		t.Errorf("calls = %v, want the device the stage built suspended", m.calls)
 	}
 }
 
