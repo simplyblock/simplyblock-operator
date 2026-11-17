@@ -1,6 +1,6 @@
 # Design Document: Fencing a Superseded Replication Source
 
-**Status:** Draft  
+**Status:** Phase 1 Implemented  
 **Author:** Ebrahim Savari  
 **Date:** 2026-11-17  
 **Test Plan:** [`tests/test-plan-volumegroupreplicationops.md`](../tests/test-plan-volumegroupreplicationops.md)
@@ -11,7 +11,7 @@
 
 | Phase                    | Status  | Scope                                       | Target                                                     |
 |--------------------------|---------|---------------------------------------------|------------------------------------------------------------|
-| **Phase 1** (§4, §5, §6) | Planned | `VolumeGroupReplicationOps`, action `Fence` | A consistency group, named by its `VolumeGroupReplication` |
+| **Phase 1** (§4, §5, §6) | Implemented | `VolumeGroupReplicationOps`, action `Fence` | A consistency group, named by its `VolumeGroupReplication` |
 | **Phase 2** (§5.4)       | Planned | `PersistentVolumeOps`, action `Fence`       | One volume, named by its `PersistentVolume`                |
 
 Each phase ships on its own. Phase 1 covers every application protected as a
@@ -255,7 +255,7 @@ group demote with `superseded=true`. The control plane answers 204 once every me
 is fenced and demoted, and an error otherwise. There is no "still converging"
 answer: a superseded demote takes no final snapshot, so it has nothing to wait for.
 
-A connection error or a 5xx is retried with backoff: right after a site
+A connection error or a 5xx is retried every 15 seconds: right after a site
 reconnects, its storage nodes may not answer yet. A 4xx other than 409 fails the
 operation. A 409 is retried.
 
@@ -286,8 +286,8 @@ Running / Validating ──── VGR or content missing, handle malformed ─�
    │ handle copied to status.groupHandle
    ▼
 Running / Fencing ─────── 4xx other than 409 ─────────────────────────► Failed
-   │ 204                   connection error, 5xx, 409: requeue with
-   │                       backoff, until the step deadline ───────────► Failed
+   │ 204                   connection error, 5xx, 409: requeue every
+   │                       15 s, until the step deadline ───────────► Failed
    ▼
 Running / Reporting       members read (a failed read is reported in
    │                      the message, not as a failure)
@@ -303,7 +303,7 @@ any step repeats at most one call.
 |-----------------------------------------------------|------------------------|-----------------------------------------------------------------------------------|
 | Object deleted while running                        | any                    | The controller stops. The control plane keeps the state of the last accepted call |
 | Operator restart                                    | any                    | Resumes from `status.step`                                                        |
-| Site's control plane unreachable                    | `Fencing`              | Requeued with backoff until the deadline, then `Failed`                           |
+| Site's control plane unreachable                    | `Fencing`              | Requeued every 15 seconds until the deadline, then `Failed`                           |
 | `VolumeGroupReplication` deleted after `Validating` | `Fencing`, `Reporting` | No effect: the operation acts on `status.groupHandle`                             |
 
 ---
@@ -362,7 +362,7 @@ with the driver.
 | `VolumeGroupReplication` not found                              | `Get` returns not found     | `Failed`, message names it                               |
 | csi-addons kinds not served                                     | `Get` returns no kind match | `Failed`, message names the kind                         |
 | Content object missing or its handle not `cg:<cluster>:<group>` | handle parse                | `Failed`, message quotes the handle                      |
-| Control plane unreachable, 5xx, or 409                          | client error                | Requeue with backoff. `Failed` at the `Fencing` deadline |
+| Control plane unreachable, 5xx, or 409                          | client error                | Requeue every 15 seconds. `Failed` at the `Fencing` deadline |
 | Control plane answers 400 (a sync-replication cluster) or 404   | status code                 | `Failed`, message carries the control plane's detail     |
 | Member list unreadable after the fence                          | client error                | `Succeeded`, the message says the members were not read  |
 
@@ -375,7 +375,7 @@ Events land on the `VolumeGroupReplicationOps` object.
 | Reason          | Type    | Emitted when                                                                                   |
 |-----------------|---------|------------------------------------------------------------------------------------------------|
 | `GroupFenced`   | Normal  | The control plane accepted the fence                                                           |
-| `FenceRetrying` | Warning | The control plane could not be reached or refused with a retryable code. Once per backoff step |
+| `FenceRetrying` | Warning | The control plane could not be reached or refused with a retryable code. Once per distinct reason |
 | `FenceFailed`   | Warning | The operation reached `Failed`                                                                 |
 
 | Metric                                           | Type      | Labels                           | Meaning                                      |

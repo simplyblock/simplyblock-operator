@@ -81,6 +81,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	nodecontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/node"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
+	replicationcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/replication"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/twonode"
 	twonodecp "github.com/simplyblock/simplyblock-operator/internal/controllers/twonode/cpadapter"
 	volumecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/volume"
@@ -1266,6 +1267,32 @@ func main() {
 		Recorder: mgr.GetEventRecorder("volumegroupsnapshotops-controller"),
 	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeGroupSnapshotOps")
+		os.Exit(1)
+	}
+	// The Fence action of a VolumeGroupReplicationOps (design-
+	// volumegroupreplicationops.md) reaches this site's control plane the way the
+	// switchover does, and reads the csi-addons objects uncached, so it starts
+	// whether or not they are served.
+	fenceBackend := &switchover.Backend{
+		Endpoint:   controlplanecontroller.NewEndpointResolver(mgr.GetClient(), operatorNamespace),
+		Credential: controlplanecontroller.NewCredentialResolver(mgr.GetClient(), operatorNamespace),
+	}
+	if cfg, err := webapi.ControlPlaneConfig(); err == nil {
+		fenceBackend.Transport = cfg.Transport
+	}
+	if err := (&replicationcontrollers.VolumeGroupReplicationOpsReconciler{
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Recorder:  mgr.GetEventRecorder("volumegroupreplicationops-controller"),
+		ControlPlane: func(ctx context.Context) (replicationcontrollers.GroupFencer, error) {
+			c, err := fenceBackend.Client(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return c, nil
+		},
+	}).SetupWithManager(ctrlMgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "VolumeGroupReplicationOps")
 		os.Exit(1)
 	}
 	// The TestFailover controller watches OCM ManifestWork, which only the hub

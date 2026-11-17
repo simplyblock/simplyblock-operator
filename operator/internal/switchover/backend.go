@@ -51,6 +51,13 @@ func (b *Backend) client(ctx context.Context) (*controlplane.Client, error) {
 	return controlplane.New(controlplane.Config{Endpoint: endpoint, Token: token, Transport: b.Transport})
 }
 
+// Client builds the client of this site's control plane for one call, for a
+// caller outside the switchover that reaches the same control plane with the
+// same credential (the Fence action of a VolumeGroupReplicationOps).
+func (b *Backend) Client(ctx context.Context) (*controlplane.Client, error) {
+	return b.client(ctx)
+}
+
 // Volume reads the volume, for the store its move is serialized on.
 func (b *Backend) Volume(ctx context.Context, h lvol.VolumeHandle) (lvol.Volume, error) {
 	c, err := b.client(ctx)

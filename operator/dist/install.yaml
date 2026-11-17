@@ -18640,6 +18640,178 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+  name: volumegroupreplicationops.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: VolumeGroupReplicationOps
+    listKind: VolumeGroupReplicationOpsList
+    plural: volumegroupreplicationops
+    shortNames:
+    - vgrops
+    singular: volumegroupreplicationops
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.volumeGroupReplicationRef
+      name: GroupReplication
+      type: string
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.step.state
+      name: Step
+      type: string
+    - jsonPath: .status.message
+      name: Message
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          VolumeGroupReplicationOps is a one-shot operation on the consistency group of a
+          VolumeGroupReplication on this site. It drives its action to completion, records
+          the result, and is then inert. The Fence action fences every member of the group
+          and stops its replication, for a site whose application was failed over to
+          another site.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              VolumeGroupReplicationOpsSpec defines the requested operation. The whole spec
+              is immutable: the object is a request.
+            properties:
+              action:
+                description: |-
+                  Action is the operation to perform. Fence fences every member of the group
+                  on this site and stops its replication, without taking a final snapshot.
+                  Use it on a site whose application was failed over to another site while
+                  this one was unreachable.
+                enum:
+                - Fence
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              volumeGroupReplicationRef:
+                description: |-
+                  VolumeGroupReplicationRef names the VolumeGroupReplication, in this
+                  namespace, whose consistency group the operation acts on. A name that does
+                  not resolve when the operation runs fails it.
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+            required:
+            - action
+            - volumeGroupReplicationRef
+            type: object
+          status:
+            description: VolumeGroupReplicationOpsStatus holds the observed state
+              of the operation.
+            properties:
+              completedAt:
+                description: CompletedAt is when the operation finished, successfully
+                  or not.
+                format: date-time
+                type: string
+              groupHandle:
+                description: |-
+                  GroupHandle is the consistency group the operation acts on,
+                  cg:<cluster>:<group>, read from the VolumeGroupReplication when the
+                  operation started. Later steps act on this value, so deleting the
+                  VolumeGroupReplication does not change it.
+                type: string
+              members:
+                description: Members lists the group's member volumes after the fence.
+                items:
+                  description: FencedMemberStatus is one member volume of the fenced
+                    group.
+                  properties:
+                    fenced:
+                      description: Fenced reports that the member is fenced and no
+                        longer replicates.
+                      type: boolean
+                    volumeID:
+                      description: VolumeID is the member's volume ID on this site's
+                        control plane.
+                      type: string
+                  required:
+                  - volumeID
+                  type: object
+                type: array
+              message:
+                description: Message is the reason the phase is what it is.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the spec generation this status
+                  was computed from.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the high-level lifecycle phase.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                type: string
+              startedAt:
+                description: StartedAt is when the operation began.
+                format: date-time
+                type: string
+              step:
+                description: Step is the step the operation is in, and the deadline
+                  it expires at.
+                properties:
+                  deadline:
+                    format: date-time
+                    type: string
+                  state:
+                    description: VolumeGroupReplicationOpsStep is one step of a running
+                      operation.
+                    enum:
+                    - Validating
+                    - Fencing
+                    - Reporting
+                    - Completed
+                    type: string
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: volumegroupsnapshotops.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -19539,6 +19711,13 @@ rules:
   - update
   - watch
 - apiGroups:
+  - replication.storage.openshift.io
+  resources:
+  - volumegroupreplicationcontents
+  - volumegroupreplications
+  verbs:
+  - get
+- apiGroups:
   - snapshot.storage.k8s.io
   resources:
   - volumesnapshotclasses
@@ -19697,6 +19876,7 @@ rules:
   - stretchedclusters/status
   - tasks/status
   - testfailovers/status
+  - volumegroupreplicationops/status
   - volumegroupsnapshotops/status
   - volumemigrations/status
   verbs:
@@ -19731,6 +19911,7 @@ rules:
   - storagefenceremediationtemplates
   - storagegroupbackups
   - storagenodesets
+  - volumegroupreplicationops
   - volumegroupsnapshotops
   verbs:
   - get

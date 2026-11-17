@@ -1,7 +1,7 @@
 # Test Plan: Fencing a Superseded Replication Source
 
 Related design: [`designs/design-volumegroupreplicationops.md`](../designs/design-volumegroupreplicationops.md)  
-Harness: [`internal/controllers/replication`](../../internal/controllers/replication) (planned), [`atlas-lib/controlplane`](../../../atlas-lib/controlplane)
+Harness: [`internal/controllers/replication`](../../internal/controllers/replication), [`atlas-lib/controlplane`](../../../atlas-lib/controlplane)
 
 Scope: the operator, the CSI driver, and the Kubernetes surface of this
 repository. Control-plane (`sbcli`) behavior is a dependency, faked at the
@@ -23,7 +23,7 @@ reconciler against a fake `client.Client` and a fake control-plane client.
 
 ### Control-Plane Client (design §5.2)
 
-File: `atlas-lib/controlplane/groupreplication_test.go`, `atlas-lib/controlplane/replication_test.go`
+File: `atlas-lib/controlplane/groupreplication_test.go`, `atlas-lib/controlplane/replication_test.go`, `atlas-lib/controlplane/consistencygroups_members_test.go`
 
 | #    | Scenario                                                                            | Type     | Test                                            |
 |------|-------------------------------------------------------------------------------------|----------|-------------------------------------------------|
@@ -31,6 +31,7 @@ File: `atlas-lib/controlplane/groupreplication_test.go`, `atlas-lib/controlplane
 | U-02 | `FenceGroup` returns a `*StatusError` carrying 202, 400, or 500                     | Negative | `TestFenceGroupAnythingButDoneIsAnError`        |
 | U-03 | `FenceVolume` posts the volume demote with `superseded=true` and returns nil on 204 | Positive | `TestClientFenceVolumeOrdersASupersededDemote`  |
 | U-04 | `FenceVolume` returns an error on 202, 400, or 500                                  | Negative | `TestClientFenceVolumeAnythingButDoneIsAnError` |
+| U-26 | `ConsistencyGroupMembers` lists the current members only, and an empty group as an empty list | Positive | `TestConsistencyGroupMembersListsTheCurrentOnes` |
 
 ### Resolving the Group (design §5.1)
 
@@ -38,12 +39,12 @@ File: `internal/controllers/replication/volumegroupreplicationops_controller_tes
 
 | #    | Scenario                                                                                                         | Type     | Test |
 |------|------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-05 | The `VolumeGroupReplication` and its content resolve to `cg:<cluster>:<group>`, copied into `status.groupHandle` | Positive | —    |
-| U-06 | The `VolumeGroupReplication` does not exist → `Failed`, message names it, no control-plane call                  | Negative | —    |
-| U-07 | The content object is missing → `Failed`, no control-plane call                                                  | Negative | —    |
-| U-08 | The handle is not `cg:<cluster>:<group>` (a volume handle, empty) → `Failed`, message quotes it                  | Negative | —    |
-| U-09 | The csi-addons kind is not served → `Failed`, message names the kind                                             | Negative | —    |
-| U-10 | `status.groupHandle` already set → the `VolumeGroupReplication` is not read again                                | Positive | —    |
+| U-05 | The `VolumeGroupReplication` and its content resolve to `cg:<cluster>:<group>`, copied into `status.groupHandle` | Positive | `TestFence_ResolvesTheGroupAndFencesIt` |
+| U-06 | The `VolumeGroupReplication` does not exist → `Failed`, message names it, no control-plane call                  | Negative | `TestFence_UnresolvableTargetFails` |
+| U-07 | The content object is missing → `Failed`, no control-plane call                                                  | Negative | `TestFence_UnresolvableTargetFails` |
+| U-08 | The handle is not `cg:<cluster>:<group>` (a volume handle, empty) → `Failed`, message quotes it                  | Negative | `TestFence_UnresolvableTargetFails` |
+| U-09 | The csi-addons kind is not served → `Failed`, message names the kind                                             | Negative | `TestFence_UnresolvableTargetFails` |
+| U-10 | `status.groupHandle` already set → the `VolumeGroupReplication` is not read again                                | Positive | `TestFence_ActsOnTheRecordedHandle` |
 
 ### Ordering the Fence (design §5.2, §6)
 
@@ -51,23 +52,23 @@ File: `internal/controllers/replication/volumegroupreplicationops_controller_tes
 
 | #    | Scenario                                                                         | Type     | Test |
 |------|----------------------------------------------------------------------------------|----------|------|
-| U-11 | 204 → `Reporting`, then `Succeeded` / `Completed`, `GroupFenced` event           | Positive | —    |
-| U-12 | Connection error → stays `Fencing`, requeued, `FenceRetrying` event              | Negative | —    |
-| U-13 | 5xx and 409 → stays `Fencing`, requeued                                          | Negative | —    |
-| U-14 | 400 and 404 → `Failed`, message carries the detail, `FenceFailed` event          | Negative | —    |
-| U-15 | `Fencing` past its deadline → `Failed`                                           | Boundary | —    |
-| U-16 | `Fencing` one second before its deadline and a retryable error → still `Fencing` | Boundary | —    |
-| U-17 | Restart in `Fencing` → one more call, then `Succeeded`                           | Positive | —    |
-| U-18 | A terminal operation is not requeued and makes no call                           | Positive | —    |
-| U-19 | Every status write sets `observedGeneration`                                     | Positive | —    |
+| U-11 | 204 → `Reporting`, then `Succeeded` / `Completed`, `GroupFenced` event           | Positive | `TestFence_ResolvesTheGroupAndFencesIt` |
+| U-12 | Connection error → stays `Fencing`, requeued, `FenceRetrying` event              | Negative | `TestFence_RetryableAnswersKeepFencing` |
+| U-13 | 5xx and 409 → stays `Fencing`, requeued                                          | Negative | `TestFence_RetryableAnswersKeepFencing` |
+| U-14 | 400 and 404 → `Failed`, message carries the detail, `FenceFailed` event          | Negative | `TestFence_PermanentRefusalFails` |
+| U-15 | `Fencing` past its deadline → `Failed`                                           | Boundary | `TestFence_StepDeadline` |
+| U-16 | `Fencing` one second before its deadline and a retryable error → still `Fencing` | Boundary | `TestFence_StepDeadline` |
+| U-17 | Restart in `Fencing` → one more call, then `Succeeded`                           | Positive | `TestFence_ActsOnTheRecordedHandle` |
+| U-18 | A terminal operation is not requeued and makes no call                           | Positive | `TestFence_TerminalOperationIsInert` |
+| U-19 | Every status write sets `observedGeneration`                                     | Positive | `TestFence_StatusCarriesObservedGeneration` |
 
 ### Reporting the Members (design §5.3)
 
 | #    | Scenario                                                                           | Type     | Test |
 |------|------------------------------------------------------------------------------------|----------|------|
-| U-20 | The member list is recorded with `fenced: true` per member                         | Positive | —    |
-| U-21 | The member list cannot be read → `Succeeded`, `members` empty, the message says so | Negative | —    |
-| U-22 | A group with no members → `Succeeded`, `members` empty                             | Boundary | —    |
+| U-20 | The member list is recorded with `fenced: true` per member                         | Positive | `TestFence_ResolvesTheGroupAndFencesIt` |
+| U-21 | The member list cannot be read → `Succeeded`, `members` empty, the message says so | Negative | `TestFence_MemberReport` |
+| U-22 | A group with no members → `Succeeded`, `members` empty                             | Boundary | `TestFence_MemberReport` |
 
 ### Admission (design §4.3)
 
@@ -157,7 +158,7 @@ fence then marks every member demoted and cancels the transfer, and Ramen's next
 
 | #           | Gap                                        | Reason                                                |
 |-------------|--------------------------------------------|-------------------------------------------------------|
-| U-05 … U-25 | Reconciler and admission scenarios         | Phase 1 not implemented                               |
+| U-23 … U-25 | Admission scenarios | Need the envtest CEL harness of the operator package |
 | I-01 … I-04 | Integration scenarios                      | Phase 1 not implemented                               |
 | E-02, E-03  | The order as an object and through the hub | Phase 1 not implemented. E-03 also needs the hub side |
 | —           | A third-party detector as the orderer      | It creates the same object as E-02                    |
