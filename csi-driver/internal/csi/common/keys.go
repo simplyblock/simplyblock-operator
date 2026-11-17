@@ -64,6 +64,13 @@ const (
 	CtxStripeMembers    = "stripeMembers"
 	CtxStripeChunkBytes = "stripeChunkBytes"
 
+	// CtxVDOLogicalBytes is the size the node creates a client-side compressed
+	// or deduplicated volume's VDO volume at, the capacity the volume reports,
+	// written by the controller service. The pool under it is larger by what VDO
+	// and LVM keep for themselves. A volume created before it existed carries
+	// none, and its VDO volume was sized by VDO.
+	CtxVDOLogicalBytes = "vdoLogicalBytes"
+
 	// The topology keys the node service reports and the controller service
 	// places against. The beta zone key is still read because clusters upgraded
 	// from it keep the label.

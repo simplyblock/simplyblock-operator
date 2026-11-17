@@ -39,6 +39,16 @@ func lvmBackedBytes(bytes int64) int64 {
 	return alignToGiBBytes(bytes + lvm.PhysicalVolumeOverheadBytes)
 }
 
+// vdoBackedBytes is the size of the control-plane volume under a client-side
+// compressed or deduplicated volume that reports bytes: bytes, plus what LVM
+// keeps of the physical volume, plus what VDO keeps of its pool
+// (lvm.VDOOverheadBytes), in whole GiB. The node creates the VDO volume at
+// exactly bytes (csicommon.CtxVDOLogicalBytes), so the pool behind it holds
+// all of it even when nothing compresses or deduplicates.
+func vdoBackedBytes(bytes int64) int64 {
+	return alignToGiBBytes(bytes + lvm.PhysicalVolumeOverheadBytes + lvm.VDOOverheadBytes(bytes))
+}
+
 // stagedUnderLVM reports whether the volume volumeID names is one the node
 // stages under an LVM stack, a client-side compressed or deduplicated one, read
 // from its PersistentVolume's attributes: an expansion receives no volume

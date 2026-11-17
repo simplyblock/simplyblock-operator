@@ -83,7 +83,7 @@ const (
 	// shapePlain with the dmLinear indirection above the fabric, so a volume's
 	// namespace can move to another subsystem under a live consumer
 	// (consistency-group co-location). Chosen for a fresh stage when the node
-	// runs with SPDKCSI_DM_INDIRECTION, and afterwards by the stack record:
+	// runs with SPDKCSI_DM_INDIRECTION, and afterward by the stack record:
 	// a volume never gains or loses the layer under a staged consumer.
 	shapeIndirectRawBlock
 	shapeIndirectPlain
@@ -188,12 +188,24 @@ func wantsVDO(vc map[string]string) bool {
 func vdoOptions(vc map[string]string) plans.LogicalVolumeOptions {
 	return plans.LogicalVolumeOptions{
 		Definition: lvm.LogicalVolumeDefinition{
-			Compression:   boolFromContext(vc[kube.ParamClientCompression]),
-			Deduplication: boolFromContext(vc[kube.ParamClientDeduplication]),
+			Compression:      boolFromContext(vc[kube.ParamClientCompression]),
+			Deduplication:    boolFromContext(vc[kube.ParamClientDeduplication]),
+			LogicalSizeBytes: vdoLogicalBytes(vc),
 		},
 		PoolName:   vdoPoolName,
 		Capability: volstack.Capability(kube.LabelVDOCapable),
 	}
+}
+
+// vdoLogicalBytes is the size the controller asked the VDO volume to be
+// (csicommon.CtxVDOLogicalBytes), or zero for a context from before it named
+// one, which leaves VDO to size the volume as it always did.
+func vdoLogicalBytes(vc map[string]string) int64 {
+	n, err := strconv.ParseInt(strings.TrimSpace(vc[csicommon.CtxVDOLogicalBytes]), 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // stackVolume is the volume as the filesystem layer needs it described.

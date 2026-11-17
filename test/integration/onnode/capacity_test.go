@@ -14,6 +14,8 @@ package onnode
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/simplyblock/atlas/lvm"
@@ -112,4 +114,65 @@ func TestVDOStackRecordsWhatItKeepsOfItsNamespace(t *testing.T) {
 	out, _ := h.node.manager.Run(ctx, "lvs", "--units", "b", "-o", "lv_name,lv_size,data_percent,vdo_operating_mode",
 		h.volume.VolumeGroup())
 	t.Logf("lvs:\n%s", out)
+}
+
+// Regression: 2026-11-17-vdo-capacity-underreported (PR #922 review). A VDO
+// volume sized by VDO was a third short of what it reported. The driver now
+// names the logical size and makes the pool larger by lvm.VDOOverheadBytes, and
+// this is that sizing on a real kernel: the largest volume the driver would put
+// on this namespace comes up at exactly its logical size, with at least that
+// much physical space free behind it, so it cannot run out of space before its
+// device is full even when nothing compresses.
+func TestVDOStackHoldsItsLogicalSizeInPhysicalSpace(t *testing.T) {
+	requireLVM(t)
+	requireVDO(t)
+	h := newHarness(t)
+	ctx, cancel := context.WithTimeout(context.Background(), stackTimeout)
+	defer cancel()
+
+	h.blank(ctx, h.targets[0])
+	size := h.namespaceBytes(ctx, t, h.targets[0])[0]
+
+	// The controller's rule (vdoBackedBytes), solved for the largest logical
+	// size whose pool fits this namespace.
+	const gib = int64(1) << 30
+	var logical int64
+	for l := gib; ; l += gib {
+		pool := (l + lvm.PhysicalVolumeOverheadBytes + lvm.VDOOverheadBytes(l) + gib - 1) / gib * gib
+		if pool > size {
+			break
+		}
+		logical = l
+	}
+	if logical == 0 {
+		t.Skipf("a %d-byte namespace holds no VDO volume the driver would size", size)
+	}
+
+	plan := h.node.LVMRawBlock(h.targets[0].Connection(), h.volume, plans.LogicalVolumeOptions{
+		Definition: lvm.LogicalVolumeDefinition{Deduplication: true, Compression: true, LogicalSizeBytes: logical},
+		PoolName:   vdoPoolName,
+	})
+	art := h.up(ctx, plan)
+	t.Cleanup(func() { h.down(context.WithoutCancel(ctx), plan) })
+
+	if got := int64(art.Devices[0].SizeBytes); got != logical {
+		t.Errorf("the VDO volume is %d bytes, want exactly the %d it was created for", got, logical)
+	}
+	out := lastLine(h.run(ctx, t, "lvs", "--noheadings", "--units", "b", "--nosuffix", "-o", "lv_size,data_percent",
+		h.volume.VolumeGroup()+"/"+vdoPoolName))
+	fields := strings.Fields(out)
+	if len(fields) != 2 {
+		t.Fatalf("read the pool's size and use: %q", out)
+	}
+	poolBytes, err1 := strconv.ParseInt(fields[0], 10, 64)
+	used, err2 := strconv.ParseFloat(fields[1], 64)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("parse the pool's size and use from %q: %v, %v", out, err1, err2)
+	}
+	free := int64(float64(poolBytes) * (100 - used) / 100)
+	t.Logf("namespace %d bytes, logical %d, pool %d with %.2f%% kept, %d free", size, logical, poolBytes, used, free)
+	if free < logical {
+		t.Errorf("the pool has %d bytes free behind a %d-byte volume: incompressible data would fill it first",
+			free, logical)
+	}
 }

@@ -157,7 +157,9 @@ equal share of the reported capacity plus that extent, rounded up to a whole GiB
 and the striped device is never smaller than the reported capacity. A 10GiB
 volume of width 2 has two members of 6GiB. An expansion sizes the members the
 same way. A client-side compressed or deduplicated volume, staged under LVM as
-well, is created and expanded one extent larger than it reports in the same way.
+well, is padded by that extent and by VDO's own metadata, and its VDO volume is
+created at exactly the reported size (design-client-side-vdo-compression.md,
+*Sizing*).
 
 **QoS.** The class's ceilings are divided evenly across the members (rounded
 up), so the volume as a whole is held to the class's numbers. The volume context
