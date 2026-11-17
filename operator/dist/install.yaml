@@ -21304,6 +21304,29 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: simplyblock-operator-system
+      path: /validate-storage-k8s-io-v1-storageclass
+  failurePolicy: Fail
+  matchConditions:
+  - expression: has(object.metadata.labels) && 'storage.simplyblock.io/pool' in object.metadata.labels
+    name: has-storage-pool-label
+  name: storageclass-validator.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.k8s.io
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - storageclasses
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
       path: /validate-storage-simplyblock-io-v1alpha2-clusterdeploymentconfig
   failurePolicy: Fail
   name: vclusterdeploymentconfig.simplyblock.io

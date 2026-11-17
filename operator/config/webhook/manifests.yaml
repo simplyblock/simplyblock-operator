@@ -74,6 +74,26 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
+      path: /validate-storage-k8s-io-v1-storageclass
+  failurePolicy: Fail
+  name: storageclass-validator.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.k8s.io
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - storageclasses
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
       path: /validate-storage-simplyblock-io-v1alpha2-clusterdeploymentconfig
   failurePolicy: Fail
   name: vclusterdeploymentconfig.simplyblock.io
