@@ -32,6 +32,8 @@ import (
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/lvm"
+	"github.com/simplyblock/atlas/nvme"
+	"github.com/simplyblock/atlas/nvmeof"
 	"github.com/simplyblock/atlas/volstack/plans"
 )
 
@@ -364,6 +366,17 @@ func TestStripedStackStagesACloneBesideItsSource(t *testing.T) {
 	// The source is staged with the copies detached, so that what this case
 	// tests is the clone attaching beside a live source, and not the source
 	// re-staging beside a clone nobody has re-identified yet.
+	//
+	// Disconnected by name, because a detach does not: nvmet subsystems can
+	// hold more than one namespace, and the fabric layer never disconnects a
+	// subsystem that could be shared (nvmeof.DetachDevice). Reaping one is the
+	// explicit act this is.
+	connector := nvmeof.NewCLIConnector(nvme.NewSysfsSubsystemResolver(nvme.SysfsConfig{}))
+	for _, target := range copies {
+		if err := connector.Disconnect(ctx, target.NQN); err != nil {
+			t.Fatalf("disconnect the copy %s: %v", target.NQN, err)
+		}
+	}
 	awaitGone(t, copied)
 
 	sourcePlan := h.node.Striped(connections(source), h.volume, stripedOptions(len(source)))
