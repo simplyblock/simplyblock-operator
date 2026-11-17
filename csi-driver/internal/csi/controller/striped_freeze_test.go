@@ -359,7 +359,7 @@ func TestCloneOfALiveStripeIsTakenUnderTheFreeze(t *testing.T) {
 }
 
 // Where a volume is staged is read off its VolumeAttachments, through its
-// PersistentVolume, counting an attachment being torn down until it is gone.
+// PersistentVolume, counting one not attached yet and one being torn down.
 func TestStagedNodesReadTheAttachments(t *testing.T) {
 	const handle = "c:p:v:s2"
 	pv := &corev1.PersistentVolume{
@@ -383,9 +383,11 @@ func TestStagedNodesReadTheAttachments(t *testing.T) {
 		attachment("b", "worker-2", "pv-1", false),
 		attachment("c", "worker-3", "pv-other", true),
 	)}
+	// An attachment not attached yet counts as well: a stage is about to start
+	// behind it.
 	nodes, err := cs.stagedNodes(context.Background(), handle)
-	if err != nil || !slices.Equal(nodes, []string{"worker-1"}) {
-		t.Errorf("stagedNodes = %v, %v; want worker-1", nodes, err)
+	if err != nil || !slices.Equal(nodes, []string{"worker-1", "worker-2"}) {
+		t.Errorf("stagedNodes = %v, %v; want worker-1 and worker-2", nodes, err)
 	}
 }
 
@@ -421,5 +423,36 @@ func TestAFailedFreezeKeepsItsReason(t *testing.T) {
 			t.Errorf("%s: err = %v, want %s mentioning %q", tc.name, err, tc.want, tc.mention)
 		}
 		mock.Close()
+	}
+}
+
+// Regression: 2026-11-17-snapshot-under-a-starting-stage. A volume attached
+// nowhere has no writer and is taken without a freeze, but an attachment, and
+// the stage after it, can begin while the members are taken. One that appeared
+// by the time they are taken makes them nothing: they are deleted and the
+// snapshot is retried, under a freeze this time.
+func TestAnUnattachedSnapshotIsRetriedWhenTheVolumeAttaches(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	ev := &events{}
+	cs := frozenServer(t, mock, &fakeFreezer{events: ev, frozen: true, held: true}, ev)
+	calls := 0
+	cs.attachedNodes = func(context.Context, string) ([]string, error) {
+		calls++
+		if calls == 1 {
+			return nil, nil
+		}
+		return []string{"worker-1"}, nil
+	}
+	vol := createStriped(t, cs, stripedRequest("pvc-striped", "2", 2*gib))
+
+	_, err := cs.CreateSnapshot(context.Background(), &csi.CreateSnapshotRequest{
+		SourceVolumeId: vol.GetVolumeId(), Name: "snapshot-1",
+	})
+	if status.Code(err) != codes.Aborted {
+		t.Errorf("err = %v, want Aborted", err)
+	}
+	if n := snapshotCount(mock); n != 0 {
+		t.Errorf("%d member snapshots kept from an attempt the volume attached during", n)
 	}
 }

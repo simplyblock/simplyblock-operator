@@ -99,7 +99,7 @@ func TestFreezeThenThawHoldsTheWholeTime(t *testing.T) {
 	released := 0
 	acquire := func(context.Context) (func(), error) { return func() { released++ }, nil }
 
-	if err := h.Freeze(context.Background(), "vol", "dm-x", "tok", 5*time.Second, acquire); err != nil {
+	if err := h.Freeze(context.Background(), "vol", "tok", 5*time.Second, withDevice("dm-x", acquire)); err != nil {
 		t.Fatal(err)
 	}
 	if (*timers)[0].d != 5*time.Second {
@@ -127,7 +127,7 @@ func TestFreezeThenThawHoldsTheWholeTime(t *testing.T) {
 // not last, which is what makes its holder throw away what it took.
 func TestTheDeadlineThawsAndALateThawIsTold(t *testing.T) {
 	h, m, timers := newHolds(t, "")
-	if err := h.Freeze(context.Background(), "vol", "dm-x", "tok", time.Minute, nil); err != nil {
+	if err := h.Freeze(context.Background(), "vol", "tok", time.Minute, withDevice("dm-x", nil)); err != nil {
 		t.Fatal(err)
 	}
 	if (*timers)[0].d != 10*time.Second {
@@ -148,10 +148,10 @@ func TestTheDeadlineThawsAndALateThawIsTold(t *testing.T) {
 
 func TestATokenMismatchTouchesNothing(t *testing.T) {
 	h, m, _ := newHolds(t, "")
-	if err := h.Freeze(context.Background(), "vol", "dm-x", "mine", 0, nil); err != nil {
+	if err := h.Freeze(context.Background(), "vol", "mine", 0, withDevice("dm-x", nil)); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Freeze(context.Background(), "vol", "dm-x", "theirs", 0, nil); !errors.Is(err, ErrHeld) {
+	if err := h.Freeze(context.Background(), "vol", "theirs", 0, withDevice("dm-x", nil)); !errors.Is(err, ErrHeld) {
 		t.Errorf("a second holder's Freeze = %v, want ErrHeld", err)
 	}
 	if held, err := h.Thaw(context.Background(), "vol", "theirs"); held || !errors.Is(err, ErrTokenMismatch) {
@@ -169,7 +169,7 @@ func TestATokenMismatchTouchesNothing(t *testing.T) {
 func TestARetriedFreezeIsTheSameHold(t *testing.T) {
 	h, m, _ := newHolds(t, "")
 	for range 2 {
-		if err := h.Freeze(context.Background(), "vol", "dm-x", "tok", 0, nil); err != nil {
+		if err := h.Freeze(context.Background(), "vol", "tok", 0, withDevice("dm-x", nil)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -185,7 +185,7 @@ func TestAFailedSuspendResumesAndReleases(t *testing.T) {
 	m.suspendErr = errors.New("ioctl failed")
 	released := 0
 	acquire := func(context.Context) (func(), error) { return func() { released++ }, nil }
-	if err := h.Freeze(context.Background(), "vol", "dm-x", "tok", 0, acquire); err == nil {
+	if err := h.Freeze(context.Background(), "vol", "tok", 0, withDevice("dm-x", acquire)); err == nil {
 		t.Fatal("a failed suspend was reported as a freeze")
 	}
 	if got := m.seen(); !slices.Equal(got, []string{"suspend dm-x", "resume dm-x"}) {
@@ -195,7 +195,7 @@ func TestAFailedSuspendResumesAndReleases(t *testing.T) {
 		t.Errorf("released %d times", released)
 	}
 	m.suspendErr = nil
-	if err := h.Freeze(context.Background(), "vol", "dm-x", "other", 0, nil); err != nil {
+	if err := h.Freeze(context.Background(), "vol", "other", 0, withDevice("dm-x", nil)); err != nil {
 		t.Errorf("the volume stayed held after a failed freeze: %v", err)
 	}
 }
@@ -209,7 +209,7 @@ func TestAThawDuringTheSuspendCancelsIt(t *testing.T) {
 			t.Errorf("Thaw during the suspend = %v, %v", held, err)
 		}
 	}
-	if err := h.Freeze(context.Background(), "vol", "dm-x", "tok", 0, nil); err == nil {
+	if err := h.Freeze(context.Background(), "vol", "tok", 0, withDevice("dm-x", nil)); err == nil {
 		t.Error("a freeze thawed during its suspend reported success")
 	}
 	if got := m.seen(); !slices.Equal(got, []string{"suspend dm-x", "resume dm-x"}) {
@@ -222,7 +222,7 @@ func TestAThawDuringTheSuspendCancelsIt(t *testing.T) {
 func TestRecoverResumesWhatAPreviousProcessLeftFrozen(t *testing.T) {
 	dir := t.TempDir()
 	first, _, _ := newHolds(t, dir)
-	if err := first.Freeze(context.Background(), "vol", "dm-x", "tok", 0, nil); err != nil {
+	if err := first.Freeze(context.Background(), "vol", "tok", 0, withDevice("dm-x", nil)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -236,5 +236,40 @@ func TestRecoverResumesWhatAPreviousProcessLeftFrozen(t *testing.T) {
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 0 {
 		t.Errorf("records remain after recovery: %v", entries)
+	}
+}
+
+// A hold with no device holds what it acquired and suspends nothing: the node
+// freezes a volume it does not stage that way, so a stage cannot start under
+// the snapshot, and a Thaw still learns whether it lasted.
+func TestAHoldWithNoDeviceSuspendsNothing(t *testing.T) {
+	h, m, _ := newHolds(t, t.TempDir())
+	released := 0
+	acquire := func(context.Context) (func(), error) { return func() { released++ }, nil }
+
+	if err := h.Freeze(context.Background(), "vol", "tok", 5*time.Second, withDevice("", acquire)); err != nil {
+		t.Fatalf("Freeze: %v", err)
+	}
+	held, err := h.Thaw(context.Background(), "vol", "tok")
+	if !held || err != nil {
+		t.Fatalf("Thaw = %v, %v; want a hold that lasted", held, err)
+	}
+	if got := m.seen(); len(got) != 0 {
+		t.Errorf("a hold with no device ran %v", got)
+	}
+	if released != 1 {
+		t.Errorf("released %d times, want once", released)
+	}
+}
+
+// withDevice adapts an acquire that holds something to one that also names
+// device, and nil to one that holds nothing.
+func withDevice(device string, acquire func(context.Context) (func(), error)) Acquire {
+	if acquire == nil {
+		return OnDevice(device)
+	}
+	return func(ctx context.Context) (string, func(), error) {
+		release, err := acquire(ctx)
+		return device, release, err
 	}
 }
