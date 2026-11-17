@@ -387,3 +387,41 @@ func TestTheWatchdogReportsHowLongNFSDHasBeenStuck(t *testing.T) {
 		t.Errorf("StuckFor = %v after the episode ended, want 0", got)
 	}
 }
+
+// Regression: SFAM-2857. Under heavy writes every request a thread serves can
+// block on the same wchan, so the thread looks stuck while requests complete.
+// That is load, not a stall, and must not count toward the guest's health.
+func TestAThreadOnOneWaitWhileRequestsCompleteIsNotStuckForHealth(t *testing.T) {
+	p := newFakeProc(t)
+	p.thread(101, "nfsd", "D", "xlog_wait_on_iclog")
+	now := time.Unix(0, 0)
+	w := newWatchdog(p, &recorder{}, &now)
+	for i := range 20 {
+		p.pool(10+100*i, 10+100*i, 10+100*i)
+		p.rpcCalls(500 + 100*i)
+		w.Tick()
+		now = now.Add(15 * time.Second)
+	}
+	if got := w.StuckFor(); got != 0 {
+		t.Errorf("StuckFor = %v while requests keep completing, want 0", got)
+	}
+}
+
+// The same wait with no request completing is a real stall: a disk that died
+// under nfsd while clients stopped sending.
+func TestAThreadOnOneWaitWithNoRequestCompletingIsStuckForHealth(t *testing.T) {
+	p := newFakeProc(t)
+	p.pool(10, 10, 10)
+	p.rpcCalls(500)
+	p.thread(101, "nfsd", "D", "submit_bio_wait")
+	now := time.Unix(0, 0)
+	w := newWatchdog(p, &recorder{}, &now)
+	for range 4 {
+		w.Tick()
+	}
+	now = now.Add(4 * time.Minute)
+	w.Tick()
+	if got := w.StuckFor(); got != 4*time.Minute {
+		t.Errorf("StuckFor = %v with no request completing, want 4m", got)
+	}
+}
