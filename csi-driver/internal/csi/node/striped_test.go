@@ -372,3 +372,40 @@ func TestAStripedVolumeIsFormattedWithTheStripesGeometryOnly(t *testing.T) {
 		t.Errorf("a striped volume skipped the discard: %v", options)
 	}
 }
+
+// Regression: 2026-11-17-record-context-pairing (PR #922 review). A teardown
+// pairs record entry i with the context's member i to find a namespace by its
+// id. That is sound only because the context lists the members in the order
+// they were created and is never rewritten; a context naming a different number
+// of members than the record cannot be paired, and pairing it anyway would look
+// a member up by another member's id. The record's subsystems alone are used.
+func TestTheRecordIsPairedWithTheContextOnlyWhenTheyAgree(t *testing.T) {
+	ns, _ := newStackedServer(t, newRecordingRunner())
+	handle := pvcTestHandle + ":s3"
+	members := []string{pvcTestLvol, memberB, memberC}
+	writeStripedRecord(t, ns.stack, handle, members, true)
+	record, err := ns.stack.store.Load(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	paired, err := recordedMemberConnections(record, members)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range paired {
+		if c.UUID != members[i] || c.NQN != memberNQN(members[i]) {
+			t.Errorf("member %d = %+v, want %s on %s", i, c, members[i], memberNQN(members[i]))
+		}
+	}
+
+	unpaired, err := recordedMemberConnections(record, members[:2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range unpaired {
+		if c.UUID != "" || c.NQN != memberNQN(members[i]) {
+			t.Errorf("member %d of a context that disagrees = %+v, want the record's subsystem and no id", i, c)
+		}
+	}
+}
