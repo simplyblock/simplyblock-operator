@@ -63,8 +63,11 @@ two from 4Ki to 1Mi or that is set without a `stripeWidth` of 2 or more, and a
 striped pool with client-side compression or deduplication or with replication.
 The StoragePool admission webhook refuses a striped pool on a stretched cluster,
 and one wider than the cluster's storage nodes (or, on a supercluster, than any
-member that takes new volumes) once the cluster has nodes to count.
-`volumeDefaults` is immutable, so a pool's width is fixed when it is created.
+member that takes new volumes) once the cluster has nodes to count. On a
+supercluster, a member that takes new volumes and is synchronously replicated
+is refused as a stretched cluster is. The same checks run on an update that
+gives a pool created without volume defaults its stripe.
+`volumeDefaults` is immutable once set, so a pool's width is fixed from then on.
 
 **Through the Helm chart.** For a cluster given in `csiConfig.simplybk` or
 `multiCluster.clusters`, which has no StoragePool, the chart's class takes
