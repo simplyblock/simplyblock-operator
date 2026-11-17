@@ -96,11 +96,11 @@ func (m *Manager) AdoptVolumeGroup(ctx context.Context, volumeGroup VolumeGroup)
 	return m.adopt(ctx, nil, volumeGroup)
 }
 
-// adoptOnDevice is AdoptVolumeGroup scoped to one device, for a clone whose
-// group still carries its source's name and UUID: unscoped, the command could
-// find the source instead.
-func (m *Manager) adoptOnDevice(ctx context.Context, pv PhysicalVolume, volumeGroup VolumeGroup) error {
-	return m.adopt(ctx, []string{pv.DevicePath}, volumeGroup)
+// adoptOnDevices is AdoptVolumeGroup scoped to a clone's devices, for a clone
+// whose group still carries its source's name and UUID: unscoped, the command
+// could find the source instead.
+func (m *Manager) adoptOnDevices(ctx context.Context, devices []string, volumeGroup VolumeGroup) error {
+	return m.adopt(ctx, devices, volumeGroup)
 }
 
 func (m *Manager) adopt(ctx context.Context, devices []string, volumeGroup VolumeGroup) error {
