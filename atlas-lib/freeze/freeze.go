@@ -214,10 +214,19 @@ func (h *Holds) Freeze(
 		return fail(err)
 	}
 
+	// The deadline runs from here, not from the suspend's return: a suspend
+	// over a device whose paths are gone waits in the kernel for as long as
+	// they are, and the hold is bounded however long that is.
+	timer := h.cfg.AfterFunc(deadline, func() { h.expire(key, hd) })
+	h.mu.Lock()
+	hd.timer = timer
+	h.mu.Unlock()
+
 	if err := h.suspend(ctx, device); err != nil {
 		// A suspend that failed partway may still have taken effect, and
 		// resuming a device that is not suspended is harmless, so it is resumed
 		// rather than guessed about.
+		timer.Stop()
 		hd.release = release
 		_ = h.resume(key, hd)
 		return fail(fmt.Errorf("freeze %s: %w", key, err))
@@ -228,18 +237,18 @@ func (h *Holds) Freeze(
 	hd.since = h.cfg.Now()
 	hd.pending = false
 	if hd.canceled {
-		// The holder thawed while the suspend ran. It was told the freeze did
-		// not hold, so the device goes straight back.
+		// The holder thawed, or the deadline passed, while the suspend ran.
+		// Either way the freeze did not hold, so the device goes straight back.
 		if h.holds[key] == hd {
 			delete(h.holds, key)
 		}
 		h.mu.Unlock()
+		timer.Stop()
 		if err := h.resume(key, hd); err != nil {
 			return err
 		}
-		return fmt.Errorf("freeze %s: thawed while it was being frozen", key)
+		return fmt.Errorf("freeze %s: thawed or out of time while it was being frozen", key)
 	}
-	hd.timer = h.cfg.AfterFunc(deadline, func() { h.expire(key, hd) })
 	h.mu.Unlock()
 
 	h.cfg.Logger.Info("frozen", "volume", key, "device", device, "deadline", deadline)
@@ -289,6 +298,15 @@ func (h *Holds) expire(key string, hd *hold) {
 		return
 	}
 	delete(h.holds, key)
+	if hd.pending {
+		// The suspend has not returned. It cannot be resumed under it, so the
+		// hold is ended and the Freeze resumes the device when it returns.
+		hd.canceled = true
+		h.mu.Unlock()
+		h.cfg.Logger.Warn("freeze deadline reached during the suspend; resuming once it returns",
+			"volume", key, "device", hd.device)
+		return
+	}
 	h.mu.Unlock()
 	h.cfg.Logger.Warn("freeze deadline reached, resuming", "volume", key, "device", hd.device)
 	_ = h.resume(key, hd)
