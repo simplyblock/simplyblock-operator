@@ -48,11 +48,12 @@ func (cs *Server) ControllerExpandVolume(
 		return nil, err
 	}
 
-	// A client-side compressed or deduplicated volume is staged under LVM, and is
-	// grown that much larger than it reports, the way it was created.
+	// A client-side compressed or deduplicated volume is staged under LVM and
+	// VDO, and is grown that much larger than it reports, the way it was
+	// created.
 	lvolBytes := capacityBytes
 	if cs.stagedUnderLVM(ctx, volumeID) {
-		lvolBytes = lvmBackedBytes(capacityBytes)
+		lvolBytes = vdoBackedBytes(capacityBytes)
 	}
 	err = cs.onActiveVolume(ctx, volumeID, spdkVol, sbclient,
 		func(h *lvol.Handle, c *controlplane.ClusterClient) error {

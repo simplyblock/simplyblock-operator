@@ -16,6 +16,8 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/simplyblock/atlas/lvm"
+
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
 // deviceBytes is the device LVM builds over members of these sizes: their sum,
@@ -169,5 +171,32 @@ func TestAStripedSnapshotRestoresIntoItsSourcesSize(t *testing.T) {
 	if stripeMemberBytes(snap.GetSizeBytes(), 3) < memberSizes(mock)[0] {
 		t.Errorf("a restore at the snapshot's size (%d) would get members of %d, smaller than the snapshot's %d",
 			snap.GetSizeBytes(), stripeMemberBytes(snap.GetSizeBytes(), 3), memberSizes(mock)[0])
+	}
+}
+
+// Regression: 2026-11-17-vdo-capacity-underreported (PR #922 review). VDO keeps
+// its own metadata on top of LVM's extent, 4.02GiB of a 12GiB pool on the
+// runner kernel, and the volume reported the whole. A VDO volume's pool holds
+// what it reports plus both, created and expanded, and its context names the
+// logical size the node creates the VDO volume at.
+func TestAVDOVolumesPoolHoldsItsReportedSizeAndVDOsMetadata(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newTestControllerServer(t, mock)
+	req := basicCreateVolumeRequest("pvc-vdo")
+	req.CapacityRange.RequiredBytes = 10 * gib
+	req.Parameters["client_compression"] = strconv.FormatBool(true)
+
+	resp, err := cs.CreateVolume(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateVolume: %v", err)
+	}
+	reported := resp.GetVolume().GetCapacityBytes()
+	need := reported + lvm.PhysicalVolumeOverheadBytes + lvm.VDOOverheadBytes(reported)
+	if got := memberSizes(mock)[0]; got < need {
+		t.Errorf("the pool's volume is %d bytes, short of the %d a %d-byte VDO volume needs", got, need, reported)
+	}
+	if got := resp.GetVolume().GetVolumeContext()[csicommon.CtxVDOLogicalBytes]; got != strconv.FormatInt(reported, 10) {
+		t.Errorf("the context names a logical size of %q, want %d", got, reported)
 	}
 }

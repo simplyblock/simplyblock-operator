@@ -508,12 +508,14 @@ func (cs *Server) createVolume(
 		}
 	}
 
-	// A client-side compressed or deduplicated volume is staged under LVM, which
-	// keeps part of the device for itself, so it is created that much larger
-	// than it reports.
+	// A client-side compressed or deduplicated volume is staged under LVM and
+	// VDO, which keep part of the device for themselves, so it is created that
+	// much larger than it reports, and the node makes the VDO volume exactly
+	// what it reports.
 	lvolBytes := capacityBytes
 	if key, _ := vdoCapableSegment(req); key != "" {
-		lvolBytes = lvmBackedBytes(capacityBytes)
+		lvolBytes = vdoBackedBytes(capacityBytes)
+		vol.VolumeContext[csicommon.CtxVDOLogicalBytes] = strconv.FormatInt(capacityBytes, 10)
 	}
 	createVolReq, podAffinitive, err := cs.prepareCreateVolumeReq(ctx, req, lvolBytes)
 	if err != nil {
