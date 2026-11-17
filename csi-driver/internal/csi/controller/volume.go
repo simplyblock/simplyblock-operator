@@ -423,11 +423,16 @@ func (cs *Server) prepareCreateVolumeReq(
 // check). A non-online leftover from a failed earlier attempt is deleted so the
 // caller can recreate. It returns the existing volume's UUID to reuse, "" to
 // recreate, or an error (a size conflict, or a list/delete failure).
+//
+// lvolBytes is the size this create makes the volume at, which is larger than
+// the request for one under an LVM stack (lvmBackedBytes). The request's own
+// size is accepted as well, for a create a driver from before that padding
+// started and this one retries; zero accepts only the request's.
 func reconcileExistingVolume(
 	ctx context.Context,
 	sbclient controlplane.ClusterAPI,
 	name string,
-	requiredBytes int64,
+	requiredBytes, lvolBytes int64,
 	sync bool,
 ) (string, error) {
 	volumes, err := sbclient.ListVolumes(ctx)
@@ -441,7 +446,7 @@ func reconcileExistingVolume(
 		if strings.EqualFold(v.Status, "online") {
 			if requiredBytes > 0 {
 				aligned := alignToGiBBytes(requiredBytes)
-				if v.LvolSize != aligned {
+				if v.LvolSize != aligned && (lvolBytes == 0 || v.LvolSize != lvolBytes) {
 					return "", status.Errorf(
 						codes.AlreadyExists,
 						"volume %q exists with size %d but requested %d",
@@ -503,7 +508,14 @@ func (cs *Server) createVolume(
 		}
 	}
 
-	createVolReq, podAffinitive, err := cs.prepareCreateVolumeReq(ctx, req, capacityBytes)
+	// A client-side compressed or deduplicated volume is staged under LVM, which
+	// keeps part of the device for itself, so it is created that much larger
+	// than it reports.
+	lvolBytes := capacityBytes
+	if key, _ := vdoCapableSegment(req); key != "" {
+		lvolBytes = lvmBackedBytes(capacityBytes)
+	}
+	createVolReq, podAffinitive, err := cs.prepareCreateVolumeReq(ctx, req, lvolBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -544,6 +556,7 @@ func (cs *Server) createVolume(
 				sbclient,
 				req.GetName(),
 				req.GetCapacityRange().GetRequiredBytes(),
+				lvolBytes,
 				syncCluster(sbclient.ClusterID()),
 			)
 			if rerr != nil {

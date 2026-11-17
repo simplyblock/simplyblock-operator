@@ -15,6 +15,7 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/csi-addons/spec/lib/go/replication"
 	atlascp "github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/lvol"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -127,13 +128,16 @@ func TestParseStripeSpec(t *testing.T) {
 	}
 }
 
+// A member is an equal share of the GiB-rounded request plus what LVM keeps of
+// it, rounded up to a GiB, so the device LVM builds over the members holds what
+// the volume reports.
 func TestStripeMemberBytesRoundsEachShareUpToAGiB(t *testing.T) {
 	cases := []struct {
 		capacity int64
 		width    int
 		want     int64
 	}{
-		{10 * gib, 2, 5 * gib},
+		{10 * gib, 2, 6 * gib},
 		{10 * gib, 3, 4 * gib},
 		{1, 4, gib},
 		{3*gib + 1, 3, 2 * gib},
@@ -143,8 +147,10 @@ func TestStripeMemberBytesRoundsEachShareUpToAGiB(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("stripeMemberBytes(%d, %d) = %d, want %d", tc.capacity, tc.width, got, tc.want)
 		}
-		if got*int64(tc.width) < tc.capacity {
-			t.Errorf("stripeMemberBytes(%d, %d) adds up to less than was asked for", tc.capacity, tc.width)
+		device := (got - lvm.PhysicalVolumeOverheadBytes) * int64(tc.width)
+		if device < stripedCapacity(tc.capacity) {
+			t.Errorf("stripeMemberBytes(%d, %d) builds a device of %d, short of the %d reported",
+				tc.capacity, tc.width, device, stripedCapacity(tc.capacity))
 		}
 	}
 }
@@ -253,8 +259,8 @@ func TestCreateStripedVolume(t *testing.T) {
 	if !ok || width != 3 || !strings.HasSuffix(vol.GetVolumeId(), ":s3") {
 		t.Fatalf("volume id %q is not a striped handle of width 3", vol.GetVolumeId())
 	}
-	if vol.GetCapacityBytes() != 12*gib {
-		t.Errorf("capacity = %d, want 3 members of 4GiB", vol.GetCapacityBytes())
+	if vol.GetCapacityBytes() != 10*gib {
+		t.Errorf("capacity = %d, want the 10GiB asked for", vol.GetCapacityBytes())
 	}
 
 	byName := volumesNamed(mock)
@@ -339,7 +345,9 @@ func TestCreateStripedVolumeCompletesWhatAnEarlierAttemptLeft(t *testing.T) {
 		t.Fatal(err)
 	}
 	const leftover = "11111111-0000-4000-8000-000000000001"
-	mock.volumes[leftover] = &mockVolume{UUID: leftover, Name: "pvc-striped-s1", Size: gib, HostID: planned[0]}
+	mock.volumes[leftover] = &mockVolume{
+		UUID: leftover, Name: "pvc-striped-s1", Size: stripeMemberBytes(3*gib, 3), HostID: planned[0],
+	}
 
 	vol := createStriped(t, cs, stripedRequest("pvc-striped", "3", 3*gib))
 	byName := volumesNamed(mock)
@@ -487,8 +495,8 @@ func TestExpandStripedVolumeGrowsEveryMember(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ControllerExpandVolume: %v", err)
 	}
-	if resp.GetCapacityBytes() != 12*gib || !resp.GetNodeExpansionRequired() {
-		t.Errorf("expand = %+v, want 3 members of 4GiB and node expansion", resp)
+	if resp.GetCapacityBytes() != 10*gib || !resp.GetNodeExpansionRequired() {
+		t.Errorf("expand = %+v, want the 10GiB asked for and node expansion", resp)
 	}
 	for name, v := range volumesNamed(mock) {
 		if v.Size != 4*gib {
@@ -681,7 +689,7 @@ func TestFoldStripedSnapshots(t *testing.T) {
 		return &controlplane.SnapshotResp{Name: name, UUID: name, Size: size, ClusterID: "c", PoolID: "p"}
 	}
 	views := foldStripedSnapshots([]*controlplane.SnapshotResp{
-		snap("snapshot-a", 1), snap("snapshot-a-s1", 2), snap("snapshot-a-s2", 3),
+		snap("snapshot-a", 4*gib), snap("snapshot-a-s1", 4*gib), snap("snapshot-a-s2", 4*gib),
 		snap("snapshot-b", 5),
 		// A name that only looks like a member, with no snapshot it belongs to.
 		snap("orphan-s1", 7),
@@ -693,8 +701,11 @@ func TestFoldStripedSnapshots(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("views = %v, want snapshot-a, snapshot-b, and orphan-s1", got)
 	}
-	if v := got["snapshot-a"]; v.width != 3 || v.size != 6 {
-		t.Errorf("snapshot-a = width %d, size %d; want 3 and 6", v.width, v.size)
+	// Three members of 4GiB are what a 9GiB or a 10GiB volume is made of across
+	// three, and the folded snapshot restores into the smaller of the two
+	// (stripedRestoreBytes), so into either.
+	if v := got["snapshot-a"]; v.width != 3 || v.size != 9*gib {
+		t.Errorf("snapshot-a = width %d, size %d; want 3 and 9GiB", v.width, v.size)
 	}
 	if v := got["snapshot-b"]; v.width != 1 || v.size != 5 {
 		t.Errorf("snapshot-b = width %d, size %d; want 1 and 5", v.width, v.size)

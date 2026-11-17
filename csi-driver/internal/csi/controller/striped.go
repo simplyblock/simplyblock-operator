@@ -33,6 +33,7 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/lvol"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -133,17 +134,38 @@ func stripeMemberName(name string, i int) string {
 	return name + stripeMemberSuffix + strconv.Itoa(i)
 }
 
-// stripeMemberBytes is the size of each member of a striped volume asked to hold
-// capacity bytes: an equal share, rounded up to the control plane's GiB. The
-// volume reports width times that, which is at least what was asked for.
-//
-// LVM keeps a little of each member for its own metadata, at most a few MiB, so
-// the striped device is that much short of the reported size. The rounding up to
-// whole GiB per member covers it for every width that does not divide the
-// request evenly.
+// stripeMemberBytes is the size of each member of a striped volume that reports
+// capacity bytes, rounded to the control plane's GiB (stripedCapacity): an equal
+// share of it, plus what LVM keeps of each member, rounded up to whole GiB. The
+// striped device LVM builds is the members' sum less that overhead per member,
+// so it is never smaller than what the volume reports.
 func stripeMemberBytes(capacity int64, width int) int64 {
-	share := (capacity + int64(width) - 1) / int64(width)
-	return alignToGiBBytes(share)
+	reported := stripedCapacity(capacity)
+	share := (reported + int64(width) - 1) / int64(width)
+	return lvmBackedBytes(share)
+}
+
+// stripedRestoreBytes is the restore size of a striped snapshot whose members
+// are memberBytes each: the smallest capacity, in whole GiB, whose members
+// (stripeMemberBytes) are that large. It is never more than its source volume
+// reports, so the claim the volume was made from can be restored into, and a
+// restore of at least that size gets members at least as large as the
+// snapshot's, which the clones grow to.
+func stripedRestoreBytes(memberBytes int64, width int) int64 {
+	// stripeMemberBytes(c) = memberBytes holds for every c above
+	// width × (memberBytes − 1GiB − the LVM overhead), up to its own rounding.
+	floor := int64(width) * (memberBytes - gib - lvm.PhysicalVolumeOverheadBytes)
+	restore := alignToGiBBytes(max(floor+1, 1))
+	for stripeMemberBytes(restore, width) < memberBytes {
+		restore += gib
+	}
+	return restore
+}
+
+// stripedCapacity is what a striped volume asked for capacity bytes reports:
+// the request in whole GiB, as an ordinary volume reports it.
+func stripedCapacity(capacity int64) int64 {
+	return alignToGiBBytes(capacity)
 }
 
 // setStripeContext writes what the node service stages a striped volume from
@@ -422,7 +444,7 @@ func (cs *Server) createStripedVolume(
 	memberBytes := stripeMemberBytes(size, spec.width)
 
 	vol := &csi.Volume{
-		CapacityBytes: memberBytes * int64(spec.width),
+		CapacityBytes: stripedCapacity(size),
 		VolumeContext: req.GetParameters(),
 		ContentSource: req.GetVolumeContentSource(),
 	}
@@ -660,7 +682,7 @@ func (cs *Server) expandStripedVolume(
 	// The node grows the physical volumes, then the striped logical volume
 	// across them, then the filesystem.
 	return &csi.ControllerExpandVolumeResponse{
-		CapacityBytes:         memberBytes * int64(width),
+		CapacityBytes:         stripedCapacity(required),
 		NodeExpansionRequired: true,
 	}, nil
 }
@@ -737,10 +759,11 @@ func (cs *Server) createStripedSnapshot(
 		return nil, classifyCreateSnapshotError(err)
 	}
 
-	var size int64
+	var largest int64
 	for _, m := range members {
-		size += m.LvolSize
+		largest = max(largest, m.LvolSize)
 	}
+	size := stripedRestoreBytes(largest, width)
 	return &csi.CreateSnapshotResponse{
 		Snapshot: &csi.Snapshot{
 			SizeBytes:      size,
@@ -955,7 +978,10 @@ func foldStripedSnapshots(entries []*controlplane.SnapshotResp) []stripedSnapsho
 				break
 			}
 			view.width++
-			view.size += member.Size
+			view.size = max(view.size, member.Size)
+		}
+		if view.width > 1 {
+			view.size = stripedRestoreBytes(view.size, view.width)
 		}
 		views = append(views, view)
 	}
