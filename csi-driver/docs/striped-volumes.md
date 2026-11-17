@@ -137,6 +137,14 @@ it is never more than its source volume reports and the claim the volume was mad
 from can be restored into. A restore of at least that size grows the cloned
 members to its own member size.
 
+**A retried snapshot.** A snapshot whose freeze held is sealed on its
+VolumeSnapshotContent (the annotation `storage.simplyblock.io/striped-snapshot-id`,
+written through the content name the snapshotter sidecar passes with
+`--extra-create-metadata`). A retried `CreateSnapshot` answers the sealed snapshot
+when every member snapshot is still there, without freezing the volume again. A
+set without the seal is never trusted, since an attempt whose freeze did not hold
+and whose rollback failed leaves one, and is taken again.
+
 **Volume context.** The controller writes `stripeWidth`, `stripeMembers` (the
 member UUIDs in stripe order), and `stripeChunkBytes` into the volume context.
 The member order is the stripe: the same members in another order are a

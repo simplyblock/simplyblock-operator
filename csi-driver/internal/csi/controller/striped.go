@@ -744,6 +744,9 @@ func (cs *Server) createStripedSnapshot(
 	if err := requireAllMembers(volumeID, members); err != nil {
 		return nil, err
 	}
+	if sealed := cs.sealedSnapshot(ctx, sbclient, req, members, width, handle.VolumeID); sealed != nil {
+		return sealed, nil
+	}
 	if err := clearMemberSnapshots(ctx, sbclient, req.GetName(), members); err != nil {
 		return nil, err
 	}
@@ -776,10 +779,12 @@ func (cs *Server) createStripedSnapshot(
 		largest = max(largest, m.LvolSize)
 	}
 	size := stripedRestoreBytes(largest, width)
+	id := lvol.WithStripeMarker(taken[0].csiID, width)
+	cs.seal(ctx, req, id)
 	return &csi.CreateSnapshotResponse{
 		Snapshot: &csi.Snapshot{
 			SizeBytes:      size,
-			SnapshotId:     lvol.WithStripeMarker(taken[0].csiID, width),
+			SnapshotId:     id,
 			SourceVolumeId: handle.VolumeID,
 			CreationTime:   timestamppb.Now(),
 			ReadyToUse:     true,

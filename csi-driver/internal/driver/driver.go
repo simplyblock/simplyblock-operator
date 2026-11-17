@@ -152,6 +152,11 @@ func Run(conf *config.Config) {
 		if err != nil {
 			klog.Fatalf("failed to create controller server: %s", err)
 		}
+		// A finished striped snapshot is sealed on its VolumeSnapshotContent,
+		// so a retried CreateSnapshot answers it rather than freezing again.
+		if dynClient != nil {
+			cs.SetSnapshotSealer(controller.NewContentSealer(dynClient))
+		}
 		// The membership label is live for the volume's whole life (design
 		// §4.5): a PVC watcher joins a volume when the label is added and
 		// detaches it when the label is removed. Degrades to a logged no-op
