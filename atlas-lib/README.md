@@ -207,6 +207,7 @@ atlas/
 │
 ├── internal/               Private — not importable by consumers
 │   ├── cpapi/              oapi-codegen client for the control-plane v2 API (generated)
+│   ├── recordfile/         Path: the file a per-volume record is kept in (volstack, freeze)
 │   ├── sysfs/              low-level sysfs primitives (paths, attr reads)
 │   └── version/            build metadata (stamped via -ldflags)
 │
