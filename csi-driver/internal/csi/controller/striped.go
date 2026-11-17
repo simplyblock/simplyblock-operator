@@ -37,7 +37,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/klog"
 
 	"github.com/simplyblock/csi-driver/internal/clusters"
@@ -46,17 +45,6 @@ import (
 )
 
 const (
-	// defaultStripeChunkBytes is the chunk each member takes before the next one
-	// does, when the class names none. 64KiB is LVM's own default and keeps a
-	// 4KiB random write on one member.
-	defaultStripeChunkBytes = int64(64 << 10)
-
-	// The bounds on stripe_size. LVM takes any power of two from the page size
-	// up. Past 1MiB a stripe stops spreading the I/O of a single request at all,
-	// which is the reason to stripe.
-	minStripeChunkBytes = int64(4 << 10)
-	maxStripeChunkBytes = int64(1 << 20)
-
 	// stripeMemberSuffix is what the second and later members' names carry
 	// after the volume's own name, followed by the member's position.
 	stripeMemberSuffix = "-s"
@@ -80,46 +68,15 @@ type stripeSpec struct {
 // striped reports whether the class asked for a striped volume at all.
 func (s stripeSpec) striped() bool { return s.width > 1 }
 
-// parseStripeSpec reads stripe_width and stripe_size from a class's parameters.
-//
-// An absent, empty, 0, or 1 width is an ordinary volume, and stripe_size is then
-// not read at all, so a class that never asked for striping is provisioned
-// exactly as before this existed. Anything else that is not a width from 2 to
-// lvol.MaxStripeWidth, or a chunk that is not a power of two from 4KiB to 1MiB,
-// is the class's mistake and InvalidArgument.
+// parseStripeSpec reads stripe_width and stripe_size from a class's parameters
+// (kube.ParseStripe), and a class that asks for something the driver cannot
+// build is InvalidArgument.
 func parseStripeSpec(params map[string]string) (stripeSpec, error) {
-	raw := strings.TrimSpace(params[kube.ParamStripeWidth])
-	if raw == "" {
-		return stripeSpec{width: 1}, nil
+	stripe, err := kube.ParseStripe(params)
+	if err != nil {
+		return stripeSpec{}, status.Error(codes.InvalidArgument, err.Error())
 	}
-	width, err := strconv.Atoi(raw)
-	if err != nil || width < 0 {
-		return stripeSpec{}, status.Errorf(codes.InvalidArgument,
-			"%s must be a whole number of storage nodes, not %q", kube.ParamStripeWidth, raw)
-	}
-	if width <= 1 {
-		return stripeSpec{width: 1}, nil
-	}
-	if width > lvol.MaxStripeWidth {
-		return stripeSpec{}, status.Errorf(codes.InvalidArgument,
-			"%s is %d, and LVM stripes across at most %d members", kube.ParamStripeWidth, width, lvol.MaxStripeWidth)
-	}
-
-	spec := stripeSpec{width: width, chunkBytes: defaultStripeChunkBytes}
-	if rawChunk := strings.TrimSpace(params[kube.ParamStripeSize]); rawChunk != "" {
-		q, err := resource.ParseQuantity(rawChunk)
-		if err != nil {
-			return stripeSpec{}, status.Errorf(codes.InvalidArgument,
-				"%s must be a size such as 64Ki, not %q: %v", kube.ParamStripeSize, rawChunk, err)
-		}
-		chunk := q.Value()
-		if chunk < minStripeChunkBytes || chunk > maxStripeChunkBytes || chunk&(chunk-1) != 0 {
-			return stripeSpec{}, status.Errorf(codes.InvalidArgument,
-				"%s is %d bytes, and has to be a power of two from 4Ki to 1Mi", kube.ParamStripeSize, chunk)
-		}
-		spec.chunkBytes = chunk
-	}
-	return spec, nil
+	return stripeSpec{width: stripe.Width, chunkBytes: stripe.ChunkBytes}, nil
 }
 
 // refuseStripedClass refuses the class features a striped volume cannot have

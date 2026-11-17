@@ -115,6 +115,7 @@ atlas/
 │   ├── resolver.go         Resolver iface + ResolveBinding aggregation
 │   ├── storageclass.go     Properties: typed StorageClass provisioning params
 │   ├── params.go           String/Int/Float/BoolParam map helpers
+│   ├── stripe.go           ParseStripe: stripe_width / stripe_size, read the same by the driver and the operator
 │   ├── index.go            shared index names + pure key funcs
 │   ├── informer.go         InformerResolver: client-go informer-backed Resolver
 │   ├── live.go             LiveResolver: uncached clientset-backed Resolver
