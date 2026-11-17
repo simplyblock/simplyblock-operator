@@ -571,10 +571,6 @@ func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 				Verbs:     []string{"list", "get", "create", "update", "patch", "watch"},
 			},
 			rbacv1.PolicyRule{
-				// The CPU topology job deletes the master KubeletConfig a
-				// previous simplyblock cluster left behind, because only one
-				// cluster's kubelet settings can apply to the masters. No job
-				// deletes a MachineConfig or a pool.
 				APIGroups: []string{"machineconfiguration.openshift.io"},
 				Resources: []string{"kubeletconfigs"},
 				Verbs:     []string{"delete"},
