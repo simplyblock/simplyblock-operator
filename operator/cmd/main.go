@@ -473,11 +473,15 @@ func main() {
 	// the CSI controller to the node that stages the volume: the controller has
 	// no link to a node, and both link to here. The registry the relay reaches
 	// nodes through exists once the hub does, so it is read at call time.
-	freezeRelay := freezerpc.NewRelay(func(node string) (grpc.ClientConnInterface, error) {
+	freezeRelay := freezerpc.NewRelay(func(node string) (grpc.ClientConnInterface, []string, error) {
 		if csiPeers == nil {
-			return nil, errors.New("the CSI link is not running")
+			return nil, nil, errors.New("the CSI link is not running")
 		}
-		return csiPeers.Conn(link.NodePeer(node))
+		p, err := csiPeers.Peer(link.NodePeer(node))
+		if err != nil {
+			return nil, nil, err
+		}
+		return p.Conn(), p.Capabilities, nil
 	})
 	if csiLinkEnabled {
 		var certFile, keyFile string

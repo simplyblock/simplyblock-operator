@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+
+	"github.com/simplyblock/atlas/freeze/freezerpc/freezev1"
+	"github.com/simplyblock/atlas/link"
 )
 
 // fakeFreezer records what reached the node.
@@ -103,9 +107,9 @@ func TestAHeldThawWithAResumeErrorIsHeld(t *testing.T) {
 // before any node is reached.
 func TestTheRelayRefusesACallerThatIsNotAController(t *testing.T) {
 	reached := false
-	relay := NewRelay(func(string) (grpc.ClientConnInterface, error) {
+	relay := NewRelay(func(string) (grpc.ClientConnInterface, []string, error) {
 		reached = true
-		return nil, errors.New("unused")
+		return nil, nil, errors.New("unused")
 	})
 	_, err := Remote(serve(t, relay.Register)).Freeze(context.Background(), "worker-1", "h", "t", time.Second)
 	if status.Code(err) != codes.PermissionDenied {
@@ -113,5 +117,26 @@ func TestTheRelayRefusesACallerThatIsNotAController(t *testing.T) {
 	}
 	if reached {
 		t.Error("the relay reached a node for an unidentified caller")
+	}
+}
+
+// Regression: 2026-11-17-freeze-errors-unavailable (PR #922 review). The relay
+// called a node without asking whether it serves the freeze, so a node plugin
+// from before striped snapshots answered Unimplemented through it. A node that
+// does not advertise CapabilityFreeze is refused at the relay, naming why, and
+// is not called.
+func TestTheRelayRefusesANodeThatDoesNotServeTheFreeze(t *testing.T) {
+	reached := false
+	relay := NewRelay(func(string) (grpc.ClientConnInterface, []string, error) {
+		reached = true
+		return nil, []string{"atlas.conntrack.v1.FlowService"}, nil
+	})
+	ctx := link.ContextWithPeer(context.Background(), link.PeerID{Kind: link.PeerKindController, Name: "csi"})
+	_, err := relay.Freeze(ctx, &freezev1.FreezeRequest{Node: "worker-1", VolumeHandle: "h", Token: "t"})
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), CapabilityFreeze) {
+		t.Errorf("err = %v, want FailedPrecondition naming %s", err, CapabilityFreeze)
+	}
+	if !reached {
+		t.Error("the relay never looked the node up")
 	}
 }
