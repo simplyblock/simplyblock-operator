@@ -6236,7 +6236,7 @@
           "replication"
         ],
         "summary": "Clusters:Storage-Pools:Volumes:Replication:Demote",
-        "description": "Fence the source and confirm the last write replicated (P0-3).\n\nSynchronous and re-drivable, not queued: each call does only the work its\ncurrent state calls for (fence + trigger the final snapshot once, then\njust check whether it has landed), so the caller re-invokes this route\nuntil it reports 204. A 202 means still waiting -- call again, the same\nway `GET .../status` is re-read rather than pushed.\n\nOn a sync-replication cluster: fence the volume on ``site`` (required),\nsynchronously - 204 (also when it is not served there), 409 when the gate\nfails (the replicas are not in sync).",
+        "description": "Fence the source and confirm the last write replicated (P0-3).\n\nSynchronous and re-drivable, not queued: each call does only the work its\ncurrent state calls for (fence + trigger the final snapshot once, then\njust check whether it has landed), so the caller re-invokes this route\nuntil it reports 204. A 202 means still waiting -- call again, the same\nway `GET .../status` is re-read rather than pushed.\n\nOn a sync-replication cluster: fence the volume on ``site`` (required),\nsynchronously - 204 (also when it is not served there), 409 when the gate\nfails (the replicas are not in sync).\n\n``superseded=true`` is the fence order for a volume failed over elsewhere\n(control-plane split): it is fenced and its replication stopped, with no\ndemote cut, and the route answers 204. The caller decides it, never this\ncontrol plane.",
         "operationId": "clusters_storage_pools_volumes_replication_demote_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_demote_post",
         "security": [
           {
@@ -6291,6 +6291,18 @@
               "title": "Site"
             },
             "description": "Sync replication: the site the caller acts from"
+          },
+          {
+            "name": "superseded",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "The caller says the volume or group was failed over elsewhere: fence it and stop its replication, with no demote cut",
+              "default": false,
+              "title": "Superseded"
+            },
+            "description": "The caller says the volume or group was failed over elsewhere: fence it and stop its replication, with no demote cut"
           }
         ],
         "responses": {
@@ -10717,7 +10729,7 @@
           "consistency-groups"
         ],
         "summary": "Clusters:Consistency-Groups:Replication:Demote",
-        "description": "Demote the whole group: fence every member and confirm each one's last\nwrite replicated (design-csi-addons-replication.md \u00a714.4). Re-drivable, not\nqueued: 204 once every member is demoted, 202 (with per-member detail) while\nany is still converging, 500 on a hard failure.\n\nOn a sync-replication cluster: fence every member on ``site`` (required),\none gate for all - 204, 409 when the gate fails.",
+        "description": "Demote the whole group: fence every member and confirm each one's last\nwrite replicated (design-csi-addons-replication.md \u00a714.4). Re-drivable, not\nqueued: 204 once every member is demoted, 202 (with per-member detail) while\nany is still converging, 500 on a hard failure.\n\nOn a sync-replication cluster: fence every member on ``site`` (required),\none gate for all - 204, 409 when the gate fails.\n\n``superseded=true`` is the fence order for a group failed over elsewhere\n(control-plane split): every member is fenced and its replication stopped,\nwith no demote cut. The caller decides it, never this control plane.",
         "operationId": "clusters_consistency_groups_replication_demote_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_demote_post",
         "security": [
           {
@@ -10762,6 +10774,18 @@
               "title": "Site"
             },
             "description": "Sync replication: the site the caller acts from"
+          },
+          {
+            "name": "superseded",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "The caller says the volume or group was failed over elsewhere: fence it and stop its replication, with no demote cut",
+              "default": false,
+              "title": "Superseded"
+            },
+            "description": "The caller says the volume or group was failed over elsewhere: fence it and stop its replication, with no demote cut"
           }
         ],
         "responses": {
@@ -15567,6 +15591,11 @@
             "type": "boolean",
             "title": "Create Only",
             "default": false
+          },
+          "source_lvol_id": {
+            "type": "string",
+            "title": "Source Lvol Id",
+            "default": ""
           }
         },
         "type": "object",

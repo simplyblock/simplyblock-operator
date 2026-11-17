@@ -2283,6 +2283,7 @@ type LandingRequest struct {
 	Size                  int       `json:"size"`
 	SnapshotId            string    `json:"snapshot_id"`
 	SourceClusterId       string    `json:"source_cluster_id"`
+	SourceLvolId          *string   `json:"source_lvol_id,omitempty"`
 }
 
 // LandingResponse defines model for LandingResponse.
@@ -3458,6 +3459,9 @@ type ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGetPara
 type ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostParams struct {
 	// Site Sync replication: the site the caller acts from
 	Site *string `form:"site,omitempty" json:"site,omitempty"`
+
+	// Superseded The caller says the volume or group was failed over elsewhere: fence it and stop its replication, with no demote cut
+	Superseded *bool `form:"superseded,omitempty" json:"superseded,omitempty"`
 }
 
 // ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostParams defines parameters for ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost.
@@ -3705,6 +3709,9 @@ type ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePo
 type ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostParams struct {
 	// Site Sync replication: the site the caller acts from
 	Site *string `form:"site,omitempty" json:"site,omitempty"`
+
+	// Superseded The caller says the volume or group was failed over elsewhere: fence it and stop its replication, with no demote cut
+	Superseded *bool `form:"superseded,omitempty" json:"superseded,omitempty"`
 }
 
 // ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams defines parameters for ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost.
@@ -5276,6 +5283,10 @@ type ClientInterface interface {
 	// On a sync-replication cluster: fence every member on ``site`` (required),
 	// one gate for all - 204, 409 when the gate fails.
 	//
+	// ``superseded=true`` is the fence order for a group failed over elsewhere
+	// (control-plane split): every member is fenced and its replication stopped,
+	// with no demote cut. The caller decides it, never this control plane.
+	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/demote (the `ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost` operationId).
 	ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, params *ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -6253,6 +6264,11 @@ type ClientInterface interface {
 	// On a sync-replication cluster: fence the volume on ``site`` (required),
 	// synchronously - 204 (also when it is not served there), 409 when the gate
 	// fails (the replicas are not in sync).
+	//
+	// ``superseded=true`` is the fence order for a volume failed over elsewhere
+	// (control-plane split): it is fenced and its replication stopped, with no
+	// demote cut, and the route answers 204. The caller decides it, never this
+	// control plane.
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/demote (the `ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost` operationId).
 	ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params *ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -8252,6 +8268,10 @@ func (c *Client) ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClust
 //
 // On a sync-replication cluster: fence every member on “site“ (required),
 // one gate for all - 204, 409 when the gate fails.
+//
+// “superseded=true“ is the fence order for a group failed over elsewhere
+// (control-plane split): every member is fenced and its replication stopped,
+// with no demote cut. The caller decides it, never this control plane.
 //
 // Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/demote (the `ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost` operationId).
 func (c *Client) ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, params *ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -10480,6 +10500,11 @@ func (c *Client) ClustersStoragePoolsVolumesReplicationCutoverProceedApiV2Cluste
 // On a sync-replication cluster: fence the volume on “site“ (required),
 // synchronously - 204 (also when it is not served there), 409 when the gate
 // fails (the replicas are not in sync).
+//
+// “superseded=true“ is the fence order for a volume failed over elsewhere
+// (control-plane split): it is fenced and its replication stopped, with no
+// demote cut, and the route answers 204. The caller decides it, never this
+// control plane.
 //
 // Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/demote (the `ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost` operationId).
 func (c *Client) ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params *ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -14115,6 +14140,18 @@ func NewClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsiste
 		if params.Site != nil {
 
 			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "site", *params.Site, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Superseded != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "superseded", *params.Superseded, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {
@@ -19995,6 +20032,18 @@ func NewClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStorag
 
 		}
 
+		if params.Superseded != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "superseded", *params.Superseded, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
 		if encoded := queryValues.Encode(); encoded != "" {
 			rawQueryFragments = append(rawQueryFragments, encoded)
 		}
@@ -22282,6 +22331,10 @@ type ClientWithResponsesInterface interface {
 	// On a sync-replication cluster: fence every member on ``site`` (required),
 	// one gate for all - 204, 409 when the gate fails.
 	//
+	// ``superseded=true`` is the fence order for a group failed over elsewhere
+	// (control-plane split): every member is fenced and its replication stopped,
+	// with no demote cut. The caller decides it, never this control plane.
+	//
 	// Returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/demote (the `ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost` operationId).
@@ -23433,6 +23486,11 @@ type ClientWithResponsesInterface interface {
 	// On a sync-replication cluster: fence the volume on ``site`` (required),
 	// synchronously - 204 (also when it is not served there), 409 when the gate
 	// fails (the replicas are not in sync).
+	//
+	// ``superseded=true`` is the fence order for a volume failed over elsewhere
+	// (control-plane split): it is fenced and its replication stopped, with no
+	// demote cut, and the route answers 204. The caller decides it, never this
+	// control plane.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -33843,6 +33901,10 @@ func (c *ClientWithResponses) ClustersConsistencyGroupsReplicationConfigureApiV2
 // On a sync-replication cluster: fence every member on “site“ (required),
 // one gate for all - 204, 409 when the gate fails.
 //
+// “superseded=true“ is the fence order for a group failed over elsewhere
+// (control-plane split): every member is fenced and its replication stopped,
+// with no demote cut. The caller decides it, never this control plane.
+//
 // Returns a wrapper object for the known response body format(s).
 //
 // Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/demote (the `ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost` operationId).
@@ -35744,6 +35806,11 @@ func (c *ClientWithResponses) ClustersStoragePoolsVolumesReplicationCutoverProce
 // On a sync-replication cluster: fence the volume on “site“ (required),
 // synchronously - 204 (also when it is not served there), 409 when the gate
 // fails (the replicas are not in sync).
+//
+// “superseded=true“ is the fence order for a volume failed over elsewhere
+// (control-plane split): it is fenced and its replication stopped, with no
+// demote cut, and the route answers 204. The caller decides it, never this
+// control plane.
 //
 // Returns a wrapper object for the known response body format(s).
 //

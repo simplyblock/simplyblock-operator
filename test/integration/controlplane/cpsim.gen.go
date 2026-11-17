@@ -2281,6 +2281,7 @@ type LandingRequest struct {
 	Size                  int       `json:"size"`
 	SnapshotId            string    `json:"snapshot_id"`
 	SourceClusterId       string    `json:"source_cluster_id"`
+	SourceLvolId          *string   `json:"source_lvol_id,omitempty"`
 }
 
 // LandingResponse defines model for LandingResponse.
@@ -3456,6 +3457,9 @@ type ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGetPara
 type ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostParams struct {
 	// Site Sync replication: the site the caller acts from
 	Site *string `form:"site,omitempty" json:"site,omitempty"`
+
+	// Superseded The caller says the volume or group was failed over elsewhere: fence it and stop its replication, with no demote cut
+	Superseded *bool `form:"superseded,omitempty" json:"superseded,omitempty"`
 }
 
 // ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostParams defines parameters for ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost.
@@ -3703,6 +3707,9 @@ type ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePo
 type ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostParams struct {
 	// Site Sync replication: the site the caller acts from
 	Site *string `form:"site,omitempty" json:"site,omitempty"`
+
+	// Superseded The caller says the volume or group was failed over elsewhere: fence it and stop its replication, with no demote cut
+	Superseded *bool `form:"superseded,omitempty" json:"superseded,omitempty"`
 }
 
 // ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams defines parameters for ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost.
@@ -7070,6 +7077,19 @@ func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsReplicationDemoteApi
 			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "site"})
 		} else {
 			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "superseded" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "superseded", r.URL.Query(), &params.Superseded, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "superseded"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "superseded", Err: err})
 		}
 		return
 	}
@@ -11679,6 +11699,19 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationDemoteA
 			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "site"})
 		} else {
 			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "superseded" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "superseded", r.URL.Query(), &params.Superseded, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "superseded"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "superseded", Err: err})
 		}
 		return
 	}
