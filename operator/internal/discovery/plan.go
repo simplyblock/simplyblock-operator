@@ -647,6 +647,7 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 		plan.assignFailureDomains(failureDomainLabelOf(run))
 	}
 	plan.noteMultipath()
+	plan.noteStoppedArrays()
 
 	if len(plan.Workers) > 0 && plan.Workers[0].Attachment == nil {
 		plan.Unattached = true

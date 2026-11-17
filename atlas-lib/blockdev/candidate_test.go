@@ -532,6 +532,84 @@ func TestCandidatesNamesTheArrayARAIDMemberBelongsTo(t *testing.T) {
 	}
 }
 
+// Regression: 2026-11-17-unused-md-array-members — a worker whose disks were
+// assembled into an MD RAID array that nothing mounts, holds, or formatted
+// offered none of them, because every member was refused as held by the array.
+// The array has nothing on it to lose, and taking it apart is what hands the
+// disks over.
+func TestCandidatesOffersTheMembersOfAnArrayNothingUses(t *testing.T) {
+	root := idleRaidHost().write(t)
+	in := Inspector{
+		Config: ScanConfig{SysfsRoot: root, ProcRoot: root},
+		Prober: NewProberWithOpener(contentOpener(map[string]sparse{
+			"md0": blank(1572335616 * 512),
+		}), WithRegionSize(MinRegionSize)),
+		Exclusive: heldBy("/dev/nvme0n1", "/dev/nvme0n2"),
+	}
+
+	cands, err := in.Candidates(context.Background())
+	if err != nil {
+		t.Fatalf("collect the candidates: %v", err)
+	}
+
+	for _, name := range []string{"nvme0n1", "nvme0n2"} {
+		member := found(t, cands, name)
+		if !member.OnlyRejectedFor(ReasonIdleRAIDMember) {
+			t.Fatalf("%s, a member of an array nothing uses, was not refused on that ground alone: %v",
+				name, member.Rejections)
+		}
+		got := rejection(t, member, ReasonIdleRAIDMember)
+		for _, want := range []string{"md0", "raid0"} {
+			if !strings.Contains(got.Detail, want) {
+				t.Errorf("%s: the detail %q does not name %s", name, got.Detail, want)
+			}
+		}
+	}
+	if array := found(t, cands, "md0"); array.Available() {
+		t.Errorf("md0 itself was handed over; its members are what a cluster takes")
+	}
+}
+
+func TestCandidatesKeepsTheMembersOfAnArraySomethingUses(t *testing.T) {
+	// The waiver rests on the array being unused, and each of these is a use:
+	// a filesystem mounted from it, a filesystem on it that nothing mounts
+	// right now, and a kernel that refuses to hand the array over.
+	xfs := blank(1572335616 * 512)
+	xfs.bytes[0] = []byte("XFSB")
+
+	for _, tc := range []struct {
+		name    string
+		host    tree
+		content sparse
+		held    []string
+	}{
+		{"mounted", raidHost(), blank(1572335616 * 512), nil},
+		{"formatted", idleRaidHost(), xfs, nil},
+		{"busy", idleRaidHost(), blank(1572335616 * 512), []string{"/dev/md0"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := tc.host.write(t)
+			in := Inspector{
+				Config: ScanConfig{SysfsRoot: root, ProcRoot: root},
+				Prober: NewProberWithOpener(contentOpener(map[string]sparse{"md0": tc.content}),
+					WithRegionSize(MinRegionSize)),
+				Exclusive: heldBy(append([]string{"/dev/nvme0n1", "/dev/nvme0n2"}, tc.held...)...),
+			}
+			cands, err := in.Candidates(context.Background())
+			if err != nil {
+				t.Fatalf("collect the candidates: %v", err)
+			}
+			for _, name := range []string{"nvme0n1", "nvme0n2"} {
+				member := found(t, cands, name)
+				if member.RejectedFor(ReasonIdleRAIDMember) || !member.RejectedFor(ReasonRAIDMember) {
+					t.Errorf("%s, a member of an array in use, was offered for release: %v",
+						name, member.Rejections)
+				}
+			}
+		})
+	}
+}
+
 func TestCandidatesExplainsAKernelRefusalItCanAccountFor(t *testing.T) {
 	// The kernel gives no reason for refusing an exclusive open, but when a
 	// readable source already found who holds the device, that is the reason,

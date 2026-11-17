@@ -349,7 +349,7 @@ The probe lists every block device in `/sys/class/block`. Hidden NVMe multipath 
   [`Disk`], [Everything not listed below.], [The only kind a cluster is built from.],
   [`Partition`], [The device has a `partition` attribute.], [Refused in NVMe mode. In logical block device mode taken when empty.],
   [`DeviceMapper`], [A `dm` directory, or the name starts with `dm-`: LVM volume, dm-crypt, multipath.], [Refused (`NotAWholeDisk`).],
-  [`MDRaid`], [An `md` directory, or the name starts with `md`.], [Refused (`NotAWholeDisk`).],
+  [`MDRaid`], [An `md` directory, or the name starts with `md`.], [Refused (`NotAWholeDisk`). Its content is still read, because an array that is blank or released and that nothing mounts, holds, or keeps busy has its members reported as `IdleRAIDMember` rather than `RAIDMember`.],
   [`Loop`], [A `loop` directory, or the name starts with `loop`.], [Refused (`NotAWholeDisk`).],
   [`Memory`], [The name starts with `ram` or `zram`.], [Refused (`NotAWholeDisk`).],
   [`Network`], [The name starts with `nbd`, `rbd` (Ceph), or `drbd`.], [Refused (`NotAWholeDisk`).],
@@ -377,7 +377,7 @@ The bus is read from the directories the device's sysfs path passes through. The
 #grid(cols, head,
   [Mounts], [`/proc/self/mountinfo` (host)], [The device or any of its partitions mounted anywhere.], [`Mounted`.],
   [Swap], [`/proc/swaps`], [The device or a partition is active swap.], [`SwapArea`.],
-  [Holders], [`/sys/class/block/<dev>/holders`], [Device-mapper, RAID, or multipath devices built on top.], [`Stacked`.],
+  [Holders], [`/sys/class/block/<dev>/holders`], [Device-mapper, RAID, or multipath devices built on top.], [`Stacked`, or for an md array `RAIDMember`, or `IdleRAIDMember` when nothing uses the array.],
   [Exclusive open], [Opening the device with `O_EXCL`], [The kernel refuses with nothing above to explain it.], [`Busy`.],
 )
 

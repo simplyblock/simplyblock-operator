@@ -76,6 +76,18 @@ const (
 	// is.
 	ReasonRAIDMember Reason = "RAIDMember"
 
+	// ReasonIdleRAIDMember is a member of a software-RAID array that nothing
+	// uses: the array is not mounted, not swap, holds nothing, the kernel hands
+	// it over, and it carries no content. Taking the member means stopping the
+	// array and erasing the members' RAID superblocks, and the array has
+	// nothing on it to lose, so this is a ground a caller may waive. It is a
+	// refusal rather than an availability because the waiver stops an array,
+	// and that has to be a decision somebody can see.
+	//
+	// It replaces ReasonRAIDMember and the Busy the array causes, so a device
+	// refused on this ground alone is one that taking the array apart frees.
+	ReasonIdleRAIDMember Reason = "IdleRAIDMember"
+
 	// ReasonBusy is a device the kernel refused to hand over. The kernel gives
 	// no reason, so the detail supplies one when a readable source found it:
 	// the array or the device-mapper node that holds the device, the mount, or
@@ -261,7 +273,64 @@ func (in Inspector) Candidates(ctx context.Context) ([]Candidate, error) {
 		candidate.StablePath = links.Preferred(disk.Path)
 		candidates = append(candidates, candidate)
 	}
+	releaseIdleArrayMembers(candidates)
 	return candidates, nil
+}
+
+// releaseIdleArrayMembers re-judges the members of every array nothing uses.
+//
+// It runs after every device was judged, because whether a member is free is a
+// finding about its array, and the array's verdict, content reading included,
+// is only known once the array itself was judged. A member whose holders are
+// all idle arrays is refused as IdleRAIDMember alone: the array is the whole
+// of what holds it, and so it is the whole of why the kernel would not hand it
+// over. A member with any other holder, or with any other ground, keeps every
+// ground it had.
+func releaseIdleArrayMembers(candidates []Candidate) {
+	idle := make(map[string]Candidate)
+	for _, c := range candidates {
+		if idleArray(c) {
+			idle[c.Name] = c
+		}
+	}
+	if len(idle) == 0 {
+		return
+	}
+
+	for i := range candidates {
+		c := &candidates[i]
+		if !c.RejectedFor(ReasonRAIDMember) || len(c.Usage.Holders) == 0 {
+			continue
+		}
+		arrays := make([]Disk, 0, len(c.Usage.Holders))
+		for _, holder := range c.Usage.Holders {
+			array, ok := idle[holder]
+			if !ok {
+				arrays = nil
+				break
+			}
+			arrays = append(arrays, array.Disk)
+		}
+		if arrays == nil || !c.OnlyRejectedFor(ReasonRAIDMember, ReasonBusy) {
+			continue
+		}
+		c.Rejections = nil
+		for _, array := range arrays {
+			c.reject(ReasonIdleRAIDMember, "a member of the MD RAID array "+describeArray(array)+
+				", which nothing mounts, holds, or formatted; taking the device stops the array")
+		}
+	}
+}
+
+// idleArray reports whether c is a software-RAID array nothing uses: refused
+// only for not being a whole disk, which every array is, and read as carrying
+// no content. A filesystem nobody mounts at the moment is still somebody's
+// filesystem, so an array carrying one is not idle.
+func idleArray(c Candidate) bool {
+	if c.Kind != KindMDRaid || !c.OnlyRejectedFor(ReasonNotAWholeDisk) {
+		return false
+	}
+	return c.Reading.Content == ContentBlank || c.Reading.Content == ContentReleased
 }
 
 // judge decides one device.
@@ -440,6 +509,10 @@ func (c Candidate) refusedBeyondReading(kind Kind) bool {
 		switch {
 		case rejection.Reason == ReasonPartitioned:
 		case rejection.Reason == ReasonNotAWholeDisk && kind == KindPartition:
+		// An array is read for the same reason a partition is: its members
+		// are offered only when the array carries nothing, and nothing but
+		// the reading says so.
+		case rejection.Reason == ReasonNotAWholeDisk && kind == KindMDRaid:
 		default:
 			return true
 		}

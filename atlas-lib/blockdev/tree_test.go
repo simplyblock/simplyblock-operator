@@ -208,3 +208,12 @@ func raidHost() tree {
 	t2.files["swaps"] = "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority"
 	return t2
 }
+
+// idleRaidHost is raidHost with nothing mounted from md0: the array is
+// assembled and nothing uses it, the state an array is left in when whoever
+// built it is gone and the boot still assembles it.
+func idleRaidHost() tree {
+	t2 := raidHost()
+	t2.files["self/mountinfo"] = "25 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw"
+	return t2
+}
