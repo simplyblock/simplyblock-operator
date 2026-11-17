@@ -117,10 +117,7 @@ func (cs *Server) underFreeze(ctx context.Context, volumeID string, take func(co
 		// The node may have frozen it and the answer been lost: thawing under
 		// this token undoes that, and touches nothing else.
 		cs.thaw(ctx, node, volumeID, token)
-		if s, ok := status.FromError(err); ok && s.Code() == codes.Aborted {
-			return err
-		}
-		return status.Errorf(codes.Unavailable, "freeze striped volume %s on node %s: %v", volumeID, node, err)
+		return freezeError(volumeID, node, err)
 	}
 	if !frozen {
 		// Attached and not staged: nothing on the node writes to it either.
@@ -204,4 +201,30 @@ func (cs *Server) stagedNodes(ctx context.Context, volumeID string) ([]string, e
 	}
 	sort.Strings(nodes)
 	return nodes, nil
+}
+
+// freezeError is what a failed freeze answers the snapshot with. A transport
+// failure, or one that names no reason, is Unavailable and retried. A
+// refusal keeps its own code, Aborted for another holder and
+// FailedPrecondition for a node that will not freeze this volume, so a
+// permanent answer does not read as a passing one. Unimplemented is the
+// operator or the node plugin predating the freeze, which is said as such.
+func freezeError(volumeID, node string, err error) error {
+	s, ok := status.FromError(err)
+	if !ok {
+		return status.Errorf(codes.Unavailable, "freeze striped volume %s on node %s: %v", volumeID, node, err)
+	}
+	switch s.Code() {
+	case codes.Aborted:
+		return err
+	case codes.FailedPrecondition, codes.InvalidArgument, codes.PermissionDenied:
+		return status.Errorf(codes.FailedPrecondition, "freeze striped volume %s on node %s: %s",
+			volumeID, node, s.Message())
+	case codes.Unimplemented:
+		return status.Errorf(codes.FailedPrecondition,
+			"freeze striped volume %s on node %s: the operator or the node plugin predates striped snapshots "+
+				"and needs an upgrade: %s", volumeID, node, s.Message())
+	default:
+		return status.Errorf(codes.Unavailable, "freeze striped volume %s on node %s: %v", volumeID, node, err)
+	}
 }

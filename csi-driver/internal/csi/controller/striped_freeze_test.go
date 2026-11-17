@@ -388,3 +388,38 @@ func TestStagedNodesReadTheAttachments(t *testing.T) {
 		t.Errorf("stagedNodes = %v, %v; want worker-1", nodes, err)
 	}
 }
+
+// Regression: 2026-11-17-freeze-errors-unavailable (PR #922 review). Every
+// freeze error was answered Unavailable, so a node refusing for good (a volume
+// staged as something other than a stripe), and an operator or node plugin too
+// old to serve the freeze, were retried forever under a message that said
+// nothing about why. A transport failure stays Unavailable; a refusal is
+// FailedPrecondition; and Unimplemented says the versions do not match.
+func TestAFailedFreezeKeepsItsReason(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		want    codes.Code
+		mention string
+	}{
+		{"the link is down", status.Error(codes.Unavailable, "no session"), codes.Unavailable, "no session"},
+		{"an untyped failure", errors.New("node not linked"), codes.Unavailable, "node not linked"},
+		{"the node refuses", status.Error(codes.FailedPrecondition, "staged as a plain volume"),
+			codes.FailedPrecondition, "staged as a plain volume"},
+		{"an old operator or node", status.Error(codes.Unimplemented, "unknown service atlas.freeze.v1.FreezeService"),
+			codes.FailedPrecondition, "predates"},
+	} {
+		mock := newMockSBCLI()
+		ev := &events{}
+		cs := frozenServer(t, mock, &fakeFreezer{events: ev, freezeErr: tc.err}, ev)
+		vol := createStriped(t, cs, stripedRequest("pvc-striped", "2", 2*gib))
+
+		_, err := cs.CreateSnapshot(context.Background(), &csi.CreateSnapshotRequest{
+			SourceVolumeId: vol.GetVolumeId(), Name: "snapshot-1",
+		})
+		if status.Code(err) != tc.want || !strings.Contains(err.Error(), tc.mention) {
+			t.Errorf("%s: err = %v, want %s mentioning %q", tc.name, err, tc.want, tc.mention)
+		}
+		mock.Close()
+	}
+}
