@@ -197,9 +197,16 @@ func memberConnectionsFromControlPlane(
 
 // recordedMemberConnections rebuilds the members' connections from the stack
 // record, in the order the record holds them, which is the order they were
-// brought up in. members, the ids the volume context lists, are added where
-// the context still has them, since a namespace is found by its id when its
-// subsystem coordinates no longer find it.
+// brought up in. members, the ids the volume context lists, are added to them,
+// since a namespace is found by its id when its subsystem coordinates no longer
+// find it.
+//
+// Entry i is paired with the context's member i, which is sound because the
+// context lists the members in the order they were created and is never
+// rewritten (csicommon.CtxStripeMembers), and the stage that wrote the record
+// brought them up in that order. A context naming a different number of members
+// than the record cannot be paired, so no id is added, and the record's
+// subsystems alone find the namespaces.
 func recordedMemberConnections(record volstack.Record, members []string) ([]lvol.Connection, error) {
 	var entries []volstack.Entry
 	for _, entry := range record.Plan {
@@ -224,7 +231,7 @@ func recordedMemberConnections(record volstack.Record, members []string) ([]lvol
 			}
 		}
 		connection := lvol.Connection{NQN: params.NQN, NSID: params.NSID}
-		if i < len(members) {
+		if len(members) == len(entries) {
 			connection.UUID = members[i]
 		}
 		if connection.NQN == "" && connection.UUID == "" {
