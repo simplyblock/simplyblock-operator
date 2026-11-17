@@ -53,6 +53,10 @@ type Server struct {
 	// attachedNodes lists the nodes a volume is attached to. Nil reads its
 	// VolumeAttachments; a test sets it.
 	attachedNodes func(ctx context.Context, volumeID string) ([]string, error)
+	// snapshotSeals reads and writes a striped snapshot's seal on its
+	// VolumeSnapshotContent (striped_seal.go). Nil seals nothing, and a
+	// retried snapshot is taken again.
+	snapshotSeals snapshotSealer
 }
 
 //nolint:unparam // error return kept for constructor symmetry / future use
