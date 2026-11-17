@@ -752,3 +752,38 @@ func TestAStripedVolumeRefusesMultiNodeAccess(t *testing.T) {
 		mock.Close()
 	}
 }
+
+// Regression: 2026-11-17-striped-health-first-member (PR #922 review).
+// ControllerGetVolume read the first member alone, so a striped volume with
+// another member offline was reported healthy while I/O to that member's share
+// of the stripe failed. Every member is read, and one that is not online makes
+// the volume abnormal, naming it.
+func TestAStripedVolumesHealthIsEveryMembers(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := stripedServer(t, mock, storageNodes([]string{stripeNodeA, stripeNodeB, stripeNodeC}))
+	vol := createStriped(t, cs, stripedRequest("pvc-striped", "3", 3*gib))
+
+	get := &csi.ControllerGetVolumeRequest{VolumeId: vol.GetVolumeId()}
+	healthy, err := cs.ControllerGetVolume(context.Background(), get)
+	if err != nil || healthy.GetStatus().GetVolumeCondition().GetAbnormal() {
+		t.Fatalf("a striped volume with every member online = %v, %v; want normal", healthy, err)
+	}
+
+	mock.mu.Lock()
+	for _, v := range mock.volumes {
+		if v.Name == "pvc-striped-s2" {
+			v.Status = "offline"
+		}
+	}
+	mock.mu.Unlock()
+
+	sick, err := cs.ControllerGetVolume(context.Background(), get)
+	if err != nil {
+		t.Fatalf("ControllerGetVolume: %v", err)
+	}
+	condition := sick.GetStatus().GetVolumeCondition()
+	if !condition.GetAbnormal() || !strings.Contains(condition.GetMessage(), "member 2") {
+		t.Errorf("a striped volume with member 2 offline = %+v, want abnormal naming member 2", condition)
+	}
+}
