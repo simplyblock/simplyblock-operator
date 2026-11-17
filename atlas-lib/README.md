@@ -78,7 +78,7 @@ atlas/
 │   ├── lvm.go              Manager, Run (the escape hatch)
 │   ├── identity.go         VolumeGroup, HasLogicalVolume, ListLogicalVolumes, Rescan
 │   ├── volume.go           Create/Activate/Deactivate/Remove a PV, VG, or LV
-│   ├── clone.go            ResolveClonedVolumeGroup (rescan + import + rename)
+│   ├── clone.go            ResolveClonedVolumeGroup(Set) (rescan + import + rename)
 │   ├── grow.go             Expand a PV, VG, or LV, read an LV's current size
 │   ├── dm.go               RemoveOrphanedDMNodes, HasOrphanedDMNodes
 │   ├── devices.go          ForgetDevice: prune the node's LVM devices file
@@ -1254,6 +1254,15 @@ name logical volumes to preserve, for the structural ones a stack names
 identically in every volume, such as VDO's pool. `ImportClonedVolumeGroup` and
 `RenameLogicalVolume` remain available for a recovery path that needs one step
 alone.
+
+A group spanning several devices, such as a striped volume's members, is
+resolved with `ResolveClonedVolumeGroupSet`, which takes every device of the
+group and imports them in one `vgimportclone`. LVM refuses to re-stamp a group
+from one of its devices while the command is scoped away from the rest, so
+calling `ResolveClonedVolumeGroup` once per member fails on the first. Devices
+that disagree about their group are `ErrSplitClone`, and nothing is changed.
+The physical-volume layer (`volstack/layers/lvmphysicalvolume.go`) is the one
+caller today.
 
 VDO is a built-in `VolumeProvisioning` handler in `lvm` itself (`vdo.go`),
 registered by this package's own `init` rather than requiring a caller to
