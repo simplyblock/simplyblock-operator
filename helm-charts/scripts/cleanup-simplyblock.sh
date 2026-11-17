@@ -18,6 +18,11 @@ Options:
       --csi-driver NAME    CSI driver name whose PVs are cleaned up
                            (default: csi.simplyblock.io, or \$CSI_DRIVER)
   -h, --help               Show this help message
+
+On OpenShift, the MachineConfigPool, MachineConfigs, and KubeletConfigs of the
+storage clusters in NAMESPACE are removed too, with those an earlier cleanup left
+of a cluster that no longer exists. A pool that still has nodes is kept, with
+everything named after its cluster.
 EOF
     exit 0
 }
@@ -246,6 +251,16 @@ for c in json.load(open(sys.argv[1]))["items"]:
 # finds the clusters' StorageClasses by these UUIDs.
 CLUSTER_UUIDS=$($KUBECTL get "storageclusters.$CRD_GROUP" -n "$NAMESPACE" \
     -o jsonpath='{.items[*].status.uuid}' 2>/dev/null || true)
+# The UUIDs of the storage clusters in every other namespace, or "unknown" when
+# they could not be listed. Step 7 never touches their MachineConfig objects.
+if other=$($KUBECTL get "storageclusters.$CRD_GROUP" -A \
+        -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.status.uuid}{"\n"}{end}' 2>/dev/null); then
+    OTHER_CLUSTER_UUIDS=$(awk -v ns="$NAMESPACE" '$1 != ns && $2 != "" {print $2}' <<< "$other" | tr '\n' ' ')
+elif ! $KUBECTL get crd "storageclusters.$CRD_GROUP" >/dev/null 2>&1; then
+    OTHER_CLUSTER_UUIDS=""
+else
+    OTHER_CLUSTER_UUIDS=unknown
+fi
 
 # ---------------------------------------------------------------------------
 # 0a. Remove this cluster's NFSExports while the operator still runs
@@ -521,7 +536,10 @@ fi
 # ---------------------------------------------------------------------------
 section "Removing remaining workloads in namespace '$NAMESPACE'"
 
-for kind in pod daemonset deployment statefulset replicaset; do
+# Jobs first: the storage node Jobs (CPU topology, core isolation, and the
+# others the control plane starts) restart their pods on failure, so a running
+# Job brings back a pod deleted before it.
+for kind in job pod daemonset deployment statefulset replicaset; do
     count=$($KUBECTL get "$kind" -n "$NAMESPACE" --ignore-not-found --no-headers 2>/dev/null | wc -l | tr -d ' ')
     if [[ "$count" -gt 0 ]]; then
         info "Deleting ${count} ${kind}(s)..."
@@ -973,6 +991,128 @@ fi
 section "Removing namespace '$NAMESPACE'"
 $KUBECTL delete namespace "$NAMESPACE" --ignore-not-found --timeout=300s || \
     warn "Namespace '$NAMESPACE' was not removed within 300s"
+
+# ---------------------------------------------------------------------------
+# 7. Remove the MachineConfig objects of the storage clusters (OpenShift)
+# ---------------------------------------------------------------------------
+# On OpenShift the CPU topology job gives a cluster's storage nodes their kubelet
+# settings through a MachineConfigPool, a MachineConfig, and KubeletConfigs named
+# after the first six characters of the cluster's UUID, and MCO generates kubelet
+# configs for the pool that it leaves behind when the pool goes. The core
+# isolation job isolates cores on the masters through a MachineConfig that
+# records the cluster.
+#
+# Removed are those of the clusters in this namespace, and those of a previous
+# cluster that an earlier cleanup left: a storage-<id> pool carrying the
+# custom-kubelet label the job gives it, or a MachineConfig or KubeletConfig
+# named after a cluster, whose cluster exists in no other namespace. A cluster that still exists in another namespace keeps its objects,
+# and when the other namespaces cannot be listed, only this namespace's go.
+# A pool that still has nodes is kept, and so is every object named after its
+# cluster: moving the nodes out of it reboots them, and deleting it deletes the
+# rendered config they run, which MCO then cannot update them from. Removing the
+# master objects rolls the master pool, which reboots the masters one at a time.
+
+# Prints the nodes whose current or desired config is a render of pool $1.
+nodes_on_render() {
+    local nodes="$JSON_DIR/mco-nodes.json"
+    $KUBECTL get nodes -o json > "$nodes" 2>/dev/null || { echo "<unknown>"; return; }
+    python3 -c '
+import json, sys
+prefix = "rendered-" + sys.argv[2] + "-"
+for n in json.load(open(sys.argv[1]))["items"]:
+    a = n["metadata"].get("annotations") or {}
+    if any(a.get("machineconfiguration.openshift.io/" + k, "").startswith(prefix)
+           for k in ("currentConfig", "desiredConfig")):
+        print(n["metadata"]["name"])
+' "$nodes" "$1"
+}
+
+# Prints the short IDs of the storage clusters whose MachineConfig objects exist,
+# one per line: the storage pools the CPU topology job created, and the
+# MachineConfigs and KubeletConfigs named after a cluster, which outlive a pool
+# an earlier cleanup removed.
+storage_mco_ids() {
+    local pools="$JSON_DIR/mco-pools.json" names
+    $KUBECTL get machineconfigpool -o json > "$pools" 2>/dev/null || return 1
+    names=$($KUBECTL get machineconfig -o name 2>/dev/null) || return 1
+    names="$names"$'\n'$($KUBECTL get kubeletconfig -o name 2>/dev/null) || return 1
+    python3 -c '
+import json, re, sys
+for p in json.load(open(sys.argv[1]))["items"]:
+    m = p["metadata"]
+    found = re.fullmatch(r"storage-([0-9a-f]{6})", m["name"])
+    if found and (m.get("labels") or {}).get("custom-kubelet") == "storage-cpumanager-" + found.group(1):
+        print(found.group(1))
+for name in sys.stdin.read().split():
+    name = name.rsplit("/", 1)[-1]
+    found = (re.fullmatch(r"storage-mc-([0-9a-f]{6})", name)
+             or re.fullmatch(r"9[0-9]-storage-([0-9a-f]{6})-generated-kubelet(-[0-9]+)?", name)
+             or re.fullmatch(r"storage-kubelet-([0-9a-f]{6})(-master)?", name))
+    if found:
+        print(found.group(1))
+' "$pools" <<< "$names"
+}
+
+# True when $1, a full or short cluster UUID, is a cluster in another namespace.
+of_other_cluster() {
+    local uuid
+    for uuid in $OTHER_CLUSTER_UUIDS; do
+        [[ "$uuid" == "$1"* || "${uuid:0:6}" == "$1" ]] && return 0
+    done
+    return 1
+}
+
+if $KUBECTL get crd machineconfigpools.machineconfiguration.openshift.io >/dev/null 2>&1; then
+    section "Removing the MachineConfig objects of the storage clusters in '$NAMESPACE'"
+
+    ids=""
+    for uuid in $CLUSTER_UUIDS; do ids="$ids ${uuid:0:6}"; done
+    if [[ "$OTHER_CLUSTER_UUIDS" == unknown ]]; then
+        warn "Could not list the storage clusters of other namespaces; leaving the MachineConfig objects of previous clusters."
+    elif found_ids=$(storage_mco_ids); then
+        for id in $found_ids; do
+            of_other_cluster "$id" || ids="$ids $id"
+        done
+    else
+        warn "Could not list the MachineConfig objects; removing only this namespace's."
+    fi
+    ids=$(tr ' ' '\n' <<< "$ids" | sort -u)
+
+    master_by=$($KUBECTL get machineconfig simplyblock-master-isolated \
+        -o jsonpath='{.metadata.annotations.simplyblock\.io/cluster-id}' 2>/dev/null || true)
+    # Ours, or a previous cluster's. Unrecorded (written before the annotation
+    # existed) is neither.
+    if [[ -n "$master_by" ]] && { [[ " $CLUSTER_UUIDS " == *" $master_by "* ]] ||
+        { [[ "$OTHER_CLUSTER_UUIDS" != unknown ]] && ! of_other_cluster "$master_by"; }; }; then
+        info "Deleting MachineConfig simplyblock-master-isolated; the masters reboot one at a time."
+        $KUBECTL delete machineconfig simplyblock-master-isolated --ignore-not-found --timeout=60s >/dev/null || \
+            warn "Could not delete MachineConfig simplyblock-master-isolated"
+    fi
+
+    for id in $ids; do
+        pool="storage-$id"
+        on=$(nodes_on_render "$pool" | tr '\n' ' ')
+        count=0
+        if $KUBECTL get machineconfigpool "$pool" >/dev/null 2>&1; then
+            count=$($KUBECTL get machineconfigpool "$pool" -o jsonpath='{.status.machineCount}' 2>/dev/null || echo unknown)
+        fi
+        if [[ -n "$on" || "${count:-0}" != 0 ]]; then
+            warn "MachineConfigPool $pool still has nodes (${on:-machineCount $count}); keeping it and the objects named after it."
+            continue
+        fi
+        for obj in "kubeletconfig/storage-kubelet-$id-master" "kubeletconfig/storage-kubelet-$id" \
+                   "machineconfig/storage-mc-$id" "machineconfigpool/$pool"; do
+            $KUBECTL delete "${obj%%/*}" "${obj#*/}" --ignore-not-found --timeout=60s >/dev/null || warn "Could not delete $obj"
+        done
+        # MCO's kubelet configs for the pool, which it keeps after the pool goes.
+        generated=$($KUBECTL get machineconfig -o name 2>/dev/null | sed 's#.*/##' \
+            | grep -E "^9[0-9]-$pool-generated-kubelet(-[0-9]+)?$" || true)
+        for mc in $generated; do
+            $KUBECTL delete machineconfig "$mc" --ignore-not-found --timeout=60s >/dev/null || warn "Could not delete MachineConfig $mc"
+        done
+        info "Removed the MachineConfig objects of storage cluster $id."
+    done
+fi
 
 # ---------------------------------------------------------------------------
 # Done
