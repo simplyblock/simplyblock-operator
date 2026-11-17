@@ -109,3 +109,34 @@ func TestResolveReplicatedGroupNotFailedOverHereHasNoActiveGroup(t *testing.T) {
 		t.Errorf("active = %v, want none", *res.Active)
 	}
 }
+
+func TestFenceGroupOrdersASupersededDemote(t *testing.T) {
+	var gotMethod, gotPath, gotQuery string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotQuery = r.Method, r.URL.Path, r.URL.RawQuery
+		w.WriteHeader(http.StatusNoContent)
+	})
+	gh := lvol.GroupHandle{ClusterID: sourceCluster, GroupID: sourceGroup}
+
+	if err := c.FenceGroup(context.Background(), gh); err != nil {
+		t.Fatalf("FenceGroup: %v", err)
+	}
+	want := "/api/v2/clusters/" + sourceCluster + "/consistency-groups/" + sourceGroup + "/replication/demote"
+	if gotMethod != http.MethodPost || gotPath != want || gotQuery != "superseded=true" {
+		t.Errorf("request = %s %s?%s, want POST %s?superseded=true", gotMethod, gotPath, gotQuery, want)
+	}
+}
+
+func TestFenceGroupAnythingButDoneIsAnError(t *testing.T) {
+	for _, code := range []int{http.StatusAccepted, http.StatusBadRequest, http.StatusInternalServerError} {
+		c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(code)
+		})
+		gh := lvol.GroupHandle{ClusterID: sourceCluster, GroupID: sourceGroup}
+		err := c.FenceGroup(context.Background(), gh)
+		var se *StatusError
+		if !errors.As(err, &se) || se.StatusCode != code {
+			t.Errorf("HTTP %d: err = %v, want a *StatusError carrying it", code, err)
+		}
+	}
+}

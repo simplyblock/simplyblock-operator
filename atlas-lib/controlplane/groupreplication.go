@@ -139,6 +139,31 @@ func (c *Client) DemoteGroup(ctx context.Context, gh lvol.GroupHandle) (bool, er
 	}
 }
 
+// FenceGroup orders the fence of a group that was failed over to another
+// cluster: every member is fenced and its replication stopped, with no final
+// group snapshot, since its data is stale. The caller decides the group was
+// superseded; the control plane does not detect it. Idempotent and
+// synchronous: done, or an error.
+func (c *Client) FenceGroup(ctx context.Context, gh lvol.GroupHandle) error {
+	cluster, group, err := groupIDs(gh)
+	if err != nil {
+		return err
+	}
+	superseded := true
+	resp, err := c.api.ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostWithResponse(
+		ctx, cluster, group,
+		&cpapi.ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostParams{
+			Superseded: &superseded,
+		})
+	if err != nil {
+		return fmt.Errorf("fence group %s: %w", gh.Handle(), err)
+	}
+	if code := resp.StatusCode(); code != http.StatusNoContent {
+		return respError("fence group "+string(gh.Handle()), code, resp.Body)
+	}
+	return nil
+}
+
 // ResyncGroup reverses the shipping direction for the whole group. It never cuts
 // over, matching the per-volume ResyncVolume. sourceClusterID selects the source
 // explicitly; "" leaves it unset.
