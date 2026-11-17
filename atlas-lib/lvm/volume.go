@@ -26,6 +26,11 @@ type LogicalVolumeDefinition struct {
 	// applies only alongside a stripe count, since there is nothing for a chunk
 	// size to describe on a linear volume.
 	StripeChunkBytes int64
+
+	// LogicalSizeBytes is the size of a pooled type's volume inside its pool,
+	// VDO's virtual size, and zero lets the pool size it from its own physical
+	// space.
+	LogicalSizeBytes int64
 }
 
 type VolumeProvisioning interface {
