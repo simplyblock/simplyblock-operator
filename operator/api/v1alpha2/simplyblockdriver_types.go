@@ -217,6 +217,13 @@ type DriverPNFSMDS struct {
 	// server.
 	// +optional
 	DataNetwork *DriverPNFSDataNetwork `json:"dataNetwork,omitempty"`
+
+	// UnhealthyDeadline is how long a booted guest may stay unhealthy before
+	// the pod restarts. The metadata server is a singleton in the data path of
+	// every pNFS volume, so a restart pauses all of them. 0s never restarts it.
+	// Unset keeps the runner's default of 90s.
+	// +optional
+	UnhealthyDeadline *metav1.Duration `json:"unhealthyDeadline,omitempty"`
 }
 
 // DriverPNFSDataNetwork is the storage data network the metadata server is

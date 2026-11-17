@@ -233,9 +233,10 @@ type NFSDWatchdog struct {
 	inEpisode   bool
 	episodeAt   time.Time
 	lastDump    time.Time
-	// stuckSince is episodeAt while an episode lasts, nil otherwise, for
-	// readers beside Tick.
-	stuckSince atomic.Pointer[time.Time]
+	// stalledSince is when nfsd stopped completing requests, nil while it
+	// completes them, for readers beside Tick. A thread on one wait starts an
+	// episode but not a stall: under load it serves many requests there.
+	stalledSince atomic.Pointer[time.Time]
 }
 
 func (w *NFSDWatchdog) now() time.Time {
@@ -264,7 +265,9 @@ func (w *NFSDWatchdog) Tick() {
 
 	stuck := w.trackWaits(threads)
 	calls, haveCalls := readRPCCalls(root)
-	notDraining := running && w.trackPool(pool, calls, haveCalls)
+	notDraining, flat := w.trackPool(pool, calls, haveCalls)
+	notDraining = running && notDraining
+	w.trackStall(notDraining || (len(stuck) > 0 && (!haveCalls || flat)))
 	if running && w.ticks%summaryEvery == 0 {
 		w.summarize(threads, pool)
 	}
@@ -272,8 +275,6 @@ func (w *NFSDWatchdog) Tick() {
 	switch {
 	case (len(stuck) > 0 || notDraining) && !w.inEpisode:
 		w.inEpisode, w.episodeAt = true, w.now()
-		at := w.episodeAt
-		w.stuckSince.Store(&at)
 		w.Log.Warningf("nfsd watchdog: nfsd looks stuck: %s", describeEpisode(stuck, notDraining))
 		w.dumpStacks(root, threads)
 	case (len(stuck) > 0 || notDraining) && w.now().Sub(w.lastDump) >= stackDumpEvery:
@@ -282,7 +283,6 @@ func (w *NFSDWatchdog) Tick() {
 		w.dumpStacks(root, threads)
 	case len(stuck) == 0 && !notDraining && w.inEpisode:
 		w.inEpisode = false
-		w.stuckSince.Store(nil)
 		w.Log.Infof("nfsd watchdog: episode ended after %s", w.now().Sub(w.episodeAt).Round(time.Second))
 	}
 }
@@ -309,13 +309,24 @@ func (w *NFSDWatchdog) trackWaits(threads []nfsdThread) []nfsdThread {
 	return stuck
 }
 
+// trackStall starts or ends the stall StuckFor reports.
+func (w *NFSDWatchdog) trackStall(stalled bool) {
+	switch {
+	case stalled && w.stalledSince.Load() == nil:
+		at := w.now()
+		w.stalledSince.Store(&at)
+	case !stalled:
+		w.stalledSince.Store(nil)
+	}
+}
+
 // trackPool reports whether work arrived over the last stuckTicks ticks while
-// nfsd processed no request. Without the RPC statistics it does not judge:
-// there is no progress to compare the arrivals with.
-func (w *NFSDWatchdog) trackPool(pool poolStats, calls uint64, haveCalls bool) bool {
+// nfsd processed no request, and whether it processed none at all. Without the
+// RPC statistics it does not judge: there is no progress to compare with.
+func (w *NFSDWatchdog) trackPool(pool poolStats, calls uint64, haveCalls bool) (notDraining, flat bool) {
 	if !haveCalls {
 		w.pools, w.calls = nil, nil
-		return false
+		return false, false
 	}
 	w.pools = append(w.pools, pool)
 	w.calls = append(w.calls, calls)
@@ -324,10 +335,11 @@ func (w *NFSDWatchdog) trackPool(pool poolStats, calls uint64, haveCalls bool) b
 		w.calls = w.calls[len(w.calls)-stuckTicks-1:]
 	}
 	if len(w.pools) <= stuckTicks {
-		return false
+		return false, false
 	}
 	moved := pool.minus(w.pools[0])
-	return (moved.Arrived > 0 || moved.Enqueued > 0) && calls == w.calls[0]
+	flat = calls == w.calls[0]
+	return (moved.Arrived > 0 || moved.Enqueued > 0) && flat, flat
 }
 
 // summarize logs one line: threads by state, the wchans they wait in, and the
@@ -412,10 +424,10 @@ func RunNFSDWatchdog(ctx context.Context, w *NFSDWatchdog, interval time.Duratio
 	}
 }
 
-// StuckFor reports how long the current stuck episode has lasted, zero outside
-// one. Safe to call beside Tick.
+// StuckFor reports how long nfsd has completed no request while it had work,
+// zero while it completes them. Safe to call beside Tick.
 func (w *NFSDWatchdog) StuckFor() time.Duration {
-	since := w.stuckSince.Load()
+	since := w.stalledSince.Load()
 	if since == nil {
 		return 0
 	}

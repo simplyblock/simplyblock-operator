@@ -442,6 +442,9 @@ func mdsRunnerContainer(
 		// The guest's traffic to the data network leaves through it.
 		args = append(args, "--data-interface="+MDSDataInterface)
 	}
+	if spec.UnhealthyDeadline != nil {
+		args = append(args, "--unhealthy-deadline="+spec.UnhealthyDeadline.Duration.String())
+	}
 	return corev1.Container{
 		Name:            MDSContainerName,
 		Image:           image,
