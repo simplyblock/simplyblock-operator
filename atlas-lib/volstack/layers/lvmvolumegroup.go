@@ -196,7 +196,7 @@ func (l *LVMVolumeGroup) Ensure(ctx context.Context, below volstack.Artifact) (v
 		}
 	}
 
-	if err := l.cfg.Manager.ActivateVolumeGroup(ctx, l.group()); err != nil {
+	if err := l.cfg.Manager.ActivateVolumeGroup(ctx, l.group(), physicalVolumes(below)...); err != nil {
 		return volstack.Artifact{}, fmt.Errorf("lvmVolumeGroup: %w", err)
 	}
 	// Last, and on every bring-up: the claim a volume belongs to can change
@@ -263,7 +263,7 @@ func (l *LVMVolumeGroup) ensureOwned(ctx context.Context) error {
 // device-mapper nodes are removed directly. That escaping has to double the
 // dashes the way device-mapper does, or it matches nothing.
 func (l *LVMVolumeGroup) Release(ctx context.Context, below volstack.Artifact) error {
-	err := l.cfg.Manager.DeactivateVolumeGroup(ctx, l.group())
+	err := l.cfg.Manager.DeactivateVolumeGroup(ctx, l.group(), physicalVolumes(below)...)
 	if err == nil {
 		return nil
 	}
@@ -326,4 +326,15 @@ func (l *LVMVolumeGroup) Grow(ctx context.Context, below volstack.Artifact) (vol
 
 func (l *LVMVolumeGroup) group() lvm.VolumeGroup {
 	return lvm.VolumeGroup{Name: l.cfg.VolumeGroup}
+}
+
+// physicalVolumes is the group's own members, the devices below, which
+// activation is scoped to so that a clone of them attached on the same host is
+// not considered.
+func physicalVolumes(below volstack.Artifact) []lvm.PhysicalVolume {
+	pvs := make([]lvm.PhysicalVolume, 0, len(below.Devices))
+	for _, d := range below.Devices {
+		pvs = append(pvs, lvm.PhysicalVolume{DevicePath: d.Path})
+	}
+	return pvs
 }
