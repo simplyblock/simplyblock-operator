@@ -277,4 +277,124 @@ EOF
 }
 job_case
 
+# The CPU topology job gives a storage cluster's nodes their kubelet settings on
+# OpenShift through a MachineConfigPool, a MachineConfig, and KubeletConfigs named
+# after the cluster's UUID. Cleanup removes this cluster's, and no other's: its
+# nodes leave the pool first, and the pool goes only once none runs its render,
+# because a pool's rendered configs are deleted with it.
+machine_config_case() {
+  local name="the cluster's MachineConfig objects go, another cluster's stay"
+  local dir="$WORK/mco"
+  mkdir -p "$dir/bin" "$dir/state"
+  for o in mcp.storage-abc123 mc.storage-mc-abc123 kc.storage-kubelet-abc123 \
+           kc.storage-kubelet-abc123-master mc.simplyblock-master-isolated \
+           mcp.storage-ffffff mc.storage-mc-ffffff kc.storage-kubelet-ffffff \
+           kc.storage-kubelet-ffffff-master node-on-pool; do
+    touch "$dir/state/$o"
+  done
+  cat > "$dir/bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+S="$STATE_DIR"
+args=" $* "
+short() { case "$1" in machineconfigpool*|mcp) echo mcp ;; machineconfig*) echo mc ;; kubeletconfig*) echo kc ;; esac; }
+case "$1" in
+  get)
+    if [[ "$*" == "get crd -o name" ]]; then
+      echo customresourcedefinition.apiextensions.k8s.io/storageclusters.storage.simplyblock.io
+      exit 0
+    fi
+    [[ "$2" == crd && "${3:-}" == machineconfigpools.machineconfiguration.openshift.io ]] && exit 0
+    [[ "$2" == crd && "${3:-}" != -* ]] && exit 1
+    if [[ "$2" == storageclusters.* && "$args" == *uuid* ]]; then
+      echo abc123de-0000-4000-8000-000000000001
+      exit 0
+    fi
+    if [[ "$2" == nodes && "$args" == *" -o json "* ]]; then
+      cfg=rendered-worker-1
+      [[ -f "$S/node-on-pool" ]] && cfg=rendered-storage-abc123-9f
+      printf '{"items":[{"metadata":{"name":"worker-1","annotations":{"machineconfiguration.openshift.io/currentConfig":"%s","machineconfiguration.openshift.io/desiredConfig":"%s"}}}]}\n' "$cfg" "$cfg"
+      exit 0
+    fi
+    if [[ "$2" == machineconfig && "${3:-}" == simplyblock-master-isolated ]]; then
+      [[ -f "$S/mc.simplyblock-master-isolated" ]] || exit 1
+      [[ "$args" == *cluster-id* ]] && echo abc123de-0000-4000-8000-000000000001
+      exit 0
+    fi
+    kind=$(short "$2")
+    if [[ -n "$kind" && -n "${3:-}" && "${3:-}" != -* ]]; then
+      [[ -f "$S/$kind.$3" ]] || exit 1
+      [[ "$args" == *machineCount* ]] && { [[ -f "$S/node-on-pool" ]] && echo 1 || echo 0; }
+      exit 0
+    fi
+    [[ "$args" == *" -o json "* ]] && echo '{"items":[]}'
+    exit 0
+    ;;
+  patch)
+    if [[ -z "${STUCK:-}" && "$(short "$2")" == mcp && "${3:-}" == storage-abc123 && "$args" == *retired-empty-storage-pool* ]]; then
+      rm -f "$S/node-on-pool"
+    fi
+    exit 0
+    ;;
+  delete)
+    kind=$(short "$2")
+    [[ -z "$kind" ]] && exit 0
+    if [[ "$kind" == mcp && -f "$S/node-on-pool" ]]; then touch "$S/pool-deleted-under-node"; fi
+    rm -f "$S/$kind.${3:-}"
+    exit 0
+    ;;
+esac
+exit 0
+EOF
+  # shellcheck disable=SC2016
+  printf '#!/usr/bin/env bash\n[[ "$1" == list ]] && echo "[]"\nexit 0\n' > "$dir/bin/helm"
+  chmod +x "$dir/bin/kubectl" "$dir/bin/helm"
+  PATH="$dir/bin:$PATH" STATE_DIR="$dir/state" bash "$SCRIPT" -f simplyblock >/dev/null 2>&1
+  local left="" kept=""
+  for o in mcp.storage-abc123 mc.storage-mc-abc123 kc.storage-kubelet-abc123 \
+           kc.storage-kubelet-abc123-master mc.simplyblock-master-isolated; do
+    [[ -f "$dir/state/$o" ]] && left="$left $o"
+  done
+  for o in mcp.storage-ffffff mc.storage-mc-ffffff kc.storage-kubelet-ffffff kc.storage-kubelet-ffffff-master; do
+    [[ -f "$dir/state/$o" ]] || kept="$kept $o"
+  done
+  if [[ -n "$left" ]]; then
+    echo "FAIL $name: left$left"
+    FAILED=1
+  elif [[ -n "$kept" ]]; then
+    echo "FAIL $name: deleted another cluster's$kept"
+    FAILED=1
+  elif [[ -f "$dir/state/pool-deleted-under-node" ]]; then
+    echo "FAIL $name: the pool was deleted while a node still ran its render"
+    FAILED=1
+  else
+    echo "ok   $name"
+  fi
+}
+machine_config_case
+
+# A node that has not left the pool when the wait ends keeps the pool, its
+# MachineConfig, and its KubeletConfig: deleting the pool would delete the render
+# the node runs.
+stuck_pool_case() {
+  local name="a pool a node still runs is kept"
+  local dir="$WORK/mco"
+  rm -rf "$dir/state" && mkdir -p "$dir/state"
+  for o in mcp.storage-abc123 mc.storage-mc-abc123 kc.storage-kubelet-abc123 node-on-pool; do
+    touch "$dir/state/$o"
+  done
+  PATH="$dir/bin:$PATH" STATE_DIR="$dir/state" STUCK=1 MCO_WAIT_SECONDS=0 \
+    bash "$SCRIPT" -f simplyblock >/dev/null 2>&1
+  local gone=""
+  for o in mcp.storage-abc123 mc.storage-mc-abc123 kc.storage-kubelet-abc123; do
+    [[ -f "$dir/state/$o" ]] || gone="$gone $o"
+  done
+  if [[ -n "$gone" ]]; then
+    echo "FAIL $name: deleted$gone while a node ran the pool's render"
+    FAILED=1
+  else
+    echo "ok   $name"
+  fi
+}
+stuck_pool_case
+
 exit "$FAILED"

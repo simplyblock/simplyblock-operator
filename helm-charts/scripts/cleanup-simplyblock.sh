@@ -18,6 +18,11 @@ Options:
       --csi-driver NAME    CSI driver name whose PVs are cleaned up
                            (default: csi.simplyblock.io, or \$CSI_DRIVER)
   -h, --help               Show this help message
+
+On OpenShift, the MachineConfigPool, MachineConfig, and KubeletConfigs of the
+storage clusters in NAMESPACE are removed too, and the nodes they configured
+reboot out of the settings. The wait for a pool's nodes to leave it is
+\$MCO_WAIT_SECONDS long (default 1800).
 EOF
     exit 0
 }
@@ -976,6 +981,93 @@ fi
 section "Removing namespace '$NAMESPACE'"
 $KUBECTL delete namespace "$NAMESPACE" --ignore-not-found --timeout=300s || \
     warn "Namespace '$NAMESPACE' was not removed within 300s"
+
+# ---------------------------------------------------------------------------
+# 7. Remove the MachineConfig objects of the storage clusters (OpenShift)
+# ---------------------------------------------------------------------------
+# On OpenShift the CPU topology job gives a cluster's storage nodes their kubelet
+# settings through a MachineConfigPool, a MachineConfig, and KubeletConfigs named
+# after the first six characters of the cluster's UUID, and the core isolation
+# job isolates cores on the masters through a MachineConfig that records the
+# cluster. Only those of the clusters in this namespace are removed. Every node
+# they configured reboots out of the settings: a worker into the worker pool's
+# render, and the masters one at a time as the master pool rolls.
+#
+# A pool's rendered configs are deleted with it, and a node whose current config
+# is gone cannot be updated. So the pool first stops selecting its nodes, and the
+# pool, its MachineConfig, and its KubeletConfig go once no node runs its render.
+# A pool still in use when the wait ends stays, retired and labeled with this
+# namespace, so a rerun finds it after the StorageClusters are gone.
+MCO_LABEL="storage.simplyblock.io/removed-by-cleanup"
+MCO_WAIT_SECONDS="${MCO_WAIT_SECONDS:-1800}"
+
+# Prints the nodes whose current or desired config is a render of pool $1.
+nodes_on_render() {
+    local nodes="$JSON_DIR/mco-nodes.json"
+    $KUBECTL get nodes -o json > "$nodes" 2>/dev/null || { echo "<unknown>"; return; }
+    python3 -c '
+import json, sys
+prefix = "rendered-" + sys.argv[2] + "-"
+for n in json.load(open(sys.argv[1]))["items"]:
+    a = n["metadata"].get("annotations") or {}
+    if any(a.get("machineconfiguration.openshift.io/" + k, "").startswith(prefix)
+           for k in ("currentConfig", "desiredConfig")):
+        print(n["metadata"]["name"])
+' "$nodes" "$1"
+}
+
+if $KUBECTL get crd machineconfigpools.machineconfiguration.openshift.io >/dev/null 2>&1; then
+    section "Removing the MachineConfig objects of the storage clusters in '$NAMESPACE'"
+
+    master_by=$($KUBECTL get machineconfig simplyblock-master-isolated \
+        -o jsonpath='{.metadata.annotations.simplyblock\.io/cluster-id}' 2>/dev/null || true)
+    if [[ -n "$master_by" && " $CLUSTER_UUIDS " == *" $master_by "* ]]; then
+        info "Deleting MachineConfig simplyblock-master-isolated; the masters reboot one at a time."
+        $KUBECTL delete machineconfig simplyblock-master-isolated --ignore-not-found --timeout=60s >/dev/null || \
+            warn "Could not delete MachineConfig simplyblock-master-isolated"
+    fi
+
+    ids=""
+    for uuid in $CLUSTER_UUIDS; do ids="$ids ${uuid:0:6}"; done
+    for pool in $($KUBECTL get machineconfigpool -l "$MCO_LABEL=$NAMESPACE" -o name 2>/dev/null | sed 's#.*/##'); do
+        ids="$ids ${pool#storage-}"
+    done
+    ids=$(tr ' ' '\n' <<< "$ids" | sort -u)
+
+    for id in $ids; do
+        pool="storage-$id"
+        # Selects the master pool, which rolls on its own.
+        $KUBECTL delete kubeletconfig "storage-kubelet-$id-master" --ignore-not-found --timeout=60s >/dev/null || \
+            warn "Could not delete KubeletConfig storage-kubelet-$id-master"
+
+        if $KUBECTL get machineconfigpool "$pool" >/dev/null 2>&1; then
+            $KUBECTL label machineconfigpool "$pool" "$MCO_LABEL=$NAMESPACE" --overwrite >/dev/null || \
+                warn "Could not label MachineConfigPool $pool"
+            # An In selector with no values is invalid, so a value that matches no host.
+            $KUBECTL patch machineconfigpool "$pool" --type=merge -p \
+                '{"spec":{"nodeSelector":{"matchExpressions":[{"key":"kubernetes.io/hostname","operator":"In","values":["retired-empty-storage-pool"]}]}}}' \
+                >/dev/null || warn "Could not release the nodes of MachineConfigPool $pool"
+            info "MachineConfigPool $pool selects no node now; waiting up to ${MCO_WAIT_SECONDS}s for its nodes to reboot into the worker pool..."
+            deadline=$((SECONDS + MCO_WAIT_SECONDS))
+            while :; do
+                on=$(nodes_on_render "$pool" | tr '\n' ' ')
+                count=$($KUBECTL get machineconfigpool "$pool" -o jsonpath='{.status.machineCount}' 2>/dev/null || echo unknown)
+                [[ -z "$on" && "${count:-0}" == 0 ]] && break
+                if (( SECONDS >= deadline )); then break; fi
+                sleep 15
+            done
+            if [[ -n "$on" || "${count:-0}" != 0 ]]; then
+                warn "Nodes still run MachineConfigPool $pool's render (${on:-machineCount $count}); keeping it."
+                warn "  Re-run this script once they have moved to the worker pool."
+                continue
+            fi
+        fi
+        for obj in "kubeletconfig/storage-kubelet-$id" "machineconfig/storage-mc-$id" "machineconfigpool/$pool"; do
+            $KUBECTL delete "${obj%%/*}" "${obj#*/}" --ignore-not-found --timeout=60s >/dev/null || warn "Could not delete $obj"
+        done
+        info "Removed MachineConfigPool $pool, its MachineConfig, and its KubeletConfigs."
+    done
+fi
 
 # ---------------------------------------------------------------------------
 # Done
