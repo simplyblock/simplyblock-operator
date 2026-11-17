@@ -787,3 +787,50 @@ func TestAStripedVolumesHealthIsEveryMembers(t *testing.T) {
 		t.Errorf("a striped volume with member 2 offline = %+v, want abnormal naming member 2", condition)
 	}
 }
+
+// Regression: 2026-11-17-striped-rollback-leak (PR #922 review). A member the
+// rollback of a failed create could not delete was only logged, so a claim
+// deleted before its retry left the member behind for good. A delete that
+// fails is tried again, and one that still fails is named in the error the
+// claim's events carry.
+func TestARollbackRetriesADeleteAndNamesWhatItLeaves(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		deleteErr int // how many DELETEs fail
+		left      int
+	}{
+		{"a delete that fails once", 1, 0},
+		{"a delete that keeps failing", 1000, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newMockSBCLI()
+			defer mock.Close()
+			cs := stripedServer(t, mock, storageNodes([]string{stripeNodeA, stripeNodeB, stripeNodeC}))
+			creates, deletes := 0, 0
+			mock.failIf = func(r *http.Request) bool {
+				switch {
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/volumes/"):
+					creates++
+					return creates == 3
+				case r.Method == http.MethodDelete && deletes < tc.deleteErr:
+					deletes++
+					return true
+				}
+				return false
+			}
+			_, err := cs.CreateVolume(context.Background(), stripedRequest("pvc-striped", "3", 3*gib))
+			if err == nil {
+				t.Fatal("CreateVolume succeeded with a member that could not be created")
+			}
+			left := volumesNamed(mock)
+			if len(left) != tc.left {
+				t.Fatalf("%d volumes left, want %d: %v", len(left), tc.left, left)
+			}
+			for name := range left {
+				if !strings.Contains(err.Error(), name) {
+					t.Errorf("the error %q does not name the volume %s it left", err, name)
+				}
+			}
+		})
+	}
+}
