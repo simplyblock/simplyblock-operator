@@ -597,6 +597,18 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 		}
 
 		chosen, why := placement.Choose(report, admitted)
+		// After the placement, because the filter and the placement are what can
+		// split an array, and before the emptiness check, because dropping a
+		// partial array can leave a worker with nothing.
+		chosen, partial := keepWholeArrays(report, class, chosen)
+		plan.Refusals = append(plan.Refusals, partial...)
+		if len(chosen) == 0 && len(partial) > 0 {
+			plan.Refusals = append(plan.Refusals, Refusal{
+				Worker: report.Node, Rule: WholeArrayRule,
+				Reason: "every device the run drafted is part of an array it drafted only in part",
+			})
+			continue
+		}
 		if len(chosen) == 0 {
 			plan.Refusals = append(plan.Refusals, Refusal{
 				Worker: report.Node, Rule: placement.Name(), Reason: why,
