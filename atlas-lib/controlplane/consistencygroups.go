@@ -95,6 +95,20 @@ func (c *Client) ConsistencyGroupByName(ctx context.Context, clusterID, name str
 		name, clusterID, errs.ErrNotFound)
 }
 
+// ConsistencyGroupMembers returns the volume ids of a group's current members.
+// An empty group is an empty list.
+func (c *Client) ConsistencyGroupMembers(ctx context.Context, gh lvol.GroupHandle) ([]string, error) {
+	cluster, err := parseUUID("cluster id", gh.ClusterID)
+	if err != nil {
+		return nil, err
+	}
+	group, err := parseUUID("consistency group id", gh.GroupID)
+	if err != nil {
+		return nil, err
+	}
+	return c.consistencyGroupMembers(ctx, cluster, group)
+}
+
 // consistencyGroupMembers returns a group's current open-epoch member lvol ids.
 func (c *Client) consistencyGroupMembers(ctx context.Context, cluster, group uuid.UUID) ([]string, error) {
 	resp, err := c.api.ClustersConsistencyGroupsMembersApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersGetWithResponse(
