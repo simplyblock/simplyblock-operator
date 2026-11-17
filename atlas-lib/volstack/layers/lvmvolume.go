@@ -223,7 +223,7 @@ func (l *LVMLogicalVolume) Ensure(ctx context.Context, below volstack.Artifact) 
 		// The layer below maps the group and everything in it, so reaching here
 		// means the volume alone was taken down. Mapping it again is convergent
 		// and costs nothing when it is already mapped.
-		if err := l.cfg.Manager.ActivateVolumeGroup(ctx, l.group()); err != nil {
+		if err := l.cfg.Manager.ActivateVolumeGroup(ctx, l.group(), physicalVolumes(below)...); err != nil {
 			return volstack.Artifact{}, fmt.Errorf("lvmLogicalVolume: %w", err)
 		}
 		if err := l.clearStaleMarker(ctx); err != nil {

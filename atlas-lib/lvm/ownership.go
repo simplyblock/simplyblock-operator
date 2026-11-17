@@ -48,7 +48,13 @@ type StackRecognizer func(volumeGroup string, logicalVolumes []string) bool
 
 // requireOwned refuses to go on unless volumeGroup carries OwnerTag.
 func (m *Manager) requireOwned(ctx context.Context, volumeGroup VolumeGroup) error {
-	tags, err := m.VolumeGroupTags(ctx, volumeGroup)
+	return m.requireOwnedOn(ctx, nil, volumeGroup)
+}
+
+// requireOwnedOn is requireOwned reading the group from devices alone, nil for
+// every device.
+func (m *Manager) requireOwnedOn(ctx context.Context, devices []string, volumeGroup VolumeGroup) error {
+	tags, err := m.volumeGroupTagsOn(ctx, devices, volumeGroup)
 	if err != nil {
 		if isAlreadyGone(err) {
 			return fmt.Errorf("%w: %s", errGroupGone, volumeGroup.Name)
