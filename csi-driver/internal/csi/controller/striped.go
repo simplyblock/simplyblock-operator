@@ -287,10 +287,35 @@ func pickStripeHosts(
 				"a striped volume needs one storage node per member",
 			kube.ParamStripeWidth, width, len(used)+len(candidates))
 	}
-	for i := range hosts {
-		if hosts[i] == "" {
-			hosts[i], candidates = candidates[0], candidates[1:]
+	// Each open slot takes the candidate in the least used failure domain, the
+	// members already placed counted: walking the rotated interleaving alone
+	// put two members in one domain whenever the rotation began inside a
+	// domain's run, and never counted a pinned or kept member. The rotated
+	// order breaks ties, so the choice stays deterministic per volume and
+	// spread across volumes.
+	domainOf := make(map[string]int, len(nodes))
+	for _, n := range nodes {
+		domainOf[n.ID] = n.FailureDomain
+	}
+	inDomain := map[int]int{}
+	for _, host := range hosts {
+		if host != "" {
+			inDomain[domainOf[host]]++
 		}
+	}
+	for i := range hosts {
+		if hosts[i] != "" {
+			continue
+		}
+		best := 0
+		for j, c := range candidates {
+			if inDomain[domainOf[c]] < inDomain[domainOf[candidates[best]]] {
+				best = j
+			}
+		}
+		hosts[i] = candidates[best]
+		inDomain[domainOf[hosts[i]]]++
+		candidates = slices.Delete(candidates, best, best+1)
 	}
 	return hosts, nil
 }
