@@ -24,7 +24,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog"
 
-	"github.com/simplyblock/csi-driver/internal/clusters"
 	"github.com/simplyblock/csi-driver/internal/controlplane"
 	"github.com/simplyblock/csi-driver/internal/fabric"
 	"github.com/simplyblock/csi-driver/internal/initiator"
@@ -223,7 +222,7 @@ func isTCPReachable(ctx context.Context, ip string, port int) bool {
 	return true
 }
 
-func isNodeOnline(ctx context.Context, client *controlplane.ClusterClient, nodeID, ip string, port int) bool {
+func isNodeOnline(ctx context.Context, client volumeClient, nodeID, ip string, port int) bool {
 	status, err := client.StorageNodeStatus(ctx, nodeID)
 	if err != nil {
 		klog.Errorf("failed to fetch node status for node %s: %v", nodeID, err)
@@ -356,12 +355,12 @@ func resolveExpectedPathCount(subsystemNQN, clusterID, lvolID string, currentAct
 		return cached
 	}
 
-	sbcClient, err := clusters.Client(context.Background(), clusterID, "")
-	if err != nil {
-		klog.Warningf("resolveExpectedPathCount: client error for NQN %s: %v", subsystemNQN, err)
-		return cached
-	}
-	conns, err := sbcClient.LvolConnections(context.Background(), lvolID, hostNQN)
+	var conns []*controlplane.LvolConnectResp
+	_, _, err := volumeClusters.lookup(context.Background(), clusterID, lvolID, func(c volumeClient) error {
+		var qerr error
+		conns, qerr = c.LvolConnections(context.Background(), lvolID, hostNQN)
+		return qerr
+	})
 	if err != nil {
 		klog.Warningf("resolveExpectedPathCount: fetch error for NQN %s: %v", subsystemNQN, err)
 		return cached
@@ -378,12 +377,14 @@ func resolveExpectedPathCount(subsystemNQN, clusterID, lvolID string, currentAct
 }
 
 func recoverPathsWithANA(clusterID, lvolID, devicePath string, activePaths []initiator.Path, hostNQN string) error {
-	sbcClient, err := clusters.Client(context.Background(), clusterID, "")
-	if err != nil {
-		return fmt.Errorf("failed to create SimplyBlock client: %w", err)
-	}
-
-	nodeInfo, err := sbcClient.VolumeNodeInfo(context.Background(), lvolID)
+	// The volume may have moved to another cluster since the subsystem was
+	// attached; the resolver finds the cluster serving it (see clusterResolver).
+	var nodeInfo *controlplane.NodeInfo
+	sbcClient, _, err := volumeClusters.lookup(context.Background(), clusterID, lvolID, func(c volumeClient) error {
+		var qerr error
+		nodeInfo, qerr = c.VolumeNodeInfo(context.Background(), lvolID)
+		return qerr
+	})
 	if err != nil {
 		return fmt.Errorf("failed to fetch node info for lvol %s: %w", lvolID, err)
 	}
@@ -448,7 +449,7 @@ func recoverPathsWithANA(clusterID, lvolID, devicePath string, activePaths []ini
 
 //nolint:unparam // devicePath kept for parity with reconcileNonOptimizedPaths
 func reconcileOptimizedPath(
-	sbcClient *controlplane.ClusterClient,
+	sbcClient volumeClient,
 	nodeInfo *controlplane.NodeInfo,
 	devicePath string,
 	conn *controlplane.LvolConnectResp,
@@ -489,7 +490,7 @@ func reconcileOptimizedPath(
 //
 //nolint:unparam // devicePath kept for parity with reconcileOptimizedPath
 func reconcileNonOptimizedPaths(
-	sbcClient *controlplane.ClusterClient,
+	sbcClient volumeClient,
 	nodeInfo *controlplane.NodeInfo,
 	devicePath string,
 	conns []*controlplane.LvolConnectResp,

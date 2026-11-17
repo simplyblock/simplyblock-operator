@@ -599,7 +599,9 @@ func (client APIClient) deleteSnapshotScanPools(ctx context.Context, snapshotID 
 }
 
 // findPoolForVolume scans all storage pools to find which one contains the given
-// volume UUID, and returns that pool's UUID. Returns an error if not found.
+// volume UUID, and returns that pool's UUID. A volume no pool holds is
+// reported as ErrVolumeNotFound, so callers can tell "not in this cluster"
+// from a control plane that failed to answer.
 func (client APIClient) findPoolForVolume(ctx context.Context, lvolID string) (string, error) {
 	pools, err := client.listStoragePools(ctx)
 	if err != nil {
@@ -614,7 +616,7 @@ func (client APIClient) findPoolForVolume(ctx context.Context, lvolID string) (s
 			return "", fmt.Errorf("unexpected error searching for volume %s in pool %s: %w", lvolID, pool.UUID, err)
 		}
 	}
-	return "", fmt.Errorf("volume %s not found in any pool", lvolID)
+	return "", fmt.Errorf("volume %s not found in any pool: %w", lvolID, ErrVolumeNotFound)
 }
 
 // getLvolConnections returns the raw NVMe-oF connection list for a volume.
