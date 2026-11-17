@@ -38,6 +38,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/simplyblock/atlas/internal/recordfile"
 )
 
 const (
@@ -358,17 +360,10 @@ func (h *Holds) Recover(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// path is a hold's record, named for its key made safe for a filename.
+// path is a hold's record, named by the rule the volume stack's records beside
+// it use.
 func (h *Holds) path(key string) string {
-	safe := strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '.':
-			return r
-		default:
-			return '_'
-		}
-	}, key)
-	return filepath.Join(h.cfg.Dir, safe+".json")
+	return recordfile.Path(h.cfg.Dir, key)
 }
 
 func (h *Holds) write(key string, rec record) error {
