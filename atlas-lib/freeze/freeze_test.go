@@ -273,3 +273,30 @@ func withDevice(device string, acquire func(context.Context) (func(), error)) Ac
 		return device, release, err
 	}
 }
+
+// Regression: 2026-11-17-freeze-deadline-after-suspend (PR #922 review). The
+// deadline was armed once the suspend returned, and dmsetup suspend over a
+// member that lost every path waits in the kernel for as long as the path is
+// gone, with the volume's lock held and nothing bounding it. The deadline runs
+// from the Freeze: one that passes while the suspend is still running ends the
+// hold, the device is resumed the moment the suspend returns, and a Thaw is
+// told the freeze did not hold.
+func TestTheDeadlineRunsFromTheFreezeNotFromTheSuspend(t *testing.T) {
+	h, m, timers := newHolds(t, "")
+	m.onSuspend = func() {
+		if len(*timers) == 0 {
+			t.Error("no deadline was armed while the suspend ran")
+			return
+		}
+		(*timers)[0].fire()
+	}
+	if err := h.Freeze(context.Background(), "vol", "tok", 5*time.Second, withDevice("dm-x", nil)); err == nil {
+		t.Error("a freeze whose deadline passed during its suspend reported success")
+	}
+	if got := m.seen(); !slices.Equal(got, []string{"suspend dm-x", "resume dm-x"}) {
+		t.Errorf("calls = %v, want the device resumed once the suspend returned", got)
+	}
+	if held, _ := h.Thaw(context.Background(), "vol", "tok"); held {
+		t.Error("a Thaw after the deadline was told the freeze held")
+	}
+}
