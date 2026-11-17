@@ -780,7 +780,28 @@ func (r *ReplicationSlotReconciler) followBackendOutOfCutoverPending(
 	// replication having been stopped), and the slot must follow instead
 	// of waiting for a cutover that will not come (bf12 2026-11-04: slots
 	// cutover_pending for 16 h, a new migration round blocked behind them).
+	//
+	// A cutover that did complete looks the same from here once the window
+	// in which the source reports cutover_done has passed: with
+	// --delete-source the source volume is gone and its replication read
+	// answers 404. Whether the data moved is the control plane's
+	// relationship record, so that decides, and a release waits for it
+	// (bf24 2026-11-14: vol-3 and vol-6 released as abandoned right after
+	// cutover-proceed, the slots kept the deleted source volume, and the
+	// next rounds skipped them or asked for a plan on the wrong cluster).
 	if !isFailback && (status == nil || status.State == utils.ReplicationBackendStateReplicating) {
+		movedTo, err := r.completedMoveOf(ctx, slot, apiClient)
+		if err != nil {
+			logf.FromContext(ctx).Error(err, "Cannot tell whether the cutover completed; keeping cutover_pending",
+				"slot", slot.Name)
+			return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
+		}
+		if movedTo != "" {
+			// The preconnect of this attempt never reported success: give the
+			// consumer the paths of the volume it has been moved to.
+			late := slot.Annotations[annotCutoverProceedSignaled] != annotCutoverProceedSignaledValue
+			return r.adoptCompletedMove(ctx, slot, apiClient, movedTo, late)
+		}
 		return r.releaseAbandonedCutover(ctx, slot, apiClient, status, clusterID, poolID, volumeID)
 	}
 	// During failback the target cluster always has the stale failed_over record
@@ -1130,6 +1151,63 @@ func (r *ReplicationSlotReconciler) cutoverInFlight(
 	return h.Resyncing, nil
 }
 
+// completedMoveOf is the handle of the volume a completed cutover moved the
+// slot's volume to, read from the control plane's relationship records, or ""
+// when the volume still serves its own data.
+func (r *ReplicationSlotReconciler) completedMoveOf(
+	ctx context.Context,
+	slot *simplyblockv1alpha1.ReplicationSlot,
+	apiClient *webapi.Client,
+) (string, error) {
+	current, err := currentVolumeHandle(ctx, apiClient, slot.Spec.VolumeID)
+	if err != nil {
+		return "", err
+	}
+	if current == slot.Spec.VolumeID {
+		return "", nil
+	}
+	return current, nil
+}
+
+// adoptCompletedMove records a cutover the backend completed without the slot
+// seeing it report cutover_done: the slot is cut over to movedTo, the volume
+// serving the data now. spec.volumeID keeps naming the source, as for any
+// finished slot; a later migration locates the volume through the control
+// plane. late asks for a late preconnect to the moved volume, for a consumer
+// whose preconnect of this cutover never completed.
+func (r *ReplicationSlotReconciler) adoptCompletedMove(
+	ctx context.Context,
+	slot *simplyblockv1alpha1.ReplicationSlot,
+	apiClient *webapi.Client,
+	movedTo string,
+	late bool,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	clusterID, _, volumeID, _ := splitVolumeHandle(slot.Spec.VolumeID)
+	toCluster, toPool, toVolume, ok := splitVolumeHandle(movedTo)
+	if !ok {
+		return ctrl.Result{RequeueAfter: replSlotRequeueError}, fmt.Errorf("moved-to handle %q is not a volume handle", movedTo)
+	}
+	if late {
+		r.reconcilePreconnect(ctx, slot, apiClient, clusterID, volumeID, toCluster, toPool, toVolume)
+	}
+
+	patch := client.MergeFrom(slot.DeepCopy())
+	slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone)
+	slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionTarget)
+	slot.Status.TargetLvolID = toVolume
+	slot.Status.TargetNQN = ""
+	slot.Status.Message = fmt.Sprintf("Cutover done; the volume is now %s", movedTo)
+	if err := r.Status().Patch(ctx, slot, patch); err != nil {
+		return ctrl.Result{Requeue: true}, nil
+	}
+	log.Info("Cutover completed on the backend; slot cut over to the moved volume",
+		"slot", slot.Name, "from", slot.Spec.VolumeID, "to", movedTo)
+	r.Recorder.Eventf(slot, nil, corev1.EventTypeNormal, "CutoverDone", "CutoverDone",
+		"Volume %s has cut over to %s", volumeID, movedTo)
+	return ctrl.Result{RequeueAfter: replSlotRequeueReplicating}, nil
+}
+
 // releaseAbandonedCutover takes a slot out of cutover_pending once the backend
 // reports the relationship as replicating, or reports none, for a cutover that
 // did not happen. It goes back to replicating; the next replicating poll then
@@ -1263,6 +1341,21 @@ func (r *ReplicationSlotReconciler) reconcileStoppedReplication(
 	log := logf.FromContext(ctx)
 
 	vol, err := apiClient.GetVolume(ctx, clusterID, poolID, volumeID)
+	if err == nil && vol == nil {
+		// The volume itself is gone. If a completed cutover moved it, the slot
+		// missed that cutover (or an older operator released it as abandoned)
+		// and still addresses the deleted source: it is cut over, not
+		// replicating.
+		movedTo, merr := r.completedMoveOf(ctx, slot, apiClient)
+		if merr != nil {
+			log.Error(merr, "Cannot resolve where a missing volume moved", "slot", slot.Name)
+			return ctrl.Result{}, false, nil
+		}
+		if movedTo != "" {
+			res, err := r.adoptCompletedMove(ctx, slot, apiClient, movedTo, false)
+			return res, true, err
+		}
+	}
 	if err != nil || vol == nil || vol.DoReplicate == nil {
 		return ctrl.Result{}, false, nil
 	}
