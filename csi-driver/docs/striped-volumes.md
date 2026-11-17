@@ -11,21 +11,52 @@ not set `stripe_width`, or sets it to `0` or `1`, provisions exactly as before.
 
 ### Turning it on
 
-**Through a StoragePool.** The operator writes the class of a pool it manages from
-the pool's `spec.volumeDefaults`, and `stripeWidth` and `stripeSize` there become
-`stripe_width` and `stripe_size`:
+**Through a StoragePool.** A pool's `spec.volumeDefaults` reach its volumes through
+the classes assigned to it, which state them as parameters: `stripeWidth` and
+`stripeSize` become `stripe_width` and `stripe_size`. The operator writes a class for a
+cluster's default pool only, and every other pool's class is written by an
+administrator, carrying the pool's three assignment labels (design-storagepool.md §5).
+So a striped pool takes both, the pool and a class that stripes as it does:
 
 ```yaml
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StoragePool
 metadata:
   name: fast
+  namespace: simplyblock
 spec:
   clusterRef: production
   volumeDefaults:
     stripeWidth: 4
     stripeSize: 64Ki
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: simplyblock-fast
+  labels:
+    storage.simplyblock.io/namespace: simplyblock
+    storage.simplyblock.io/cluster: production
+    storage.simplyblock.io/pool: fast
+provisioner: csi.simplyblock.io
+parameters:
+  cluster_id: <the StorageCluster's status.uuid>
+  pool_name: fast
+  stripe_width: "4"
+  stripe_size: "64Ki"
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
 ```
+
+A class assigned to a pool may not stripe otherwise than the pool. The StorageClass
+admission webhook refuses an assigned class whose `stripe_width` or `stripe_size`
+differs from the pool's, read the way the driver reads them (`64Ki` and `65536` are
+one size), or which reaches another cluster or pool than its labels assign it to. A
+class written before its pool existed is reported on the pool instead, as a Warning
+event `StorageClassDisagreesWithPool`. Any other default a class overrides, another
+filesystem for instance, is admitted and reported as a Normal event
+`StorageClassOverridesPoolDefault`.
 
 The CRD refuses a `stripeWidth` above 128, a `stripeSize` that is not a power of
 two from 4Ki to 1Mi or that is set without a `stripeWidth` of 2 or more, and a
