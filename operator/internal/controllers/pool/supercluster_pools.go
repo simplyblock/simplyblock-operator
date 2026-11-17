@@ -130,7 +130,7 @@ func (r *StoragePoolReconciler) reconcileSuperclusterPool(
 			return ctrl.Result{RequeueAfter: requeueNotReady}, nil
 		}
 	}
-	classNames, err := r.indexAssignedClasses(ctx, p)
+	classNames, err := r.indexAssignedClasses(ctx, p, supercluster.Status.UUID)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

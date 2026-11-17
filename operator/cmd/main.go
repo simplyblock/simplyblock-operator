@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -30,6 +31,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/freeze/freezerpc"
 	"github.com/simplyblock/atlas/link"
 	"github.com/simplyblock/atlas/placement/placementrpc"
 	atlasprom "github.com/simplyblock/atlas/prometheus"
@@ -467,6 +469,20 @@ func main() {
 		setupLog.Error(err, "unable to build the placement service")
 		os.Exit(1)
 	}
+	// A striped volume's freeze (atlas-lib/freeze/freezerpc) is relayed from
+	// the CSI controller to the node that stages the volume: the controller has
+	// no link to a node, and both link to here. The registry the relay reaches
+	// nodes through exists once the hub does, so it is read at call time.
+	freezeRelay := freezerpc.NewRelay(func(node string) (grpc.ClientConnInterface, []string, error) {
+		if csiPeers == nil {
+			return nil, nil, errors.New("the CSI link is not running")
+		}
+		p, err := csiPeers.Peer(link.NodePeer(node))
+		if err != nil {
+			return nil, nil, err
+		}
+		return p.Conn(), p.Capabilities, nil
+	})
 	if csiLinkEnabled {
 		var certFile, keyFile string
 		if csiLinkCertPath != "" {
@@ -487,8 +503,11 @@ func main() {
 			NodeServiceAccount:       "simplyblock-csi-node-sa",
 			ControllerServiceAccount: "simplyblock-csi-controller-sa",
 			MDSServiceAccount:        "simplyblock-csi-mds-sa",
-			Register:                 placementServer.Register,
-			Capabilities:             placementrpc.Capabilities(),
+			Register: func(r grpc.ServiceRegistrar) {
+				placementServer.Register(r)
+				freezeRelay.Register(r)
+			},
+			Capabilities: append(placementrpc.Capabilities(), freezerpc.Capabilities()...),
 		})
 		if err != nil {
 			setupLog.Error(err, "unable to set up the CSI link")
@@ -1517,6 +1536,10 @@ func main() {
 				APIClient: webapi.NewClient(),
 			}})
 		setupLog.Info("registered pinned-volume validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-k8s-io-v1-storageclass",
+			&webhook.Admission{Handler: &internalwebhook.StorageClassValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered storageclass validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-v1-pvc-vdo-size",
 			&webhook.Admission{Handler: &internalwebhook.VDOSizeFloorValidator{Client: mgr.GetClient()}})

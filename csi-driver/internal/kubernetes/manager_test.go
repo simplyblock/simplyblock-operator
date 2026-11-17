@@ -212,3 +212,54 @@ func TestManagerReflectsWatchUpdates(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// TestAStripedVolumeIsFoundByItsFirstMember holds the PersistentVolume lookup to
+// a striped handle, whose fourth segment names its width. Missing it would read
+// as the volume having no PersistentVolume, which the node service takes for a
+// deletion and destroys the volume's LVM stack on the next unstage.
+func TestAStripedVolumeIsFoundByItsFirstMember(t *testing.T) {
+	striped := testPV("pv-striped", testDriver, handle(lvolZ)+":s3")
+	for _, synced := range []bool{false, true} {
+		client := fake.NewSimpleClientset(striped.DeepCopy())
+		m := sbkube.NewManager(client)
+		ctx, cancel := context.WithCancel(context.Background())
+		if synced {
+			m.Start(ctx)
+			waitForSync(t, m)
+		}
+		pv, err := m.PersistentVolumeByLogicalVolumeID(ctx, lvolZ)
+		cancel()
+		if err != nil || pv.Name != "pv-striped" {
+			t.Errorf("synced=%v: PersistentVolumeByLogicalVolumeID(%s) = %v, %v; want pv-striped", synced, lvolZ, pv, err)
+		}
+	}
+}
+
+// TestAStripedVolumeIsFoundByEveryMember holds the lookup to the members the
+// volume attributes list. The handle names only the first member, and the
+// node's reconnect loop skips a subsystem whose lvol has no PersistentVolume:
+// on a bed, the second and third members of every striped volume lost a path
+// to a killed storage node for good, and the next outage of their other node
+// failed the volume with EIO.
+func TestAStripedVolumeIsFoundByEveryMember(t *testing.T) {
+	striped := testPV("pv-striped", testDriver, handle(lvolZ)+":s3")
+	striped.Spec.CSI.VolumeAttributes = map[string]string{"stripeMembers": lvolZ + "," + lvolA + ", " + lvolB}
+	for _, synced := range []bool{false, true} {
+		client := fake.NewSimpleClientset(striped.DeepCopy())
+		m := sbkube.NewManager(client)
+		ctx, cancel := context.WithCancel(context.Background())
+		if synced {
+			m.Start(ctx)
+			waitForSync(t, m)
+		}
+		for _, id := range []string{lvolZ, lvolA, lvolB} {
+			if pv, err := m.PersistentVolumeByLogicalVolumeID(ctx, id); err != nil || pv.Name != "pv-striped" {
+				t.Errorf("synced=%v: PersistentVolumeByLogicalVolumeID(%s) = %v, %v; want pv-striped", synced, id, pv, err)
+			}
+		}
+		if _, err := m.PersistentVolumeByLogicalVolumeID(ctx, lvolC); !apierrors.IsNotFound(err) {
+			t.Errorf("synced=%v: lvolC error = %v, want NotFound", synced, err)
+		}
+		cancel()
+	}
+}

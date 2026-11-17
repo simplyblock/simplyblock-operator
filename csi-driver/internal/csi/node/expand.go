@@ -6,12 +6,15 @@ package node
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
+
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
 func (ns *Server) NodeExpandVolume(
@@ -77,6 +80,7 @@ func (ns *Server) NodeExpandVolume(
 		return &csi.NodeExpandVolumeResponse{}, nil
 	}
 
+	volumeContext = expansionContext(volumeContext, req.GetCapacityRange().GetRequiredBytes())
 	plan, err := ns.attachPlan(ctx, volumeID, getStagingTargetPath(req), volumeContext, req.GetVolumeCapability())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to build the stack plan for volume %s: %v", volumeID, err)
@@ -144,4 +148,23 @@ func pnfsGrowArrived(have, required int64) bool {
 	const minTolerance, maxTolerance = int64(64) << 20, int64(2) << 30
 	tolerance := min(max(required/64, minTolerance), maxTolerance)
 	return have >= required-tolerance
+}
+
+// expansionContext is the stashed context an expansion builds its plan from: as
+// staged, except that a client-side compressed or deduplicated volume names the
+// size its VDO volume grows to, which an expansion learns from the request and
+// not from the context. The size is the request in whole GiB, which is what the
+// controller reports and sized the pool under it for. A request naming no size
+// leaves the context as staged.
+func expansionContext(vc map[string]string, requiredBytes int64) map[string]string {
+	if !wantsVDO(vc) || requiredBytes <= 0 {
+		return vc
+	}
+	const gib = int64(1) << 30
+	grown := make(map[string]string, len(vc)+1)
+	for k, v := range vc {
+		grown[k] = v
+	}
+	grown[csicommon.CtxVDOLogicalBytes] = strconv.FormatInt((requiredBytes+gib-1)/gib*gib, 10)
+	return grown
 }

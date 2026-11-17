@@ -204,6 +204,21 @@ Naming the groups for what they limit is what makes that legible.
 takes the `enable` form, and it moves under `spec.volumeDefaults` because it is a
 property of the volumes the pool creates rather than of the pool.
 
+**`stripeWidth` and `stripeSize` stripe the pool's volumes**
+([`csi-driver/docs/striped-volumes.md`](../../../../csi-driver/docs/striped-volumes.md)).
+They are written as `stripe_width` and `stripe_size`, and a width of 0 or 1 writes
+neither. CEL rules on `VolumeDefaults` refuse what the CSI driver would refuse for
+every claim: a `stripeSize` without a width of 2 or more, and a striped pool with
+client-side compression, deduplication, or replication. What depends on the
+cluster, its storage-node count and whether it is stretched, is the admission
+webhook's (§3.4).
+
+Like every volume default, the stripe reaches a volume only through a class that
+states it, and the operator writes a class for the default pool alone (§4.4). Unlike
+the other defaults, a class assigned to a striped pool may not depart from it: the
+pool's admission checks were made for its stripe, and a class striping otherwise, or
+not at all, would provision volumes nobody checked. §5 says how that is enforced.
+
 ### 3.2 Immutability
 
 | Field            | Optionality | Semantics                                                           |
@@ -270,11 +285,33 @@ ordering, which nothing about the intent justifies.
 So the webhook answers one question, whether the named object exists, and everything
 about the cluster's readiness belongs to the reconcile.
 
+**A striped pool is checked against the cluster that will serve it.** A
+`stripeWidth` of 2 or more is refused on a stretched or sync-replicated cluster, and
+when it is wider than the cluster's storage nodes once there are nodes to count. On a
+supercluster both are checked for every member that takes new volumes, since a
+striped volume is placed in one member and striped there. These checks run on
+`CREATE` and on an `UPDATE` that introduces the stripe: `spec.volumeDefaults` is
+immutable once set, but a pool created without it may gain it. An update that leaves
+the stripe as it was is not checked, for the reason an update is not checked against
+`spec.clusterRef`.
+
 **`failurePolicy: Fail`**, for the reason
 [`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §5 gives:
 the webhook server runs in the operator pod, so while it is unavailable nothing
 reconciles a pool anyway, and admitting a pool whose immutable reference cannot be
 resolved creates an object that can only be deleted.
+
+**A `StorageClassValidator` rejects a class that departs from the pool it is
+assigned to** (§5). It sees only classes carrying the `storage.simplyblock.io/pool`
+label: a `matchConditions` expression scopes it, so that its `failurePolicy: Fail`
+cannot block a class that names no pool while the operator is unavailable. A class is
+rejected when it reaches another cluster or pool than its labels assign it to, or when
+its `stripe_width` or `stripe_size` differs from the pool's, both read the way the CSI
+driver reads them. Every other default it overrides is admitted. A pool that does not
+exist yet admits the class, since there is nothing to compare with, and the pool
+controller reports a disagreement once the pool is there. An update is checked only
+when it assigns the class to a pool: `parameters` is immutable, so any other update
+changes nothing the check reads, and a class that predates the webhook stays editable.
 
 ### 3.5 Examples
 
@@ -551,6 +588,25 @@ this class draw from," in either direction: a class names one pool, and the clas
 assigned to a pool are a label selector rather than a computation. `parameters`
 carries what the driver needs to reach the backend, and the operator validates that
 the two agree.
+
+**Agreeing is two tiers, because a class may differ from its pool on purpose.** A pool
+can back an `ext4` class and an `xfs` class, so most of `spec.volumeDefaults` is a
+default a class may override. Two things are not:
+
+- **Where the class provisions.** `cluster_id` and `pool_name` have to reach the pool
+  the labels name, by its name or its UUID. A class reaching another one provisions
+  volumes the pool never sees.
+- **The stripe.** `stripe_width` and `stripe_size` have to be the pool's, as the CSI
+  driver reads them, so `64Ki` and `65536` are one size. The pool's admission checks
+  (§3.4) were made for its stripe, and a class striping otherwise, or not at all,
+  would provision volumes nobody checked: a striped pool whose class did not stripe
+  provisioned ordinary volumes, and nothing said so.
+
+A departure from either is rejected at admission (§3.4) and, for a class written before
+its pool or before the webhook, reported as `StorageClassDisagreesWithPool` (§9.1). An
+override of any other default is reported as `StorageClassOverridesPoolDefault`, as
+information. QoS ceilings are read under every spelling §5.1 names, so a class stating
+the pool's ceiling under an older key agrees with it.
 
 **The class name carries nothing, and that is what makes zero-or-more possible.** A
 class named for its pool (`simplyblock-<namespace>-<cluster>-<pool>`) puts the link
@@ -860,26 +916,28 @@ The pool controller emits no events and exports no metric. Both tables are new.
 Events land on the `StoragePool`, which is what an administrator managing tenancy
 has open, and on the `StoragePoolOps` for an operation.
 
-| Event                                                    | Type      | Reason                      | On               |
-|----------------------------------------------------------|-----------|-----------------------------|------------------|
-| The pool was created in the control plane                | `Normal`  | `PoolCreated`               | `StoragePool`    |
-| Creation was rejected by the control plane               | `Warning` | `PoolCreationFailed`        | `StoragePool`    |
-| The cluster is not ready, so creation is held            | `Normal`  | `ClusterNotReady`           | `StoragePool`    |
-| A `StorageClass` was assigned to this pool               | `Normal`  | `StorageClassAssigned`      | `StoragePool`    |
-| The default class was created with the default pool      | `Normal`  | `StorageClassCreated`       | `StoragePool`    |
-| The default class's name is taken by another class       | `Warning` | `StorageClassNameTaken`     | `StoragePool`    |
-| A class assigned to this pool sets both QoS spellings    | `Warning` | `QoSParameterConflict`      | `StoragePool`    |
-| An entry in `spec.allowedNodes` resolves to no node      | `Warning` | `AllowedNodeMissing`        | `StoragePool`    |
-| Deletion is held because a class is still assigned       | `Warning` | `StorageClassStillAssigned` | `StoragePool`    |
-| Deletion is held because volumes are still bound         | `Warning` | `VolumesStillBound`         | `StoragePool`    |
-| The control plane refused to delete the pool             | `Warning` | `PoolDeletionFailed`        | `StoragePool`    |
-| The pool's capacity limit has been reached               | `Warning` | `CapacityExhausted`         | `StoragePool`    |
-| The operation is waiting for another to release the lock | `Normal`  | `OperationQueued`           | `StoragePoolOps` |
-| The operation acquired the lock and started              | `Normal`  | `OperationStarted`          | `StoragePoolOps` |
-| The operation finished successfully                      | `Normal`  | `OperationSucceeded`        | `StoragePoolOps` |
-| The operation failed                                     | `Warning` | `OperationFailed`           | `StoragePoolOps` |
-| The operation was aborted and its unwind finished        | `Normal`  | `OperationAborted`          | `StoragePoolOps` |
-| A step's deadline expired                                | `Warning` | `StepDeadlineExceeded`      | `StoragePoolOps` |
+| Event                                                    | Type      | Reason                             | On               |
+|----------------------------------------------------------|-----------|------------------------------------|------------------|
+| The pool was created in the control plane                | `Normal`  | `PoolCreated`                      | `StoragePool`    |
+| Creation was rejected by the control plane               | `Warning` | `PoolCreationFailed`               | `StoragePool`    |
+| The cluster is not ready, so creation is held            | `Normal`  | `ClusterNotReady`                  | `StoragePool`    |
+| A `StorageClass` was assigned to this pool               | `Normal`  | `StorageClassAssigned`             | `StoragePool`    |
+| The default class was created with the default pool      | `Normal`  | `StorageClassCreated`              | `StoragePool`    |
+| The default class's name is taken by another class       | `Warning` | `StorageClassNameTaken`            | `StoragePool`    |
+| A class assigned to this pool sets both QoS spellings    | `Warning` | `QoSParameterConflict`             | `StoragePool`    |
+| A class assigned to this pool departs from it (§5)       | `Warning` | `StorageClassDisagreesWithPool`    | `StoragePool`    |
+| A class assigned to this pool overrides a default (§5)   | `Normal`  | `StorageClassOverridesPoolDefault` | `StoragePool`    |
+| An entry in `spec.allowedNodes` resolves to no node      | `Warning` | `AllowedNodeMissing`               | `StoragePool`    |
+| Deletion is held because a class is still assigned       | `Warning` | `StorageClassStillAssigned`        | `StoragePool`    |
+| Deletion is held because volumes are still bound         | `Warning` | `VolumesStillBound`                | `StoragePool`    |
+| The control plane refused to delete the pool             | `Warning` | `PoolDeletionFailed`               | `StoragePool`    |
+| The pool's capacity limit has been reached               | `Warning` | `CapacityExhausted`                | `StoragePool`    |
+| The operation is waiting for another to release the lock | `Normal`  | `OperationQueued`                  | `StoragePoolOps` |
+| The operation acquired the lock and started              | `Normal`  | `OperationStarted`                 | `StoragePoolOps` |
+| The operation finished successfully                      | `Normal`  | `OperationSucceeded`               | `StoragePoolOps` |
+| The operation failed                                     | `Warning` | `OperationFailed`                  | `StoragePoolOps` |
+| The operation was aborted and its unwind finished        | `Normal`  | `OperationAborted`                 | `StoragePoolOps` |
+| A step's deadline expired                                | `Warning` | `StepDeadlineExceeded`             | `StoragePoolOps` |
 
 **`VolumesStillBound` is the load-bearing one**, because it is the only thing
 that explains a `kubectl delete storagecluster` that does not finish (§6). Without
