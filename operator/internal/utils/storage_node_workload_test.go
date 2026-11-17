@@ -1,12 +1,14 @@
 package utils
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -33,6 +35,36 @@ func TestBuildStorageNodeSetClusterRoleBindingNameIncludesNamespace(t *testing.T
 	}
 	if len(cluster1Binding.Subjects) != 1 || cluster1Binding.Subjects[0].Namespace != "cluster1" {
 		t.Fatalf("expected cluster1 service account subject, got %#v", cluster1Binding.Subjects)
+	}
+}
+
+// allows reports whether a rule of role grants verb on the resource kind in group.
+func allows(role *rbacv1.ClusterRole, group, kind, verb string) bool {
+	for _, r := range role.Rules {
+		if slices.Contains(r.APIGroups, group) && slices.Contains(r.Resources, kind) && slices.Contains(r.Verbs, verb) {
+			return true
+		}
+	}
+	return false
+}
+
+// The OpenShift CPU topology job deletes the master KubeletConfig a previous
+// simplyblock cluster left behind. Without delete in the storage node role that
+// call is Forbidden, `set -e` fails the job, and the node is never added.
+func TestStorageNodeRoleMayDeleteAKubeletConfigOnOpenShift(t *testing.T) {
+	const group = "machineconfiguration.openshift.io"
+	role := BuildStorageNodeSetClusterRole(true)
+
+	if !allows(role, group, "kubeletconfigs", "delete") {
+		t.Fatalf("the storage node role cannot delete kubeletconfigs: %#v", role.Rules)
+	}
+	for _, kind := range []string{"machineconfigs", "machineconfigpools"} {
+		if allows(role, group, kind, "delete") {
+			t.Errorf("the storage node role may delete %s, which no job does", kind)
+		}
+	}
+	if allows(BuildStorageNodeSetClusterRole(false), group, "kubeletconfigs", "delete") {
+		t.Errorf("the storage node role grants kubeletconfigs outside OpenShift")
 	}
 }
 
