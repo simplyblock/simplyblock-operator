@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/lvm"
@@ -152,6 +153,30 @@ func readHead(t *testing.T, dev blockdev.Device, n int64) []byte {
 		t.Fatalf("read the first %d bytes of %s: %v", n, dev.Path, err)
 	}
 	return head
+}
+
+// awaitGone waits for detached devices to leave /dev, and fails the case with
+// what is still there when they do not: a namespace the harness believes it
+// detached and LVM still scans is a fixture fault, not a finding about the stack.
+func awaitGone(t *testing.T, paths []string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var present []string
+		for _, path := range paths {
+			if _, err := os.Stat(path); err == nil {
+				present = append(present, path)
+			}
+		}
+		if len(present) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			all, _ := filepath.Glob("/dev/nvme*n*")
+			t.Fatalf("%v are still present 30s after their detach; /dev holds %v", present, all)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // lastLine is a report's value line, after whatever notices LVM printed first
@@ -328,12 +353,18 @@ func TestStripedStackStagesACloneBesideItsSource(t *testing.T) {
 
 	// The backend's snapshot and clone, done on the node: each member's bytes
 	// onto a namespace of its own.
+	var copied []string
 	func() {
 		devices, detach := h.attachRaw(ctx, t, "copy", h.targets[:4]...)
 		defer detach()
 		copyDevice(t, devices[0], devices[2])
 		copyDevice(t, devices[1], devices[3])
+		copied = []string{devices[2].Path, devices[3].Path}
 	}()
+	// The source is staged with the copies detached, so that what this case
+	// tests is the clone attaching beside a live source, and not the source
+	// re-staging beside a clone nobody has re-identified yet.
+	awaitGone(t, copied)
 
 	sourcePlan := h.node.Striped(connections(source), h.volume, stripedOptions(len(source)))
 	sourceArt := h.up(ctx, sourcePlan)
