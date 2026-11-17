@@ -36,6 +36,8 @@ import (
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog"
+
+	"github.com/simplyblock/atlas/kube"
 )
 
 const (
@@ -162,6 +164,11 @@ func (cs *Server) thaw(ctx context.Context, node, volumeID, token string) bool {
 
 // stagedNodes is the nodes the volume is attached to, from its
 // VolumeAttachments, which are where kubelet stages it.
+//
+// The PersistentVolume is matched on its handle alone, not through
+// kube.LiveResolver.PVByVolumeHandle, which keeps only PVs of the default driver
+// name: under a driver started with another --drivername it would find none,
+// and the volume would read as attached nowhere and be snapshotted unfrozen.
 func (cs *Server) stagedNodes(ctx context.Context, volumeID string) ([]string, error) {
 	if cs.attachedNodes != nil {
 		return cs.attachedNodes(ctx, volumeID)
@@ -174,30 +181,23 @@ func (cs *Server) stagedNodes(ctx context.Context, volumeID string) ([]string, e
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "list PersistentVolumes: %v", err)
 	}
-	names := map[string]bool{}
-	for i := range pvs.Items {
-		if c := pvs.Items[i].Spec.CSI; c != nil && c.VolumeHandle == volumeID {
-			names[pvs.Items[i].Name] = true
-		}
-	}
-	if len(names) == 0 {
-		return nil, nil
-	}
-	attachments, err := cs.kubeClient.StorageV1().VolumeAttachments().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "list VolumeAttachments: %v", err)
-	}
+	resolver := kube.NewLiveResolver(cs.kubeClient)
 	seen := map[string]bool{}
 	var nodes []string
-	for i := range attachments.Items {
-		va := &attachments.Items[i]
-		pv := va.Spec.Source.PersistentVolumeName
-		// An attachment being torn down still counts until it is gone: the
-		// node may not have unstaged yet.
-		if pv == nil || !names[*pv] || (!va.Status.Attached && va.DeletionTimestamp == nil) {
+	for i := range pvs.Items {
+		if c := pvs.Items[i].Spec.CSI; c == nil || c.VolumeHandle != volumeID {
 			continue
 		}
-		if !seen[va.Spec.NodeName] {
+		attachments, err := resolver.AttachmentsForPV(ctx, pvs.Items[i].Name)
+		if err != nil {
+			return nil, status.Errorf(codes.Unavailable, "list VolumeAttachments: %v", err)
+		}
+		for _, va := range attachments {
+			// An attachment being torn down still counts until it is gone: the
+			// node may not have unstaged yet.
+			if (!va.Status.Attached && va.DeletionTimestamp == nil) || seen[va.Spec.NodeName] {
+				continue
+			}
 			seen[va.Spec.NodeName] = true
 			nodes = append(nodes, va.Spec.NodeName)
 		}
