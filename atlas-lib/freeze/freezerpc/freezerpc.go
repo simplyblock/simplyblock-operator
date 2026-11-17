@@ -30,6 +30,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"google.golang.org/grpc"
@@ -115,12 +116,13 @@ func asStatus(err error) error {
 // node it names.
 type Relay struct {
 	freezev1.UnimplementedFreezeServiceServer
-	conn func(node string) (grpc.ClientConnInterface, error)
+	peer func(node string) (grpc.ClientConnInterface, []string, error)
 }
 
-// NewRelay relays over conn, which answers the link connection to a node.
-func NewRelay(conn func(node string) (grpc.ClientConnInterface, error)) *Relay {
-	return &Relay{conn: conn}
+// NewRelay relays over peer, which answers the link connection to a node and
+// the capabilities the node advertised on it.
+func NewRelay(peer func(node string) (grpc.ClientConnInterface, []string, error)) *Relay {
+	return &Relay{peer: peer}
 }
 
 // Register adds the relay to a gRPC server.
@@ -157,12 +159,19 @@ func (r *Relay) node(ctx context.Context, node string) (freezev1.FreezeServiceCl
 	if node == "" {
 		return nil, status.Error(codes.InvalidArgument, "freeze: no node named")
 	}
-	if r.conn == nil {
+	if r.peer == nil {
 		return nil, status.Error(codes.Unavailable, "freeze: the operator's link is not up")
 	}
-	conn, err := r.conn(node)
+	conn, capabilities, err := r.peer(node)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "freeze: node %s is not linked: %v", node, err)
+	}
+	// A node plugin from before striped snapshots answers nothing for the
+	// service, and saying so here names the reason a version mismatch has.
+	if !slices.Contains(capabilities, CapabilityFreeze) {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"freeze: the node plugin on %s does not serve %s; it predates striped snapshots and needs an upgrade",
+			node, CapabilityFreeze)
 	}
 	return freezev1.NewFreezeServiceClient(conn), nil
 }
