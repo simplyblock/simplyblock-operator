@@ -1533,6 +1533,10 @@ func main() {
 			}})
 		setupLog.Info("registered pinned-volume validating webhook")
 
+		mgr.GetWebhookServer().Register("/validate-storage-k8s-io-v1-storageclass",
+			&webhook.Admission{Handler: &internalwebhook.StorageClassValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered storageclass validating webhook")
+
 		mgr.GetWebhookServer().Register("/validate-v1-pvc-vdo-size",
 			&webhook.Admission{Handler: &internalwebhook.VDOSizeFloorValidator{Client: mgr.GetClient()}})
 		setupLog.Info("registered vdo-size-floor validating webhook")
