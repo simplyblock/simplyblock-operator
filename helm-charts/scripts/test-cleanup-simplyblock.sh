@@ -226,4 +226,55 @@ EOF
 }
 snapshot_class_case
 
+# Regression: the storage node Jobs (CPU topology, core isolation, and the rest
+# sbcli renders) survived step 3, which deleted their pods but not the Jobs.
+# A Job still running gets its pod back as soon as that pod is deleted, so the
+# Jobs go first, and the pods after them.
+job_case() {
+  local name="storage node Jobs are deleted before their pods"
+  local dir="$WORK/jobs"
+  mkdir -p "$dir/bin" "$dir/state"
+  touch "$dir/state/job"
+  cat > "$dir/bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+S="$STATE_DIR"
+args=" $* "
+case "$1" in
+  get)
+    if [[ "$*" == "get crd -o name" ]]; then
+      echo customresourcedefinition.apiextensions.k8s.io/storageclusters.storage.simplyblock.io
+      exit 0
+    fi
+    [[ "$2" == crd && "${3:-}" != -* ]] && exit 1
+    if [[ "$2" == job && "$args" == *" --no-headers "* ]]; then
+      [[ -f "$S/job" ]] && echo "snode-cpu-topology-worker-1 Running 0/1 5m"
+      exit 0
+    fi
+    [[ "$args" == *" -o json "* ]] && echo '{"items":[]}'
+    exit 0
+    ;;
+  delete)
+    if [[ "$2" == job ]]; then rm -f "$S/job"; fi
+    if [[ "$2" == pod && -f "$S/job" ]]; then touch "$S/pod-recreated"; fi
+    exit 0
+    ;;
+esac
+exit 0
+EOF
+  # shellcheck disable=SC2016
+  printf '#!/usr/bin/env bash\n[[ "$1" == list ]] && echo "[]"\nexit 0\n' > "$dir/bin/helm"
+  chmod +x "$dir/bin/kubectl" "$dir/bin/helm"
+  PATH="$dir/bin:$PATH" STATE_DIR="$dir/state" bash "$SCRIPT" -f simplyblock >/dev/null 2>&1
+  if [[ -f "$dir/state/job" ]]; then
+    echo "FAIL $name: the Job is still there"
+    FAILED=1
+  elif [[ -f "$dir/state/pod-recreated" ]]; then
+    echo "FAIL $name: the pods were deleted while the Job could still recreate them"
+    FAILED=1
+  else
+    echo "ok   $name"
+  fi
+}
+job_case
+
 exit "$FAILED"

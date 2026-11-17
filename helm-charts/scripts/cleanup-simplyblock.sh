@@ -521,7 +521,10 @@ fi
 # ---------------------------------------------------------------------------
 section "Removing remaining workloads in namespace '$NAMESPACE'"
 
-for kind in pod daemonset deployment statefulset replicaset; do
+# Jobs first: the storage node Jobs (CPU topology, core isolation, and the
+# others the control plane starts) restart their pods on failure, so a running
+# Job brings back a pod deleted before it.
+for kind in job pod daemonset deployment statefulset replicaset; do
     count=$($KUBECTL get "$kind" -n "$NAMESPACE" --ignore-not-found --no-headers 2>/dev/null | wc -l | tr -d ' ')
     if [[ "$count" -gt 0 ]]; then
         info "Deleting ${count} ${kind}(s)..."
