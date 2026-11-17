@@ -591,11 +591,13 @@ func (cs *Server) createStripedMembers(
 		}
 		id, err := sbclient.CreateVolume(ctx, &data)
 		if err != nil {
-			cs.removeStripeMembers(sbclient, name, members)
+			left := cs.removeStripeMembers(sbclient, name, members)
 			if errors.Is(err, controlplane.ErrSiteConflict) {
-				return nil, status.Errorf(codes.FailedPrecondition, "create member %d of %s: %v", i, name, err)
+				return nil, withLeftovers(
+					status.Errorf(codes.FailedPrecondition, "create member %d of %s: %v", i, name, err), left)
 			}
-			return nil, fmt.Errorf("create member %d of striped volume %s on storage node %s: %w", i, name, hosts[i], err)
+			return nil, withLeftovers(
+				fmt.Errorf("create member %d of striped volume %s on storage node %s: %w", i, name, hosts[i], err), left)
 		}
 		members[i] = id
 	}
@@ -605,18 +607,28 @@ func (cs *Server) createStripedMembers(
 // removeStripeMembers deletes the members a failed operation made, last member
 // first, and logs what it could not delete rather than masking the error that
 // made it necessary.
-func (cs *Server) removeStripeMembers(sbclient controlplane.ClusterAPI, name string, members []string) {
+func (cs *Server) removeStripeMembers(sbclient controlplane.ClusterAPI, name string, members []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), stripeRollbackTimeout)
 	defer cancel()
+	var left []string
 	for i := len(members) - 1; i >= 0; i-- {
 		if members[i] == "" {
 			continue
 		}
-		if err := sbclient.DeleteVolume(ctx, members[i]); err != nil && !errors.Is(err, controlplane.ErrVolumeNotFound) {
+		err := retryRollback(ctx, func() error {
+			err := sbclient.DeleteVolume(ctx, members[i])
+			if errors.Is(err, controlplane.ErrVolumeNotFound) {
+				return nil
+			}
+			return err
+		})
+		if err != nil {
 			klog.Errorf("striped volume %s: could not remove member %d (%s) after a failed create: %v",
 				name, i, members[i], err)
+			left = append(left, fmt.Sprintf("%s (%s)", stripeMemberName(name, i), members[i]))
 		}
 	}
+	return leftoversError("volume", left)
 }
 
 // deleteStripedVolume deletes every member of a striped volume, the first one
@@ -767,11 +779,11 @@ func (cs *Server) createStripedSnapshot(
 	})
 	if err != nil {
 		klog.Errorf("striped snapshot %s of %s: %v", req.GetName(), volumeID, err)
-		cs.removeMemberSnapshots(sbclient, req.GetName(), taken)
+		left := cs.removeMemberSnapshots(sbclient, req.GetName(), taken)
 		if _, isStatus := status.FromError(err); isStatus {
-			return nil, err
+			return nil, withLeftovers(err, left)
 		}
-		return nil, classifyCreateSnapshotError(err)
+		return nil, withLeftovers(classifyCreateSnapshotError(err), left)
 	}
 
 	var largest int64
@@ -873,18 +885,68 @@ func existingMemberSnapshot(
 
 // removeMemberSnapshots deletes the member snapshots a failed striped snapshot
 // took or found.
-func (cs *Server) removeMemberSnapshots(sbclient controlplane.ClusterAPI, name string, taken []memberSnapshot) {
+func (cs *Server) removeMemberSnapshots(sbclient controlplane.ClusterAPI, name string, taken []memberSnapshot) error {
 	ctx, cancel := context.WithTimeout(context.Background(), stripeRollbackTimeout)
 	defer cancel()
+	var left []string
 	for i := len(taken) - 1; i >= 0; i-- {
 		if taken[i].uuid == "" {
 			continue
 		}
-		if err := sbclient.DeleteSnapshot(ctx, taken[i].uuid); err != nil {
+		if err := retryRollback(ctx, func() error { return sbclient.DeleteSnapshot(ctx, taken[i].uuid) }); err != nil {
 			klog.Errorf("striped snapshot %s: could not remove member %d (%s) after a failed snapshot: %v",
 				name, i, taken[i].uuid, err)
+			left = append(left, fmt.Sprintf("%s (%s)", stripeMemberName(name, i), taken[i].uuid))
 		}
 	}
+	return leftoversError("snapshot", left)
+}
+
+// rollbackAttempts and rollbackBackoff bound how a rollback's delete is retried
+// before what it could not remove is reported.
+const (
+	rollbackAttempts = 3
+	rollbackBackoff  = 200 * time.Millisecond
+)
+
+// retryRollback runs del until it succeeds, rollbackAttempts times, or ctx
+// ends, backing off between tries, and answers the last error.
+func retryRollback(ctx context.Context, del func() error) error {
+	var err error
+	for attempt := 1; attempt <= rollbackAttempts; attempt++ {
+		if err = del(); err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(time.Duration(attempt) * rollbackBackoff):
+		}
+	}
+	return err
+}
+
+// leftoversError names what a rollback could not remove, so that the claim's or
+// the snapshot's events carry it: a retry of the same name finds and removes
+// it, and a claim deleted before one leaves it to be removed by hand.
+func leftoversError(kind string, left []string) error {
+	if len(left) == 0 {
+		return nil
+	}
+	return fmt.Errorf("and could not remove the member %s(s) it made, %s; a retry of the same request removes "+
+		"them, otherwise delete them on the control plane", kind, strings.Join(left, ", "))
+}
+
+// withLeftovers appends what a rollback left to the error it rolled back for,
+// keeping that error's gRPC code.
+func withLeftovers(err, left error) error {
+	if left == nil {
+		return err
+	}
+	if s, ok := status.FromError(err); ok && s.Code() != codes.Unknown {
+		return status.Errorf(s.Code(), "%s; %v", s.Message(), left)
+	}
+	return fmt.Errorf("%w; %w", err, left)
 }
 
 // resolveMemberSnapshots finds the member snapshots of the striped snapshot
@@ -1154,8 +1216,9 @@ func (cs *Server) cloneStripedMembers(
 		}
 		id, err := clone(ctx, sourceIDs[i], stripeMemberName(name, i), size, pvc)
 		if err != nil {
-			cs.removeStripeMembers(sbclient, name, members)
-			return nil, nil, fmt.Errorf("clone member %d of striped volume %s from %s: %w", i, name, sourceIDs[i], err)
+			left := cs.removeStripeMembers(sbclient, name, members)
+			return nil, nil, withLeftovers(
+				fmt.Errorf("clone member %d of striped volume %s from %s: %w", i, name, sourceIDs[i], err), left)
 		}
 		members[i] = id
 	}
@@ -1243,8 +1306,7 @@ func (cs *Server) cloneLiveStripe(
 		return nil
 	})
 	if err != nil {
-		cs.removeStripeMembers(sbclient, name, members)
-		return nil, err
+		return nil, withLeftovers(err, cs.removeStripeMembers(sbclient, name, members))
 	}
 	return members, nil
 }
