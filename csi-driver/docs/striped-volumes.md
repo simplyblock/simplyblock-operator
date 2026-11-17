@@ -130,8 +130,12 @@ striping cannot mistake a striped volume for its first member.
 
 **Snapshot ID.** The same scheme: `{cluster}:{pool}:{snapshot0UUID}:s{width}`.
 Member snapshot *i* is named `<snapshot name>-s<i>`. `ListSnapshots` reports a
-striped snapshot once, under the first member's ID with the marker, at the size
-of all members, and does not list the other members' snapshots on their own.
+striped snapshot once, under the first member's ID with the marker, and does not
+list the other members' snapshots on their own. A striped snapshot's size, its
+restore size, is the smallest capacity whose members are as large as its own, so
+it is never more than its source volume reports and the claim the volume was made
+from can be restored into. A restore of at least that size grows the cloned
+members to its own member size.
 
 **Volume context.** The controller writes `stripeWidth`, `stripeMembers` (the
 member UUIDs in stripe order), and `stripeChunkBytes` into the volume context.
@@ -146,9 +150,14 @@ domains, starting at a hash of the volume name, so a retried create picks the
 same nodes and consecutive members land in different failure domains where the
 cluster has them.
 
-**Sizing.** Each member is `ceil(capacity / width)` rounded up to a whole GiB,
-and the volume reports `width × member size`. LVM keeps a few MiB of each member
-for its own metadata.
+**Sizing.** The volume reports the requested capacity rounded up to a whole GiB,
+as an ordinary volume does. LVM keeps one 4MiB extent of each member for its
+label and metadata (`lvm.PhysicalVolumeOverheadBytes`), so each member is an
+equal share of the reported capacity plus that extent, rounded up to a whole GiB,
+and the striped device is never smaller than the reported capacity. A 10GiB
+volume of width 2 has two members of 6GiB. An expansion sizes the members the
+same way. A client-side compressed or deduplicated volume, staged under LVM as
+well, is created and expanded one extent larger than it reports in the same way.
 
 **QoS.** The class's ceilings are divided evenly across the members (rounded
 up), so the volume as a whole is held to the class's numbers. The volume context
@@ -166,7 +175,7 @@ twice.
 |---------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `CreateVolume`                        | Creates every member on its own node. A retry finds members by name and creates only the missing ones, replacing a member that is not online. If a member cannot be created, every member is deleted. |
 | `DeleteVolume`                        | Deletes every member, the first one last, so an interrupted delete is retried with the first member still there to find the rest. Members already gone are skipped.                                   |
-| `ControllerExpandVolume`              | Resizes every member to `ceil(new size / width)`, skipping members already there. Node expansion is required.                                                                                         |
+| `ControllerExpandVolume`              | Resizes every member to its share of the new size plus LVM's extent (see *Sizing*), skipping members already there. Node expansion is required.                                                       |
 | `NodeExpandVolume`                    | `pvresize` of every member, `lvextend -l+100%FREE` of the striped logical volume (which keeps its stripes), then the filesystem grow.                                                                 |
 | `CreateSnapshot`                      | Freezes the volume on its node, snapshots every member concurrently, and thaws (see below). Anything short of a freeze that held for every member deletes the member snapshots and is retried.        |
 | `DeleteSnapshot`                      | Deletes every member snapshot, the first one last.                                                                                                                                                    |

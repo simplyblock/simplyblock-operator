@@ -48,9 +48,15 @@ func (cs *Server) ControllerExpandVolume(
 		return nil, err
 	}
 
+	// A client-side compressed or deduplicated volume is staged under LVM, and is
+	// grown that much larger than it reports, the way it was created.
+	lvolBytes := capacityBytes
+	if cs.stagedUnderLVM(ctx, volumeID) {
+		lvolBytes = lvmBackedBytes(capacityBytes)
+	}
 	err = cs.onActiveVolume(ctx, volumeID, spdkVol, sbclient,
 		func(h *lvol.Handle, c *controlplane.ClusterClient) error {
-			return c.ResizeVolume(ctx, h.VolumeID, capacityBytes)
+			return c.ResizeVolume(ctx, h.VolumeID, lvolBytes)
 		})
 	if err != nil {
 		klog.Errorf("failed to resize lvol, LVolID: %s err: %v", spdkVol.VolumeID, err)
