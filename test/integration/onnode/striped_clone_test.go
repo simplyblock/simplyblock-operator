@@ -477,6 +477,19 @@ func TestStripedStackRestagesItsSourceBesideAnUnresolvedClone(t *testing.T) {
 	detach()
 	t.Cleanup(func() { h.disconnect(context.WithoutCancel(ctx), t, copies...) })
 
+	// What any unscoped LVM command on the node does sooner or later, another
+	// volume's stage included: a scan of every device, which is when LVM learns
+	// the clone is there. Without it, LVM can go on answering from the hints it
+	// kept from before the clone was attached, and never meet the duplicates at
+	// all. Asserted rather than assumed, so that the case cannot pass by LVM
+	// having looked away.
+	scan, _ := h.node.manager.Run(ctx, "pvscan", "--cache")
+	pvs, _ := h.node.manager.Run(ctx, "pvs", "-o", "pv_name,vg_name")
+	if !strings.Contains(scan+pvs, "duplicate") && !strings.Contains(scan+pvs, "Not using device") {
+		t.Fatalf("LVM does not see the clone's members as duplicates of the source's, so this case tests nothing:\n%s\n%s",
+			scan, pvs)
+	}
+
 	art, err := h.runner().Up(ctx, h.handle(), plan)
 	if err != nil {
 		t.Fatalf("the source could not be staged beside an attached clone of it: %v", err)
