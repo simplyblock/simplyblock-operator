@@ -30,7 +30,8 @@ PROTO_GEN := link/linkv1/link.pb.go link/linkv1/link_grpc.pb.go \
 	placement/placementrpc/placementv1/placement.pb.go placement/placementrpc/placementv1/placement_grpc.pb.go \
 	netcheck/netcheckrpc/netcheckv1/check.pb.go netcheck/netcheckrpc/netcheckv1/check_grpc.pb.go \
 	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.pb.go \
-	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery_grpc.pb.go 	freeze/freezerpc/freezev1/freeze.pb.go freeze/freezerpc/freezev1/freeze_grpc.pb.go
+	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery_grpc.pb.go \
+	freeze/freezerpc/freezev1/freeze.pb.go freeze/freezerpc/freezev1/freeze_grpc.pb.go
 
 GENERATED := $(CPAPI_GEN) $(PROTO_GEN)
 
