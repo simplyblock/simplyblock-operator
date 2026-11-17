@@ -479,15 +479,22 @@ func TestStripedStackRestagesItsSourceBesideAnUnresolvedClone(t *testing.T) {
 
 	// What any unscoped LVM command on the node does sooner or later, another
 	// volume's stage included: a scan of every device, which is when LVM learns
-	// the clone is there. Without it, LVM can go on answering from the hints it
-	// kept from before the clone was attached, and never meet the duplicates at
-	// all. Asserted rather than assumed, so that the case cannot pass by LVM
-	// having looked away.
-	scan, _ := h.node.manager.Run(ctx, "pvscan", "--cache")
-	pvs, _ := h.node.manager.Run(ctx, "pvs", "-o", "pv_name,vg_name")
-	if !strings.Contains(scan+pvs, "duplicate") && !strings.Contains(scan+pvs, "Not using device") {
-		t.Fatalf("LVM does not see the clone's members as duplicates of the source's, so this case tests nothing:\n%s\n%s",
-			scan, pvs)
+	// the clone is there.
+	_, _ = h.node.manager.Run(ctx, "pvscan", "--cache")
+
+	// The duplication the case is about, asserted rather than assumed: each
+	// clone member carries its source member's physical-volume identity. Read
+	// scoped to the one device, because LVM reports which of two duplicates it
+	// is not using only on stderr, which a successful command does not return.
+	for i := range source {
+		src, clone := devices[i].Path, clones[i].Path
+		uuid := func(dev string) string {
+			return lastLine(h.run(ctx, t, "pvs", "--devices", dev, "--noheadings", "-o", "pv_uuid", dev))
+		}
+		if a, b := uuid(src), uuid(clone); a == "" || a != b {
+			t.Fatalf("clone member %d (%s) carries PV %q and its source (%s) %q, so there is no duplicate to test",
+				i, clone, b, src, a)
+		}
 	}
 
 	art, err := h.runner().Up(ctx, h.handle(), plan)
