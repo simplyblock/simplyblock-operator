@@ -29,6 +29,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+
+	"github.com/simplyblock/atlas/inventory"
 )
 
 // KubeNode is one worker as Kubernetes describes it.
@@ -78,6 +80,10 @@ type KubeNode struct {
 	// marks a machine that is both a control-plane node and a worker. Role is the
 	// most restrictive of them; this is what a draft reports.
 	Roles []NodeRole
+
+	// Distribution is the Kubernetes distribution the node's own markers point
+	// at, empty for a node that carries none.
+	Distribution inventory.Distribution
 }
 
 // ReservedMemoryBytes is capacity less allocatable: the memory the kubelet
@@ -120,6 +126,7 @@ func KubeNodeOf(node corev1.Node) KubeNode {
 		Roles:                  RolesOf(node),
 		Labels:                 node.Labels,
 	}
+	out.Distribution, _ = inventory.NodeDistribution(node)
 
 	for _, address := range node.Status.Addresses {
 		if address.Type == corev1.NodeInternalIP {

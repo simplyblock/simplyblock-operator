@@ -83,6 +83,12 @@ type Worker struct {
 	// part of what makes two workers groupable, because a NodeGroup names one
 	// failure domain for every worker it lists.
 	FailureDomain string
+
+	// Environment is the distribution the worker runs on where it is not the
+	// cluster's, and empty where it is. It is part of what makes two workers
+	// groupable, because a NodeGroup states one environment for every worker it
+	// lists.
+	Environment simplyblockv1alpha2.KubernetesEnvironment
 }
 
 // Addresses is how the draft names this worker's devices, ascending and without
@@ -136,6 +142,10 @@ type Group struct {
 
 	// FailureDomain is the failure domain every worker in the group is in.
 	FailureDomain string
+
+	// Environment is the distribution every worker in the group runs on, empty
+	// where it is the cluster's.
+	Environment simplyblockv1alpha2.KubernetesEnvironment
 }
 
 // Grouper puts workers into groups.
@@ -166,7 +176,7 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 	for _, worker := range workers {
 		addresses := worker.Addresses()
 		signature := worker.Class.signature(addresses, worker.Mgmt.Name, worker.Data) + "\x00" + worker.FailureDomain +
-			"\x00" + attachmentSignature(worker.Attachment)
+			"\x00" + attachmentSignature(worker.Attachment) + "\x00" + string(worker.Environment)
 
 		group, seen := bySignature[signature]
 		if !seen {
@@ -177,6 +187,7 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 				DataInterfaces:    worker.Data,
 				NetworkAttachment: worker.Attachment,
 				FailureDomain:     worker.FailureDomain,
+				Environment:       worker.Environment,
 			}
 			bySignature[signature] = group
 			order = append(order, signature)
@@ -315,6 +326,7 @@ func nodeGroupOf(group Group) simplyblockv1alpha2.NodeGroup {
 		MgmtInterface:  group.MgmtInterface,
 		DataInterfaces: group.DataInterfaces,
 		FailureDomain:  group.FailureDomain,
+		Environment:    group.Environment,
 	}
 	if group.NetworkAttachment != nil {
 		attachment := *group.NetworkAttachment

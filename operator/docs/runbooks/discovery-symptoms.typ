@@ -162,7 +162,7 @@ D 12.
   [Its management interface does not hold its node address and is on a different prefix than the other workers, or a data interface is on a different prefix than most workers.],
   [R 5.2, D 7.4],
   [The workers are split into several groups], [Compare the workers' reports],
-  [Workers share a group only with the same device names, management interface, data interfaces, and failure domain. In NVMe mode the device names are PCI addresses, so different slots make different groups.],
+  [Workers share a group only with the same device names, management interface, data interfaces, failure domain, and environment. In NVMe mode the device names are PCI addresses, so different slots make different groups. Workers from another provider than the control plane's get groups of their own (`WorkerEnvironmentDiffers`).],
   [D 10],
   [The draft has several node sets, so several clusters], [The node labels and the worker count],
   [More than 32 storage nodes for one role, workers in different regions, or `storage.simplyblock.io/placement-group` labels, including the `PlacementGroup` warnings.],

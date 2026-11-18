@@ -603,7 +603,7 @@ func (r *OperatorOpsReconciler) write(
 		return false, err
 	}
 
-	planner := discoverypkg.Planner{KubeNodes: kubeNodes}
+	planner := discoverypkg.Planner{KubeNodes: kubeNodes, Environment: ops.Status.Environment}
 	plan := planner.Plan(collected, spec)
 
 	if len(plan.NodeSets) == 0 {

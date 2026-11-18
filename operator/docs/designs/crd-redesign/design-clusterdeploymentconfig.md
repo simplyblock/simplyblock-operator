@@ -942,6 +942,20 @@ boots. Discovery reads them together and writes the distribution it concluded,
 which is what makes the field a finding a reviewer corrects rather than a
 question a reviewer answers. §3.1 is what the answer then buys.
 
+**A fleet of several providers is concluded from its control plane.** Each
+worker is also concluded on its own, from its own markers, and a fleet whose
+workers agree is answered by the precedence as before. Workers that disagree are
+one control plane with workers from more than one provider, and there the
+precedence would name whichever provider it lists first, so the cluster's
+environment is concluded from the API server alone: its API groups, and the
+build suffix of its version, which is the one mark a managed control plane
+leaves because it runs no node a cluster can list. A worker whose own conclusion
+differs from the cluster's is drafted into a group stating its environment
+(§3.1), and the run raises `WorkerEnvironmentDiffers` naming the workers. A
+worker that carries no marker says nothing about itself and stays on the
+cluster's environment. Neither happens on an `OpenShift` or a `Talos` cluster, or
+toward either.
+
 **`spec.hostOS` is read the same way and stated only when the fleet agrees.**
 Each probe reads its own host's `os-release`, which is on the worker's root
 filesystem rather than in the trees the rest of the inventory comes from, and

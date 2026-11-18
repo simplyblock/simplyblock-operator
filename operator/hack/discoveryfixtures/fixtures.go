@@ -643,6 +643,12 @@ func role(name string) nodeOpt {
 	return func(n *corev1.Node) { n.Labels["node-role.kubernetes.io/"+name] = "" }
 }
 
+// labeled puts a label on the node, such as the node-pool label a managed
+// service puts on the nodes it provisions.
+func labeled(key, value string) nodeOpt {
+	return func(n *corev1.Node) { n.Labels[key] = value }
+}
+
 // reachableAt is the address the cluster reaches the machine on.
 func reachableAt(address string) nodeOpt {
 	return func(n *corev1.Node) {
