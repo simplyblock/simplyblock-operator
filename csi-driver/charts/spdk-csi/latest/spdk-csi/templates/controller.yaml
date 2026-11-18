@@ -74,6 +74,7 @@ spec:
         - "--v=5"
         - "--timeout=150s"
         - "--leader-election=false"
+        - "--extra-create-metadata=true"
         imagePullPolicy: {{ .Values.image.csiProvisioner.pullPolicy }}
         securityContext:
           privileged: true

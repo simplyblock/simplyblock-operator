@@ -16,6 +16,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/simplyblock/atlas/internal/recordfile"
 )
 
 // RecordVersion is the schema version this package writes and the only one it
@@ -78,18 +80,7 @@ func NewStore(dir string) *Store { return &Store{dir: dir} }
 // handle carries made safe for a filename. It never leaves the store's own
 // directory, whatever it is handed.
 func (s *Store) path(handle string) string {
-	safe := strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '.':
-			return r
-		default:
-			return '_'
-		}
-	}, handle)
-	if safe == "" || strings.Trim(safe, ".") == "" {
-		safe = "_"
-	}
-	return filepath.Join(s.dir, safe+".json")
+	return recordfile.Path(s.dir, handle)
 }
 
 // Write persists rec.

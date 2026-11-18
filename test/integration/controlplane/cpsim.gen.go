@@ -1410,6 +1410,7 @@ type ClusterDTO struct {
 	LeaderSite                  *string            `json:"leader_site,omitempty"`
 	LostSite                    *string            `json:"lost_site,omitempty"`
 	LostSiteState               *string            `json:"lost_site_state,omitempty"`
+	LvolGeometryEnabled         bool               `json:"lvol_geometry_enabled"`
 	MaxFaultTolerance           int                `json:"max_fault_tolerance"`
 	MdJournal                   *bool              `json:"md_journal,omitempty"`
 	Name                        *string            `json:"name"`
@@ -1473,6 +1474,7 @@ type ClusterParams struct {
 	InlineChecksum         *bool                    `json:"inline_checksum,omitempty"`
 	IsSingleNode           *bool                    `json:"is_single_node,omitempty"`
 	LeaderSite             *string                  `json:"leader_site,omitempty"`
+	LvolGeometryEnabled    *bool                    `json:"lvol_geometry_enabled,omitempty"`
 	MaxQueueSize           *int                     `json:"max_queue_size,omitempty"`
 	MaxSubsys              int                      `json:"max_subsys"`
 	MdJournal              *bool                    `json:"md_journal,omitempty"`
@@ -4306,9 +4308,9 @@ type ServerInterface interface {
 	// ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost Clusters:Storage-Nodes:Prepare-Removal
 	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/prepare-removal)
 	ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, params ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPostParams)
-	// ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost Clusters:Storage-Nodes:Start
+	// ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost Clusters:Storage-Nodes:Promote
 	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote)
-	ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
+	ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
 	// ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPost Clusters:Storage-Nodes:Restart
 	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/restart)
 	ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
@@ -9048,8 +9050,8 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesPrepareRemovalApiV2Cluste
 	handler.ServeHTTP(w, r)
 }
 
-// ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost operation middleware
-func (siw *ServerInterfaceWrapper) ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w http.ResponseWriter, r *http.Request) {
+// ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	_ = err
@@ -9073,7 +9075,7 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesStartApiV2ClustersCluster
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w, r, clusterId, storageNodeId)
+		siw.Handler.ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w, r, clusterId, storageNodeId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -12185,7 +12187,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/nics/{nic_id}/iostats", wrapper.ClustersStorageNodesNicsIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdNicsNicIdIostatsGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/prepare-removal", wrapper.ClustersStorageNodesPrepareRemovalProgressApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/prepare-removal", wrapper.ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote", wrapper.ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote", wrapper.ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/restart", wrapper.ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/resume", wrapper.ClustersStorageNodesResumeApiV2ClustersClusterIdStorageNodesStorageNodeIdResumePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/shutdown", wrapper.ClustersStorageNodesShutdownApiV2ClustersClusterIdStorageNodesStorageNodeIdShutdownPost)

@@ -122,15 +122,38 @@ func (m *Mapper) Create(ctx context.Context, name, device string, sectors uint64
 // queued), load the new table, resume. A failed load resumes on the old table,
 // so a swap never leaves the mapping suspended.
 func (m *Mapper) Swap(ctx context.Context, name, device string, sectors uint64) error {
-	if _, err := m.run(ctx, "dmsetup", "suspend", name); err != nil {
-		return fmt.Errorf("dmsetup suspend %s: %w", name, err)
+	if err := m.Suspend(ctx, name); err != nil {
+		return err
 	}
 	if _, err := m.run(ctx, "dmsetup", "reload", name, "--table", table(sectors, device)); err != nil {
-		if _, rerr := m.run(ctx, "dmsetup", "resume", name); rerr != nil {
+		if rerr := m.Resume(ctx, name); rerr != nil {
 			return fmt.Errorf("dmsetup reload %s: %w; resume on the old table also failed: %v", name, err, rerr)
 		}
 		return fmt.Errorf("dmsetup reload %s: %w (resumed on the old table)", name, err)
 	}
+	return m.Resume(ctx, name)
+}
+
+// Suspend suspends mapping name: I/O in flight drains, new I/O is queued, and a
+// filesystem mounted on it is frozen and flushed first, which is what dmsetup
+// does by default (lockfs). The image underneath is then one a filesystem can
+// mount after a crash, and stays that until Resume.
+//
+// Swap suspends through it, and so does a striped volume's snapshot, which
+// holds the stripe's logical volume suspended so that every member is
+// snapshotted at one point in its write stream (atlas-lib/freeze).
+func (m *Mapper) Suspend(ctx context.Context, name string) error {
+	if _, err := m.run(ctx, "dmsetup", "suspend", name); err != nil {
+		return fmt.Errorf("dmsetup suspend %s: %w", name, err)
+	}
+	return nil
+}
+
+// Resume lets mapping name's queued and new I/O through again, and thaws a
+// filesystem Suspend froze. Resuming a mapping that is not suspended is a
+// no-op for device-mapper, which is what lets a caller resume when it is not
+// sure a suspend took effect.
+func (m *Mapper) Resume(ctx context.Context, name string) error {
 	if _, err := m.run(ctx, "dmsetup", "resume", name); err != nil {
 		return fmt.Errorf("dmsetup resume %s: %w", name, err)
 	}
@@ -157,12 +180,13 @@ type Mapping struct {
 	Suspended bool
 }
 
-// Suspend holds name's I/O. In-flight requests complete on the current device
-// before it returns and new ones queue, so no request is outstanding on a
-// namespace that is about to leave its subsystem. --nolockfs skips the
-// filesystem freeze: the swap changes a path, it is not a consistency point,
-// and a freeze would flush dirty pages inside the window.
-func (m *Mapper) Suspend(ctx context.Context, name string) error {
+// SuspendWithoutFreeze holds name's I/O without freezing a filesystem on top.
+// In-flight requests complete on the current device before it returns and new
+// ones queue, so no request is outstanding on a namespace that is about to
+// leave its subsystem. --nolockfs skips the freeze Suspend does: moving a
+// namespace changes a path, it is not a consistency point, and a freeze would
+// flush dirty pages inside the window.
+func (m *Mapper) SuspendWithoutFreeze(ctx context.Context, name string) error {
 	if _, err := m.run(ctx, "dmsetup", "suspend", "--nolockfs", name); err != nil {
 		return fmt.Errorf("dmsetup suspend %s: %w", name, err)
 	}
@@ -178,14 +202,6 @@ func (m *Mapper) ReloadResume(ctx context.Context, name, device string, sectors 
 		return fmt.Errorf("dmsetup reload %s: %w (still suspended)", name, err)
 	}
 	return m.Resume(ctx, name)
-}
-
-// Resume releases name's I/O on whatever table it holds.
-func (m *Mapper) Resume(ctx context.Context, name string) error {
-	if _, err := m.run(ctx, "dmsetup", "resume", name); err != nil {
-		return fmt.Errorf("dmsetup resume %s: %w", name, err)
-	}
-	return nil
 }
 
 // Suspended reports whether name is holding its I/O, or ErrNotFound.

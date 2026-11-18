@@ -36,6 +36,10 @@ spec:
     # they are at their default, which keeps an empty PCI filter from reaching a
     # logical-block-device run that refuses one.
     enablePartitionedDevices: {{ if hasKey $d "enablePartitionedDevices" }}{{ $d.enablePartitionedDevices }}{{ else }}true{{ end }}
+    {{- /* Tri-state: rendered only when stated, so an unset value leaves the run's own auto decision. */}}
+    {{- if hasKey $d "enableFailureDomains" }}
+    enableFailureDomains: {{ $d.enableFailureDomains }}
+    {{- end }}
     {{- with $d.nodeSelector }}
     nodeSelector:
       {{- toYaml . | nindent 6 }}
@@ -47,6 +51,15 @@ spec:
     {{- range $field := list "enableControlPlaneNodes" "enableLogicalBlockDevices" "forceJournalDevice" }}
     {{- if index $d $field }}
     {{ $field }}: true
+    {{- end }}
+    {{- end }}
+    {{- with $d.network }}
+    {{- if and .podNetwork .spdkOnHostNetwork }}
+    {{- fail "discovery.network.podNetwork and discovery.network.spdkOnHostNetwork are exclusive; set one." }}
+    {{- end }}
+    {{- if or .podNetwork .spdkOnHostNetwork }}
+    network:
+      {{ if .podNetwork }}podNetwork{{ else }}spdkOnHostNetwork{{ end }}: true
     {{- end }}
     {{- end }}
     {{- /* Host networking unless management names an attachment; data alone describes nothing deployable. */}}

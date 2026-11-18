@@ -489,7 +489,7 @@ func (s *Server) ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorage
 	notImplemented(w, r)
 }
 
-func (s *Server) ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID, _ openapi_types.UUID) {
+func (s *Server) ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID, _ openapi_types.UUID) {
 	notImplemented(w, r)
 }
 

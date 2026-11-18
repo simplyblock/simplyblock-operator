@@ -397,6 +397,23 @@ func TestSnapshotterSidecarEnablesGroupSnapshots(t *testing.T) {
 	}
 }
 
+// Regression: 2026-11-17-striped-snapshot-retry (PR #922 review). The
+// csi-snapshotter sidecar named no VolumeSnapshotContent in CreateSnapshot, so
+// the driver had nowhere to seal a finished striped snapshot, and a retry froze
+// the workload again and answered a new ID. The provisioner already carried the
+// flag; the snapshotter must too.
+func TestSnapshotterSidecarNamesTheContent(t *testing.T) {
+	d := testDriver("simplyblock")
+	snapshotter := containerNamed(
+		controllerStatefulSet(d, testImage).Spec.Template.Spec.Containers, "csi-snapshotter")
+	if snapshotter == nil {
+		t.Fatal("no csi-snapshotter sidecar")
+	}
+	if !slices.Contains(snapshotter.Args, "--extra-create-metadata=true") {
+		t.Errorf("snapshotter args carry no --extra-create-metadata: %v", snapshotter.Args)
+	}
+}
+
 // Both plugins' pods are marked for the log collector.
 //
 // Regression: 2026-10-06-graylog-receives-nothing — neither plugin was marked:

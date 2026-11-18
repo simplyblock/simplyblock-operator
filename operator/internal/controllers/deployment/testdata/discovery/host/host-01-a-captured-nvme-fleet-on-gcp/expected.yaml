@@ -13,7 +13,7 @@ spec:
     maxSubsystemCount: 30
     name: discovered-discover-host-01-cluster
     network:
-      podNetwork: true
+      spdkOnHostNetwork: true
     stripe:
       dataChunks: 2
       parityChunks: 1

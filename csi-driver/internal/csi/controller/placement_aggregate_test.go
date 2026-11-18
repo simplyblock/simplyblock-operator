@@ -255,6 +255,10 @@ func (e *recordingExports) EnsureExport(_ context.Context, _ string, spec Export
 
 func (e *recordingExports) DeleteExport(context.Context, string) (bool, error) { return true, nil }
 
+func (e *recordingExports) MetadataServerConfigured(context.Context) (bool, error) {
+	return true, nil
+}
+
 func (e *recordingExports) SetExportSize(context.Context, string, int64) (bool, error) {
 	return true, nil
 }
@@ -283,5 +287,32 @@ func TestAPNFSClaimIsExportedFromItsMember(t *testing.T) {
 
 	if len(exports.specs) != 1 || !strings.HasPrefix(exports.specs[0].VolumeRef, sanityClusterID+":") {
 		t.Errorf("exports = %+v, want one of the member's volume", exports.specs)
+	}
+}
+
+// Regression: 2026-11-17-striped-handle-parsers (PR #922 review). A striped
+// snapshot's id carries the width as a fourth segment, which the source-cluster
+// reading did not accept, so a restore through a supercluster class asked the
+// operator with no source cluster. The operator could answer another member;
+// the members were then cloned in the snapshot's cluster and published through
+// the one answered, and every retry failed the same way.
+func TestAStripedRestoreSendsItsSourcesCluster(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newTestControllerServer(t, mock)
+	placer := &fakePlacer{err: status.Error(codes.InvalidArgument, "not a member")}
+	cs.SetPlacer(placer)
+	req := aggregateRequest()
+	req.Parameters["stripe_width"] = "2"
+	req.VolumeContentSource = &csi.VolumeContentSource{Type: &csi.VolumeContentSource_Snapshot{
+		Snapshot: &csi.VolumeContentSource_SnapshotSource{
+			SnapshotId: sanityClusterID + ":" + sanityPoolUUID + ":22222222-2222-2222-2222-222222222222:s2",
+		},
+	}}
+
+	_, _ = cs.CreateVolume(context.Background(), req)
+
+	if asked := placer.asked(); len(asked) != 1 || asked[0].SourceClusterID != sanityClusterID {
+		t.Errorf("requests = %+v, want the striped snapshot's cluster %s", asked, sanityClusterID)
 	}
 }

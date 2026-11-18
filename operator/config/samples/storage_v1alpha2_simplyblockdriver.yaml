@@ -1,0 +1,9 @@
+# The CSI driver. It reports Unavailable until a storage cluster exists.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: SimplyblockDriver
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  driverName: csi.simplyblock.io
+  enableVolumeSnapshots: true

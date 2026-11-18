@@ -96,6 +96,13 @@ csiConfig:
     # -- Name of the StorageClass rendered for `csiConfig.simplybk.pool`. Empty uses
     # `simplyblock-<pool>`.
     storageClassName:
+    # -- Stripes each volume of the rendered StorageClass across this many storage nodes of the
+    # cluster, 2 to 128 (`stripe_width`). Empty, 0, or 1 is an ordinary volume. See
+    # csi-driver/docs/striped-volumes.md.
+    stripeWidth:
+    # -- Chunk each member of a striped volume takes, a power of two from `4Ki` to `1Mi`
+    # (`stripe_size`). Empty uses the driver's 64Ki. Requires stripeWidth of 2 or more.
+    stripeSize:
 
 # Configuration for the csiSecret
 csiSecret:
@@ -107,15 +114,17 @@ multiCluster:
   # -- Writes one entry per item in `multiCluster.clusters` instead of the single cluster above.
   enable: false
   # -- Storage clusters the CSI driver connects to, when `multiCluster.enable` is `true`. Each entry
-  # has `cluster_id`, `secret`, `workers`, `pool`, and `storageClassName`, with the same meaning as
-  # the matching `csiConfig` and `csiSecret` values.
+  # has `cluster_id`, `secret`, `workers`, `pool`, `storageClassName`, `stripeWidth`, and
+  # `stripeSize`, with the same meaning as the matching `csiConfig` and `csiSecret` values.
   clusters:
   - cluster_id:
     secret:
     workers:
-    # As csiConfig.simplybk.pool and storageClassName, for this cluster.
+    # As csiConfig.simplybk.pool, storageClassName, stripeWidth, and stripeSize, for this cluster.
     pool:
     storageClassName:
+    stripeWidth:
+    stripeSize:
       
 deployment:
   # One of: standalone, managed, empty.
@@ -288,6 +297,27 @@ discovery:
   # carves journal partitions out of every device, and a discovery run over logical block devices
   # fails. The draft notes which disk was taken.
   forceJournalDevice: false
+
+  # Override whether the draft proposes failure-domain mode, which the run
+  # otherwise decides from the workers' topology: on when every worker carries a
+  # failure-domain label in a layout the control plane accepts, off otherwise.
+  #
+  # Set false to turn the mode off and read no failure domains at all, so a fleet
+  # spread over zones it does not want treated as failure domains is grouped by
+  # hardware alone into one cluster. Set true to propose the mode on; the layout
+  # must still pass the control plane's activation rules. Left out (the default),
+  # the run decides.
+  #   enableFailureDomains: false
+  # -- Overrides whether the draft proposes failure-domain mode. `false` reads no failure domains and
+  # groups the fleet as one cluster; `true` proposes the mode on. Omitted leaves the decision to the run.
+
+  # The cluster network the draft proposes. With neither set, the SPDK pods run on
+  # the host network. The two are exclusive.
+  network:
+    # -- Runs the SPDK pods on the host network. The default when neither is set.
+    spdkOnHostNetwork: false
+    # -- Runs the SPDK pods on the pod network instead of the host network.
+    podNetwork: false
 
   # Attach the proposed storage nodes through Multus NetworkAttachmentDefinitions
   # instead of host networking. Both are names of definitions in the run's
@@ -626,6 +656,22 @@ controlplane:
     # remote cluster with the `managed` profile names the same token in
     # `controlplane.managed.credentialsSecretRef`. Empty grants no additional credential.
     adminTokenSecretRef: ""
+    # Cluster add-ons the operator installs from its embedded manifests when
+    # the cluster lacks them. One set to false is only checked for: when it is
+    # missing, the install holds and the ControlPlane status names it (the
+    # snapshot controller only raises a warning event). Installed add-ons are
+    # cluster-wide and outlive the ControlPlane.
+    prerequisites:
+      # -- Installs the FoundationDB CRDs when `apps.foundationdb.org/v1beta2` is not served.
+      installFoundationDBCRDs: true
+      # -- Installs cert-manager when `cert-manager.io/v1` is not served and TLS is issued by cert-manager.
+      installCertManager: true
+      # -- Installs local-path-provisioner when no StorageClass uses `rancher.io/local-path` and
+      # `controlplane.storageclass.name` is empty.
+      installLocalPathProvisioner: true
+      # -- Installs the CSI snapshot CRDs and snapshot-controller when `snapshot.storage.k8s.io/v1` is
+      # not served.
+      installSnapshotController: true
 
     # The IAM role this control plane's pods and every StorageCluster's
     # storage-node pods in this namespace assume, through a ServiceAccount
@@ -1221,7 +1267,7 @@ prometheus:
     # -- Path of the simplyblock Prometheus configuration.
     configPath: /etc/simplyblock-config/prometheus.yml
     # -- Additional volumes of the Prometheus pod: the scrape configuration, the object store
-    # configuration, and the TLS client certificate and CA.
+    # configuration, and the TLS CA.
     extraVolumes:
       - name: simplyblock-prometheus-config
         configMap:
@@ -1229,14 +1275,8 @@ prometheus:
       - name: objstore-config
         configMap:
           name: simplyblock-objstore-config
-      - name: prometheus-client-tls
-        secret:
-          secretName: simplyblock-prometheus-client-tls
-          optional: true
-      # The CA the control plane's certificate is verified against. It is its
-      # own volume because the client certificate above is issued only for
-      # mutual TLS, and a scrape that encrypts without verifying is one an
-      # in-cluster impersonator answers.
+      # The CA the control plane's certificate is verified against: a scrape
+      # that encrypts without verifying is one an in-cluster impersonator answers.
       - name: prometheus-ca-tls
         secret:
           secretName: simplyblock-ca-bundle-tls
@@ -1245,9 +1285,6 @@ prometheus:
     extraVolumeMounts:
       - name: simplyblock-prometheus-config
         mountPath: /etc/simplyblock-config
-      - name: prometheus-client-tls
-        mountPath: /etc/prometheus/certs
-        readOnly: true
       - name: prometheus-ca-tls
         mountPath: /etc/prometheus/ca
         readOnly: true
@@ -1662,19 +1699,13 @@ tls:
   # Required if provider == cert-manager. Names a ClusterIssuer used to mint
   # the chart's own CA Certificate.
   cert-manager:
-    # When true, the chart creates a self-signed ClusterIssuer whose name is
+    # When true, the operator creates a self-signed ClusterIssuer whose name is
     # given by cluster-issuer. Set to false to use an issuer you created yourself.
     # -- Creates a self-signed ClusterIssuer named by `cluster-issuer`. `false` uses an existing
     # issuer.
     createSelfSignedIssuer: true
     # -- ClusterIssuer the chart mints its CA certificate from.
     cluster-issuer: selfsigned
-    # Namespace where cert-manager is installed. The chart's CA secret is placed
-    # here so that the ClusterIssuer can locate it (ClusterIssuers always read CA
-    # secrets from the cert-manager controller namespace).
-    # -- Namespace cert-manager runs in. The chart places its CA Secret there so the ClusterIssuer can
-    # read it.
-    namespace: cert-manager
 
   # Mutual TLS (clients present and verify certificates). Only allowed when
   # provider == cert-manager. On by default, with tls.enabled: the chart issues a

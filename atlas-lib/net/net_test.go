@@ -40,3 +40,36 @@ func TestValidateExternalURL(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateExternalHostPort(t *testing.T) {
+	tests := []struct {
+		name     string
+		hostport string
+		wantErr  string // substring, where empty means no error expected
+	}{
+		{name: "empty is ok", hostport: ""},
+		{name: "valid public IP", hostport: "8.8.8.8:5696"},
+		{name: "no port rejected", hostport: "kmip.example.com", wantErr: "malformed host:port"},
+		{name: "loopback", hostport: "127.0.0.1:5696", wantErr: "restricted IP"},
+		{name: "link-local IMDS", hostport: "169.254.169.254:5696", wantErr: "restricted IP"},
+		{name: "IPv6 loopback", hostport: "[::1]:5696", wantErr: "restricted IP"},
+		{name: "IPv6 link-local", hostport: "[fe80::1]:5696", wantErr: "restricted IP"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateExternalHostPort(tc.hostport)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error %q to contain %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}

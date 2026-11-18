@@ -67,6 +67,9 @@ var clusterRoleRules = map[string][]rbacv1.PolicyRule{
 		// export: the write bumps the generation, which is what tells the
 		// operator to re-assemble and grow the filesystem on the host.
 		rule(simplyblock, []string{"nfsexports"}, "get", "list", "watch", "create", "update", "delete"),
+		// CreateVolume refuses a pNFS claim before allocating its volume when
+		// no driver sets spec.pnfs.mds (SFAM-2845).
+		rule(simplyblock, []string{"simplyblockdrivers"}, "get", "list"),
 		// The status carries the backing volume's identity, which only this
 		// plugin knows, and the operator reads it back.
 		rule(simplyblock, []string{"nfsexports/status"}, "get", "update", "patch"),

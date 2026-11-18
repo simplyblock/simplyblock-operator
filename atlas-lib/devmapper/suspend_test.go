@@ -14,7 +14,7 @@ import (
 // skips the filesystem freeze but still drains in-flight I/O.
 func TestSuspendDrainsInFlightIOWithoutFreezingTheFilesystem(t *testing.T) {
 	r := &recorder{}
-	if err := New(r.run).Suspend(context.Background(), "sb-v"); err != nil {
+	if err := New(r.run).SuspendWithoutFreeze(context.Background(), "sb-v"); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.calls) != 1 || r.calls[0] != "dmsetup suspend --nolockfs sb-v" {

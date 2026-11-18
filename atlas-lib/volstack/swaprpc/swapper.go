@@ -81,7 +81,7 @@ type Timer interface{ Stop() bool }
 type Mapper interface {
 	Table(ctx context.Context, name string) (devmapper.Target, error)
 	Sectors(ctx context.Context, device string) (uint64, error)
-	Suspend(ctx context.Context, name string) error
+	SuspendWithoutFreeze(ctx context.Context, name string) error
 	ReloadResume(ctx context.Context, name, device string, sectors uint64) error
 	Resume(ctx context.Context, name string) error
 	Suspended(ctx context.Context, name string) (bool, error)
@@ -393,7 +393,7 @@ func (s *Swapper) hold(ctx context.Context, v volume, deadline time.Time) error 
 		return nil
 	}
 	if !suspended {
-		if err := s.cfg.Mapper.Suspend(ctx, v.mapping); err != nil {
+		if err := s.cfg.Mapper.SuspendWithoutFreeze(ctx, v.mapping); err != nil {
 			return fmt.Errorf("swap: %s: %w", v.handle, err)
 		}
 	}
@@ -565,7 +565,7 @@ func (s *Swapper) repoint(ctx context.Context, v volume, dev nvme.Device) error 
 		}
 	default:
 		if !suspended {
-			if err := s.cfg.Mapper.Suspend(ctx, v.mapping); err != nil {
+			if err := s.cfg.Mapper.SuspendWithoutFreeze(ctx, v.mapping); err != nil {
 				return fmt.Errorf("swap: %s: %w", v.handle, err)
 			}
 		}

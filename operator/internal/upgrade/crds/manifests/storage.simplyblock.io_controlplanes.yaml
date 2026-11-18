@@ -422,6 +422,24 @@ spec:
                                 served. It is consulted only when the control plane serves TLS issued by
                                 cert-manager. Unset is on.
                               type: boolean
+                            installEBSCSIDriver:
+                              default: true
+                              description: |-
+                                InstallEBSCSIDriver installs the AWS EBS CSI driver on Amazon EKS when
+                                the cluster has no CSIDriver ebs.csi.aws.com, neither the EKS add-on nor
+                                a driver installed some other way. It is consulted only on EKS, and only
+                                while the control plane's volumes name no StorageClass. The node role, or
+                                the role in eksRoleARN, needs the AWS managed policy
+                                AmazonEBSCSIDriverPolicy. Unset is on.
+                              type: boolean
+                            installEBSStorageClass:
+                              default: true
+                              description: |-
+                                InstallEBSStorageClass creates the gp3 StorageClass simplyblock-gp3 on
+                                Amazon EKS when no StorageClass of the EBS CSI driver provisions gp3
+                                volumes. An existing one, under any name, is used instead. The class is
+                                made the default only when the cluster has no default class. Unset is on.
+                              type: boolean
                             installFoundationDBCRDs:
                               default: true
                               description: |-
@@ -796,6 +814,15 @@ spec:
                   x-kubernetes-validations:
                     - message: unknown step
                       rule: '!has(self.state) || self.state in [''ApplyingFoundationDB'',''AwaitingFoundationDB'',''BuildingIndices'',''ApplyingDatastore'',''ApplyingAPI'',''AwaitingAPI'',''Installed'']'
+                storageClassName:
+                  description: |-
+                    StorageClassName is the StorageClass the operator chose for the control
+                    plane's volumes (FoundationDB, the object store, and Prometheus) when
+                    spec.source.local.foundationDB.storageClassName names none: on Amazon
+                    EKS, a gp3 class of the EBS CSI driver. It is chosen once, before the
+                    database is first applied, and never changed afterwards, because the
+                    volumes cannot move to another class.
+                  type: string
                 version:
                   description: Version is the version the management API reports.
                   type: string

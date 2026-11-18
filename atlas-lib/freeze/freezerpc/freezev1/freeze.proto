@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+// Package atlas.freeze.v1 holds a striped volume's device suspended on the node
+// that stages it, for as long as the CSI controller takes the volume's member
+// snapshots.
+//
+// Two hops serve it. The CSI controller calls the operator, naming the node, and
+// the operator relays the call to that node's plugin over the node's own link.
+// The controller has no link to a node, and the operator is the one party both
+// of them dial.
+package atlas.freeze.v1;
+
+option go_package = "github.com/simplyblock/atlas/freeze/freezerpc/freezev1;freezev1";
+
+// FreezeService suspends and resumes a staged striped volume.
+service FreezeService {
+  // Freeze suspends the volume's striped device on the node: in-flight I/O
+  // drains, new I/O waits, and a mounted filesystem is frozen. It returns once
+  // the device is suspended. The node resumes it by itself at the deadline,
+  // capped by the node, whatever happens to the caller.
+  //
+  // Repeated under the same token it is the same freeze. Errors: Aborted when
+  // another token holds the volume frozen, FailedPrecondition when the volume
+  // staged on the node is not striped, Unavailable when the node is not linked.
+  rpc Freeze(FreezeRequest) returns (FreezeResponse);
+
+  // Thaw resumes the device and reports whether it stayed suspended from
+  // Freeze until now. Under another token it changes nothing and is
+  // FailedPrecondition.
+  rpc Thaw(ThawRequest) returns (ThawResponse);
+}
+
+// FreezeRequest names the volume, where it is staged, and for how long it may
+// stay suspended.
+message FreezeRequest {
+  // node is the Kubernetes node the volume is staged on. The operator routes by
+  // it; the node ignores it.
+  string node = 1;
+
+  // volume_handle is the CSI volume ID.
+  string volume_handle = 2;
+
+  // token identifies this freeze. The caller chooses it, so a retried Freeze
+  // and a late Thaw are recognized as its own.
+  string token = 3;
+
+  // deadline_ms is how long the device may stay suspended before the node
+  // resumes it by itself.
+  int64 deadline_ms = 4;
+}
+
+// FreezeResponse is the outcome of a freeze.
+message FreezeResponse {
+  // frozen is false when the volume is not staged on the node, so nothing on
+  // it writes to the volume and there was nothing to suspend.
+  bool frozen = 1;
+}
+
+// ThawRequest names the freeze to end.
+message ThawRequest {
+  string node = 1;
+  string volume_handle = 2;
+  string token = 3;
+}
+
+// ThawResponse is the outcome of a thaw.
+message ThawResponse {
+  // held is true when the device stayed suspended from Freeze until this Thaw.
+  // False means the freeze ended before it, at its deadline or never having
+  // taken effect, and what the caller took under it is not consistent.
+  bool held = 1;
+}

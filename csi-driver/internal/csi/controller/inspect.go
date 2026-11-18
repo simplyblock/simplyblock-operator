@@ -4,13 +4,17 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/csi-driver/internal/clusters"
+	"github.com/simplyblock/csi-driver/internal/controlplane"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
@@ -34,7 +38,14 @@ func (cs *Server) ValidateVolumeCapabilities(
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	if _, err := sbclient.VolumeInfo(ctx, spdkVol.VolumeID, ""); err != nil {
+	// A moved volume's handle names a source the move deleted: the volume
+	// serving it is the one to check.
+	err = cs.onActiveVolume(ctx, volumeID, spdkVol, sbclient,
+		func(h *lvol.Handle, c *controlplane.ClusterClient) error {
+			_, err := c.VolumeInfo(ctx, h.VolumeID, "")
+			return err
+		})
+	if err != nil {
 		return nil, classifyValidateVolumeCapabilitiesError(err)
 	}
 
@@ -77,7 +88,16 @@ func (cs *Server) ControllerGetVolume(
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 
-	volumeInfo, err := sbclient.VolumeInfo(ctx, spdkVol.VolumeID, "")
+	// A moved volume's handle names a source the move deleted, so its health
+	// is the health of the volume serving it; reporting the deleted source
+	// marked every failed-over or relocated volume abnormal ("not found").
+	var volumeInfo map[string]string
+	err = cs.onActiveVolume(ctx, volumeID, spdkVol, sbclient,
+		func(h *lvol.Handle, c *controlplane.ClusterClient) error {
+			info, err := c.VolumeInfo(ctx, h.VolumeID, "")
+			volumeInfo = info
+			return err
+		})
 	if err != nil {
 		klog.Errorf("failed to get spdkVol for %s: %v", volumeID, err)
 
@@ -102,13 +122,35 @@ func (cs *Server) ControllerGetVolume(
 		VolumeContext: volumeInfo,
 	}
 
+	condition := &csi.VolumeCondition{}
+	if width := csicommon.StripeWidth(volumeID); width > 1 {
+		condition = stripedCondition(ctx, sbclient, volumeID, spdkVol.VolumeID, width)
+	}
 	return &csi.ControllerGetVolumeResponse{
 		Volume: volume,
-		Status: &csi.ControllerGetVolumeResponse_VolumeStatus{
-			VolumeCondition: &csi.VolumeCondition{
-				Abnormal: false,
-				Message:  "",
-			},
-		},
+		Status: &csi.ControllerGetVolumeResponse_VolumeStatus{VolumeCondition: condition},
 	}, nil
+}
+
+// stripedCondition is a striped volume's condition: abnormal when a member is
+// missing or not online, naming it, since the striped device fails I/O to that
+// member's share of every stripe. The first member was read already.
+func stripedCondition(
+	ctx context.Context, sbclient controlplane.ClusterAPI, volumeID, firstID string, width int,
+) *csi.VolumeCondition {
+	members, err := resolveStripeMembers(ctx, sbclient, firstID, width)
+	if err != nil {
+		return &csi.VolumeCondition{Abnormal: true, Message: fmt.Sprintf("read the members of %s: %v", volumeID, err)}
+	}
+	for i, m := range members {
+		switch {
+		case m == nil:
+			return &csi.VolumeCondition{Abnormal: true,
+				Message: fmt.Sprintf("member %d of striped volume %s is missing from the control plane", i, volumeID)}
+		case !strings.EqualFold(m.Status, lvolOnline):
+			return &csi.VolumeCondition{Abnormal: true,
+				Message: fmt.Sprintf("member %d (%s) of striped volume %s is %s", i, m.UUID, volumeID, m.Status)}
+		}
+	}
+	return &csi.VolumeCondition{}
 }

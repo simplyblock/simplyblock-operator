@@ -15,7 +15,7 @@ spec:
     minHugePagesSize: 16G
     name: discovered-discover-net-21-cluster
     network:
-      podNetwork: true
+      spdkOnHostNetwork: true
     stripe:
       dataChunks: 2
       parityChunks: 1

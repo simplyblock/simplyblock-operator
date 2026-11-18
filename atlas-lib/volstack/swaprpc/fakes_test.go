@@ -81,7 +81,7 @@ func (m *fakeMapper) Table(_ context.Context, name string) (devmapper.Target, er
 
 func (m *fakeMapper) Sectors(context.Context, string) (uint64, error) { return m.sectors, nil }
 
-func (m *fakeMapper) Suspend(_ context.Context, name string) error {
+func (m *fakeMapper) SuspendWithoutFreeze(_ context.Context, name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.record("suspend " + name); err != nil {

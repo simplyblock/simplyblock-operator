@@ -340,6 +340,24 @@ type ControlPlanePrerequisites struct {
 	// +kubebuilder:default=true
 	// +optional
 	InstallSnapshotController *bool `json:"installSnapshotController,omitempty"`
+
+	// InstallEBSCSIDriver installs the AWS EBS CSI driver on Amazon EKS when
+	// the cluster has no CSIDriver ebs.csi.aws.com, neither the EKS add-on nor
+	// a driver installed some other way. It is consulted only on EKS, and only
+	// while the control plane's volumes name no StorageClass. The node role, or
+	// the role in eksRoleARN, needs the AWS managed policy
+	// AmazonEBSCSIDriverPolicy. Unset is on.
+	// +kubebuilder:default=true
+	// +optional
+	InstallEBSCSIDriver *bool `json:"installEBSCSIDriver,omitempty"`
+
+	// InstallEBSStorageClass creates the gp3 StorageClass simplyblock-gp3 on
+	// Amazon EKS when no StorageClass of the EBS CSI driver provisions gp3
+	// volumes. An existing one, under any name, is used instead. The class is
+	// made the default only when the cluster has no default class. Unset is on.
+	// +kubebuilder:default=true
+	// +optional
+	InstallEBSStorageClass *bool `json:"installEBSStorageClass,omitempty"`
 }
 
 // on reads a defaulted-true flag, treating unset as true.
@@ -361,6 +379,14 @@ func (p ControlPlanePrerequisites) InstallsLocalPathProvisioner() bool {
 // InstallsSnapshotController reports whether a missing snapshot controller is installed.
 func (p ControlPlanePrerequisites) InstallsSnapshotController() bool {
 	return on(p.InstallSnapshotController)
+}
+
+// InstallsEBSCSIDriver reports whether a missing EBS CSI driver is installed on EKS.
+func (p ControlPlanePrerequisites) InstallsEBSCSIDriver() bool { return on(p.InstallEBSCSIDriver) }
+
+// InstallsEBSStorageClass reports whether a missing gp3 StorageClass is created on EKS.
+func (p ControlPlanePrerequisites) InstallsEBSStorageClass() bool {
+	return on(p.InstallEBSStorageClass)
 }
 
 // NeedsCertManager reports whether this control plane's TLS is issued by cert-manager.
@@ -540,6 +566,15 @@ type ControlPlaneStatus struct {
 	// Version is the version the management API reports.
 	// +optional
 	Version string `json:"version,omitempty"`
+
+	// StorageClassName is the StorageClass the operator chose for the control
+	// plane's volumes (FoundationDB, the object store, and Prometheus) when
+	// spec.source.local.foundationDB.storageClassName names none: on Amazon
+	// EKS, a gp3 class of the EBS CSI driver. It is chosen once, before the
+	// database is first applied, and never changed afterwards, because the
+	// volumes cannot move to another class.
+	// +optional
+	StorageClassName string `json:"storageClassName,omitempty"`
 
 	// LastChecked is when the readiness probe last ran.
 	// +optional

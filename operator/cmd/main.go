@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -30,6 +31,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/freeze/freezerpc"
 	"github.com/simplyblock/atlas/link"
 	"github.com/simplyblock/atlas/placement/placementrpc"
 	atlasprom "github.com/simplyblock/atlas/prometheus"
@@ -39,6 +41,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/metricsapi"
+	"github.com/simplyblock/simplyblock-operator/internal/prerequisites"
 	"github.com/simplyblock/simplyblock-operator/internal/sitelink"
 	"github.com/simplyblock/simplyblock-operator/internal/sitesvc"
 
@@ -79,6 +82,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	nodecontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/node"
+	objectstorecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/objectstore"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/twonode"
 	twonodecp "github.com/simplyblock/simplyblock-operator/internal/controllers/twonode/cpadapter"
@@ -287,6 +291,16 @@ func main() {
 	flag.DurationVar(&deviceSMARTInterval, "device-smart-interval", nodecontroller.DefaultSMARTInterval,
 		"How often each storage device's SMART health log is read. A StorageDeviceOps with action "+
 			"CheckHealth reads one immediately.")
+	var caChain bool
+	var caRootIssuer string
+	var caCreateRoot bool
+	flag.BoolVar(&caChain, "cert-manager-ca-chain", false,
+		"Keep the simplyblock CA chain in place: the CA Certificate in cert-manager's cluster resource "+
+			"namespace and the CA ClusterIssuer that signs every simplyblock certificate.")
+	flag.StringVar(&caRootIssuer, "cert-manager-root-issuer", prerequisites.SelfSignedIssuerName,
+		"The ClusterIssuer the CA Certificate is minted from.")
+	flag.BoolVar(&caCreateRoot, "cert-manager-create-root-issuer", true,
+		"Create the root ClusterIssuer as a self-signed issuer.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -455,6 +469,20 @@ func main() {
 		setupLog.Error(err, "unable to build the placement service")
 		os.Exit(1)
 	}
+	// A striped volume's freeze (atlas-lib/freeze/freezerpc) is relayed from
+	// the CSI controller to the node that stages the volume: the controller has
+	// no link to a node, and both link to here. The registry the relay reaches
+	// nodes through exists once the hub does, so it is read at call time.
+	freezeRelay := freezerpc.NewRelay(func(node string) (grpc.ClientConnInterface, []string, error) {
+		if csiPeers == nil {
+			return nil, nil, errors.New("the CSI link is not running")
+		}
+		p, err := csiPeers.Peer(link.NodePeer(node))
+		if err != nil {
+			return nil, nil, err
+		}
+		return p.Conn(), p.Capabilities, nil
+	})
 	if csiLinkEnabled {
 		var certFile, keyFile string
 		if csiLinkCertPath != "" {
@@ -475,8 +503,11 @@ func main() {
 			NodeServiceAccount:       "simplyblock-csi-node-sa",
 			ControllerServiceAccount: "simplyblock-csi-controller-sa",
 			MDSServiceAccount:        "simplyblock-csi-mds-sa",
-			Register:                 placementServer.Register,
-			Capabilities:             placementrpc.Capabilities(),
+			Register: func(r grpc.ServiceRegistrar) {
+				placementServer.Register(r)
+				freezeRelay.Register(r)
+			},
+			Capabilities: append(placementrpc.Capabilities(), freezerpc.Capabilities()...),
 		})
 		if err != nil {
 			setupLog.Error(err, "unable to set up the CSI link")
@@ -543,6 +574,16 @@ func main() {
 		os.Exit(1)
 	}
 	ctrlMgr := gatedManager{Manager: mgr, gate: webhookGate.open}
+	if caChain {
+		if err := mgr.Add(&prerequisites.CAChainKeeper{
+			Client:   mgr.GetClient(),
+			Chain:    prerequisites.CAChain{RootIssuer: caRootIssuer, CreateRoot: caCreateRoot},
+			Interval: time.Minute,
+		}); err != nil {
+			setupLog.Error(err, "unable to add the CA chain keeper")
+			os.Exit(1)
+		}
+	}
 
 	cpSubscriptions := cpinformer.NewSubscriptionManager(streamCfg, ctrl.Log.WithName("cpinformer"), cpinformer.LeaderOnly)
 	deviceSubscription := subscriptions.NewDeviceSubscription()
@@ -595,6 +636,36 @@ func main() {
 	}
 	if err := nfsExportReconciler.SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NFSExport")
+		os.Exit(1)
+	}
+	// S3Bucket's own delivery step (W-12) also reaches its nodes over
+	// csi-link, the same registry NFSExport assembly uses, because both run
+	// in this manager (design-bucket-provisioning.md §7.1).
+	s3BucketReconciler := &objectstorecontrollers.S3BucketReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("s3bucket-controller"),
+	}
+	if csiPeers != nil {
+		s3BucketReconciler.Registry = csiPeers
+	}
+	if err := s3BucketReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "S3Bucket")
+		os.Exit(1)
+	}
+	// The gateway workload S3Bucket's own mount delivery reaches
+	// (design-objectstore.md), in this manager rather than one of its own
+	// (0005-s3bucket-joins-the-main-operator-manager.md).
+	if err := (&objectstorecontrollers.ObjectStoreReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("objectstore-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ObjectStore")
+		os.Exit(1)
+	}
+	if err := mgr.Add(&objectstorecontrollers.Collector{Client: mgr.GetClient()}); err != nil {
+		setupLog.Error(err, "unable to add the S3Bucket/ObjectStore collector")
 		os.Exit(1)
 	}
 	if err := (&nodecontroller.StorageDeviceReconciler{
@@ -709,6 +780,26 @@ func main() {
 		Recorder: mgr.GetEventRecorder("controlplaneops-controller"),
 	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlaneOps")
+		os.Exit(1)
+	}
+	// A contingency for a wedge seen in practice: a management API pod whose
+	// process answers its liveness probe while its readiness probe never
+	// recovers. It should not happen; this is the operator refusing to leave
+	// it unnoticed and unrestarted (webapiwatchdog.go).
+	if err := mgr.Add(&controlplanecontroller.WebAPIReadinessWatchdog{
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorder("webapi-readiness-watchdog"),
+	}); err != nil {
+		setupLog.Error(err, "unable to add the management API readiness watchdog")
+		os.Exit(1)
+	}
+	// An MDS pod that stays unready after it has served is recreated, since
+	// only a new pod stages its state volume again (mds_watchdog.go).
+	if err := mgr.Add(&driver.MDSReadinessWatchdog{
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorder("mds-readiness-watchdog"),
+	}); err != nil {
+		setupLog.Error(err, "unable to add the pNFS metadata server readiness watchdog")
 		os.Exit(1)
 	}
 	// The site link is the elected replica's, so it runs as a leader-election
@@ -1353,10 +1444,6 @@ func main() {
 	// exists. failurePolicy=Ignore keeps pod creation unblocked during the gap.
 	go func() {
 		<-webhookReady
-		mgr.GetWebhookServer().Register("/validate-v1-pod-eviction-foundationdb",
-			&webhook.Admission{Handler: &internalwebhook.FoundationDBEvictionHandler{Client: mgr.GetClient()}})
-		setupLog.Info("registered FoundationDB eviction webhook")
-
 		mgr.GetWebhookServer().Register("/mutate-v1-pod-simplyblock-rebalancer",
 			&webhook.Admission{Handler: &internalwebhook.SimplyblockRebalancerInjector{Client: mgr.GetClient()}})
 		setupLog.Info("registered simplyblock-rebalancer mutating webhook")
@@ -1459,6 +1546,10 @@ func main() {
 				APIClient: webapi.NewClient(),
 			}})
 		setupLog.Info("registered pinned-volume validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-k8s-io-v1-storageclass",
+			&webhook.Admission{Handler: &internalwebhook.StorageClassValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered storageclass validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-v1-pvc-vdo-size",
 			&webhook.Admission{Handler: &internalwebhook.VDOSizeFloorValidator{Client: mgr.GetClient()}})

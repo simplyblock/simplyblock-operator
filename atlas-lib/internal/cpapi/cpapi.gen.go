@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -333,6 +334,36 @@ const (
 func (e HCPKeyDescriptorType) Valid() bool {
 	switch e {
 	case Hcp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KMIPKMSSettingsProvider.
+const (
+	KMIPKMSSettingsProviderKmip KMIPKMSSettingsProvider = "kmip"
+)
+
+// Valid indicates whether the value is a known member of the KMIPKMSSettingsProvider enum.
+func (e KMIPKMSSettingsProvider) Valid() bool {
+	switch e {
+	case KMIPKMSSettingsProviderKmip:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KMIPKeyDescriptorType.
+const (
+	KMIPKeyDescriptorTypeKmip KMIPKeyDescriptorType = "kmip"
+)
+
+// Valid indicates whether the value is a known member of the KMIPKeyDescriptorType enum.
+func (e KMIPKeyDescriptorType) Valid() bool {
+	switch e {
+	case KMIPKeyDescriptorTypeKmip:
 		return true
 	default:
 		return false
@@ -936,6 +967,21 @@ func (e UpdatableClusterParametersTwoNodeFencingAuthority) Valid() bool {
 	}
 }
 
+// Defines values for VaultKMSSettingsProvider.
+const (
+	Vault VaultKMSSettingsProvider = "vault"
+)
+
+// Valid indicates whether the value is a known member of the VaultKMSSettingsProvider enum.
+func (e VaultKMSSettingsProvider) Valid() bool {
+	switch e {
+	case Vault:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateParamsHaType.
 const (
 	CreateParamsHaTypeHa     CreateParamsHaType = "ha"
@@ -1430,6 +1476,7 @@ type ClusterDTO struct {
 	LeaderSite                  *string            `json:"leader_site,omitempty"`
 	LostSite                    *string            `json:"lost_site,omitempty"`
 	LostSiteState               *string            `json:"lost_site_state,omitempty"`
+	LvolGeometryEnabled         bool               `json:"lvol_geometry_enabled"`
 	MaxFaultTolerance           int                `json:"max_fault_tolerance"`
 	MdJournal                   *bool              `json:"md_journal,omitempty"`
 	Name                        *string            `json:"name"`
@@ -1487,12 +1534,13 @@ type ClusterParams struct {
 	EnableNodeAffinity     *bool                    `json:"enable_node_affinity,omitempty"`
 	Fabric                 *string                  `json:"fabric,omitempty"`
 	HaType                 *ClusterParamsHaType     `json:"ha_type,omitempty"`
-	HashicorpVaultSettings *HashicorpVaultSettings  `json:"hashicorp_vault_settings,omitempty"`
 	HugepagesMem           *int                     `json:"hugepages_mem,omitempty"`
 	InflightIoThreshold    *int                     `json:"inflight_io_threshold,omitempty"`
 	InlineChecksum         *bool                    `json:"inline_checksum,omitempty"`
 	IsSingleNode           *bool                    `json:"is_single_node,omitempty"`
+	KmsSettings            *KMSSettings             `json:"kms_settings,omitempty"`
 	LeaderSite             *string                  `json:"leader_site,omitempty"`
+	LvolGeometryEnabled    *bool                    `json:"lvol_geometry_enabled,omitempty"`
 	MaxQueueSize           *int                     `json:"max_queue_size,omitempty"`
 	MaxSubsys              int                      `json:"max_subsys"`
 	MdJournal              *bool                    `json:"md_journal,omitempty"`
@@ -2064,12 +2112,29 @@ type HTTPValidationError struct {
 	Detail *[]ValidationError `json:"detail,omitempty"`
 }
 
-// HashicorpVaultSettings defines model for HashicorpVaultSettings.
-type HashicorpVaultSettings struct {
-	BaseUrl      *string `json:"base_url,omitempty"`
-	CertRole     *string `json:"cert_role,omitempty"`
-	KvMount      *string `json:"kv_mount,omitempty"`
-	TransitMount *string `json:"transit_mount,omitempty"`
+// KMIPKMSSettings A KMIP-speaking key management appliance.
+type KMIPKMSSettings struct {
+	Provider  *KMIPKMSSettingsProvider `json:"provider,omitempty"`
+	ServerUrl string                   `json:"server_url"`
+}
+
+// KMIPKMSSettingsProvider defines model for KMIPKMSSettings.Provider.
+type KMIPKMSSettingsProvider string
+
+// KMIPKeyDescriptor Keys held in a KMIP-speaking appliance, wrapped under a named key.
+type KMIPKeyDescriptor struct {
+	DekPath   string                 `json:"dek_path"`
+	KekName   string                 `json:"kek_name"`
+	ServerUrl *string                `json:"server_url,omitempty"`
+	Type      *KMIPKeyDescriptorType `json:"type,omitempty"`
+}
+
+// KMIPKeyDescriptorType defines model for KMIPKeyDescriptor.Type.
+type KMIPKeyDescriptorType string
+
+// KMSSettings defines model for KMSSettings.
+type KMSSettings struct {
+	union json.RawMessage
 }
 
 // LocatedManifestsInput Manifests that were read from one location, and that location.
@@ -2763,6 +2828,19 @@ type ValidationErrorLoc1 = int
 type ValidationError_Loc_Item struct {
 	union json.RawMessage
 }
+
+// VaultKMSSettings HashiCorp Vault (or an OpenBao-compatible server): a Transit mount
+// wraps/unwraps DEKs, a KV mount stores the wrapped ciphertext.
+type VaultKMSSettings struct {
+	BaseUrl      string                    `json:"base_url"`
+	CertRole     *string                   `json:"cert_role,omitempty"`
+	KvMount      *string                   `json:"kv_mount,omitempty"`
+	Provider     *VaultKMSSettingsProvider `json:"provider,omitempty"`
+	TransitMount *string                   `json:"transit_mount,omitempty"`
+}
+
+// VaultKMSSettingsProvider defines model for VaultKMSSettings.Provider.
+type VaultKMSSettingsProvider string
 
 // VolumeDTO defines model for VolumeDTO.
 type VolumeDTO struct {
@@ -3617,6 +3695,107 @@ type ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigr
 
 // ClustersUpgradeApiV2ClustersClusterIdUpdatePostJSONRequestBody defines body for ClustersUpgradeApiV2ClustersClusterIdUpdatePost for application/json ContentType.
 type ClustersUpgradeApiV2ClustersClusterIdUpdatePostJSONRequestBody = UnderscoreUpdateParams
+
+// AsVaultKMSSettings returns the union data inside the KMSSettings as a VaultKMSSettings
+func (t KMSSettings) AsVaultKMSSettings() (VaultKMSSettings, error) {
+	var body VaultKMSSettings
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromVaultKMSSettings overwrites any union data inside the KMSSettings as the provided VaultKMSSettings
+func (t *KMSSettings) FromVaultKMSSettings(v VaultKMSSettings) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"provider":"vault"}`))
+	t.union = b
+	return err
+}
+
+// MergeVaultKMSSettings performs a merge with any union data inside the KMSSettings, using the provided VaultKMSSettings
+func (t *KMSSettings) MergeVaultKMSSettings(v VaultKMSSettings) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"provider":"vault"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsKMIPKMSSettings returns the union data inside the KMSSettings as a KMIPKMSSettings
+func (t KMSSettings) AsKMIPKMSSettings() (KMIPKMSSettings, error) {
+	var body KMIPKMSSettings
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromKMIPKMSSettings overwrites any union data inside the KMSSettings as the provided KMIPKMSSettings
+func (t *KMSSettings) FromKMIPKMSSettings(v KMIPKMSSettings) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"provider":"kmip"}`))
+	t.union = b
+	return err
+}
+
+// MergeKMIPKMSSettings performs a merge with any union data inside the KMSSettings, using the provided KMIPKMSSettings
+func (t *KMSSettings) MergeKMIPKMSSettings(v KMIPKMSSettings) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"provider":"kmip"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t KMSSettings) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"provider"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t KMSSettings) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "kmip":
+		return t.AsKMIPKMSSettings()
+	case "vault":
+		return t.AsVaultKMSSettings()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t KMSSettings) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *KMSSettings) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
 
 // AsUnderscoreCreateParams returns the union data inside the RootModelUnionCreateParamsCloneParams as a UnderscoreCreateParams
 func (t RootModelUnionCreateParamsCloneParams) AsUnderscoreCreateParams() (UnderscoreCreateParams, error) {
@@ -5536,10 +5715,10 @@ type ClientInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/prepare-removal (the `ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost` operationId).
 	ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, params *ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPostParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost Clusters:Storage-Nodes:Start
+	// ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost Clusters:Storage-Nodes:Promote
 	//
-	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote (the `ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost` operationId).
-	ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote (the `ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost` operationId).
+	ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPostWithBody Clusters:Storage-Nodes:Restart
 	//
@@ -9149,11 +9328,11 @@ func (c *Client) ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorage
 	return c.Client.Do(req)
 }
 
-// ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost Clusters:Storage-Nodes:Start
+// ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost Clusters:Storage-Nodes:Promote
 //
-// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote (the `ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost` operationId).
-func (c *Client) ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostRequest(c.Server, clusterId, storageNodeId)
+// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote (the `ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost` operationId).
+func (c *Client) ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostRequest(c.Server, clusterId, storageNodeId)
 	if err != nil {
 		return nil, err
 	}
@@ -17000,8 +17179,8 @@ func NewClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStor
 	return req, nil
 }
 
-// NewClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostRequest constructs an http.Request for the ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost method
-func NewClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostRequest(server string, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID) (*http.Request, error) {
+// NewClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostRequest constructs an http.Request for the ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost method
+func NewClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostRequest(server string, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -22310,12 +22489,12 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/prepare-removal (the `ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost` operationId).
 	ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, params *ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPostParams, reqEditors ...RequestEditorFn) (*ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPostResponse, error)
 
-	// ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse Clusters:Storage-Nodes:Start
+	// ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse Clusters:Storage-Nodes:Promote
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote (the `ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost` operationId).
-	ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse, error)
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote (the `ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost` operationId).
+	ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse, error)
 
 	// ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPostWithBodyWithResponse Clusters:Storage-Nodes:Restart
 	//
@@ -28677,7 +28856,7 @@ func (r ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStor
 	return ""
 }
 
-type ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse struct {
+type ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	// JSON422 the response for an HTTP 422 `application/json` response
@@ -28685,17 +28864,17 @@ type ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPro
 }
 
 // GetJSON422 returns the response for an HTTP 422 `application/json` response
-func (r ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) GetJSON422() *HTTPValidationError {
+func (r ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) GetJSON422() *HTTPValidationError {
 	return r.JSON422
 }
 
 // GetBody returns the raw response body bytes
-func (r ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) GetBody() []byte {
+func (r ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) GetBody() []byte {
 	return r.Body
 }
 
 // Status returns HTTPResponse.Status
-func (r ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) Status() string {
+func (r ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -28703,7 +28882,7 @@ func (r ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeId
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) StatusCode() int {
+func (r ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -28711,7 +28890,7 @@ func (r ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeId
 }
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) ContentType() string {
+func (r ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -33978,17 +34157,17 @@ func (c *ClientWithResponses) ClustersStorageNodesPrepareRemovalApiV2ClustersClu
 	return ParseClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPostResponse(rsp)
 }
 
-// ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse Clusters:Storage-Nodes:Start
+// ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse Clusters:Storage-Nodes:Promote
 //
 // Returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote (the `ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost` operationId).
-func (c *ClientWithResponses) ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse, error) {
-	rsp, err := c.ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(ctx, clusterId, storageNodeId, reqEditors...)
+// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote (the `ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost` operationId).
+func (c *ClientWithResponses) ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse, error) {
+	rsp, err := c.ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(ctx, clusterId, storageNodeId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse(rsp)
+	return ParseClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse(rsp)
 }
 
 // ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPostWithBodyWithResponse Clusters:Storage-Nodes:Restart
@@ -39126,21 +39305,24 @@ func ParseClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesSt
 	return response, nil
 }
 
-// ParseClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse parses an HTTP response from a ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse call
-func ParseClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse(rsp *http.Response) (*ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse, error) {
+// ParseClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse parses an HTTP response from a ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostWithResponse call
+func ParseClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse(rsp *http.Response) (*ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse{
+	response := &ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePostResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
 
 	switch {
 	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case rsp.StatusCode == 409:
 		break // No content-type
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:

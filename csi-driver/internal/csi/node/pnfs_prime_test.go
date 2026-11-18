@@ -5,6 +5,7 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -313,5 +314,112 @@ func TestAProbeWhoseWriteBypassedTheServerTookItsLayout(t *testing.T) {
 	writesCounting(t, 17, 17)
 	if err := primeLayout(context.Background(), t.TempDir()); err != nil {
 		t.Errorf("primeLayout = %v, want success: no NFS WRITE was issued", err)
+	}
+}
+
+// namespaceIdentityReturning replaces namespaceIdentity for one test: it looks
+// up a canned (nguid, devicePath) by volume ID, and reports not-found for
+// anything else.
+func namespaceIdentityReturning(t *testing.T, known map[string][2]string) {
+	t.Helper()
+	real := namespaceIdentity
+	namespaceIdentity = func(_ context.Context, volumeID string) (string, string, error) {
+		id, ok := known[volumeID]
+		if !ok {
+			return "", "", fmt.Errorf("no device attached for %s", volumeID)
+		}
+		return id[0], id[1], nil
+	}
+	t.Cleanup(func() { namespaceIdentity = real })
+}
+
+// deviceAliasRecording replaces deviceAlias for one test, recording every call
+// instead of writing under /dev/disk/by-id, which a test cannot do.
+func deviceAliasRecording(t *testing.T) *[]string {
+	t.Helper()
+	var calls []string
+	real := deviceAlias
+	deviceAlias = func(nguid, devicePath string) (string, error) {
+		calls = append(calls, nguid+"@"+devicePath)
+		return "", nil
+	}
+	t.Cleanup(func() { deviceAlias = real })
+	return &calls
+}
+
+// The alias check runs every tick for every live staging mount, independent
+// of whether that mount's transport reconnected. This is what closes issue
+// 10 (pNFS-10): ensureDeviceAlias used to run only once, at stage, so a
+// device node that changed under an already-staged volume (background path
+// repair, a healed stack -- never a reconnect this loop's own gate sees)
+// left a stale or missing alias until the pod was rescheduled.
+func TestReconcileDeviceAliasesRunsEveryTickRegardlessOfReconnect(t *testing.T) {
+	namespaceIdentityReturning(t, map[string][2]string{
+		"c:p:6e17": {"deadbeef", "/dev/nvme2n1"},
+	})
+	calls := deviceAliasRecording(t)
+	p := newLayoutPrimer(primeDriver)
+	mounts := []nfsclient.Mount{pnfsMount(stagingMount, 6)}
+
+	reconcileDeviceAliases(context.Background(), p, mounts)
+	reconcileDeviceAliases(context.Background(), p, mounts) // no reconnect between these two ticks
+
+	if len(*calls) != 2 {
+		t.Fatalf("alias refreshed %d times over two ticks with no reconnect, want 2: %v", len(*calls), *calls)
+	}
+	for _, c := range *calls {
+		if c != "deadbeef@/dev/nvme2n1" {
+			t.Errorf("refreshed with %q, want deadbeef@/dev/nvme2n1", c)
+		}
+	}
+}
+
+// Only this driver's own pNFS staging mounts are reconciled, the same filter
+// due() uses: another driver's mount is not ours to alias.
+func TestReconcileDeviceAliasesSkipsMountsNotOwnedByThisDriver(t *testing.T) {
+	namespaceIdentityReturning(t, map[string][2]string{}) // nothing should ever be looked up
+	calls := deviceAliasRecording(t)
+	p := newLayoutPrimer(primeDriver)
+	other := pnfsMount("/var/lib/kubelet/plugins/kubernetes.io/csi/nfs.csi.k8s.io/bb/globalmount/vol", 1)
+
+	reconcileDeviceAliases(context.Background(), p, []nfsclient.Mount{other})
+
+	if len(*calls) != 0 {
+		t.Errorf("refreshed an alias for another driver's mount: %v", *calls)
+	}
+}
+
+// A mount with no device currently attached -- total path loss, or a volume
+// caught between reconnects -- is left alone rather than failing the whole
+// pass or writing a bogus alias.
+func TestReconcileDeviceAliasesSkipsAMountWithNoCurrentDevice(t *testing.T) {
+	namespaceIdentityReturning(t, map[string][2]string{}) // the one mount below resolves to nothing
+	calls := deviceAliasRecording(t)
+	p := newLayoutPrimer(primeDriver)
+
+	reconcileDeviceAliases(context.Background(), p, []nfsclient.Mount{pnfsMount(stagingMount, 6)})
+
+	if len(*calls) != 0 {
+		t.Errorf("refreshed an alias with no resolvable device: %v", *calls)
+	}
+}
+
+// The volume ID a mount resolves against is the mount point's own last path
+// segment, this driver's own staging-path convention (getStagingTargetPath),
+// not something read back out of a stash -- a pNFS stage never records one.
+func TestReconcileDeviceAliasesDerivesTheVolumeIDFromTheMountPoint(t *testing.T) {
+	var got string
+	real := namespaceIdentity
+	namespaceIdentity = func(_ context.Context, volumeID string) (string, string, error) {
+		got = volumeID
+		return "", "", errors.New("unused")
+	}
+	t.Cleanup(func() { namespaceIdentity = real })
+
+	mounts := []nfsclient.Mount{pnfsMount(stagingMount, 6)}
+	reconcileDeviceAliases(context.Background(), newLayoutPrimer(primeDriver), mounts)
+
+	if got != "c:p:6e17" {
+		t.Errorf("resolved volume ID %q, want c:p:6e17 (the mount point's last segment)", got)
 	}
 }

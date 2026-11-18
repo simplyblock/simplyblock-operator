@@ -8,6 +8,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/freeze"
 	"github.com/simplyblock/atlas/lvol"
 	export "github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/nvme"
@@ -43,8 +44,14 @@ type Server struct {
 	// It is a field for the reason repairFabric is one: it reaches sysfs and the
 	// mount table directly, and a test has neither.
 	identifyStaged func(ctx context.Context, stagingTargetPath string) (lvol.Connection, error)
-	unstagePNFSFn  func(context.Context, string, export.Spec) error
-	volumeLocks    *csicommon.VolumeLocks
+	// ensureInitiator reports why this node cannot connect a volume, or nil when
+	// it can. It is a field because it asks the kernel, and a test has none.
+	ensureInitiator func(ctx context.Context) error
+	unstagePNFSFn   func(context.Context, string, export.Spec) error
+	volumeLocks     *csicommon.VolumeLocks
+	// freezes are the striped volumes suspended on this node for a snapshot
+	// (freeze.go).
+	freezes *freeze.Holds
 	// swapGate is the node's swap service, asked whether it is holding a
 	// volume's I/O before a stage, unstage, publish, or expand touches the
 	// mapping it holds. Nil before the service is built, when nothing is held.
@@ -77,7 +84,9 @@ func New(d *csicommon.CSIDriver, kubeClient kubernetes.Interface, manager *sbkub
 		stack:             newStack(mounter, stackRecordDir),
 		repairFabric:      fabric.RepairAttach,
 		identifyStaged:    stagedIdentity(nvme.SysfsConfig{}),
+		ensureInitiator:   hostInitiatorCheck().ensure,
 		volumeLocks:       csicommon.NewVolumeLocks(),
+		freezes:           newFreezes(),
 		kubeClient:        kubeClient,
 		manager:           manager,
 		syncSite:          clusters.SyncSite,

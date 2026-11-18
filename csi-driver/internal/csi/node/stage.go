@@ -63,6 +63,19 @@ func (ns *Server) NodeStageVolume(
 	stagingParentPath := req.GetStagingTargetPath() // where the volume context is stashed
 	stagingTargetPath := getStagingTargetPath(req)
 
+	// A node without the initiator fails every connect the same way, and what
+	// the connect says about it names nothing to do. It is refused here with
+	// the remedy, as a precondition rather than as a fault of this volume, and
+	// before the paths part: a pNFS volume's client connects its backing
+	// namespace too. The plugin does not start on such a node, so this is for a
+	// module that went away under it.
+	if ns.ensureInitiator != nil {
+		if err := ns.ensureInitiator(ctx); err != nil {
+			klog.Errorf("volume %s cannot be staged: %v", volumeID, err)
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+	}
+
 	// A pNFS volume is mounted from an export rather than a local device, so it
 	// takes its own path. The namespace is still attached, because the client
 	// reads and writes it directly.
@@ -221,6 +234,7 @@ func (ns *Server) NodeUnstageVolume(
 		// be reported as one that vanished on its own.
 		initiator.ForgetDevice(devicePath)
 	}
+	forgetMembers(volumeContext)
 
 	if ns.volumeIsBeingDeleted(ctx, volumeID) {
 		// The only caller of Destroy. A volume that is going away for good takes
@@ -327,7 +341,10 @@ func (ns *Server) healStack(
 	}
 	if device, ok := artifact.Device(); ok {
 		volumeContext["devicePath"] = device.Path
-		initiator.MarkDevicePresent(device.Path, deviceLvolID(volumeContext))
+		// A striped stack is watched through its members (striped.go).
+		if !markMembersPresent(ctx, plan, volumeContext) {
+			initiator.MarkDevicePresent(device.Path, deviceLvolID(volumeContext))
+		}
 	}
 	if err := stashVolumeContext(volumeContext, stagingParentPath); err != nil {
 		klog.Warningf("healStack: failed to re-stash volume context for %s: %v", volumeID, err)
@@ -348,6 +365,12 @@ func (ns *Server) attachPlan(
 	vc map[string]string,
 	volCap *csi.VolumeCapability,
 ) (volstack.Plan, error) {
+	// A striped volume attaches a namespace per member (striped.go). It never
+	// takes the dm indirection, which attachShape decides only for the two
+	// shapes that have one.
+	if shape := shapeFor(vc, volCap); isStripedShape(shape) {
+		return ns.stripedAttachPlan(ctx, volumeID, stagingTargetPath, vc, volCap, shape)
+	}
 	connection, hostNQN, err := ns.publishedConnection(ctx, volumeID, vc)
 	if err != nil {
 		return nil, err
@@ -405,6 +428,12 @@ func (ns *Server) teardownPlan(
 
 	record, err = ns.stack.store.Load(volumeID)
 	switch {
+	case errors.Is(err, volstack.ErrNoRecord) && stripeWidth(vc) > 1:
+		// A striped stage writes its record before its first side effect, so
+		// one without a record attached nothing. The plan is built from the
+		// context anyway, and releasing it finds nothing.
+		klog.Infof("striped volume %s has no stack record; releasing the members its context lists", volumeID)
+		shape, options = shapeFor(vc, nil), stripeOptions(vc)
 	case errors.Is(err, volstack.ErrNoRecord):
 		klog.Infof("volume %s has no stack record; releasing it as fabric → filesystem", volumeID)
 	case err != nil:
@@ -423,6 +452,9 @@ func (ns *Server) teardownPlan(
 
 	if fsType != "" {
 		vc[stagedFsTypeKey] = fsType
+	}
+	if isStripedShape(shape) {
+		return ns.stripedTeardownPlan(volumeID, stagingTargetPath, vc, record, shape, options)
 	}
 	connection, err := teardownConnection(record, vc)
 	if err != nil {
@@ -751,8 +783,11 @@ func (ns *Server) rememberStagedVolume(
 		// Registered here rather than at the next poll of the connection
 		// monitor, because a volume that attaches and loses every path inside
 		// one poll interval would otherwise never have been seen as present and
-		// its loss would go unnoticed.
-		initiator.MarkDevicePresent(device.Path, deviceLvolID(vc))
+		// its loss would go unnoticed. A striped stack is watched through its
+		// members (striped.go).
+		if !markMembersPresent(ctx, plan, vc) {
+			initiator.MarkDevicePresent(device.Path, deviceLvolID(vc))
+		}
 	}
 	if volCap.GetBlock() != nil {
 		return

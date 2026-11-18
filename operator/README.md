@@ -225,7 +225,7 @@ account token.
 ```sh
 kubectl apply -f https://raw.githubusercontent.com/simplyblock/simplyblock-operator/main/operator/dist/install.yaml
 kubectl -n simplyblock-operator get pods        # manager pod should be Running
-kubectl apply -k config/samples/                # try the bundled samples
+kubectl apply -k config/samples/                # control plane, CSI driver, and a discovery run
 ```
 
 **Build and deploy from source** (run from the `operator/` directory):

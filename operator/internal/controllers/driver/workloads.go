@@ -246,6 +246,9 @@ func controllerStatefulSet(d *simplyblockv1alpha2.SimplyblockDriver, image strin
 			verbosity,
 			"--timeout=150s",
 			"--leader-election=false",
+			// Names the VolumeSnapshotContent in CreateSnapshot, which a striped
+			// snapshot is sealed on so a retry answers it (striped_seal.go).
+			"--extra-create-metadata=true",
 			// VolumeGroupSnapshot support (design-consistency-groups.md §9,
 			// P0-4): the sidecar calls the driver's GroupController for a
 			// VolumeGroupSnapshot only behind this gate.
@@ -356,7 +359,7 @@ const csiAddonsControllerPort int32 = 9070
 // hard-requires url.Parse's Scheme to equal "pod" and rejects everything
 // else with "endpoint scheme %q not supported" -- confirmed against a live
 // cluster, where passing --controller-ip produced the OTHER branch of the
-// sidecar's own BuildEndpointURL (a bare "<ip>:<port>", no scheme at all)
+// sidecar's own BuildEndpointURL (a bare <ip>:<port> with no scheme at all)
 // and the controller-manager failed every connection attempt with "first
 // path segment in URL cannot contain colon" until it gave up and deleted
 // the CSIAddonsNode. Omitting --controller-ip is the fix, not a missing

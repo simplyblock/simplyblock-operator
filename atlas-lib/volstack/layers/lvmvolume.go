@@ -223,7 +223,7 @@ func (l *LVMLogicalVolume) Ensure(ctx context.Context, below volstack.Artifact) 
 		// The layer below maps the group and everything in it, so reaching here
 		// means the volume alone was taken down. Mapping it again is convergent
 		// and costs nothing when it is already mapped.
-		if err := l.cfg.Manager.ActivateVolumeGroup(ctx, l.group()); err != nil {
+		if err := l.cfg.Manager.ActivateVolumeGroup(ctx, l.group(), physicalVolumes(below)...); err != nil {
 			return volstack.Artifact{}, fmt.Errorf("lvmLogicalVolume: %w", err)
 		}
 		if err := l.clearStaleMarker(ctx); err != nil {
@@ -375,12 +375,16 @@ func (l *LVMLogicalVolume) Grow(ctx context.Context, _ volstack.Artifact) (volst
 	}
 
 	// A pooled type sizes its logical volume independently of the pool's physical
-	// size, so the volume has to be told to match what the pool just became.
+	// size, so the volume has to be told its new size: the logical size the
+	// definition names, or, for one naming none, what the pool just became.
 	if l.cfg.PoolName != "" {
-		pool := lvm.LogicalVolume{VolumeGroup: l.group(), Name: l.cfg.PoolName}
-		size, err := l.cfg.Manager.LogicalVolumeSize(ctx, pool)
-		if err != nil {
-			return volstack.Artifact{}, fmt.Errorf("lvmLogicalVolume: %w", err)
+		size := l.cfg.Definition.LogicalSizeBytes
+		if size <= 0 {
+			pool := lvm.LogicalVolume{VolumeGroup: l.group(), Name: l.cfg.PoolName}
+			var err error
+			if size, err = l.cfg.Manager.LogicalVolumeSize(ctx, pool); err != nil {
+				return volstack.Artifact{}, fmt.Errorf("lvmLogicalVolume: %w", err)
+			}
 		}
 		if err := l.cfg.Manager.ExtendLogicalVolumeToSize(ctx, l.volume(), size); err != nil {
 			return volstack.Artifact{}, fmt.Errorf("lvmLogicalVolume: %w", err)

@@ -1,0 +1,11 @@
+# The control plane. The operator only reconciles a ControlPlane named
+# "simplyblock" in its own namespace.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ControlPlane
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  source:
+    local:
+      image: quay.io/simplyblock-io/simplyblock:26.4.0-beta4

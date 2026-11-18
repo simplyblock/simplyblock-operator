@@ -521,6 +521,13 @@ spec:
                               type: string
                           type: object
                         type: array
+                      unhealthyDeadline:
+                        description: |-
+                          UnhealthyDeadline is how long a booted guest may stay unhealthy before
+                          the pod restarts. The metadata server is a singleton in the data path of
+                          every pNFS volume, so a restart pauses all of them. 0s never restarts it.
+                          Unset keeps the runner's default of 90s.
+                        type: string
                     type: object
                 type: object
               sidecarImages:

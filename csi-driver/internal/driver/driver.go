@@ -26,6 +26,9 @@ package driver
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	csiaddonsidentity "github.com/csi-addons/spec/lib/go/identity"
@@ -38,8 +41,10 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/bucketdelivery/bucketdeliveryrpc"
 	"github.com/simplyblock/atlas/conntrack"
 	"github.com/simplyblock/atlas/conntrack/conntrackrpc"
+	"github.com/simplyblock/atlas/freeze/freezerpc"
 	"github.com/simplyblock/atlas/inventory"
 	"github.com/simplyblock/atlas/link"
 	"github.com/simplyblock/atlas/netcheck"
@@ -80,9 +85,10 @@ func Run(conf *config.Config) {
 			// csi.ControllerServiceCapability_RPC_LIST_VOLUMES,
 			csi.ControllerServiceCapability_RPC_VOLUME_CONDITION,
 		}
-		// A ReadWriteMany claim needs this advertised or it cannot bind. It is
-		// served by a pNFS export, and CreateVolume refuses it on any other
-		// fsType. The other multi-node modes are deliberately absent.
+		// A ReadWriteMany claim needs this advertised or it cannot bind. A
+		// filesystem one is served by a pNFS export, and CreateVolume refuses it
+		// on any other fsType. A raw-block one takes the block path. The other
+		// multi-node modes are deliberately absent.
 		volumeModes = []csi.VolumeCapability_AccessMode_Mode{
 			csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
 			csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
@@ -129,6 +135,13 @@ func Run(conf *config.Config) {
 
 	var swapper *swaprpc.Swapper
 	if conf.IsNodeServer {
+		// Before anything is started: a node whose kernel has no NVMe/TCP
+		// initiator can stage no volume, so the plugin exits and says why, in its
+		// log, in the container's termination message, and as an event on its pod.
+		if err := node.RequireInitiator(context.Background()); err != nil {
+			recordStartRefusal(kubeClient, conf, err)
+			klog.Fatalf("the node plugin does not start: %s", err)
+		}
 		var err error
 		ns, err = startNodeServer(cd, kubeClient)
 		if err != nil {
@@ -142,6 +155,11 @@ func Run(conf *config.Config) {
 		cs, err = controller.New(cd, kubeClient, exports)
 		if err != nil {
 			klog.Fatalf("failed to create controller server: %s", err)
+		}
+		// A finished striped snapshot is sealed on its VolumeSnapshotContent,
+		// so a retried CreateSnapshot answers it rather than freezing again.
+		if dynClient != nil {
+			cs.SetSnapshotSealer(controller.NewContentSealer(dynClient))
 		}
 		// The membership label is live for the volume's whole life (design
 		// §4.5): a PVC watcher joins a volume when the label is added and
@@ -158,7 +176,7 @@ func Run(conf *config.Config) {
 	if conf.LinkEnabled {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		agent, err := startLink(ctx, conf, swapper)
+		agent, err := startLink(ctx, conf, ns, swapper)
 		if err != nil {
 			klog.Fatalf("failed to start the operator link: %s", err)
 		}
@@ -166,6 +184,9 @@ func Run(conf *config.Config) {
 		// supercluster a volume goes to (design-superclusters.md §7.2).
 		if cs != nil {
 			cs.SetPlacer(csilink.Placement{Agent: agent})
+			// And has the operator relay a striped volume's freeze to the node
+			// that stages it, for a crash-consistent snapshot.
+			cs.SetFreezer(csilink.Freezer{Agent: agent})
 		}
 	}
 
@@ -226,7 +247,7 @@ func Run(conf *config.Config) {
 //
 // A node plugin also serves the swap service when it has one, which is what
 // lets the operator move a staged volume's namespace to another subsystem.
-func startLink(ctx context.Context, conf *config.Config, swapper *swaprpc.Swapper) (*link.Agent, error) {
+func startLink(ctx context.Context, conf *config.Config, ns *node.Server, swapper *swaprpc.Swapper) (*link.Agent, error) {
 	cfg := csilink.Config{
 		HubAddress:  conf.LinkHubAddress,
 		CAFile:      conf.LinkCAFile,
@@ -270,6 +291,19 @@ func startLink(ctx context.Context, conf *config.Config, swapper *swaprpc.Swappe
 		if err != nil {
 			return nil, fmt.Errorf("node host checks: %w", err)
 		}
+		// DeliverBucket/WithdrawBucket: ns itself satisfies
+		// bucketdeliveryrpc.Deliverer, wrapping its own NodeStageVolume family
+		// in-process (design-bucket-provisioning.md §5.2).
+		bucketDelivery, err := bucketdeliveryrpc.NewServer(ns)
+		if err != nil {
+			return nil, fmt.Errorf("node bucket delivery: %w", err)
+		}
+		// Freeze/Thaw: the controller suspends a striped volume staged here
+		// while it snapshots the members, through the operator's relay.
+		freezes, err := freezerpc.NewServer(ns)
+		if err != nil {
+			return nil, fmt.Errorf("node freeze: %w", err)
+		}
 		// No export service: exports are assembled in the metadata server's
 		// guest, never on a node.
 		cfg.ID = link.NodePeer(conf.NodeID)
@@ -277,12 +311,16 @@ func startLink(ctx context.Context, conf *config.Config, swapper *swaprpc.Swappe
 			srv.Register(r)
 			flows.Register(r)
 			checks.Register(r)
+			bucketDelivery.Register(r)
+			freezes.Register(r)
 			if swapper != nil {
 				swaprpc.NewServer(swapper).Register(r)
 			}
 		}
 		cfg.Capabilities = append(storagerpc.Capabilities(), conntrackrpc.Capabilities()...)
 		cfg.Capabilities = append(cfg.Capabilities, netcheckrpc.Capabilities()...)
+		cfg.Capabilities = append(cfg.Capabilities, bucketdeliveryrpc.Capabilities()...)
+		cfg.Capabilities = append(cfg.Capabilities, freezerpc.Capabilities()...)
 		if swapper != nil {
 			cfg.Capabilities = append(cfg.Capabilities, swaprpc.Capabilities()...)
 		}
@@ -318,6 +356,28 @@ func startSwapper(ns *node.Server, nodeName string) *swaprpc.Swapper {
 	return sw
 }
 
+// serviceAccountNamespaceFile is where a pod reads its own namespace.
+const serviceAccountNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+// recordStartRefusal leaves the reason the node plugin does not start as an
+// event on its own pod. The pod's name and UID come from the downward API, and
+// its namespace from the ServiceAccount mount. It is bounded, because the
+// process is about to exit and an API server that does not answer must not
+// hold that up.
+func recordStartRefusal(kubeClient kubernetes.Interface, conf *config.Config, reason error) {
+	namespace, err := os.ReadFile(serviceAccountNamespaceFile)
+	if err != nil {
+		klog.Warningf("the refusal is not recorded as an event: reading the pod's namespace: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pod := node.PodRef{Namespace: strings.TrimSpace(string(namespace)), Name: conf.PodName, UID: conf.PodUID}
+	if err := node.RecordStartRefusal(ctx, kubeClient, pod, reason); err != nil {
+		klog.Warningf("the refusal is not recorded as an event: %v", err)
+	}
+}
+
 // startNodeServer builds the node service and starts the background loops that
 // belong to a node plugin rather than to a request: the connection monitor,
 // which reconnects NVMe-oF paths the control plane still publishes, the
@@ -342,6 +402,10 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	if err != nil {
 		return nil, err
 	}
+	// A striped volume left suspended by a previous run, mid-snapshot, is
+	// resumed before anything else: the deadline that would have resumed it
+	// went with that run.
+	ns.RecoverFreezes(context.Background())
 
 	nodeName := cd.GetNodeID()
 	// Before the service serves: a fresh stage reads the answer.

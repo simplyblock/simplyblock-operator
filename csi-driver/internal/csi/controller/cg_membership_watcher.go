@@ -181,6 +181,19 @@ func (w *cgMembershipWatcher) reconcile(ctx context.Context, pvc *corev1.Persist
 	if err != nil {
 		return nil // not a volume this driver can address; nothing to reconcile
 	}
+	if width := csicommon.StripeWidth(pv.Spec.CSI.VolumeHandle); width > 1 {
+		// The handle names the first member only, and a group is confined to
+		// one logical volume store while the members are on different nodes by
+		// construction: joining, detaching, or colocating would act on one
+		// member of the stripe. CreateVolume refuses the label for the same
+		// reason; this is the label added after the claim was bound.
+		if pvc.Labels[consistencyGroupLabel] != "" {
+			w.recorder.Eventf(pvc, corev1.EventTypeWarning, "ConsistencyGroupStripedVolume",
+				"volume is striped across %d storage nodes and cannot join consistency group %q; "+
+					"remove the label", width, pvc.Labels[consistencyGroupLabel])
+		}
+		return nil
+	}
 	client, err := w.clientFor(ctx, handle.ClusterID, handle.PoolRef)
 	if err != nil {
 		return fmt.Errorf("control-plane client for cluster %s: %w", handle.ClusterID, err)

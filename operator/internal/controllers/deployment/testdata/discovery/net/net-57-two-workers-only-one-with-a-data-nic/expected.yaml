@@ -11,11 +11,12 @@ spec:
   cluster:
     clusterMode: Dual
     enableDriveFormat: true
+    enableNodeAffinity: true
     maxSubsystemCount: 30
     minHugePagesSize: 16G
     name: discovered-discover-net-57-cluster
     network:
-      podNetwork: true
+      spdkOnHostNetwork: true
     stripe:
       dataChunks: 1
       parityChunks: 1
