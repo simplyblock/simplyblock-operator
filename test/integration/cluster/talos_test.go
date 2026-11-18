@@ -175,7 +175,8 @@ func TestDefaultConfigNarrates(t *testing.T) {
 // sudo-rs, which ignores -E with a warning on stderr. talosctl then ran with
 // root's HOME and no KUBECONFIG, and the warning landed in the JSON the
 // harness parses, so every suite failed to bring its cluster up. Under sudo the
-// variables talosctl needs are passed by name, which both sudo builds keep.
+// variables talosctl needs are sudo's own VAR=value arguments, which both sudo
+// builds accept under the SETENV grant the README documents.
 func TestSudoPassesHomeAndKubeconfigByName(t *testing.T) {
 	sudo := true
 	c := &Cluster{cfg: Config{TalosctlPath: "talosctl", Sudo: &sudo}, kubeconfig: "/work/kubeconfig"}
@@ -187,6 +188,11 @@ func TestSudoPassesHomeAndKubeconfigByName(t *testing.T) {
 	args := c.talosctlCommand(context.Background(), "config", "info").Args
 	if slices.Contains(args, "-E") {
 		t.Errorf("args = %q, want no -E, which sudo-rs ignores", args)
+	}
+	// The scoped grants in the README authorize talosctl with SETENV, and
+	// nothing else: a run through env would prompt for it.
+	if len(args) < 2 || args[0] != "sudo" || slices.Contains(args, "env") {
+		t.Errorf("args = %q, want sudo to run talosctl itself, with the variables as its own arguments", args)
 	}
 	for _, want := range []string{"HOME=" + home, "KUBECONFIG=/work/kubeconfig"} {
 		i := slices.Index(args, want)

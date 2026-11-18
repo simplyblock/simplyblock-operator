@@ -538,8 +538,10 @@ func sudoCommand(ctx context.Context, args ...string) *exec.Cmd {
 // merges what it fetches into the caller's own kubeconfig unless it is pointed
 // somewhere else. Left alone, every run leaves an admin@<cluster> context
 // behind in a file the tests have no business writing, so KUBECONFIG names the
-// cluster's own file. Under sudo both are passed by name through env rather
-// than kept with -E: sudo-rs, which Ubuntu 26.04 ships, ignores -E.
+// cluster's own file. Under sudo both are sudo's own VAR=value arguments
+// rather than kept with -E: sudo-rs, which Ubuntu 26.04 ships, ignores -E.
+// Both sudo builds accept them under the SETENV grant the README documents,
+// which a run through env would not be covered by.
 func (c *Cluster) talosctlCommand(ctx context.Context, args ...string) *exec.Cmd {
 	kubeconfig := "KUBECONFIG=" + c.kubeconfig
 	bin, full := c.cfg.TalosctlPath, args
@@ -548,7 +550,7 @@ func (c *Cluster) talosctlCommand(ctx context.Context, args ...string) *exec.Cmd
 		if home, err := os.UserHomeDir(); err == nil {
 			vars = append(vars, "HOME="+home)
 		}
-		full = append(append(append([]string{"env"}, vars...), c.cfg.TalosctlPath), args...)
+		full = append(append(vars, c.cfg.TalosctlPath), args...)
 		bin = "sudo"
 	}
 	cmd := exec.CommandContext(ctx, bin, full...) //nolint:gosec // fixed binary, structured args
