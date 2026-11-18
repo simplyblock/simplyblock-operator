@@ -4901,6 +4901,11 @@ func (in *StorageNodeCapacity) DeepCopy() *StorageNodeCapacity {
 func (in *StorageNodeConfig) DeepCopyInto(out *StorageNodeConfig) {
 	*out = *in
 	in.Sizing.DeepCopyInto(&out.Sizing)
+	if in.EnableKubeletConfiguration != nil {
+		in, out := &in.EnableKubeletConfiguration, &out.EnableKubeletConfiguration
+		*out = new(bool)
+		**out = **in
+	}
 	if in.JournalManager != nil {
 		in, out := &in.JournalManager, &out.JournalManager
 		*out = new(JournalManagerSpec)

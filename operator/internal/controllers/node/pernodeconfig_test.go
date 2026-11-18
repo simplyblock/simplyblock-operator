@@ -21,6 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -266,6 +267,38 @@ func TestANodeWithNoReservedCPUsWritesNoLine(t *testing.T) {
 	got := entryOf(renderNodeConfig(&simplyblockv1alpha2.StorageCluster{}, &simplyblockv1alpha2.StorageNode{}))
 	if _, stated := got["RESERVED_SYSTEM_CPUS"]; stated {
 		t.Errorf("the entry carries RESERVED_SYSTEM_CPUS=%q with nothing stated", got["RESERVED_SYSTEM_CPUS"])
+	}
+}
+
+// Whether a worker's kubelet may be configured is a fact about the worker in a
+// cluster whose workers come from more than one provider, so a node that
+// states it overrides the fleet's value through its own entry. The agent
+// reads the inverted variable, so stating it on writes the skip off.
+func TestTheNodesKubeletConfigurationReachesItsOwnEntry(t *testing.T) {
+	for _, c := range []struct {
+		enable bool
+		want   string
+	}{{true, "false"}, {false, "true"}} {
+		node := &simplyblockv1alpha2.StorageNode{
+			Spec: simplyblockv1alpha2.StorageNodeSpec{
+				Config: simplyblockv1alpha2.StorageNodeConfig{EnableKubeletConfiguration: ptr.To(c.enable)},
+			},
+		}
+
+		got := entryOf(renderNodeConfig(&simplyblockv1alpha2.StorageCluster{}, node))
+		if got["SKIP_KUBELET_CONFIGURATION"] != c.want {
+			t.Errorf("enableKubeletConfiguration=%t wrote SKIP_KUBELET_CONFIGURATION=%q, want %q",
+				c.enable, got["SKIP_KUBELET_CONFIGURATION"], c.want)
+		}
+	}
+}
+
+// A node that states none writes none, so the fleet's value on the pod decides.
+func TestANodeWithNoKubeletConfigurationWritesNoLine(t *testing.T) {
+	got := entryOf(renderNodeConfig(&simplyblockv1alpha2.StorageCluster{}, &simplyblockv1alpha2.StorageNode{}))
+	if _, stated := got["SKIP_KUBELET_CONFIGURATION"]; stated {
+		t.Errorf("the entry carries SKIP_KUBELET_CONFIGURATION=%q with nothing stated",
+			got["SKIP_KUBELET_CONFIGURATION"])
 	}
 }
 

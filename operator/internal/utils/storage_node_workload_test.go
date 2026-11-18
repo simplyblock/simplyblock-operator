@@ -242,7 +242,11 @@ func TestTheMainContainerExportsTheNodesReservedCPUs(t *testing.T) {
 		t.Errorf("the container sources the entry and exports nothing from it, "+
 			"so the node's own reserved CPUs never reach the agent: %s", command)
 	}
-	// Only that one. Exporting the entry wholesale would put the device lists
+	if !strings.Contains(command, "export SKIP_KUBELET_CONFIGURATION") {
+		t.Errorf("the container does not export the node's own kubelet configuration "+
+			"flag, so a worker whose kubelet differs from the fleet's never reaches the agent: %s", command)
+	}
+	// Only those. Exporting the entry wholesale would put the device lists
 	// and the class flag into the agent's environment, where nothing asked for
 	// them and a name could collide.
 	if strings.Contains(command, "set -a") {
