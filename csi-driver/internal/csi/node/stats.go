@@ -194,6 +194,33 @@ func redirectToActiveVolume(
 	return nil
 }
 
+// redirectThroughLocalCluster is the redirect for a volume whose handle names
+// a cluster on another site's control plane (a Peer entry in the secret, or
+// none): on a split control plane, a fail-over clones it on this site, and
+// this site's own control plane records the relationship under the source
+// volume's id. The other site's control plane may be cut off, so it is not
+// asked. Returns nil when the handle's cluster is not on another control
+// plane, or when no cluster of this site holds a relationship for the volume.
+func redirectThroughLocalCluster(
+	ctx context.Context, clusterID, lvolID, volumeID string, vc map[string]string,
+) map[string]string {
+	local, err := clusters.FailoverClusters(clusterID)
+	if err != nil || len(local) == 0 {
+		return nil
+	}
+	for _, cluster := range local {
+		client, err := clusterClientFor(ctx, cluster, "")
+		if err != nil {
+			klog.Warningf("volume %s: no client for this site's cluster %s: %v", volumeID, cluster, err)
+			continue
+		}
+		if connInfo := redirectToActiveVolume(ctx, client, lvolID, volumeID, vc); connInfo != nil {
+			return connInfo
+		}
+	}
+	return nil
+}
+
 // maxChainHops bounds a replication-chain walk. A chain grows by one member
 // per move and is never compacted, so this is a guard against a looping
 // record, far above any chain a volume accumulates in its lifetime.

@@ -85,12 +85,56 @@ func (cs *Server) movedTo(ctx context.Context, volumeID string, h *lvol.Handle) 
 	return &end, true, nil
 }
 
+// movedOnThisSite is movedTo for a handle whose cluster is on another site's
+// control plane (a Peer entry in the secret, or none): a fail-over with that
+// site cut off cloned the volume here, and this site's control plane records
+// the relationship under the source volume's id. The other site's control
+// plane, which may still be cut off, is not asked first. ok is false when the
+// handle's cluster is on this control plane, or no cluster of this site holds
+// a fail-over of the volume.
+//
+// The walk starts at the handle re-addressed to this site's cluster: the
+// relationship endpoint finds a record by the volume's id, whichever cluster
+// it lives on, and only a cluster this control plane manages can be named in
+// its path.
+func movedOnThisSite(ctx context.Context, volumeID string, h *lvol.Handle) (*lvol.Handle, bool) {
+	local, err := clusters.FailoverClusters(h.ClusterID)
+	if err != nil || len(local) == 0 {
+		return nil, false
+	}
+	for _, cluster := range local {
+		client, err := clusters.ReplicationClient(ctx, cluster)
+		if err != nil {
+			klog.Warningf("volume %s: no client for this site's cluster %s: %v", volumeID, cluster, err)
+			continue
+		}
+		start := lvol.Handle{ClusterID: cluster, PoolRef: h.PoolRef, VolumeID: h.VolumeID}
+		hops, _, err := atlascp.WalkChain(ctx, start, client, clusters.ReplicationClient)
+		if err != nil {
+			klog.Warningf("volume %s: relationship on this site's cluster %s: %v", volumeID, cluster, err)
+			continue
+		}
+		if end := hops[len(hops)-1].Handle; end != start {
+			klog.Infof("volume %s failed over onto this site; addressing %s", volumeID, end.Handle())
+			return &end, true
+		}
+	}
+	return nil, false
+}
+
 // onActiveVolume runs call against the handle, and once more against the
 // volume serving it when the handle's own volume is gone.
 func (cs *Server) onActiveVolume(
 	ctx context.Context, volumeID string, h *lvol.Handle, client *controlplane.ClusterClient,
 	call func(*lvol.Handle, *controlplane.ClusterClient) error,
 ) error {
+	if moved, ok := movedOnThisSite(ctx, volumeID, h); ok {
+		movedClient, err := clusters.Client(ctx, moved.ClusterID, moved.PoolRef)
+		if err != nil {
+			return err
+		}
+		return call(moved, movedClient)
+	}
 	err := call(h, client)
 	if !notFound(err) {
 		return err

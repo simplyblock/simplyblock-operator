@@ -45,6 +45,16 @@ const (
 func resolveGroupTarget(
 	ctx context.Context, gh lvol.GroupHandle, side groupSide,
 ) (lvol.GroupHandle, *atlascp.Client, error) {
+	if res, ok := resolveOnThisSite(ctx, gh); ok {
+		// Failed over onto this site while the group's own control plane is
+		// on another site: the group here is both the live and the local one.
+		client, err := clusters.ReplicationClient(ctx, res.Active.ClusterID)
+		if err != nil {
+			return gh, nil, status.Error(codes.Unavailable, err.Error())
+		}
+		klog.Infof("group %s resolves to %s on this site", gh.Handle(), res.Active.Handle())
+		return *res.Active, client, nil
+	}
 	client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
 	if err != nil {
 		return gh, nil, status.Error(codes.Unavailable, err.Error())
@@ -64,6 +74,35 @@ func resolveGroupTarget(
 	}
 	klog.Infof("group %s resolves to %s", gh.Handle(), target.Handle())
 	return target, targetClient, nil
+}
+
+// resolveOnThisSite resolves gh on this site's own control plane when gh's
+// cluster is on another site's (a Peer entry in the secret, or none): after a
+// fail-over with the source cut off, the group lives here, and the other
+// site's control plane, which may still be cut off, is not asked. ok is false
+// when gh's cluster is on this control plane, or no cluster of this site holds
+// a fail-over of the group; the caller then asks gh's own control plane.
+func resolveOnThisSite(ctx context.Context, gh lvol.GroupHandle) (atlascp.GroupResolution, bool) {
+	local, err := clusters.FailoverClusters(gh.ClusterID)
+	if err != nil || len(local) == 0 {
+		return atlascp.GroupResolution{}, false
+	}
+	for _, cluster := range local {
+		client, err := clusters.ReplicationClient(ctx, cluster)
+		if err != nil {
+			klog.Warningf("group %s: no client for this site's cluster %s: %v", gh.Handle(), cluster, err)
+			continue
+		}
+		res, err := client.ResolveReplicatedGroup(ctx, cluster, gh)
+		if err != nil {
+			klog.Warningf("group %s: resolve on this site's cluster %s: %v", gh.Handle(), cluster, err)
+			continue
+		}
+		if res.Active != nil {
+			return res, true
+		}
+	}
+	return atlascp.GroupResolution{}, false
 }
 
 // chooseGroup is resolveGroupTarget's pure choice: the named group or the live

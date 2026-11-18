@@ -62,3 +62,17 @@ func TestMergeCSICredentialsWithoutTheListOnlyWritesTheOwnEntry(t *testing.T) {
 		t.Fatalf("entries %+v", creds.Clusters)
 	}
 }
+
+func TestMergeCSICredentialsKeepsAPeerEntryItsControlPlaneDoesNotList(t *testing.T) {
+	// Control-plane split: site A's control plane lists only cluster A; a
+	// ReplicationPair registered B through B's own control plane.
+	creds := CSICredentials{Clusters: []CSIClusterEntry{
+		{ClusterID: "B", ClusterEndpoint: "http://10.70.3.21:15000", ClusterSecret: "sb", Peer: true},
+	}}
+	own := CSIClusterEntry{ClusterID: "A", ClusterEndpoint: "http://cp:5000", ClusterSecret: "sa", Local: true}
+	mergeCSICredentials(&creds, own, []atlascp.Cluster{{ID: "A", Secret: "sa"}}, true)
+	got := entryIDs(creds)
+	if b, ok := got["B"]; !ok || !b.Peer || b.ClusterEndpoint != "http://10.70.3.21:15000" || b.ClusterSecret != "sb" {
+		t.Fatalf("the peer entry was pruned or changed: %+v", creds.Clusters)
+	}
+}

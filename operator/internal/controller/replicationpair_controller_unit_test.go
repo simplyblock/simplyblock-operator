@@ -18,6 +18,9 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
+// tgtBackendUUID is the id the fake control plane gives the target it creates.
+const tgtBackendUUID = "tgt-backend-uuid"
+
 // newSitePairReconciler creates a ReplicationPairReconciler backed by a fake client.
 // It indexes ReplicationPolicy.spec.pairRef so deletion-blocking checks work.
 func newSitePairReconciler(t *testing.T, objects ...client.Object) (*ReplicationPairReconciler, client.Client) {
@@ -132,7 +135,7 @@ func TestSitePair_CreatesBackendTarget(t *testing.T) {
 		}
 		if req.Method == http.MethodPost {
 			w.WriteHeader(http.StatusCreated)
-			resp, _ := json.Marshal(map[string]string{"id": "tgt-backend-uuid"})
+			resp, _ := json.Marshal(map[string]string{"id": tgtBackendUUID})
 			_, _ = w.Write(resp)
 			return
 		}
@@ -154,8 +157,8 @@ func TestSitePair_CreatesBackendTarget(t *testing.T) {
 	if !got.Status.Ready {
 		t.Errorf("pair.Status.Ready = false, want true")
 	}
-	if got.Status.BackendTargetID != "tgt-backend-uuid" {
-		t.Errorf("BackendTargetID = %q, want tgt-backend-uuid", got.Status.BackendTargetID)
+	if got.Status.BackendTargetID != tgtBackendUUID {
+		t.Errorf("BackendTargetID = %q, want %q", got.Status.BackendTargetID, tgtBackendUUID)
 	}
 }
 
@@ -182,7 +185,7 @@ func TestSitePair_UsesEndpointResolver(t *testing.T) {
 		}
 		if req.Method == http.MethodPost {
 			w.WriteHeader(http.StatusCreated)
-			resp, _ := json.Marshal(map[string]string{"id": "tgt-backend-uuid"})
+			resp, _ := json.Marshal(map[string]string{"id": tgtBackendUUID})
 			_, _ = w.Write(resp)
 			return
 		}
@@ -204,8 +207,8 @@ func TestSitePair_UsesEndpointResolver(t *testing.T) {
 	if !got.Status.Ready {
 		t.Errorf("pair.Status.Ready = false, want true (EndpointResolver should have been used)")
 	}
-	if got.Status.BackendTargetID != "tgt-backend-uuid" {
-		t.Errorf("BackendTargetID = %q, want tgt-backend-uuid", got.Status.BackendTargetID)
+	if got.Status.BackendTargetID != tgtBackendUUID {
+		t.Errorf("BackendTargetID = %q, want %q", got.Status.BackendTargetID, tgtBackendUUID)
 	}
 }
 
@@ -237,7 +240,7 @@ func TestSitePair_AuthenticatesAsSourceClusterOnceSecretIsKnown(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
-		resp, _ := json.Marshal(map[string]string{"id": "tgt-backend-uuid"})
+		resp, _ := json.Marshal(map[string]string{"id": tgtBackendUUID})
 		_, _ = w.Write(resp)
 	})
 

@@ -100,3 +100,37 @@ func TestConsistencyGroupMemberHandlesOfAnEmptyGroupIsAnError(t *testing.T) {
 		t.Fatal("an empty group answered without an error")
 	}
 }
+
+// The current members only: a removed member is left out, and an empty group is
+// an empty list, not an error.
+func TestConsistencyGroupMembersListsTheCurrentOnes(t *testing.T) {
+	const (
+		group = "c9c9c9c9-c9c9-4c9c-8c9c-c9c9c9c9c9c9"
+		m1    = "a1111111-1111-4111-8111-111111111111"
+		gone  = "d4444444-4444-4444-8444-444444444444"
+	)
+	for _, tc := range []struct {
+		body string
+		want []string
+	}{
+		{`[{"lvol_id":"` + m1 + `","joined_seq":1,"removed_seq":0,"node_id":"","lvs_name":"","online":true},` +
+			`{"lvol_id":"` + gone + `","joined_seq":1,"removed_seq":4,"node_id":"","lvs_name":"","online":true}]`, []string{m1}},
+		{`[]`, []string{}},
+	} {
+		c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if !strings.HasSuffix(r.URL.Path, "/consistency-groups/"+group+"/members") {
+				t.Errorf("unexpected path %q", r.URL.Path)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tc.body))
+		})
+
+		got, err := c.ConsistencyGroupMembers(context.Background(), lvol.GroupHandle{ClusterID: testCluster, GroupID: group})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("members = %v, want %v", got, tc.want)
+		}
+	}
+}

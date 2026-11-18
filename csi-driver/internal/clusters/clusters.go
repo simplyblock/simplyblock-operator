@@ -48,6 +48,11 @@ type Config struct {
 	// this driver runs on (written by the site's operator).
 	Sync bool   `json:"sync,omitempty"`
 	Site string `json:"site,omitempty"`
+	// Peer marks a cluster on another site's control plane (written by a
+	// ReplicationPair with spec.peer). A group promote of such a cluster's
+	// group runs on this site's own control plane, from the copies here: the
+	// other site's may be cut off, which is when a fail-over is ordered.
+	Peer bool `json:"peer,omitempty"`
 }
 
 // Info is the secret file as a whole.
@@ -93,6 +98,35 @@ func Load() (Info, error) {
 		return Info{}, fmt.Errorf("failed to parse secret file: %w", err)
 	}
 	return clusters, nil
+}
+
+// FailoverClusters returns the clusters of this site's own control plane that a
+// group promote of clusterID's group goes to, from the replicated copies there,
+// when clusterID belongs to another control plane: its entry is a Peer, or the
+// secret does not list it. It returns nil when clusterID's own control plane
+// serves the promote, as with one control plane for both sites.
+func FailoverClusters(clusterID string) ([]string, error) {
+	info, err := Load()
+	if err != nil {
+		return nil, err
+	}
+	for _, cluster := range info.Clusters {
+		if cluster.ClusterID == clusterID && !cluster.Peer {
+			return nil, nil
+		}
+	}
+	var local []string
+	for _, cluster := range info.Clusters {
+		if cluster.Local {
+			local = append(local, cluster.ClusterID)
+		}
+	}
+	if len(local) == 0 {
+		return nil, fmt.Errorf(
+			"cluster %s is on another control plane and the secret marks no cluster of this site local: %w",
+			clusterID, controlplane.ErrClusterNotFound)
+	}
+	return local, nil
 }
 
 // Local returns the ids of the clusters the secret marks local, and whether

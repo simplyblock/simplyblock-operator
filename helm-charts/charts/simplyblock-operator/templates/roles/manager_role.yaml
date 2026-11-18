@@ -347,6 +347,13 @@ rules:
   - update
   - watch
 - apiGroups:
+  - replication.storage.openshift.io
+  resources:
+  - volumegroupreplicationcontents
+  - volumegroupreplications
+  verbs:
+  - get
+- apiGroups:
   - snapshot.storage.k8s.io
   resources:
   - volumesnapshotclasses
@@ -508,6 +515,7 @@ rules:
   - stretchedclusters/status
   - tasks/status
   - testfailovers/status
+  - volumegroupreplicationops/status
   - volumegroupsnapshotops/status
   - volumemigrations/status
   verbs:
@@ -544,6 +552,7 @@ rules:
   - storagefenceremediationtemplates
   - storagegroupbackups
   - storagenodesets
+  - volumegroupreplicationops
   - volumegroupsnapshotops
   verbs:
   - get
