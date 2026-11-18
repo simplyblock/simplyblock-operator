@@ -55,7 +55,7 @@ func csiPV(name, handle string, claim *corev1.ObjectReference) *corev1.Persisten
 }
 
 func unusable() unusableLayout {
-	return unusableLayout{Path: stagingMount, FailingFor: 6 * time.Minute, Err: errProbeForTest}
+	return unusableLayout{Path: stagingMount, For: 6 * time.Minute, Probed: true, ProbeErr: errProbeForTest}
 }
 
 // Regression: SFAM-2850. A mount sent all of its I/O through the metadata
@@ -115,5 +115,62 @@ func TestAnUnusableLayoutWithNoPVIsAnError(t *testing.T) {
 	}
 	if len(rec.events) != 0 {
 		t.Errorf("events = %+v, want none", rec.events)
+	}
+}
+
+// reportOnClaim records u for the claimed volume and returns its one event.
+func reportOnClaim(t *testing.T, u unusableLayout) recordedEvent {
+	t.Helper()
+	kube := fake.NewClientset(
+		csiPV("pvc-8e7a", reportVolumeID, &corev1.ObjectReference{Namespace: "app", Name: "data"}))
+	rec := &capturingRecorder{}
+	if err := reportUnusableLayout(context.Background(), kube, rec, "worker-2", u); err != nil {
+		t.Fatalf("reportUnusableLayout: %v", err)
+	}
+	if len(rec.events) != 1 {
+		t.Fatalf("events = %+v, want one", rec.events)
+	}
+	return rec.events[0]
+}
+
+// Regression: 2026-11-18-pnfs-probe-ok-data-through-mds (F-21 on dev-ocp). The
+// event said the probes could not take the block layout while they took it,
+// and a pod's unaligned O_DIRECT was what went through the server. The event
+// says what was seen, names the causes it cannot tell apart, and reports the
+// last probe as it ended.
+func TestTheDataReportDoesNotBlameTheProbes(t *testing.T) {
+	ev := reportOnClaim(t, unusableLayout{Path: stagingMount, For: 5 * time.Minute, Probed: true})
+	if ev.Reason != reasonDataThroughMDS {
+		t.Errorf("reason = %s, want %s", ev.Reason, reasonDataThroughMDS)
+	}
+	for _, unwanted := range []string{"cannot take", "because"} {
+		if strings.Contains(ev.Message, unwanted) {
+			t.Errorf("message %q claims a cause (%q)", ev.Message, unwanted)
+		}
+	}
+	for _, want := range []string{"5m0s", "unaligned direct I/O", "took the block layout"} {
+		if !strings.Contains(ev.Message, want) {
+			t.Errorf("message %q does not say %q", ev.Message, want)
+		}
+	}
+
+	ev = reportOnClaim(t, unusable())
+	if !strings.Contains(ev.Message, errProbeForTest.Error()) {
+		t.Errorf("message %q does not carry the last probe's error", ev.Message)
+	}
+}
+
+// Regression: 2026-11-18-pnfs-probe-hung (lab cluster 111). A probe stuck in
+// the kernel is its own report, under its own reason: no probe of the mount
+// runs again until it returns.
+func TestAHungProbeIsReportedUnderItsOwnReason(t *testing.T) {
+	ev := reportOnClaim(t, unusableLayout{Path: stagingMount, Hung: true, For: 7 * time.Minute})
+	if ev.Reason != reasonProbeHung {
+		t.Errorf("reason = %s, want %s", ev.Reason, reasonProbeHung)
+	}
+	for _, want := range []string{"worker-2", "7m0s", "not returned"} {
+		if !strings.Contains(ev.Message, want) {
+			t.Errorf("message %q does not say %q", ev.Message, want)
+		}
 	}
 }

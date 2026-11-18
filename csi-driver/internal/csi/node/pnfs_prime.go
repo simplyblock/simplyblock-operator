@@ -18,9 +18,16 @@
 //
 // A fence from the device needs no reconnect: the client marks the device
 // unusable, and the mount's READs and WRITEs go through the server. So a mount
-// whose data goes through the server is probed again too, and one whose probes
-// keep failing is reported, because the mount keeps working and nothing else
-// says so.
+// whose data goes through the server is probed again too.
+//
+// A mount whose data keeps going through the server is reported, whatever its
+// probes say, because the mount keeps working and nothing else says so. The
+// probes cannot tell the causes apart: a probe counts as failed when the
+// mount's WRITE count grows under it, which a pod's own writes through the
+// server cause as well, so a kernel that cannot open the device, a fenced
+// client, and a pod doing unaligned direct I/O all look alike from here. A
+// probe that does not return is reported too: it holds the mount's probe lock,
+// and the mount is never probed again while it runs.
 
 package node
 
@@ -54,10 +61,17 @@ const primeInterval = 2 * time.Second
 // whose READs and WRITEs still go through the server is probed again.
 const dataReprobeInterval = 30 * time.Second
 
-// unusableReportAfter is how long a mount's probes have to keep failing before
-// it is reported. A restart of the server fails them for its grace period and
-// the layout hold after it, well under this.
+// unusableReportAfter is how long a mount's data has to keep going through the
+// server, or a probe has to keep running, before the mount is reported. A
+// restart of the server sends the data there, and blocks a probe, for its
+// grace period and the layout hold after it, well under this.
 const unusableReportAfter = 5 * time.Minute
+
+// failedProbeRetryMax is the longest a failed probe waits for its retry. The
+// wait starts at primeInterval and doubles with each failure in a row, so a
+// probe failing through a grace period is retried within seconds, and one a
+// pod's writes through the server keep failing is not retried on every pass.
+const failedProbeRetryMax = dataReprobeInterval
 
 // mountWrites is the NFS WRITE count of the mount at path, and false when the
 // client reports no NFS mount there. A variable so the tests can set it.
@@ -146,9 +160,10 @@ type layoutPrimer struct {
 	// carries, whatever kubelet's root directory is.
 	stagingMarker string
 
-	mu      sync.Mutex
-	mounts  map[string]*mountPrime
-	running map[string]bool
+	mu     sync.Mutex
+	mounts map[string]*mountPrime
+	// running holds when each probe still running started.
+	running map[string]time.Time
 
 	now func() time.Time
 }
@@ -164,32 +179,48 @@ type mountPrime struct {
 	data int64
 	// probedAt is when the last probe that took its layout ended.
 	probedAt time.Time
-	// failingSince is when the current run of failed probes began, zero
-	// outside one, and lastErr is its latest probe's error.
-	failingSince time.Time
-	lastErr      error
-	// reported is whether the current run of failures has been reported.
-	reported bool
+	// probed is whether any probe has finished, and lastErr is the last
+	// one's error, nil when it took its layout. failures is how many probes
+	// in a row have failed, and retryAt is when the last failed one is
+	// retried.
+	probed   bool
+	lastErr  error
+	failures int
+	retryAt  time.Time
+	// throughSince is when the current run of passes that saw data go through
+	// the server began, zero outside one, and lastThrough is the last pass in
+	// it. reported is whether the run has been reported.
+	throughSince time.Time
+	lastThrough  time.Time
+	reported     bool
+	// hungReported is whether the probe running now has been reported.
+	hungReported bool
 }
 
 func newLayoutPrimer(driverName string) *layoutPrimer {
 	return &layoutPrimer{
 		stagingMarker: "/plugins/kubernetes.io/csi/" + driverName + "/",
 		mounts:        map[string]*mountPrime{},
-		running:       map[string]bool{},
+		running:       map[string]time.Time{},
 		now:           time.Now,
 	}
 }
 
-// unusableLayout is a staging mount whose probes have kept failing.
+// unusableLayout is a staging mount the primer reports. For is how long its
+// data has gone through the server or, when Hung, how long its probe has run.
+// Probed is whether any probe of the mount has finished, and ProbeErr is the
+// last one's error, nil when it took its layout.
 type unusableLayout struct {
-	Path       string
-	FailingFor time.Duration
-	Err        error
+	Path     string
+	Hung     bool
+	For      time.Duration
+	Probed   bool
+	ProbeErr error
 }
 
-// overdue returns the staging mounts whose probes have failed for
-// unusableReportAfter, once per run of failures.
+// overdue returns the staging mounts whose data has gone through the server
+// for unusableReportAfter, once per run, and those whose probe has run that
+// long, once per probe.
 func (p *layoutPrimer) overdue() []unusableLayout {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -197,12 +228,20 @@ func (p *layoutPrimer) overdue() []unusableLayout {
 	now := p.now()
 	var out []unusableLayout
 	for path, st := range p.mounts {
-		if st.failingSince.IsZero() || st.reported {
+		if started, ok := p.running[path]; ok && !st.hungReported {
+			if running := now.Sub(started); running >= unusableReportAfter {
+				st.hungReported = true
+				out = append(out, unusableLayout{
+					Path: path, Hung: true, For: running, Probed: st.probed, ProbeErr: st.lastErr,
+				})
+			}
+		}
+		if st.throughSince.IsZero() || st.reported {
 			continue
 		}
-		if failing := now.Sub(st.failingSince); failing >= unusableReportAfter {
+		if through := now.Sub(st.throughSince); through >= unusableReportAfter {
 			st.reported = true
-			out = append(out, unusableLayout{Path: path, FailingFor: failing, Err: st.lastErr})
+			out = append(out, unusableLayout{Path: path, For: through, Probed: st.probed, ProbeErr: st.lastErr})
 		}
 	}
 	return out
@@ -237,30 +276,48 @@ func (p *layoutPrimer) due(mounts []nfsclient.Mount) []string {
 		data := m.Ops["READ"] + m.Ops["WRITE"]
 		grew := seen && data > st.data
 		st.data = data
-		if p.running[m.MountPoint] {
+		p.trackThrough(st, grew, now)
+		if _, running := p.running[m.MountPoint]; running {
 			continue
 		}
-		probe := !seen || !st.primed || st.connects != m.Connects ||
-			(grew && now.Sub(st.probedAt) >= dataReprobeInterval)
+		probe := !seen || st.connects != m.Connects ||
+			(!st.primed && !now.Before(st.retryAt)) ||
+			(st.primed && grew && now.Sub(st.probedAt) >= dataReprobeInterval)
 		if !probe {
 			continue
 		}
 		st.connects = m.Connects
-		p.running[m.MountPoint] = true
+		p.running[m.MountPoint] = now
 		out = append(out, m.MountPoint)
 	}
 	// An unstaged mount is forgotten, so a later stage on the same path is
 	// first seen again.
 	for path := range p.mounts {
-		if !present[path] && !p.running[path] {
+		if _, running := p.running[path]; !present[path] && !running {
 			delete(p.mounts, path)
 		}
 	}
 	return out
 }
 
-// done records a probe's end. After a failed one the next pass probes the
-// mount again, and the run of failures it belongs to is timed.
+// trackThrough extends or ends the mount's run of passes that saw its data go
+// through the server. A pass without growth ends it only once the data has
+// been still for dataReprobeInterval, so a workload that pauses between
+// bursts stays in one run.
+func (p *layoutPrimer) trackThrough(st *mountPrime, grew bool, now time.Time) {
+	switch {
+	case grew:
+		if st.throughSince.IsZero() {
+			st.throughSince = now
+		}
+		st.lastThrough = now
+	case !st.throughSince.IsZero() && now.Sub(st.lastThrough) >= dataReprobeInterval:
+		st.throughSince, st.lastThrough, st.reported = time.Time{}, time.Time{}, false
+	}
+}
+
+// done records a probe's end. A failed one is retried after a wait that
+// doubles with each failure in a row, up to failedProbeRetryMax.
 func (p *layoutPrimer) done(path string, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -269,15 +326,23 @@ func (p *layoutPrimer) done(path string, err error) {
 	if !ok {
 		return
 	}
+	st.probed = true
+	st.lastErr = err
+	st.hungReported = false
 	if err != nil {
 		st.primed = false
-		st.lastErr = err
-		if st.failingSince.IsZero() {
-			st.failingSince = p.now()
+		st.failures++
+		wait := failedProbeRetryMax
+		if st.failures < 8 {
+			wait = min(primeInterval<<(st.failures-1), failedProbeRetryMax)
 		}
+		st.retryAt = p.now().Add(wait)
 		return
 	}
-	*st = mountPrime{primed: true, connects: st.connects, data: st.data, probedAt: p.now()}
+	st.primed = true
+	st.failures = 0
+	st.retryAt = time.Time{}
+	st.probedAt = p.now()
 }
 
 func (p *layoutPrimer) isStagingMount(m nfsclient.Mount) bool {
@@ -335,11 +400,10 @@ func reconcileDeviceAliases(ctx context.Context, primer *layoutPrimer, mounts []
 // KeepLayoutsPrimed probes every pNFS staging mount of this driver when it is
 // first seen, after every reconnect to its server, and when its data goes
 // through the server, until ctx ends. It also keeps every such mount's device
-// alias current (see reconcileDeviceAliases), and reports a mount whose probes
-// keep failing through report.
-func KeepLayoutsPrimed(
-	ctx context.Context, driverName string, report func(context.Context, string, time.Duration, error),
-) {
+// alias current (see reconcileDeviceAliases), and reports through report a
+// mount whose data keeps going through the server, and one whose probe does
+// not return.
+func KeepLayoutsPrimed(ctx context.Context, driverName string, report func(context.Context, unusableLayout)) {
 	primer := newLayoutPrimer(driverName)
 	ticker := time.NewTicker(primeInterval)
 	defer ticker.Stop()
@@ -363,10 +427,14 @@ func KeepLayoutsPrimed(
 			}(path)
 		}
 		for _, u := range primer.overdue() {
-			klog.Errorf("pnfs: %s has sent its I/O through the metadata server for %s: "+
-				"its probes cannot take the block layout: %v", u.Path, u.FailingFor.Round(time.Second), u.Err)
+			if u.Hung {
+				klog.Errorf("pnfs: the probe of %s has not returned for %s", u.Path, u.For.Round(time.Second))
+			} else {
+				klog.Errorf("pnfs: %s has sent its I/O through the metadata server for %s; last probe: %v",
+					u.Path, u.For.Round(time.Second), probeOutcome(u))
+			}
 			if report != nil {
-				report(ctx, u.Path, u.FailingFor, u.Err)
+				report(ctx, u)
 			}
 		}
 		select {

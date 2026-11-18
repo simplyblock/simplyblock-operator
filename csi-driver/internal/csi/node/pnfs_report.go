@@ -1,9 +1,9 @@
-// Reporting a pNFS staging mount whose block layout this node cannot use.
+// Reporting a pNFS staging mount whose I/O keeps going through the metadata
+// server, or whose layout probe does not return.
 //
 // Such a mount keeps working: every READ and WRITE goes through the metadata
 // server instead of the device. Nothing fails, so without a report nobody sees
-// it. This lives beside the primer because the primer is what notices: its
-// probes of the mount keep going through the server too.
+// it. This lives beside the primer because the primer is what notices.
 
 package node
 
@@ -23,15 +23,17 @@ import (
 	"k8s.io/klog"
 )
 
-// reasonDataThroughMDS is the reason of the event a report records.
-const reasonDataThroughMDS = "PNFSDataThroughMDS"
+// The reasons of the events a report records: the mount's I/O has gone
+// through the metadata server, or its layout probe has not returned.
+const (
+	reasonDataThroughMDS = "PNFSDataThroughMDS"
+	reasonProbeHung      = "PNFSLayoutProbeHung"
+)
 
 // NewLayoutReporter returns the report KeepLayoutsPrimed takes: a Warning
 // event on the claim of the volume, recorded as this node's plugin. Without a
 // Kubernetes client it returns nil, and the primer only logs.
-func NewLayoutReporter(
-	kube kubernetes.Interface, nodeName string,
-) func(ctx context.Context, path string, failingFor time.Duration, err error) {
+func NewLayoutReporter(kube kubernetes.Interface, nodeName string) func(context.Context, unusableLayout) {
 	if kube == nil {
 		return nil
 	}
@@ -39,10 +41,9 @@ func NewLayoutReporter(
 	broadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: kube.CoreV1().Events("")})
 	recorder := broadcaster.NewRecorder(scheme.Scheme,
 		corev1.EventSource{Component: "simplyblock-csi-node", Host: nodeName})
-	return func(ctx context.Context, path string, failingFor time.Duration, err error) {
-		u := unusableLayout{Path: path, FailingFor: failingFor, Err: err}
-		if rerr := reportUnusableLayout(ctx, kube, recorder, nodeName, u); rerr != nil {
-			klog.Warningf("pnfs: could not report %s: %v", path, rerr)
+	return func(ctx context.Context, u unusableLayout) {
+		if err := reportUnusableLayout(ctx, kube, recorder, nodeName, u); err != nil {
+			klog.Warningf("pnfs: could not report %s: %v", u.Path, err)
 		}
 	}
 }
@@ -76,9 +77,33 @@ func reportUnusableLayout(
 			Name: ref.Name, Namespace: ref.Namespace, UID: ref.UID,
 		}}
 	}
+	if u.Hung {
+		recorder.Eventf(object, corev1.EventTypeWarning, reasonProbeHung,
+			"The pNFS layout probe of this volume on node %s has not returned for %s. It is likely blocked in "+
+				"the kernel, and the node does not probe the volume again until it returns.",
+			nodeName, u.For.Round(time.Second))
+		return nil
+	}
+	// The cause is not named: a client that cannot open the device, a fenced
+	// one, and a pod doing I/O the layout does not serve look alike from the
+	// node (see the primer's file comment).
 	recorder.Eventf(object, corev1.EventTypeWarning, reasonDataThroughMDS,
-		"The pNFS client on node %s has sent this volume's I/O through the metadata server for %s, "+
-			"because its probes cannot take the block layout: %v",
-		nodeName, u.FailingFor.Round(time.Second), u.Err)
+		"The pNFS client on node %s has sent this volume's I/O through the metadata server for %s instead "+
+			"of the block device. Either the client cannot use the layout's device, or the workload issues "+
+			"I/O the layout does not serve, such as unaligned direct I/O. Last layout probe: %s.",
+		nodeName, u.For.Round(time.Second), probeOutcome(u))
 	return nil
+}
+
+// probeOutcome is how the mount's last finished probe ended, for a log line
+// or an event.
+func probeOutcome(u unusableLayout) string {
+	switch {
+	case !u.Probed:
+		return "none has finished"
+	case u.ProbeErr == nil:
+		return "took the block layout"
+	default:
+		return u.ProbeErr.Error()
+	}
 }
