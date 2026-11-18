@@ -9,6 +9,9 @@ package volume
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -169,6 +172,49 @@ type fakeControlPlane struct {
 
 	// fakeRelocation answers the calls a Relocate makes.
 	fakeRelocation
+}
+
+// controlPlaneAnswer is the error the real client returns from call against a
+// control plane that answers with status and a body carrying detail. A test
+// built on it sees the classification the client applies to that answer,
+// rather than an error it shaped by hand.
+func controlPlaneAnswer(
+	t *testing.T, status int, detail string, call func(*controlplane.Client) error,
+) error {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		body, _ := json.Marshal(map[string]string{"detail": detail})
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	c, err := controlplane.New(controlplane.Config{Endpoint: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = call(c)
+	if err == nil {
+		t.Fatalf("the control plane answered %d and the client reported no error", status)
+	}
+	return err
+}
+
+// createAnswer is the error a create returns when the control plane answers
+// it with status and detail.
+func createAnswer(t *testing.T, status int, detail string) error {
+	return controlPlaneAnswer(t, status, detail, func(c *controlplane.Client) error {
+		_, err := c.CreateMigration(context.Background(), testClusterID, testNQN, testTargetID)
+		return err
+	})
+}
+
+// cancelAnswer is the error a cancel returns when the control plane answers
+// it with status and detail.
+func cancelAnswer(t *testing.T, status int, detail string) error {
+	return controlPlaneAnswer(t, status, detail, func(c *controlplane.Client) error {
+		return c.CancelMigration(context.Background(), testClusterID, testNQN, testMigrationID)
+	})
 }
 
 func (f *fakeControlPlane) Volume(context.Context, lvol.VolumeHandle) (lvol.Volume, error) {

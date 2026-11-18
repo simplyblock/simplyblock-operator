@@ -324,6 +324,13 @@ if err := client.ContinueMigration(ctx, clusterID, nqn, migration.ID); err != ni
 }
 ```
 
+A refused create or cancel says which refusal it was, so a caller never matches
+the control plane's wording itself. `controlplane.ErrMigrationBlocked` is a create
+that clears by itself and is asked again; `ErrMigrationAlreadyOnTarget` is a create
+for a volume already on the target. A cancel refused with `ErrMigrationNotActive`
+or `errs.ErrNotFound` found a migration that has already ended, which is what the
+cancel asked for, so the caller goes on to release what it built.
+
 `validateTargetPaths` connects the new paths on each consuming host and checks
 them. Between the two, `nvmeof.WaitForPathsToServe` waits, under a deadline, for
 every live path to serve every namespace of the subsystem: the connect returns
