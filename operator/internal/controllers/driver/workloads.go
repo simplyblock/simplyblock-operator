@@ -76,6 +76,12 @@ func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *apps
 	}
 	volumes = append(volumes, linkVolumes()...)
 
+	var initContainers []corev1.Container
+	if nvmeTCPModuleInstall(d) {
+		initContainers = append(initContainers, nvmeTCPModuleContainer(image, pullPolicy(d)))
+		volumes = append(volumes, hostRootVolume())
+	}
+
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{Name: n.nodeDaemonSet, Namespace: d.Namespace},
 		Spec: appsv1.DaemonSetSpec{
@@ -93,8 +99,9 @@ func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *apps
 					// namespace, but a reconnect runs from a kernel thread in the
 					// host's, so a pod that connects is moved to the host on the
 					// first reset. The plugin also reads the host's interfaces.
-					HostNetwork: true,
-					DNSPolicy:   corev1.DNSClusterFirstWithHostNet,
+					HostNetwork:    true,
+					DNSPolicy:      corev1.DNSClusterFirstWithHostNet,
+					InitContainers: initContainers,
 					Containers: []corev1.Container{
 						nodeRegistrarContainer(d, s, driver),
 						nodePluginContainer(d, image),
