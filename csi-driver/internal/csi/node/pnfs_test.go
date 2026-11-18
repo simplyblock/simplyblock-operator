@@ -330,3 +330,58 @@ func TestPNFSIsRecognizedFromTheStashedContext(t *testing.T) {
 		t.Error("a volume with no stash was routed to the pNFS path")
 	}
 }
+
+// aliasesIn points aliasDir at a directory of the test's own.
+func aliasesIn(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	saved := aliasDir
+	aliasDir = dir
+	t.Cleanup(func() { aliasDir = saved })
+	return dir
+}
+
+// Regression: 2026-11-18-pnfs-rhel95-no-nvme-eui (lab cluster 111). A RHEL 9.5
+// client kernel (5.14.0-503) predates the nvme-eui. prefix, tried only
+// dm-uuid-mpath-0x and wwn-0x, and sent every byte of every pNFS volume through
+// the metadata server. The device is linked under the wwn-0x name too, which
+// every kernel with the SCSI layout tries, with the same hex.
+func TestEnsureAliasLinksTheDeviceUnderEveryNameTheKernelTries(t *testing.T) {
+	dir := aliasesIn(t)
+	const nguid = "664878626336536637346445674b6e4f"
+	if _, err := ensureDeviceAlias(nguid, "/dev/nvme4n1"); err != nil {
+		t.Fatalf("ensureDeviceAlias: %v", err)
+	}
+	for _, name := range []string{"nvme-eui." + nguid, "wwn-0x" + nguid} {
+		if got, err := os.Readlink(filepath.Join(dir, name)); err != nil || got != "/dev/nvme4n1" {
+			t.Errorf("%s -> %q (%v), want /dev/nvme4n1", name, got, err)
+		}
+	}
+
+	if err := removeDeviceAlias(nguid); err != nil {
+		t.Fatalf("removeDeviceAlias: %v", err)
+	}
+	if left, _ := os.ReadDir(dir); len(left) != 0 {
+		t.Errorf("left behind after removal: %v", left)
+	}
+}
+
+// Every name is replaced when it points elsewhere, as the first one always was.
+func TestEnsureAliasReplacesEveryStaleName(t *testing.T) {
+	dir := aliasesIn(t)
+	const nguid = "deadbeef"
+	for _, name := range []string{"nvme-eui." + nguid, "wwn-0x" + nguid} {
+		if err := os.Symlink("/dev/nvme9n9", filepath.Join(dir, name)); err != nil {
+			t.Fatalf("seeding %s: %v", name, err)
+		}
+	}
+	const reattached = "/dev/nvme0n2"
+	if _, err := ensureDeviceAlias(nguid, reattached); err != nil {
+		t.Fatalf("ensureDeviceAlias: %v", err)
+	}
+	for _, name := range []string{"nvme-eui." + nguid, "wwn-0x" + nguid} {
+		if got, _ := os.Readlink(filepath.Join(dir, name)); got != reattached {
+			t.Errorf("%s -> %q after a reconnect, want %s", name, got, reattached)
+		}
+	}
+}

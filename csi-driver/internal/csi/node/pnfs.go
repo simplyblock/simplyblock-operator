@@ -29,14 +29,21 @@ import (
 	"github.com/simplyblock/csi-driver/internal/nfsexport"
 )
 
-// aliasDir is where the kernel looks for the device the layout names.
-const aliasDir = "/dev/disk/by-id"
+// aliasDir is where the kernel looks for the device the layout names. A
+// variable so the tests can point it at a directory of their own.
+var aliasDir = "/dev/disk/by-id"
 
 // aliasPrefix is `nvme-eui.`, not `nvme-eui64.`. The kernel builds the path as
 // "/dev/disk/by-id/%s%*phN" and tries dm-uuid-mpath-0x, wwn-0x, then this. A
 // name matching none of them fails silently: the layout is returned and every
 // byte routes through the metadata server, which looks exactly like working.
 const aliasPrefix = "nvme-eui."
+
+// aliasPrefixes are the names the device is linked under. nvme-eui. arrived
+// upstream in 6.11 and in RHEL 9 after 5.14.0-503, which tries only
+// dm-uuid-mpath-0x and wwn-0x and found no device at all. wwn-0x carries the
+// same hex, and every kernel with the SCSI layout tries it.
+var aliasPrefixes = []string{aliasPrefix, "wwn-0x"}
 
 // nfsMountOptions are the options every pNFS mount carries. 4.1 was the
 // original floor -- layouts do not exist before it -- but the gateway's
@@ -62,9 +69,19 @@ const aliasPrefix = "nvme-eui."
 // node the same way.
 var nfsMountOptions = []string{"vers=4.2", "soft", "timeo=100", "retrans=2"}
 
-// aliasPath is where the alias for a namespace goes.
+// aliasPath is where the nvme-eui. alias for a namespace goes.
 func aliasPath(nguid string) string {
 	return filepath.Join(aliasDir, aliasPrefix+normalizeNGUID(nguid))
+}
+
+// aliasPaths are where every alias for a namespace goes, one per name in
+// aliasPrefixes.
+func aliasPaths(nguid string) []string {
+	paths := make([]string, 0, len(aliasPrefixes))
+	for _, prefix := range aliasPrefixes {
+		paths = append(paths, filepath.Join(aliasDir, prefix+normalizeNGUID(nguid)))
+	}
+	return paths
 }
 
 // normalizeNGUID reduces an NGUID to the spelling the kernel looks for:
@@ -80,9 +97,10 @@ func normalizeNGUID(nguid string) string {
 	return b.String()
 }
 
-// ensureDeviceAlias creates the by-id name the client resolves the layout
-// through. Idempotent, and it replaces a stale alias rather than leaving it:
-// device nodes are assigned in attach order, so a reconnect can move one.
+// ensureDeviceAlias creates the by-id names the client resolves the layout
+// through, and returns the nvme-eui. one. Idempotent, and it replaces a stale
+// alias rather than leaving it: device nodes are assigned in attach order, so
+// a reconnect can move one.
 func ensureDeviceAlias(nguid, devicePath string) (string, error) {
 	if normalizeNGUID(nguid) == "" {
 		return "", fmt.Errorf("pnfs: namespace has no usable NGUID (%q)", nguid)
@@ -90,33 +108,44 @@ func ensureDeviceAlias(nguid, devicePath string) (string, error) {
 	if devicePath == "" {
 		return "", fmt.Errorf("pnfs: no device path for namespace %s", nguid)
 	}
-	alias := aliasPath(nguid)
 	if err := os.MkdirAll(aliasDir, 0o755); err != nil {
 		return "", fmt.Errorf("pnfs: creating %s: %w", aliasDir, err)
 	}
+	for _, alias := range aliasPaths(nguid) {
+		if err := linkAlias(alias, devicePath); err != nil {
+			return "", err
+		}
+	}
+	return aliasPath(nguid), nil
+}
 
+// linkAlias points alias at devicePath, replacing a link that points
+// elsewhere.
+func linkAlias(alias, devicePath string) error {
 	if existing, err := os.Readlink(alias); err == nil {
 		if existing == devicePath {
-			return alias, nil
+			return nil
 		}
-		// Pointing elsewhere: replace rather than leave, per above.
+		// Pointing elsewhere: replace rather than leave, per ensureDeviceAlias.
 		if err := os.Remove(alias); err != nil {
-			return "", fmt.Errorf("pnfs: replacing stale alias %s: %w", alias, err)
+			return fmt.Errorf("pnfs: replacing stale alias %s: %w", alias, err)
 		}
 	}
 	if err := os.Symlink(devicePath, alias); err != nil && !os.IsExist(err) {
-		return "", fmt.Errorf("pnfs: linking %s to %s: %w", alias, devicePath, err)
+		return fmt.Errorf("pnfs: linking %s to %s: %w", alias, devicePath, err)
 	}
-	return alias, nil
+	return nil
 }
 
-// removeDeviceAlias drops the alias, and treats an absent one as done.
+// removeDeviceAlias drops every alias, and treats an absent one as done.
 func removeDeviceAlias(nguid string) error {
 	if normalizeNGUID(nguid) == "" {
 		return nil
 	}
-	if err := os.Remove(aliasPath(nguid)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("pnfs: removing alias for %s: %w", nguid, err)
+	for _, alias := range aliasPaths(nguid) {
+		if err := os.Remove(alias); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("pnfs: removing alias %s: %w", alias, err)
+		}
 	}
 	return nil
 }
