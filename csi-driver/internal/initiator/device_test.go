@@ -575,6 +575,27 @@ func TestMatchNamespaceDevicePrefersModelOverLvol(t *testing.T) {
 	}
 }
 
+// TestMatchNamespaceDevicePrefersTargetLvolOverStaleModel covers a failed-over
+// volume whose backend connection still carries the pre-failover subsystem
+// model, while targetLvolID names the active clone. A stale source subsystem can
+// still leave model_<nsid> present on the node. Restage must choose the clone's
+// identity instead.
+func TestMatchNamespaceDevicePrefersTargetLvolOverStaleModel(t *testing.T) {
+	f := newDeviceFixture(t)
+	f.addDevice(testLink(testModel, 1), "nvme0n1")
+	want := f.addDevice("nvme-uuid."+testLvolID, "nvme1n1")
+
+	got, err := matchNamespaceDeviceWithOrder(
+		context.Background(), f.byIDDir, testModel, testLvolID, 1, testPoll, lookupTargetFirst,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != want {
+		t.Errorf("got %q, want the target lvol link %q", got, want)
+	}
+}
+
 // --- glob construction -----------------------------------------------------
 
 func TestNamespaceDeviceGlob(t *testing.T) {
