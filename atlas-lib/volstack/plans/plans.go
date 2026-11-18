@@ -219,6 +219,26 @@ func (n *Node) LVMRawBlock(
 	return append(volstack.Plan{n.fabric(connection)}, n.lvmStackRaw(volume, options)...)
 }
 
+// IndirectLVM is `fabric` → `dmLinear` → `lvmPhysicalVolume` → `lvmVolumeGroup`
+// → `lvmLogicalVolume` → `filesystem`: the LVM row with the indirection under
+// its physical volume. The label is written through the mapping, so LVM knows
+// the physical volume as /dev/mapper/sb-<lvol> and never the namespace device,
+// and a move of the namespace to another subsystem re-points the mapping below
+// LVM while the volume group, the VDO pool, and the filesystem stay as they are.
+func (n *Node) IndirectLVM(
+	connection lvol.Connection, volume Volume, options LogicalVolumeOptions,
+) volstack.Plan {
+	return append(volstack.Plan{n.fabric(connection), n.dmLinear(volume)}, n.lvmStack(volume, options)...)
+}
+
+// IndirectLVMRawBlock is IndirectLVM without the filesystem, for a VDO volume
+// the pod opens as a block device.
+func (n *Node) IndirectLVMRawBlock(
+	connection lvol.Connection, volume Volume, options LogicalVolumeOptions,
+) volstack.Plan {
+	return append(volstack.Plan{n.fabric(connection), n.dmLinear(volume)}, n.lvmStackRaw(volume, options)...)
+}
+
 // Striped is `members(n)` → `lvmPhysicalVolume` → `lvmVolumeGroup` →
 // `lvmLogicalVolume` → `filesystem`: several namespaces where every other plan
 // has one. It is the only plan whose bottom is not a single layer, which is the
