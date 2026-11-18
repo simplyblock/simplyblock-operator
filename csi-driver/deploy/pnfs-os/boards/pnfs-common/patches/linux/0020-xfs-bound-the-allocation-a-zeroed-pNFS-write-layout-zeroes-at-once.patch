@@ -1,0 +1,85 @@
+From 3506a933e3f6dc288a15e6623e86e6ff565c8e1a Mon Sep 17 00:00:00 2001
+From: "Christoph Engelbert (noctarius)" <chris@simplyblock.io>
+Date: Mon, 12 Oct 2026 07:28:48 +0200
+Subject: [PATCH] xfs: bound the allocation a zeroed pNFS write layout zeroes
+ at once
+
+With xfs.pnfs_zeroed_layouts=1 the blocks of a write layout are
+allocated zeroed and written, and the zeroing runs in the nfsd thread
+before LAYOUTGET is answered. Its cost is proportional to the
+allocation, and the allocation is as large as the client asked for: a
+client writing a 1 GiB file held an nfsd thread for 15 seconds in
+
+    blkdev_issue_zeroout
+    xfs_zero_extent
+    xfs_bmapi_allocate
+    xfs_bmapi_write
+    xfs_iomap_write_direct
+    xfs_fs_map_blocks
+    nfsd4_block_proc_layoutget
+
+while another thread waited on the log force that follows it.
+
+Cap the allocation a zeroed write layout makes in one LAYOUTGET at
+xfs.pnfs_zeroed_layout_max_mb, 64 MiB by default, 0 for no limit. nfsd
+answers with the extent it mapped, and a layout shorter than requested
+is valid: the Linux client asks for a minlength of at most a page and
+sends another LAYOUTGET for the range its layout does not cover. Each
+LAYOUTGET then costs at most a 64 MiB WRITE ZEROES and one log force,
+and the blocks it hands out are zeroed and written as before, so
+0005's guarantee is unchanged. Without zeroed layouts nothing changes.
+
+Zeroing asynchronously and answering NFS4ERR_LAYOUTTRYLATER until it is
+done would free the thread entirely, but would need per-inode state for
+a zeroing in progress and a client that retries promptly; the cap needs
+neither.
+---
+ fs/xfs/xfs_pnfs.c | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/fs/xfs/xfs_pnfs.c b/fs/xfs/xfs_pnfs.c
+index 1d40a791945..b5e02e361c7 100644
+--- a/fs/xfs/xfs_pnfs.c
++++ b/fs/xfs/xfs_pnfs.c
+@@ -33,6 +33,23 @@ module_param_named(pnfs_zeroed_layouts, xfs_pnfs_zeroed_layouts, bool, 0644);
+ MODULE_PARM_DESC(pnfs_zeroed_layouts,
+ 	"Zero and write the blocks of a pNFS write layout at allocation, so data written through it survives a lost LAYOUTCOMMIT");
+ 
++/*
++ * The most a zeroed write layout allocates and zeroes in one LAYOUTGET.
++ *
++ * The zeroing runs in the nfsd thread before the layout is answered, so its
++ * cost is proportional to the allocation: a client writing a 1 GiB file asked
++ * for the whole of it and held an nfsd thread for 15 seconds, and other
++ * threads queued behind the log force that follows. A client takes a layout
++ * shorter than it asked for and asks again for the rest, so capping the
++ * allocation bounds each LAYOUTGET at the cost of more of them. 0 disables the
++ * cap.
++ */
++static unsigned int xfs_pnfs_zeroed_layout_max_mb = 64;
++module_param_named(pnfs_zeroed_layout_max_mb, xfs_pnfs_zeroed_layout_max_mb,
++		   uint, 0644);
++MODULE_PARM_DESC(pnfs_zeroed_layout_max_mb,
++	"Largest allocation, in MiB, a zeroed pNFS write layout zeroes in one LAYOUTGET (0 = no limit)");
++
+ /*
+  * Ensure that we do not have any outstanding pNFS layouts that can be used by
+  * clients to directly read from or write to this inode.  This must be called
+@@ -212,6 +229,14 @@ xfs_fs_map_blocks(
+ 				    imap.br_state == XFS_EXT_UNWRITTEN))
+ 			end_fsb = min(end_fsb, imap.br_startoff +
+ 					       imap.br_blockcount);
++		if (zeroed) {
++			unsigned int max_mb =
++				READ_ONCE(xfs_pnfs_zeroed_layout_max_mb);
++
++			if (max_mb)
++				end_fsb = min(end_fsb, offset_fsb +
++					XFS_B_TO_FSB(mp, (u64)max_mb << 20));
++		}
+ 		xfs_iunlock(ip, lock_flags);
+ 
+ 		error = xfs_iomap_write_direct(ip, offset_fsb,
+-- 
+2.54.0 (Apple Git-157)
+

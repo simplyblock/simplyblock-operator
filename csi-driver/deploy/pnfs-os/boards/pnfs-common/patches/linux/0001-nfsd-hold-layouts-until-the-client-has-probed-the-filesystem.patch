@@ -1,0 +1,487 @@
+From 6f7c23c04b94ef8162048ba70c8ad84734a13841 Mon Sep 17 00:00:00 2001
+From: "Christoph Engelbert (noctarius)" <chris@simplyblock.io>
+Date: Thu, 8 Oct 2026 14:59:25 +0200
+Subject: [PATCH] nfsd: hold layouts until the client has probed the filesystem
+
+A pNFS client resolves the device a SCSI layout names by opening
+/dev/disk/by-id/<id> in the mount namespace of the task whose I/O asked
+for the layout. A containerized application's /dev has no disk/by-id, so
+the lookup succeeds only when a task with the host's /dev resolves the
+device first; every later layout then reuses the cached device.
+
+After a server restart the client drops that cache, and the next task to
+ask resolves it again. That is usually the application: the lookup
+fails, the device is marked unavailable for two minutes, every retry
+comes from the application again, and all of its I/O goes through the
+server for as long as it runs.
+
+A grown filesystem has the same effect. Its layouts carry a new device
+ID generation, and the client looks the device up again under it, again
+in whichever task asks. Keeping the old generation instead keeps the
+client's device length from before the grow: on a 20 GiB export grown to
+21 GiB, every extent in the new space fell outside the device the client
+knew, and the client returned the layout and wrote through the server.
+
+Add two parameters. With pnfs_probe_name and pnfs_layout_hold set, a
+client gets no layout on a filesystem until it has been granted one on a
+file of that name there, under the generation the filesystem hands out
+now, written by a node agent that has the host's /dev. Other LAYOUTGETs
+get NFS4ERR_LAYOUTTRYLATER, which clients retry instead of falling back,
+throughout the grace period and for pnfs_layout_hold seconds after the
+client's first request past it on that filesystem and generation. A
+probe granted under an older generation does not count. The hold is
+checked again under the generation the mapped layout carries, since a
+grow can raise it while the blocks are being mapped, and a layout under
+a generation the client is not primed for is not handed out. Filesystems
+report their generation through a new export op, layout_generation,
+which XFS implements. Loopback clients are never held. Both parameters
+default to off.
+---
+ fs/nfsd/blocklayout.c    |   1 +
+ fs/nfsd/nfs4layouts.c    | 216 +++++++++++++++++++++++++++++++++++++++
+ fs/nfsd/nfs4proc.c       |  25 +++++
+ fs/nfsd/nfs4state.c      |   2 +
+ fs/nfsd/pnfs.h           |  12 +++
+ fs/nfsd/state.h          |   1 +
+ fs/nfsd/xdr4.h           |   1 +
+ fs/xfs/xfs_export.c      |   1 +
+ fs/xfs/xfs_pnfs.c        |  12 +++
+ fs/xfs/xfs_pnfs.h        |   1 +
+ include/linux/exportfs.h |   1 +
+ 11 files changed, 273 insertions(+)
+
+diff --git a/fs/nfsd/blocklayout.c b/fs/nfsd/blocklayout.c
+index e9512c34c9d..df43341fc3f 100644
+--- a/fs/nfsd/blocklayout.c
++++ b/fs/nfsd/blocklayout.c
+@@ -98,6 +98,7 @@ nfsd4_block_proc_layoutget(struct svc_rqst *rqstp, struct inode *inode,
+ 		goto out_layoutunavailable;
+ 	}
+ 
++	args->lg_generation = device_generation;
+ 	error = nfsd4_set_deviceid(&bex->vol_id, fhp, device_generation);
+ 	if (error)
+ 		goto out_error;
+diff --git a/fs/nfsd/nfs4layouts.c b/fs/nfsd/nfs4layouts.c
+index 2121ef26e7a..9490198349d 100644
+--- a/fs/nfsd/nfs4layouts.c
++++ b/fs/nfsd/nfs4layouts.c
+@@ -8,6 +8,10 @@
+ #include <linux/jhash.h>
+ #include <linux/sched.h>
+ #include <linux/sunrpc/addr.h>
++#include <linux/moduleparam.h>
++#include <linux/exportfs.h>
++#include <linux/in.h>
++#include <net/ipv6.h>
+ 
+ #include "pnfs.h"
+ #include "netns.h"
+@@ -21,6 +25,55 @@ struct nfs4_layout {
+ 	struct nfsd4_layout_seg		lo_seg;
+ };
+ 
++/*
++ * Holding a client's layouts until its device lookup has been primed.
++ *
++ * A client resolves the device a SCSI layout names by opening
++ * /dev/disk/by-id/<id> in the mount namespace of the task whose I/O asked for
++ * the layout. A containerized application's /dev has no disk/by-id, so the
++ * lookup only succeeds when a task with the host's /dev resolves the device
++ * first, after which every layout reuses the client's cached device. After a
++ * server restart the client drops that cache, and whichever task asks next
++ * resolves it again: usually the application, which fails, marks the device
++ * unavailable for two minutes, and sends all of its I/O through the server.
++ *
++ * With pnfs_probe_name and pnfs_layout_hold set, a client gets no layout on a
++ * filesystem until it has been granted one on a file called pnfs_probe_name
++ * on that filesystem. The node agent that writes the probe has the host's
++ * /dev, so the device is cached before the application asks. Other requests
++ * get NFS4ERR_LAYOUTTRYLATER, which clients retry rather than fall back on,
++ * throughout the grace period, during which the probe cannot be created, and
++ * for pnfs_layout_hold seconds after the client's first request past it on
++ * that filesystem. After that the client is no longer held there, so one with
++ * no agent waits only once. Loopback clients are never held.
++ *
++ * A grown filesystem hands out layouts under a new device ID generation, and a
++ * client looks a device it has not seen up again, in whichever task asks. So
++ * the priming is per generation: a probe granted under an older generation
++ * does not count, and a new generation starts a new hold on that filesystem.
++ * The node agent probes again once it sees the new size, and the client then
++ * caches the device with its new length before the application asks.
++ */
++static unsigned int pnfs_layout_hold;
++module_param(pnfs_layout_hold, uint, 0644);
++MODULE_PARM_DESC(pnfs_layout_hold,
++		 "Seconds a new client may wait for layouts until it has probed the filesystem (0: off)");
++
++static char pnfs_probe_name[NAME_MAX + 1];
++module_param_string(pnfs_probe_name, pnfs_probe_name, sizeof(pnfs_probe_name), 0644);
++MODULE_PARM_DESC(pnfs_probe_name,
++		 "Name of the file whose layout primes a client's device lookup (empty: off)");
++
++/* A client's layout hold on one filesystem; see nfsd4_layout_held. */
++struct nfsd4_primed_fs {
++	struct list_head	list;
++	dev_t			dev;
++	bool			primed;		/* a probe was granted ... */
++	u32			primed_gen;	/* ... under this generation */
++	u32			hold_gen;	/* generation hold_until applies to */
++	time64_t		hold_until;	/* end of the hold, 0: not begun */
++};
++
+ static struct kmem_cache *nfs4_layout_cache;
+ static struct kmem_cache *nfs4_layout_stateid_cache;
+ 
+@@ -808,3 +861,166 @@ nfsd4_exit_pnfs(void)
+ 			kfree(map);
+ 	}
+ }
++
++void nfsd4_init_layout_hold(struct nfs4_client *clp)
++{
++	INIT_LIST_HEAD(&clp->cl_lo_primed);
++}
++
++void nfsd4_free_layout_hold(struct nfs4_client *clp)
++{
++	struct nfsd4_primed_fs *p, *n;
++
++	list_for_each_entry_safe(p, n, &clp->cl_lo_primed, list) {
++		list_del(&p->list);
++		kfree(p);
++	}
++}
++
++/* The device ID generation the filesystem hands out layouts under now. */
++u32 nfsd4_layout_generation(const struct svc_fh *fhp)
++{
++	struct super_block *sb = d_inode(fhp->fh_dentry)->i_sb;
++	const struct export_operations *ops = sb->s_export_op;
++
++	return ops && ops->layout_generation ? ops->layout_generation(sb) : 0;
++}
++
++static bool nfsd4_client_is_loopback(const struct nfs4_client *clp)
++{
++	const struct sockaddr *sap = (const struct sockaddr *)&clp->cl_addr;
++
++	switch (sap->sa_family) {
++	case AF_INET:
++		return ipv4_is_loopback(((const struct sockaddr_in *)sap)->sin_addr.s_addr);
++	case AF_INET6: {
++		const struct in6_addr *a = &((const struct sockaddr_in6 *)sap)->sin6_addr;
++
++		return ipv6_addr_loopback(a) ||
++		       (ipv6_addr_v4mapped(a) && ipv4_is_loopback(a->s6_addr32[3]));
++	}
++	}
++	return false;
++}
++
++static bool nfsd4_is_layout_probe(struct dentry *dentry)
++{
++	struct name_snapshot name;
++	bool ret;
++
++	take_dentry_name_snapshot(&name, dentry);
++	ret = strcmp(name.name.name, pnfs_probe_name) == 0;
++	release_dentry_name_snapshot(&name);
++	return ret;
++}
++
++/* Called with clp->cl_lock held. */
++static struct nfsd4_primed_fs *nfsd4_primed_fs_locked(struct nfs4_client *clp,
++		dev_t dev)
++{
++	struct nfsd4_primed_fs *p;
++
++	lockdep_assert_held(&clp->cl_lock);
++	list_for_each_entry(p, &clp->cl_lo_primed, list)
++		if (p->dev == dev)
++			return p;
++	return NULL;
++}
++
++/*
++ * The client's entry for a filesystem, created if it has none. NULL only when
++ * it cannot be allocated, in which case the caller does not hold the client.
++ */
++static struct nfsd4_primed_fs *nfsd4_primed_fs_get(struct nfs4_client *clp,
++		dev_t dev)
++{
++	struct nfsd4_primed_fs *p, *new;
++
++	spin_lock(&clp->cl_lock);
++	p = nfsd4_primed_fs_locked(clp, dev);
++	spin_unlock(&clp->cl_lock);
++	if (p)
++		return p;
++
++	new = kzalloc(sizeof(*new), GFP_KERNEL);
++	if (!new)
++		return NULL;
++	new->dev = dev;
++	spin_lock(&clp->cl_lock);
++	p = nfsd4_primed_fs_locked(clp, dev);
++	if (!p) {
++		list_add(&new->list, &clp->cl_lo_primed);
++		p = new;
++		new = NULL;
++	}
++	spin_unlock(&clp->cl_lock);
++	kfree(new);
++	return p;
++}
++
++/*
++ * Whether a LAYOUTGET for this file under generation gen has to wait, and in
++ * *probe whether the file is the probe, whose layout primes the client for its
++ * filesystem under the generation that layout carries.
++ */
++__be32 nfsd4_layout_held(struct nfs4_client *clp, struct svc_fh *fhp,
++		u32 gen, bool *probe)
++{
++	unsigned int hold = READ_ONCE(pnfs_layout_hold);
++	dev_t dev = d_inode(fhp->fh_dentry)->i_sb->s_dev;
++	struct nfsd4_primed_fs *p;
++	time64_t now;
++	bool held;
++
++	*probe = false;
++	if (!hold || !pnfs_probe_name[0])
++		return nfs_ok;
++	if (nfsd4_is_layout_probe(fhp->fh_dentry)) {
++		*probe = true;
++		return nfs_ok;
++	}
++	if (nfsd4_client_is_loopback(clp))
++		return nfs_ok;
++
++	spin_lock(&clp->cl_lock);
++	p = nfsd4_primed_fs_locked(clp, dev);
++	held = !p || !p->primed || p->primed_gen != gen;
++	spin_unlock(&clp->cl_lock);
++	if (!held)
++		return nfs_ok;
++	if (locks_in_grace(clp->net))
++		return nfserr_layouttrylater;
++
++	p = nfsd4_primed_fs_get(clp, dev);
++	if (!p)
++		return nfs_ok;
++	now = ktime_get_boottime_seconds();
++	spin_lock(&clp->cl_lock);
++	if (!p->hold_until || p->hold_gen != gen) {
++		p->hold_gen = gen;
++		p->hold_until = now + hold;
++	}
++	held = now < p->hold_until;
++	spin_unlock(&clp->cl_lock);
++	return held ? nfserr_layouttrylater : nfs_ok;
++}
++
++/*
++ * The probe was granted a layout under generation gen. A grant under an older
++ * generation than one already recorded, from a probe that raced a grow, does
++ * not lower it.
++ */
++void nfsd4_layout_primed(struct nfs4_client *clp, struct svc_fh *fhp, u32 gen)
++{
++	struct nfsd4_primed_fs *p;
++
++	p = nfsd4_primed_fs_get(clp, d_inode(fhp->fh_dentry)->i_sb->s_dev);
++	if (!p)
++		return;
++	spin_lock(&clp->cl_lock);
++	if (!p->primed || (s32)(gen - p->primed_gen) > 0) {
++		p->primed = true;
++		p->primed_gen = gen;
++	}
++	spin_unlock(&clp->cl_lock);
++}
+diff --git a/fs/nfsd/nfs4proc.c b/fs/nfsd/nfs4proc.c
+index bc14c3939a5..1665a878dd0 100644
+--- a/fs/nfsd/nfs4proc.c
++++ b/fs/nfsd/nfs4proc.c
+@@ -2546,6 +2546,8 @@ nfsd4_layoutget(struct svc_rqst *rqstp,
+ 	struct nfs4_layout_stateid *ls;
+ 	__be32 nfserr;
+ 	int accmode = NFSD_MAY_READ_IF_EXEC | NFSD_MAY_OWNER_OVERRIDE;
++	bool probe;
++	u32 gen;
+ 
+ 	switch (lgp->lg_seg.iomode) {
+ 	case IOMODE_READ:
+@@ -2570,6 +2572,13 @@ nfsd4_layoutget(struct svc_rqst *rqstp,
+ 	if (!ops)
+ 		goto out;
+ 
++	gen = nfsd4_layout_generation(current_fh);
++	nfserr = nfsd4_layout_held(cstate->clp, current_fh, gen, &probe);
++	if (nfserr)
++		goto out;
++	/* A layout type that reports no generation is primed under the current one. */
++	lgp->lg_generation = gen;
++
+ 	/*
+ 	 * Verify minlength and range as per RFC5661:
+ 	 *  o  If loga_length is less than loga_minlength,
+@@ -2607,7 +2616,23 @@ nfsd4_layoutget(struct svc_rqst *rqstp,
+ 	if (nfserr)
+ 		goto out_put_stid;
+ 
++	/*
++	 * A grow can raise the generation while the blocks are mapped, after
++	 * the hold was checked under the old one. The client has to be primed
++	 * under the generation the layout carries, or it looks the new device
++	 * up in whichever task asked, so check the hold again under that one.
++	 * The layout is not handed out: op_release frees it.
++	 */
++	if (!probe && lgp->lg_generation != gen) {
++		nfserr = nfsd4_layout_held(cstate->clp, current_fh,
++					   lgp->lg_generation, &probe);
++		if (nfserr)
++			goto out_put_stid;
++	}
++
+ 	nfserr = nfsd4_insert_layout(lgp, ls);
++	if (!nfserr && probe)
++		nfsd4_layout_primed(cstate->clp, current_fh, lgp->lg_generation);
+ 
+ out_put_stid:
+ 	mutex_unlock(&ls->ls_mutex);
+diff --git a/fs/nfsd/nfs4state.c b/fs/nfsd/nfs4state.c
+index fbaf2f13527..70abe3fb705 100644
+--- a/fs/nfsd/nfs4state.c
++++ b/fs/nfsd/nfs4state.c
+@@ -2501,6 +2501,7 @@ static struct nfs4_client *alloc_client(struct xdr_netobj name,
+ #ifdef CONFIG_NFSD_PNFS
+ 	INIT_LIST_HEAD(&clp->cl_lo_states);
+ #endif
++	nfsd4_init_layout_hold(clp);
+ 	INIT_LIST_HEAD(&clp->async_copies);
+ 	spin_lock_init(&clp->async_lock);
+ 	spin_lock_init(&clp->cl_lock);
+@@ -2548,6 +2549,7 @@ free_client(struct nfs4_client *clp)
+ 		free_session(ses);
+ 	}
+ 	rpc_destroy_wait_queue(&clp->cl_cb_waitq);
++	nfsd4_free_layout_hold(clp);
+ 	if (clp->cl_nfsd_dentry) {
+ 		nfsd_client_rmdir(clp->cl_nfsd_dentry);
+ 		clp->cl_nfsd_dentry = NULL;
+diff --git a/fs/nfsd/pnfs.h b/fs/nfsd/pnfs.h
+index db9af780438..60587a226ec 100644
+--- a/fs/nfsd/pnfs.h
++++ b/fs/nfsd/pnfs.h
+@@ -77,6 +77,12 @@ void nfsd4_return_all_file_layouts(struct nfs4_client *clp,
+ void nfsd4_close_layout(struct nfs4_layout_stateid *ls);
+ int nfsd4_init_pnfs(void);
+ void nfsd4_exit_pnfs(void);
++void nfsd4_init_layout_hold(struct nfs4_client *clp);
++void nfsd4_free_layout_hold(struct nfs4_client *clp);
++u32 nfsd4_layout_generation(const struct svc_fh *fhp);
++__be32 nfsd4_layout_held(struct nfs4_client *clp, struct svc_fh *fhp,
++		u32 gen, bool *probe);
++void nfsd4_layout_primed(struct nfs4_client *clp, struct svc_fh *fhp, u32 gen);
+ #else
+ struct nfs4_client;
+ struct nfs4_file;
+@@ -103,5 +109,11 @@ static inline int nfsd4_init_pnfs(void)
+ {
+ 	return 0;
+ }
++static inline void nfsd4_init_layout_hold(struct nfs4_client *clp)
++{
++}
++static inline void nfsd4_free_layout_hold(struct nfs4_client *clp)
++{
++}
+ #endif /* CONFIG_NFSD_PNFS */
+ #endif /* _FS_NFSD_PNFS_H */
+diff --git a/fs/nfsd/state.h b/fs/nfsd/state.h
+index 926e4e8063b..a3abc11890e 100644
+--- a/fs/nfsd/state.h
++++ b/fs/nfsd/state.h
+@@ -457,6 +457,7 @@ struct nfs4_client {
+ 	struct list_head        cl_lru;         /* tail queue */
+ #ifdef CONFIG_NFSD_PNFS
+ 	struct list_head	cl_lo_states;	/* outstanding layout states */
++	struct list_head	cl_lo_primed;	/* layout holds per filesystem, see nfsd4_layout_held */
+ #endif
+ 	struct xdr_netobj	cl_name; 	/* id generated by client */
+ 	nfs4_verifier		cl_verifier; 	/* generated by client */
+diff --git a/fs/nfsd/xdr4.h b/fs/nfsd/xdr4.h
+index d0ef5e7f107..c4968a41af4 100644
+--- a/fs/nfsd/xdr4.h
++++ b/fs/nfsd/xdr4.h
+@@ -655,6 +655,7 @@ struct nfsd4_layoutget {
+ 	stateid_t		lg_sid;		/* request/response */
+ 	struct nfsd4_layout_seg	lg_seg;		/* request/response */
+ 	void			*lg_content;	/* response */
++	u32			lg_generation;	/* response: device ID generation */
+ };
+ 
+ struct nfsd4_layoutcommit {
+diff --git a/fs/xfs/xfs_export.c b/fs/xfs/xfs_export.c
+index 201489d3de0..470d5365f7c 100644
+--- a/fs/xfs/xfs_export.c
++++ b/fs/xfs/xfs_export.c
+@@ -247,5 +247,6 @@ const struct export_operations xfs_export_operations = {
+ 	.get_uuid		= xfs_fs_get_uuid,
+ 	.map_blocks		= xfs_fs_map_blocks,
+ 	.commit_blocks		= xfs_fs_commit_blocks,
++	.layout_generation	= xfs_fs_layout_generation,
+ #endif
+ };
+diff --git a/fs/xfs/xfs_pnfs.c b/fs/xfs/xfs_pnfs.c
+index afe7497012d..512fc80dfe9 100644
+--- a/fs/xfs/xfs_pnfs.c
++++ b/fs/xfs/xfs_pnfs.c
+@@ -104,6 +104,18 @@ xfs_fs_map_update_inode(
+ /*
+  * Get a layout for the pNFS client.
+  */
++/*
++ * The generation map_blocks reports with a layout. It changes when the
++ * filesystem grows, and a client that sees a new one looks its device up
++ * again, which is what nfsd's layout hold waits for.
++ */
++u32
++xfs_fs_layout_generation(
++	struct super_block	*sb)
++{
++	return READ_ONCE(XFS_M(sb)->m_generation);
++}
++
+ int
+ xfs_fs_map_blocks(
+ 	struct inode		*inode,
+diff --git a/fs/xfs/xfs_pnfs.h b/fs/xfs/xfs_pnfs.h
+index 940c6c2ad88..bd28c0bfe40 100644
+--- a/fs/xfs/xfs_pnfs.h
++++ b/fs/xfs/xfs_pnfs.h
+@@ -8,6 +8,7 @@ int xfs_fs_map_blocks(struct inode *inode, loff_t offset, u64 length,
+ 		struct iomap *iomap, bool write, u32 *device_generation);
+ int xfs_fs_commit_blocks(struct inode *inode, struct iomap *maps, int nr_maps,
+ 		struct iattr *iattr);
++u32 xfs_fs_layout_generation(struct super_block *sb);
+ 
+ int xfs_break_leased_layouts(struct inode *inode, uint *iolock,
+ 		bool *did_unlock);
+diff --git a/include/linux/exportfs.h b/include/linux/exportfs.h
+index f0cf2714ec5..f0d29ca02a9 100644
+--- a/include/linux/exportfs.h
++++ b/include/linux/exportfs.h
+@@ -275,6 +275,7 @@ struct export_operations {
+ 			  bool write, u32 *device_generation);
+ 	int (*commit_blocks)(struct inode *inode, struct iomap *iomaps,
+ 			     int nr_iomaps, struct iattr *iattr);
++	u32 (*layout_generation)(struct super_block *sb);
+ 	int (*permission)(struct handle_to_path_ctx *ctx, unsigned int oflags);
+ 	struct file * (*open)(const struct path *path, unsigned int oflags);
+ #define	EXPORT_OP_NOWCC			(0x1) /* don't collect v3 wcc data */
+-- 
+2.54.0 (Apple Git-157)
+

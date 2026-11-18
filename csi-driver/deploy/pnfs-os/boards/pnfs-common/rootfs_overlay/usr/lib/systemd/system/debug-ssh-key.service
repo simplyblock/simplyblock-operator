@@ -1,0 +1,17 @@
+# Installs the debug SSH key the runner passes through QEMU fw_cfg as root's
+# authorized_keys. Only with simplyblock.debug_ssh=1 on the kernel command line,
+# which the runner adds when started with -debug-ssh. /root/.ssh is a link to
+# /run/root-ssh, since the root filesystem is read-only.
+[Unit]
+Description=Debug SSH key from QEMU fw_cfg
+ConditionKernelCommandLine=simplyblock.debug_ssh=1
+ConditionPathExists=/sys/firmware/qemu_fw_cfg/by_name/opt/io.simplyblock/ssh_authorized_keys/raw
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/mkdir -p /run/root-ssh
+ExecStart=/bin/chmod 0700 /run/root-ssh
+ExecStart=/bin/cp /sys/firmware/qemu_fw_cfg/by_name/opt/io.simplyblock/ssh_authorized_keys/raw /run/root-ssh/authorized_keys
+ExecStart=/bin/chmod 0600 /run/root-ssh/authorized_keys

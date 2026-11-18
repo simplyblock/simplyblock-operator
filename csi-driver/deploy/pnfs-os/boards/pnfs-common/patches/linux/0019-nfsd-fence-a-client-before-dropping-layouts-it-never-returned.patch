@@ -1,0 +1,222 @@
+From b7da5e51565f7b051f93828fbf42b8a7097671f6 Mon Sep 17 00:00:00 2001
+From: "Christoph Engelbert (noctarius)" <chris@simplyblock.io>
+Date: Mon, 12 Oct 2026 07:27:55 +0200
+Subject: [PATCH] nfsd: fence a client before dropping layouts it never
+ returned
+
+nfsd fences a client that does not return a recalled layout only from
+the recall's done callback, once two lease periods have passed. Two
+paths drop a client's layouts without ever getting there:
+
+ - nfsd4_run_cb_work() gives up on a callback when the client's
+   callback channel is down or the client has turned courtesy because
+   its lease expired. The recall's release then frees the layouts, and
+   the operation that recalled them goes ahead.
+ - expire_client() frees all of a client's layouts in
+   __destroy_client().
+
+Neither stops the client: it keeps writing the device directly with
+the layout it still holds. A client partitioned from the metadata
+server turned courtesy 90 seconds after the partition, its recall was
+given up, its layouts were freed, and the truncate that had recalled
+them returned 97 seconds into the partition with no preempt sent to the
+device. Its writes happened to hang; with a layout it could still use,
+they would have landed after the truncate.
+
+Fence the client on the layout's device before either path drops a
+layout it still holds, unless the recall settled it already: the client
+answered (returned its layouts or had none matching) or was fenced by
+the done callback. Expiry fences once per layout stateid the client
+still holds. Server shutdown does not expire clients, so a planned
+restart fences only clients whose recall was still in flight, whose
+layouts it drops; the next boot fences earlier clients when the export
+is set up.
+---
+ fs/nfsd/nfs4layouts.c | 88 ++++++++++++++++++++++++++++++++++++++++++-
+ fs/nfsd/nfs4state.c   |  2 +
+ fs/nfsd/pnfs.h        |  4 ++
+ fs/nfsd/state.h       |  5 +++
+ 4 files changed, 98 insertions(+), 1 deletion(-)
+
+diff --git a/fs/nfsd/nfs4layouts.c b/fs/nfsd/nfs4layouts.c
+index 45ec62d0681..8cc440a2cec 100644
+--- a/fs/nfsd/nfs4layouts.c
++++ b/fs/nfsd/nfs4layouts.c
+@@ -709,6 +709,87 @@ nfsd4_cb_layout_prepare(struct nfsd4_callback *cb)
+ 	mutex_unlock(&ls->ls_mutex);
+ }
+ 
++/*
++ * Fence the client of a layout stateid that still holds layouts it never
++ * returned, before the server drops them.
++ *
++ * Dropping a layout the client never gave back does not stop the client from
++ * using it: it keeps writing the device directly until it learns otherwise.
++ * nfsd only fenced from the recall's done callback, but a recall to a client
++ * whose callback channel is down, or that has turned courtesy because its
++ * lease expired, is given up without one, and expiring a client frees its
++ * layouts outright. A client partitioned from the server lost its layouts that
++ * way 97 seconds into a recall, the truncate that had recalled them went
++ * ahead, and nothing reached the device to stop the client.
++ */
++static void
++nfsd4_fence_unreturned_layouts(struct nfs4_layout_stateid *ls)
++{
++	const struct nfsd4_layout_ops *ops = nfsd4_layout_ops[ls->ls_layout_type];
++	struct nfsd_file *fl;
++	bool unreturned;
++
++	if (!ops->fence_client)
++		return;
++
++	spin_lock(&ls->ls_lock);
++	unreturned = !list_empty(&ls->ls_layouts) && !ls->ls_recall_settled;
++	ls->ls_recall_settled = true;
++	spin_unlock(&ls->ls_lock);
++	if (!unreturned)
++		return;
++
++	rcu_read_lock();
++	fl = nfsd_file_get(ls->ls_file);
++	rcu_read_unlock();
++	if (!fl) {
++		pr_warn("NFSD: cannot fence a client whose layout file is gone\n");
++		return;
++	}
++	trace_nfsd_layout_recall_fail(&ls->ls_stid.sc_stateid);
++	ops->fence_client(ls, fl);
++	nfsd_file_put(fl);
++}
++
++/*
++ * Fence an expiring client on every device it still holds layouts for, before
++ * __destroy_client() frees them. The client is unhashed, so it gains no new
++ * layout state meanwhile.
++ */
++void
++nfsd4_fence_client_layouts(struct nfs4_client *clp)
++{
++	struct nfs4_layout_stateid *ls, **held;
++	unsigned int n = 0, max = 0, i;
++
++	spin_lock(&clp->cl_lock);
++	list_for_each_entry(ls, &clp->cl_lo_states, ls_perclnt)
++		max++;
++	spin_unlock(&clp->cl_lock);
++	if (!max)
++		return;
++
++	held = kcalloc(max, sizeof(*held), GFP_KERNEL);
++	if (!held) {
++		pr_warn("NFSD: cannot fence the layouts of an expiring client\n");
++		return;
++	}
++	spin_lock(&clp->cl_lock);
++	list_for_each_entry(ls, &clp->cl_lo_states, ls_perclnt) {
++		if (n == max)
++			break;
++		if (refcount_inc_not_zero(&ls->ls_stid.sc_count))
++			held[n++] = ls;
++	}
++	spin_unlock(&clp->cl_lock);
++
++	for (i = 0; i < n; i++) {
++		nfsd4_fence_unreturned_layouts(held[i]);
++		nfs4_put_stid(&held[i]->ls_stid);
++	}
++	kfree(held);
++}
++
+ static int
+ nfsd4_cb_layout_done(struct nfsd4_callback *cb, struct rpc_task *task)
+ {
+@@ -728,8 +809,10 @@ nfsd4_cb_layout_done(struct nfsd4_callback *cb, struct rpc_task *task)
+ 		 * take the spinlock since this is an optimization and nothing
+ 		 * should get added until the cb counter goes to zero.
+ 		 */
+-		if (list_empty(&ls->ls_layouts))
++		if (list_empty(&ls->ls_layouts)) {
++			WRITE_ONCE(ls->ls_recall_settled, true);
+ 			return 1;
++		}
+ 
+ 		/* Poll the client until it's done with the layout */
+ 		now = ktime_get();
+@@ -749,6 +832,7 @@ nfsd4_cb_layout_done(struct nfsd4_callback *cb, struct rpc_task *task)
+ 		 * Unknown error or non-responding client, we'll need to fence.
+ 		 */
+ 		trace_nfsd_layout_recall_fail(&ls->ls_stid.sc_stateid);
++		WRITE_ONCE(ls->ls_recall_settled, true);
+ 		rcu_read_lock();
+ 		fl = nfsd_file_get(ls->ls_file);
+ 		rcu_read_unlock();
+@@ -762,6 +846,7 @@ nfsd4_cb_layout_done(struct nfsd4_callback *cb, struct rpc_task *task)
+ 		}
+ 		return 1;
+ 	case -NFS4ERR_NOMATCHING_LAYOUT:
++		WRITE_ONCE(ls->ls_recall_settled, true);
+ 		trace_nfsd_layout_recall_done(&ls->ls_stid.sc_stateid);
+ 		task->tk_status = 0;
+ 		return 1;
+@@ -777,6 +862,7 @@ nfsd4_cb_layout_release(struct nfsd4_callback *cb)
+ 
+ 	trace_nfsd_layout_recall_release(&ls->ls_stid.sc_stateid);
+ 
++	nfsd4_fence_unreturned_layouts(ls);
+ 	nfsd4_return_all_layouts(ls, &reaplist);
+ 	nfsd4_free_layouts(&reaplist);
+ 	nfs4_put_stid(&ls->ls_stid);
+diff --git a/fs/nfsd/nfs4state.c b/fs/nfsd/nfs4state.c
+index bc0d1d2ed58..463c529852e 100644
+--- a/fs/nfsd/nfs4state.c
++++ b/fs/nfsd/nfs4state.c
+@@ -2706,6 +2706,8 @@ static void expire_client(struct nfs4_client *clp)
+ {
+ 	unhash_client(clp);
+ 	nfsd4_client_record_remove(clp);
++	/* Its layouts are freed below; fence it on their devices first. */
++	nfsd4_fence_client_layouts(clp);
+ 	__destroy_client(clp);
+ }
+ 
+diff --git a/fs/nfsd/pnfs.h b/fs/nfsd/pnfs.h
+index 4c83a9b0655..eae70e3d4ba 100644
+--- a/fs/nfsd/pnfs.h
++++ b/fs/nfsd/pnfs.h
+@@ -73,6 +73,7 @@ struct nfsd4_deviceid_map *nfsd4_find_devid_map(int idx);
+ #ifdef CONFIG_NFSD_PNFS
+ void nfsd4_setup_layout_type(struct svc_export *exp);
+ void nfsd4_return_all_client_layouts(struct nfs4_client *);
++void nfsd4_fence_client_layouts(struct nfs4_client *clp);
+ void nfsd4_return_all_file_layouts(struct nfs4_client *clp,
+ 		struct nfs4_file *fp);
+ void nfsd4_close_layout(struct nfs4_layout_stateid *ls);
+@@ -95,6 +96,9 @@ static inline void nfsd4_setup_layout_type(struct svc_export *exp)
+ static inline void nfsd4_return_all_client_layouts(struct nfs4_client *clp)
+ {
+ }
++static inline void nfsd4_fence_client_layouts(struct nfs4_client *clp)
++{
++}
+ static inline void nfsd4_return_all_file_layouts(struct nfs4_client *clp,
+ 		struct nfs4_file *fp)
+ {
+diff --git a/fs/nfsd/state.h b/fs/nfsd/state.h
+index 8a76bff7f93..910fe388533 100644
+--- a/fs/nfsd/state.h
++++ b/fs/nfsd/state.h
+@@ -744,6 +744,11 @@ struct nfs4_layout_stateid {
+ 	struct nfsd4_callback		ls_recall;
+ 	stateid_t			ls_recall_sid;
+ 	bool				ls_recalled;
++	/*
++	 * The client answered the recall or was fenced for it, so whatever
++	 * layouts are left can be dropped without fencing it again.
++	 */
++	bool				ls_recall_settled;
+ 	struct mutex			ls_mutex;
+ };
+ 
+-- 
+2.54.0 (Apple Git-157)
+

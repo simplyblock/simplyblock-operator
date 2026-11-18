@@ -1,6 +1,6 @@
 // The QEMU command line that starts the pNFS metadata server's guest.
 //
-// The guest is the pnfs-os image (vela-os, prototype/boards/pnfs-common), and
+// The guest is the pnfs-os image (csi-driver/deploy/pnfs-os), and
 // the devices, their order, and the kernel command line built here are the
 // contract that image boots against: the read-only root disk is the first
 // virtio disk, the state disk carries the serial its fstab mounts by, and the

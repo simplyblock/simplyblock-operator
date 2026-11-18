@@ -119,13 +119,132 @@ jobs:
         fi
         echo "ref=${image_name}:${tag}" >> "$GITHUB_OUTPUT"
 
+  # The pNFS guest (csi-driver/deploy/pnfs-os) is tagged by the git tree of its
+  # sources, pnfsos-<tree>, so a tag that already exists holds exactly this
+  # guest. A buildroot build takes long, so it only runs for a tree that has
+  # not been published yet, and every other run reuses the published guest.
+  pnfs-os-tag:
+    name: Resolve pNFS guest
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      exists: ${{ steps.exists.outputs.exists }}
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Compute the guest tag
+      id: tag
+      run: echo "tag=$(make -s --no-print-directory -C csi-driver pnfs-os-tag)" >> "$GITHUB_OUTPUT"
+
+    - name: Check for a published guest
+      id: exists
+      run: |
+        if docker buildx imagetools inspect "${IMAGE_NAME}:${{ steps.tag.outputs.tag }}" > /dev/null 2>&1; then
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+        fi
+
+  # One job per architecture, both cross-compiled on an x86_64 host, which the
+  # prebuilt SDK requires. Each pushes pnfsos-<tree>-<arch> and skips an
+  # architecture a previous attempt already pushed, so rerunning after one of
+  # them failed does not rebuild the other. Runs for the same tree and
+  # architecture queue behind each other and the second one finds the image.
+  pnfs-os:
+    name: Build pNFS guest (${{ matrix.arch }})
+    needs: pnfs-os-tag
+    if: needs.pnfs-os-tag.outputs.exists != 'true'
+    runs-on: [self-hosted, linux, x64]
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    concurrency:
+      group: pnfs-os-${{ needs.pnfs-os-tag.outputs.tag }}-${{ matrix.arch }}
+      cancel-in-progress: false
+    env:
+      GUEST_TAG: ${{ needs.pnfs-os-tag.outputs.tag }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Log in to container registries
+      uses: ./.github/actions/registry-login
+      with:
+        dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+        dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+        ecr: "false"
+        internal: "false"
+
+    - name: Check for a published architecture
+      id: exists
+      run: |
+        if docker buildx imagetools inspect "${IMAGE_NAME}:${GUEST_TAG}-${ARCH}" > /dev/null 2>&1; then
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Set up Docker Buildx
+      if: steps.exists.outputs.exists != 'true'
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build and push
+      if: steps.exists.outputs.exists != 'true'
+      run: |
+        make -C csi-driver pnfs-os-image PNFS_OS_ARCHS="${ARCH}" \
+          PNFS_OS_IMAGE="${IMAGE_NAME}:${GUEST_TAG}-${ARCH}" PNFS_OS_BUILDX_FLAGS=--push
+
+  # The multi-architecture pnfsos-<tree> over both architectures, and on main
+  # pnfsos-latest, which moves to the latest tree even when that tree was
+  # published by an earlier run.
+  pnfs-os-manifest:
+    name: Publish pNFS guest
+    needs: [pnfs-os-tag, pnfs-os]
+    if: >-
+      !cancelled() && (needs.pnfs-os.result == 'success' ||
+      (needs.pnfs-os-tag.outputs.exists == 'true' && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-latest
+    env:
+      GUEST_TAG: ${{ needs.pnfs-os-tag.outputs.tag }}
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Log in to container registries
+      uses: ./.github/actions/registry-login
+      with:
+        dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+        dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+        ecr: "false"
+        internal: "false"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Create the manifest
+      if: needs.pnfs-os.result == 'success'
+      run: |
+        docker buildx imagetools create -t "${IMAGE_NAME}:${GUEST_TAG}" \
+          "${IMAGE_NAME}:${GUEST_TAG}-amd64" "${IMAGE_NAME}:${GUEST_TAG}-arm64"
+
+    - name: Move pnfsos-latest
+      if: github.ref == 'refs/heads/main'
+      run: docker buildx imagetools create -t "${IMAGE_NAME}:pnfsos-latest" "${IMAGE_NAME}:${GUEST_TAG}"
+
   # The pNFS metadata server image (design-pnfs-mds-vm.md §5.6): QEMU, the
   # pnfs-os guest with mds-agent written into it, mds-runner, and mds-proxy. Tagged like
   # the driver with a pnfs-mds- prefix in the same repository, which is the
   # tag the operator defaults spec.pnfs.mds.image to. It does not gate the
-  # integration suite, which runs no pod-hosted metadata server.
+  # integration suite, which runs no pod-hosted metadata server. It builds on
+  # the guest of this commit's tree, published either by this run or an earlier one.
   mds:
     name: Build MDS image
+    needs: [pnfs-os-tag, pnfs-os-manifest]
+    if: >-
+      !cancelled() && (needs.pnfs-os-tag.outputs.exists == 'true' ||
+      needs.pnfs-os-manifest.result == 'success')
     runs-on: ubuntu-latest
     steps:
     - name: Check out code
@@ -186,7 +305,7 @@ jobs:
         file: csi-driver/deploy/image/Dockerfile.mds
         platforms: linux/amd64,linux/arm64
         build-args: |
-          GUEST_IMAGE=docker.io/simplyblock/spdkcsi:pnfsos
+          GUEST_IMAGE=${{ env.IMAGE_NAME }}:${{ needs.pnfs-os-tag.outputs.tag }}
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         cache-from: type=gha,scope=mds

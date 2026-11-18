@@ -1,0 +1,376 @@
+From 9310db2071a76c6ca9878f9aac6dbe9d97dbfd2e Mon Sep 17 00:00:00 2001
+From: Manohar Reddy <manohar@simplyblock.io>
+Date: Tue, 20 Oct 2026 13:00:30 +0200
+Subject: [PATCH] nfsd: let a metadata server instance register under a key of
+ its own
+
+Every metadata server guest registers the same constant key,
+NFSD_MDS_PR_KEY, and the stale-key fence skips it. Two guests of one
+storage cluster therefore cannot tell the other's registration from
+their own, and nothing fences an earlier instance: a standby that takes
+over from a lost active would mount a device the old active can still
+write.
+
+Add nfsd.pnfs_mds_pr_key, a u64 writable at runtime, default 0. At 0
+nfsd behaves as before. When set:
+
+ - It replaces NFSD_MDS_PR_KEY everywhere nfsd uses it: the stale-key
+   fence, the claim of a device at export setup, and the preempting key
+   of nfsd4_scsi_preempt, which fence_client also goes through.
+ - Neither the claim nor GETDEVICEINFO registers or reserves. Each reads
+   the reservation and goes ahead only when the parameter's key holds it
+   with the exclusive access, registrants only type. The claim then runs
+   its stale-key fence alone. An export whose device the instance does
+   not hold fails to parse, so it is never published, and GETDEVICEINFO
+   fails. The registration is the caller's, so an instance that was
+   fenced cannot register itself back by exporting a device again.
+ - The stale-key fence leaves every key whose top byte is 0x01 alone, not
+   only its own, so a fenced instance never preempts a newer one. A
+   client key carries the boot time in its top word and has that byte
+   only for a boot in the first half of 1970.
+ - A write while nfsd has threads running fails with EBUSY. The key is
+   set before nfsd starts, under nfsd_mutex so no server starts between
+   the check and the store.
+
+nfsd4_setup_layout_type() and nfsd4_scsi_claim_export() now return an
+error, which the export parse passes on.
+---
+ fs/nfsd/blocklayout.c | 176 ++++++++++++++++++++++++++++++++++++------
+ fs/nfsd/export.c      |   6 +-
+ fs/nfsd/nfs4layouts.c |   7 +-
+ fs/nfsd/pnfs.h        |   7 +-
+ 4 files changed, 162 insertions(+), 34 deletions(-)
+
+diff --git a/fs/nfsd/blocklayout.c b/fs/nfsd/blocklayout.c
+index f7978b7..b8231eb 100644
+--- a/fs/nfsd/blocklayout.c
++++ b/fs/nfsd/blocklayout.c
+@@ -14,6 +14,7 @@
+ #include "filecache.h"
+ #include "vfs.h"
+ #include "netns.h"
++#include "nfsd.h"
+ 
+ #define NFSDDBG_FACILITY	NFSDDBG_PNFS
+ 
+@@ -219,6 +220,104 @@ const struct nfsd4_layout_ops bl_layout_ops = {
+ 
+ #ifdef CONFIG_NFSD_SCSILAYOUT
+ #define NFSD_MDS_PR_KEY		0x0100000000000000ULL
++#define NFSD_MDS_PR_KEY_TOP	0x01
++
++/*
++ * The key this server registers under. Zero keeps the constant above, which
++ * every instance shares. A metadata server that runs beside standbys sets a
++ * key of its own before it starts nfsd, so that an earlier instance's
++ * registration can be told from its own, and then registers nothing itself:
++ * whoever promoted the instance has registered the key and holds the
++ * reservation, and nfsd only checks that it still does.
++ */
++static u64 pnfs_mds_pr_key;
++
++static int pnfs_mds_pr_key_set(const char *val, const struct kernel_param *kp)
++{
++	struct net *net;
++	bool busy = false;
++	u64 key;
++	int ret;
++
++	ret = kstrtou64(val, 0, &key);
++	if (ret)
++		return ret;
++
++	/*
++	 * Under nfsd_mutex no server can start between the check and the store,
++	 * and a running one never sees the key change.
++	 */
++	mutex_lock(&nfsd_mutex);
++	rcu_read_lock();
++	for_each_net_rcu(net) {
++		struct nfsd_net *nn = net_generic(net, nfsd_net_id);
++
++		if (nn->nfsd_serv)
++			busy = true;
++	}
++	rcu_read_unlock();
++	if (!busy)
++		WRITE_ONCE(pnfs_mds_pr_key, key);
++	mutex_unlock(&nfsd_mutex);
++	return busy ? -EBUSY : 0;
++}
++
++static const struct kernel_param_ops pnfs_mds_pr_key_ops = {
++	.set	= pnfs_mds_pr_key_set,
++	.get	= param_get_ullong,
++};
++module_param_cb(pnfs_mds_pr_key, &pnfs_mds_pr_key_ops, &pnfs_mds_pr_key, 0644);
++MODULE_PARM_DESC(pnfs_mds_pr_key,
++	"Reservation key of this metadata server instance, set before nfsd starts. When set, nfsd registers and reserves nothing and serves a device only while this key holds its reservation. 0 uses the shared constant key.");
++
++static u64 nfsd4_scsi_mds_key(void)
++{
++	u64 key = READ_ONCE(pnfs_mds_pr_key);
++
++	return key ?: NFSD_MDS_PR_KEY;
++}
++
++static bool nfsd4_scsi_mds_key_is_set(void)
++{
++	return READ_ONCE(pnfs_mds_pr_key) != 0;
++}
++
++/*
++ * A key the stale-key fence leaves alone. With a key of its own, every key in
++ * the metadata servers' range is left alone, not only this server's: another
++ * instance's is either an earlier one, which whoever promoted this instance
++ * has fenced, or a newer one, which this instance must never preempt.
++ */
++static bool nfsd4_scsi_keep_key(u64 key)
++{
++	if (key == nfsd4_scsi_mds_key())
++		return true;
++	return nfsd4_scsi_mds_key_is_set() && (key >> 56) == NFSD_MDS_PR_KEY_TOP;
++}
++
++/*
++ * Whether this server holds the device's reservation. With a key of its own it
++ * is the only thing the server does to a device it did not register: it serves
++ * the device while its key holds the reservation, and not otherwise, so an
++ * instance that was fenced cannot take the device back by exporting it or
++ * answering GETDEVICEINFO.
++ */
++static int
++nfsd4_scsi_check_holder(struct block_device *bdev, const struct pr_ops *ops)
++{
++	struct pr_held_reservation rsv = {};
++	int ret;
++
++	if (!ops->pr_read_reservation)
++		return -EOPNOTSUPP;
++	ret = ops->pr_read_reservation(bdev, &rsv);
++	if (ret)
++		return ret;
++	if (rsv.key != nfsd4_scsi_mds_key() ||
++	    rsv.type != PR_EXCLUSIVE_ACCESS_REG_ONLY)
++		return -EACCES;
++	return 0;
++}
+ 
+ /*
+  * We use the client ID as a unique key for the reservations.
+@@ -241,10 +340,10 @@ nfsd4_scsi_preempt(struct block_device *bdev, const struct pr_ops *ops, u64 key)
+ {
+ 	int ret;
+ 
+-	ret = ops->pr_preempt(bdev, NFSD_MDS_PR_KEY, key,
++	ret = ops->pr_preempt(bdev, nfsd4_scsi_mds_key(), key,
+ 			PR_EXCLUSIVE_ACCESS_REG_ONLY, true);
+ 	if (ret == -EINVAL || ret == -EOPNOTSUPP)
+-		ret = ops->pr_preempt(bdev, NFSD_MDS_PR_KEY, key,
++		ret = ops->pr_preempt(bdev, nfsd4_scsi_mds_key(), key,
+ 				PR_EXCLUSIVE_ACCESS_REG_ONLY, false);
+ 	return ret;
+ }
+@@ -293,7 +392,7 @@ nfsd4_scsi_fence_stale_keys(struct block_device *bdev,
+ 	for (i = 0; i < keys->num_keys; i++) {
+ 		u64 key = keys->keys[i];
+ 
+-		if (!key || key == NFSD_MDS_PR_KEY || (u32)(key >> 32) == boot)
++		if (!key || nfsd4_scsi_keep_key(key) || (u32)(key >> 32) == boot)
+ 			continue;
+ 		ret = nfsd4_scsi_preempt(bdev, ops, key);
+ 		if (ret)
+@@ -328,7 +427,7 @@ static DEFINE_MUTEX(nfsd4_scsi_claim_lock);
+  * so every key but the server's own is fenced and nothing is recorded; the
+  * next setup after nfsd starts claims the device again for that boot.
+  */
+-void
++int
+ nfsd4_scsi_claim_export(struct super_block *sb, struct net *net)
+ {
+ 	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
+@@ -336,23 +435,39 @@ nfsd4_scsi_claim_export(struct super_block *sb, struct net *net)
+ 	const struct pr_ops *ops = bdev->bd_disk->fops->pr_ops;
+ 	u32 boot = nn->nfsd_net_up ? (u32)nn->boot_time : 0;
+ 	void *claimed;
++	int ret = 0;
+ 
+ 	if (!ops || !ops->pr_register || !ops->pr_reserve)
+-		return;
++		return 0;
+ 
+ 	mutex_lock(&nfsd4_scsi_claim_lock);
+ 	claimed = xa_load(&nfsd4_scsi_claimed, bdev->bd_dev);
+ 	if (boot && claimed && xa_to_value(claimed) == boot)
+ 		goto out_unlock;
+ 
+-	if (ops->pr_register(bdev, 0, NFSD_MDS_PR_KEY, true)) {
+-		pr_warn("pNFS: failed to register key for %pg at export\n", bdev);
+-		goto out_unlock;
+-	}
+-	if (ops->pr_reserve(bdev, NFSD_MDS_PR_KEY,
+-			PR_EXCLUSIVE_ACCESS_REG_ONLY, 0)) {
+-		pr_warn("pNFS: failed to reserve %pg at export\n", bdev);
+-		goto out_unlock;
++	if (nfsd4_scsi_mds_key_is_set()) {
++		/*
++		 * The key's owner registered and reserved before it started
++		 * nfsd. A device it does not hold is not exported: the export
++		 * fails and no request for it is answered.
++		 */
++		ret = nfsd4_scsi_check_holder(bdev, ops);
++		if (ret) {
++			pr_warn("pNFS: key 0x%llx does not hold %pg at export: %d\n",
++				nfsd4_scsi_mds_key(), bdev, ret);
++			ret = -EACCES;
++			goto out_unlock;
++		}
++	} else {
++		if (ops->pr_register(bdev, 0, NFSD_MDS_PR_KEY, true)) {
++			pr_warn("pNFS: failed to register key for %pg at export\n", bdev);
++			goto out_unlock;
++		}
++		if (ops->pr_reserve(bdev, NFSD_MDS_PR_KEY,
++				PR_EXCLUSIVE_ACCESS_REG_ONLY, 0)) {
++			pr_warn("pNFS: failed to reserve %pg at export\n", bdev);
++			goto out_unlock;
++		}
+ 	}
+ 	nfsd4_scsi_fence_stale_keys(bdev, ops, boot);
+ 	if (boot)
+@@ -360,6 +475,7 @@ nfsd4_scsi_claim_export(struct super_block *sb, struct net *net)
+ 			 GFP_KERNEL);
+ out_unlock:
+ 	mutex_unlock(&nfsd4_scsi_claim_lock);
++	return ret;
+ }
+ 
+ static const u8 designator_types[] = {
+@@ -420,19 +536,29 @@ nfsd4_block_get_device_info_scsi(struct super_block *sb,
+ 		goto out_free_dev;
+ 	}
+ 
+-	ret = ops->pr_register(sb->s_bdev, 0, NFSD_MDS_PR_KEY, true);
+-	if (ret) {
+-		pr_err("pNFS: failed to register key for device %s.\n",
+-			sb->s_id);
+-		goto out_free_dev;
+-	}
++	if (nfsd4_scsi_mds_key_is_set()) {
++		ret = nfsd4_scsi_check_holder(sb->s_bdev, ops);
++		if (ret) {
++			pr_err("pNFS: key 0x%llx does not hold device %s: %d.\n",
++				nfsd4_scsi_mds_key(), sb->s_id, ret);
++			ret = -EACCES;
++			goto out_free_dev;
++		}
++	} else {
++		ret = ops->pr_register(sb->s_bdev, 0, NFSD_MDS_PR_KEY, true);
++		if (ret) {
++			pr_err("pNFS: failed to register key for device %s.\n",
++				sb->s_id);
++			goto out_free_dev;
++		}
+ 
+-	ret = ops->pr_reserve(sb->s_bdev, NFSD_MDS_PR_KEY,
+-			PR_EXCLUSIVE_ACCESS_REG_ONLY, 0);
+-	if (ret) {
+-		pr_err("pNFS: failed to reserve device %s.\n",
+-			sb->s_id);
+-		goto out_free_dev;
++		ret = ops->pr_reserve(sb->s_bdev, NFSD_MDS_PR_KEY,
++				PR_EXCLUSIVE_ACCESS_REG_ONLY, 0);
++		if (ret) {
++			pr_err("pNFS: failed to reserve device %s.\n",
++				sb->s_id);
++			goto out_free_dev;
++		}
+ 	}
+ 
+ 	nfsd4_scsi_fence_stale_keys(sb->s_bdev, ops, clp->cl_clientid.cl_boot);
+diff --git a/fs/nfsd/export.c b/fs/nfsd/export.c
+index 2a1499f..390a53f 100644
+--- a/fs/nfsd/export.c
++++ b/fs/nfsd/export.c
+@@ -720,9 +720,9 @@ static int svc_export_parse(struct cache_detail *cd, char *mesg, int mlen)
+ 			goto out4;
+ 		if (!gid_valid(exp.ex_anon_gid))
+ 			goto out4;
+-		err = 0;
+-
+-		nfsd4_setup_layout_type(&exp);
++		err = nfsd4_setup_layout_type(&exp);
++		if (err)
++			goto out4;
+ 	}
+ 
+ 	expp = svc_export_lookup(&exp);
+diff --git a/fs/nfsd/nfs4layouts.c b/fs/nfsd/nfs4layouts.c
+index c4f99a5..2fe7911 100644
+--- a/fs/nfsd/nfs4layouts.c
++++ b/fs/nfsd/nfs4layouts.c
+@@ -176,14 +176,14 @@ nfsd4_set_deviceid(struct nfsd4_deviceid *id, const struct svc_fh *fhp,
+ 	return 0;
+ }
+ 
+-void nfsd4_setup_layout_type(struct svc_export *exp)
++int nfsd4_setup_layout_type(struct svc_export *exp)
+ {
+ #if defined(CONFIG_NFSD_BLOCKLAYOUT) || defined(CONFIG_NFSD_SCSILAYOUT)
+ 	struct super_block *sb = exp->ex_path.mnt->mnt_sb;
+ #endif
+ 
+ 	if (!(exp->ex_flags & NFSEXP_PNFS))
+-		return;
++		return 0;
+ 
+ #ifdef CONFIG_NFSD_FLEXFILELAYOUT
+ 	exp->ex_layout_types |= 1 << LAYOUT_FLEX_FILES;
+@@ -201,9 +201,10 @@ void nfsd4_setup_layout_type(struct svc_export *exp)
+ 	    sb->s_bdev->bd_disk->fops->pr_ops &&
+ 	    sb->s_bdev->bd_disk->fops->get_unique_id) {
+ 		exp->ex_layout_types |= 1 << LAYOUT_SCSI;
+-		nfsd4_scsi_claim_export(sb, exp->cd->net);
++		return nfsd4_scsi_claim_export(sb, exp->cd->net);
+ 	}
+ #endif
++	return 0;
+ }
+ 
+ void nfsd4_close_layout(struct nfs4_layout_stateid *ls)
+diff --git a/fs/nfsd/pnfs.h b/fs/nfsd/pnfs.h
+index c6816b3..b0aa4f5 100644
+--- a/fs/nfsd/pnfs.h
++++ b/fs/nfsd/pnfs.h
+@@ -48,7 +48,7 @@ extern const struct nfsd4_layout_ops bl_layout_ops;
+ #endif
+ #ifdef CONFIG_NFSD_SCSILAYOUT
+ extern const struct nfsd4_layout_ops scsi_layout_ops;
+-void nfsd4_scsi_claim_export(struct super_block *sb, struct net *net);
++int nfsd4_scsi_claim_export(struct super_block *sb, struct net *net);
+ #endif
+ #ifdef CONFIG_NFSD_FLEXFILELAYOUT
+ extern const struct nfsd4_layout_ops ff_layout_ops;
+@@ -71,7 +71,7 @@ struct nfsd4_deviceid_map *nfsd4_find_devid_map(int idx);
+ #endif /* CONFIG_NFSD_V4 */
+ 
+ #ifdef CONFIG_NFSD_PNFS
+-void nfsd4_setup_layout_type(struct svc_export *exp);
++int nfsd4_setup_layout_type(struct svc_export *exp);
+ void nfsd4_return_all_client_layouts(struct nfs4_client *);
+ void nfsd4_fence_client_layouts(struct nfs4_client *clp);
+ void nfsd4_return_all_file_layouts(struct nfs4_client *clp,
+@@ -90,8 +90,9 @@ struct nfs4_client;
+ struct nfs4_file;
+ struct nfs4_layout_stateid;
+ 
+-static inline void nfsd4_setup_layout_type(struct svc_export *exp)
++static inline int nfsd4_setup_layout_type(struct svc_export *exp)
+ {
++	return 0;
+ }
+ 
+ static inline void nfsd4_return_all_client_layouts(struct nfs4_client *clp)
+-- 
+2.54.0 (Apple Git-157)
+

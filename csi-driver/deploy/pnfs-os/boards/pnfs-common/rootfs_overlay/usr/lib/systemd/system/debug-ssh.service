@@ -1,0 +1,21 @@
+# Debug SSH into the metadata server guest: dropbear on port 22, root by key
+# only. Off unless simplyblock.debug_ssh=1 is on the kernel command line. Only
+# the runner reaches the guest's address, so this is a shell for whoever may
+# exec into the runner container. The host key is made fresh in /run at each
+# boot, because the root filesystem is read-only.
+[Unit]
+Description=Debug SSH (dropbear)
+ConditionKernelCommandLine=simplyblock.debug_ssh=1
+Wants=debug-ssh-key.service
+After=network.target debug-ssh-key.service
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /run/dropbear
+ExecStartPre=/bin/sh -c '[ -f /run/dropbear/ed25519 ] || dropbearkey -t ed25519 -f /run/dropbear/ed25519'
+ExecStart=/bin/sh -c 'exec dropbear -F -E -s -p 22 -r /run/dropbear/ed25519'
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

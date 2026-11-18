@@ -1,0 +1,151 @@
+From 2f7dc1768a27c6cd8a4ff7fae5e70324579885a6 Mon Sep 17 00:00:00 2001
+From: "Christoph Engelbert (noctarius)" <chris@simplyblock.io>
+Date: Sat, 10 Oct 2026 11:13:41 +0200
+Subject: [PATCH] xfs: optionally hand out pNFS write layouts over zeroed,
+ written blocks
+
+A pNFS block or SCSI write layout covers blocks XFS allocates as
+unwritten. The client writes the device directly, and only its
+LAYOUTCOMMIT has the server convert those extents to written. Until
+then, every other reader gets zeros.
+
+If the server restarts or crashes between the client's write and that
+LAYOUTCOMMIT, the commit never arrives. The Linux client sends no
+reclaiming LAYOUTCOMMIT (encode_layoutcommit always encodes reclaim as
+false), nfs4_layoutcommit_done ignores NFS4ERR_GRACE and
+NFS4ERR_BADLAYOUT, and pnfs_layout_handle_reboot drops the layouts
+after a LAYOUTRETURN that carries no extents for block layouts. The
+data is on the device, the extents stay unwritten, and close() on the
+writer still returns 0. A pNFS metadata server restarted while two
+writers were active served 25 MiB of zeros in each of their files to
+a reader on another node.
+
+The allocation itself is already crash safe, since the log is forced
+before the layout is handed out. With xfs.pnfs_zeroed_layouts=1 the
+blocks of a write layout are allocated zeroed and written, as for DAX,
+and an unwritten extent under a write layout is zeroed and converted.
+A client's write is then durable once it completes on the device,
+whatever happens to its LAYOUTCOMMIT. The cost is a WRITE ZEROES per
+allocation from the server. The file size still travels only in
+LAYOUTCOMMIT, so an append whose size update is lost is still cut off.
+
+The parameter defaults to off and can be changed at runtime through
+/sys/module/xfs/parameters/pnfs_zeroed_layouts.
+---
+ fs/xfs/xfs_iomap.c |  9 +++++++--
+ fs/xfs/xfs_iomap.h |  1 +
+ fs/xfs/xfs_pnfs.c  | 29 ++++++++++++++++++++++++++---
+ 3 files changed, 34 insertions(+), 5 deletions(-)
+
+diff --git a/fs/xfs/xfs_iomap.c b/fs/xfs/xfs_iomap.c
+index dcea927e0..c81a81794 100644
+--- a/fs/xfs/xfs_iomap.c
++++ b/fs/xfs/xfs_iomap.c
+@@ -267,6 +267,7 @@ xfs_iomap_write_direct(
+ 	xfs_fileoff_t		offset_fsb,
+ 	xfs_fileoff_t		count_fsb,
+ 	unsigned int		flags,
++	bool			zero,
+ 	struct xfs_bmbt_irec	*imap,
+ 	u64			*seq)
+ {
+@@ -308,8 +309,12 @@ xfs_iomap_write_direct(
+ 	 * callback for DAX. This also means that we need to be able to dip into
+ 	 * the reserve block pool for bmbt block allocation if there is no space
+ 	 * left but we need to do unwritten extent conversion.
++	 *
++	 * A caller that asks for zero gets the same, for blocks another system
++	 * writes to directly and whose conversion from unwritten it cannot rely
++	 * on being told about.
+ 	 */
+-	if (flags & IOMAP_DAX) {
++	if ((flags & IOMAP_DAX) || zero) {
+ 		bmapi_flags = XFS_BMAPI_CONVERT | XFS_BMAPI_ZERO;
+ 		if (imap->br_state == XFS_EXT_UNWRITTEN) {
+ 			force = true;
+@@ -1007,7 +1012,7 @@ xfs_direct_write_iomap_begin(
+ 	xfs_iunlock(ip, lockmode);
+ 
+ 	error = xfs_iomap_write_direct(ip, offset_fsb, end_fsb - offset_fsb,
+-			flags, &imap, &seq);
++			flags, false, &imap, &seq);
+ 	if (error)
+ 		return error;
+ 
+diff --git a/fs/xfs/xfs_iomap.h b/fs/xfs/xfs_iomap.h
+index ebcce7d49..3cf86cf68 100644
+--- a/fs/xfs/xfs_iomap.h
++++ b/fs/xfs/xfs_iomap.h
+@@ -14,6 +14,7 @@ struct xfs_zone_alloc_ctx;
+ 
+ int xfs_iomap_write_direct(struct xfs_inode *ip, xfs_fileoff_t offset_fsb,
+ 		xfs_fileoff_t count_fsb, unsigned int flags,
++		bool zero,
+ 		struct xfs_bmbt_irec *imap, u64 *sequence);
+ int xfs_iomap_write_unwritten(struct xfs_inode *, xfs_off_t, xfs_off_t, bool);
+ xfs_fileoff_t xfs_iomap_eof_align_last_fsb(struct xfs_inode *ip,
+diff --git a/fs/xfs/xfs_pnfs.c b/fs/xfs/xfs_pnfs.c
+index afe749701..99df177ba 100644
+--- a/fs/xfs/xfs_pnfs.c
++++ b/fs/xfs/xfs_pnfs.c
+@@ -14,6 +14,25 @@
+ #include "xfs_iomap.h"
+ #include "xfs_pnfs.h"
+ 
++#include <linux/moduleparam.h>
++
++/*
++ * Hand out write layouts over blocks that are zeroed and already written,
++ * rather than over unwritten extents that only a LAYOUTCOMMIT converts.
++ *
++ * A client that wrote through a layout but whose LAYOUTCOMMIT never reached
++ * this server, because it restarted or crashed in between, does not commit
++ * again: the Linux client never sends a reclaiming LAYOUTCOMMIT, and drops its
++ * layouts on a server reboot. Its data is on the device, but the extents stay
++ * unwritten and read back as zeros. Zeroing at allocation makes the data
++ * durable once the client's write completes, at the cost of a WRITE ZEROES
++ * per allocation. The file size still travels only in LAYOUTCOMMIT.
++ */
++static bool xfs_pnfs_zeroed_layouts;
++module_param_named(pnfs_zeroed_layouts, xfs_pnfs_zeroed_layouts, bool, 0644);
++MODULE_PARM_DESC(pnfs_zeroed_layouts,
++	"Zero and write the blocks of a pNFS write layout at allocation, so data written through it survives a lost LAYOUTCOMMIT");
++
+ /*
+  * Ensure that we do not have any outstanding pNFS layouts that can be used by
+  * clients to directly read from or write to this inode.  This must be called
+@@ -123,6 +142,7 @@ xfs_fs_map_blocks(
+ 	uint			lock_flags;
+ 	int			error = 0;
+ 	u64			seq;
++	bool			zeroed;
+ 
+ 	if (xfs_is_shutdown(mp))
+ 		return -EIO;
+@@ -178,17 +198,20 @@ xfs_fs_map_blocks(
+ 
+ 	ASSERT(!nimaps || imap.br_startblock != DELAYSTARTBLOCK);
+ 
++	zeroed = write && READ_ONCE(xfs_pnfs_zeroed_layouts);
+ 	if (!error && write &&
+-	    (!nimaps || imap.br_startblock == HOLESTARTBLOCK)) {
++	    (!nimaps || imap.br_startblock == HOLESTARTBLOCK ||
++	     (zeroed && imap.br_state == XFS_EXT_UNWRITTEN))) {
+ 		if (offset + length > XFS_ISIZE(ip))
+ 			end_fsb = xfs_iomap_eof_align_last_fsb(ip, end_fsb);
+-		else if (nimaps && imap.br_startblock == HOLESTARTBLOCK)
++		else if (nimaps && (imap.br_startblock == HOLESTARTBLOCK ||
++				    imap.br_state == XFS_EXT_UNWRITTEN))
+ 			end_fsb = min(end_fsb, imap.br_startoff +
+ 					       imap.br_blockcount);
+ 		xfs_iunlock(ip, lock_flags);
+ 
+ 		error = xfs_iomap_write_direct(ip, offset_fsb,
+-				end_fsb - offset_fsb, 0, &imap, &seq);
++				end_fsb - offset_fsb, 0, zeroed, &imap, &seq);
+ 		if (error)
+ 			goto out_unlock;
+ 
+-- 
+2.54.0 (Apple Git-157)
+

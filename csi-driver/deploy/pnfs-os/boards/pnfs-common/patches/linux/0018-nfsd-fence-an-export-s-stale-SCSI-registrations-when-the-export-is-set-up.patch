@@ -1,0 +1,141 @@
+From 4dfe46c139a4f7c45c13f18d48572f9fa6c5b755 Mon Sep 17 00:00:00 2001
+From: "Christoph Engelbert (noctarius)" <chris@simplyblock.io>
+Date: Mon, 12 Oct 2026 07:26:52 +0200
+Subject: [PATCH] nfsd: fence an export's stale SCSI registrations when the
+ export is set up
+
+A pNFS SCSI client's reservation key carries the server's boot time,
+and 0002 fences the keys an earlier server instance left on a device
+when the device is registered for a GETDEVICEINFO. Until some client
+asks for the device, a client of the earlier instance stays registered
+and still holds that instance's layout.
+
+Nothing makes anyone ask. A client partitioned from the metadata server
+while the server restarted kept writing its file directly to the device
+with its old layout and registration, while the new server, which had
+no layout state for it, let another client truncate the file: 117
+O_DIRECT writes landed after the truncate returned, two writers on one
+filesystem.
+
+Claim the device for SCSI layouts when the export is set up: register
+and reserve the server's key and fence every key that is neither the
+server's own nor from this boot of nfsd. This runs while the export is
+parsed, before it is published, so before any request for it is
+answered: until then, requests for the export get NFS4ERR_DELAY. A
+device is claimed once per boot of nfsd. Before nfsd has started no
+client of this boot can be registered, so every key but the server's is
+fenced, and the device is claimed again once nfsd runs.
+---
+ fs/nfsd/blocklayout.c | 59 +++++++++++++++++++++++++++++++++++++++++++
+ fs/nfsd/nfs4layouts.c |  4 ++-
+ fs/nfsd/pnfs.h        |  1 +
+ 3 files changed, 63 insertions(+), 1 deletion(-)
+
+diff --git a/fs/nfsd/blocklayout.c b/fs/nfsd/blocklayout.c
+index fc1d83e7090..cd66368a6b0 100644
+--- a/fs/nfsd/blocklayout.c
++++ b/fs/nfsd/blocklayout.c
+@@ -13,6 +13,7 @@
+ #include "pnfs.h"
+ #include "filecache.h"
+ #include "vfs.h"
++#include "netns.h"
+ 
+ #define NFSDDBG_FACILITY	NFSDDBG_PNFS
+ 
+@@ -313,6 +314,64 @@ nfsd4_scsi_fence_stale_keys(struct block_device *bdev,
+ 	kfree(keys);
+ }
+ 
++/*
++ * The devices this server has claimed for SCSI layouts, each with the boot of
++ * nfsd it fenced earlier boots' clients for.
++ */
++static DEFINE_XARRAY(nfsd4_scsi_claimed);
++static DEFINE_MUTEX(nfsd4_scsi_claim_lock);
++
++/*
++ * Claim an exported device for SCSI layouts when the export is set up, and
++ * fence every registration an earlier server instance left on it.
++ *
++ * Fencing only at GETDEVICEINFO leaves a client that cannot reach this server
++ * registered with its earlier boot's key, and still holding that boot's
++ * layout, until some client asks for the device. Nothing guarantees anyone
++ * does: a client partitioned from the server across its restart kept writing
++ * the device directly while the new server let another client truncate the
++ * file. Doing it here runs before the export is published, so before any
++ * request for it is answered: until then, requests for the export get
++ * NFS4ERR_DELAY.
++ *
++ * Before nfsd has started there is no boot whose clients can be registered,
++ * so every key but the server's own is fenced and nothing is recorded; the
++ * next setup after nfsd starts claims the device again for that boot.
++ */
++void
++nfsd4_scsi_claim_export(struct super_block *sb, struct net *net)
++{
++	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
++	struct block_device *bdev = sb->s_bdev;
++	const struct pr_ops *ops = bdev->bd_disk->fops->pr_ops;
++	u32 boot = nn->nfsd_net_up ? (u32)nn->boot_time : 0;
++	void *claimed;
++
++	if (!ops || !ops->pr_register || !ops->pr_reserve)
++		return;
++
++	mutex_lock(&nfsd4_scsi_claim_lock);
++	claimed = xa_load(&nfsd4_scsi_claimed, bdev->bd_dev);
++	if (boot && claimed && xa_to_value(claimed) == boot)
++		goto out_unlock;
++
++	if (ops->pr_register(bdev, 0, NFSD_MDS_PR_KEY, true)) {
++		pr_warn("pNFS: failed to register key for %pg at export\n", bdev);
++		goto out_unlock;
++	}
++	if (ops->pr_reserve(bdev, NFSD_MDS_PR_KEY,
++			PR_EXCLUSIVE_ACCESS_REG_ONLY, 0)) {
++		pr_warn("pNFS: failed to reserve %pg at export\n", bdev);
++		goto out_unlock;
++	}
++	nfsd4_scsi_fence_stale_keys(bdev, ops, boot);
++	if (boot)
++		xa_store(&nfsd4_scsi_claimed, bdev->bd_dev, xa_mk_value(boot),
++			 GFP_KERNEL);
++out_unlock:
++	mutex_unlock(&nfsd4_scsi_claim_lock);
++}
++
+ static const u8 designator_types[] = {
+ 	PS_DESIGNATOR_EUI64,
+ 	PS_DESIGNATOR_NAA,
+diff --git a/fs/nfsd/nfs4layouts.c b/fs/nfsd/nfs4layouts.c
+index fcced61fc10..45ec62d0681 100644
+--- a/fs/nfsd/nfs4layouts.c
++++ b/fs/nfsd/nfs4layouts.c
+@@ -186,8 +186,10 @@ void nfsd4_setup_layout_type(struct svc_export *exp)
+ 	    sb->s_export_op->commit_blocks &&
+ 	    sb->s_bdev &&
+ 	    sb->s_bdev->bd_disk->fops->pr_ops &&
+-	    sb->s_bdev->bd_disk->fops->get_unique_id)
++	    sb->s_bdev->bd_disk->fops->get_unique_id) {
+ 		exp->ex_layout_types |= 1 << LAYOUT_SCSI;
++		nfsd4_scsi_claim_export(sb, exp->cd->net);
++	}
+ #endif
+ }
+ 
+diff --git a/fs/nfsd/pnfs.h b/fs/nfsd/pnfs.h
+index 6958c6f5c99..4c83a9b0655 100644
+--- a/fs/nfsd/pnfs.h
++++ b/fs/nfsd/pnfs.h
+@@ -48,6 +48,7 @@ extern const struct nfsd4_layout_ops bl_layout_ops;
+ #endif
+ #ifdef CONFIG_NFSD_SCSILAYOUT
+ extern const struct nfsd4_layout_ops scsi_layout_ops;
++void nfsd4_scsi_claim_export(struct super_block *sb, struct net *net);
+ #endif
+ #ifdef CONFIG_NFSD_FLEXFILELAYOUT
+ extern const struct nfsd4_layout_ops ff_layout_ops;
+-- 
+2.54.0 (Apple Git-157)
+

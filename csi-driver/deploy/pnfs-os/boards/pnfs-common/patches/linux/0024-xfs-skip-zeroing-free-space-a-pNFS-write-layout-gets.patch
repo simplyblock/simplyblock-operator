@@ -1,0 +1,550 @@
+From e65a41d61c195ea3b225cb2db1c5d9fdb9a790e0 Mon Sep 17 00:00:00 2001
+From: "Christoph Engelbert (noctarius)" <chris@simplyblock.io>
+Date: Fri, 16 Oct 2026 16:04:09 +0200
+Subject: [PATCH] xfs: skip zeroing free space a pNFS write layout gets, once
+ it reads as zeros
+
+With xfs.pnfs_zeroed_layouts=1 the blocks of a write layout are
+allocated zeroed and written (0005), and the zeroing runs in the nfsd
+thread before LAYOUTGET is answered. On space the volume never wrote,
+the target answers the WRITE ZEROES from metadata. On space XFS freed
+and reuses, it is a real write of zeroes: an nfsd thread spent 15
+seconds in blkdev_issue_zeroout for one LAYOUTGET on a volume fio had
+been rewriting for an hour.
+
+XFS cannot tell space it never used from space it freed. Free space
+reads as zeros when every extent freed is discarded and the device
+returns zeros for a discarded range, and neither holds by default:
+an unwritten extent is freed without a discard, as are the extents
+growfs and online repair free, and a discard that fails releases its
+extents anyway. A filesystem mounted without -o discard before leaves
+its freed space as it was.
+
+With xfs.pnfs_discarded_free_space=1, read once at load, a mount with
+-o discard on a device that announces deallocated blocks read as
+zeros (nvme sets the write_zeroes_unmap limits only for a namespace
+whose DLFEAT says so) latches PNFS_DISCARD_ALL:
+
+ - every extent freed is discarded, whatever asked to skip it;
+ - a discard that fails, or is never issued, has its extents zeroed
+   before they are released, and the filesystem is shut down if that
+   fails too;
+ - a FITRIM of the whole data device with no extent too small to trim
+   then marks the mount PNFS_FREE_ZEROED. Free extents it skipped
+   because part of them was busy are trimmed again once nothing is
+   busy, three times at most, and the mount is not marked if any
+   remain.
+
+Under PNFS_FREE_ZEROED a zeroed write layout over a hole allocates
+written extents without the WRITE ZEROES, and without the per-LAYOUTGET
+cap of 0020, which exists only to bound the zeroing. An unwritten
+extent under a write layout is still zeroed before it is converted: it
+may hold data a client wrote under a layout whose LAYOUTCOMMIT was
+lost. 0005's guarantee is unchanged: the blocks a write layout covers
+are written, and read as zeros until the client writes them.
+
+The cost moves to the discards: every unlink and truncate discards
+what it frees, after the log commit, and a target that has to zero a
+discarded part of an allocated cluster does so then rather than at
+the next allocation. The skip is only as safe as the device's
+announcement, which is why it is gated on it rather than configured.
+---
+ fs/xfs/libxfs/xfs_alloc.c |   8 ++-
+ fs/xfs/xfs_discard.c      | 113 ++++++++++++++++++++++++++++++++++++--
+ fs/xfs/xfs_extent_busy.h  |   3 +
+ fs/xfs/xfs_iomap.c        |  17 ++++--
+ fs/xfs/xfs_iomap.h        |  15 ++++-
+ fs/xfs/xfs_mount.h        |  10 +++-
+ fs/xfs/xfs_pnfs.c         |  57 ++++++++++++++++++-
+ fs/xfs/xfs_pnfs.h         |   3 +
+ fs/xfs/xfs_super.c        |   2 +
+ 9 files changed, 213 insertions(+), 15 deletions(-)
+
+diff --git a/fs/xfs/libxfs/xfs_alloc.c b/fs/xfs/libxfs/xfs_alloc.c
+index ad381c73a..303f071fd 100644
+--- a/fs/xfs/libxfs/xfs_alloc.c
++++ b/fs/xfs/libxfs/xfs_alloc.c
+@@ -4048,7 +4048,13 @@ __xfs_free_extent(
+ 	if (error)
+ 		goto err_release;
+ 
+-	if (skip_discard)
++	/*
++	 * Free space must read as zeros under PNFS_DISCARD_ALL, so an extent is
++	 * discarded even where it would not be: an unwritten extent, whose
++	 * blocks may hold data written without a conversion, and the extents
++	 * growfs and online repair free.
++	 */
++	if (skip_discard && !xfs_is_pnfs_discard_all(mp))
+ 		busy_flags |= XFS_EXTENT_BUSY_SKIP_DISCARD;
+ 	xfs_extent_busy_insert(tp, pag_group(pag), agbno, len, busy_flags);
+ 	return 0;
+diff --git a/fs/xfs/xfs_discard.c b/fs/xfs/xfs_discard.c
+index 6917de832..2030044d8 100644
+--- a/fs/xfs/xfs_discard.c
++++ b/fs/xfs/xfs_discard.c
+@@ -77,6 +77,39 @@
+ 
+ struct workqueue_struct *xfs_discard_wq;
+ 
++/*
++ * Zero the extents of a discard that failed, before they are released as free
++ * space that must read as zeros. A filesystem whose device can neither discard
++ * nor zero them is shut down rather than allocate them unzeroed.
++ */
++static void
++xfs_discard_zero_failed(
++	struct xfs_busy_extents	*extents)
++{
++	struct xfs_extent_busy	*busyp;
++
++	list_for_each_entry(busyp, &extents->extent_list, list) {
++		struct xfs_group	*xg = busyp->group;
++		struct xfs_mount	*mp = xg->xg_mount;
++		struct xfs_buftarg	*btp =
++			xfs_group_type_buftarg(mp, xg->xg_type);
++		int			error;
++
++		if (xg->xg_type != XG_TYPE_AG || !xfs_is_pnfs_discard_all(mp))
++			continue;
++		error = blkdev_issue_zeroout(btp->bt_bdev,
++				xfs_gbno_to_daddr(xg, busyp->bno),
++				XFS_FSB_TO_BB(mp, busyp->length), GFP_KERNEL, 0);
++		if (error) {
++			xfs_alert(mp,
++	"zeroing extent [0x%llx,%u] after a failed discard failed, error %d",
++				  (unsigned long long)busyp->bno,
++				  busyp->length, error);
++			xfs_force_shutdown(mp, SHUTDOWN_META_IO_ERROR);
++		}
++	}
++}
++
+ static void
+ xfs_discard_endio_work(
+ 	struct work_struct	*work)
+@@ -84,6 +117,8 @@ xfs_discard_endio_work(
+ 	struct xfs_busy_extents	*extents =
+ 		container_of(work, struct xfs_busy_extents, endio_work);
+ 
++	if (extents->failed)
++		xfs_discard_zero_failed(extents);
+ 	xfs_extent_busy_clear(&extents->extent_list, false);
+ 	kfree(extents->owner);
+ }
+@@ -98,6 +133,8 @@ xfs_discard_endio(
+ {
+ 	struct xfs_busy_extents	*extents = bio->bi_private;
+ 
++	if (bio->bi_status)
++		extents->failed = true;
+ 	INIT_WORK(&extents->endio_work, xfs_discard_endio_work);
+ 	queue_work(xfs_discard_wq, &extents->endio_work);
+ 	bio_put(bio);
+@@ -136,8 +173,11 @@ xfs_discard_extents(
+ 				 (unsigned long long)busyp->bno,
+ 				 busyp->length,
+ 				 error);
++			extents->failed = true;
+ 			break;
+ 		}
++		if (error)
++			extents->failed = true;
+ 	}
+ 
+ 	if (bio) {
+@@ -166,6 +206,8 @@ struct xfs_trim_cur {
+ 	xfs_agblock_t	end;
+ 	xfs_extlen_t	minlen;
+ 	bool		by_bno;
++	/* Free extents skipped because part of them was busy. */
++	unsigned int	busy_skipped;
+ };
+ 
+ static int
+@@ -294,6 +336,7 @@ xfs_trim_gather_extents(
+ 		 */
+ 		if (xfs_extent_busy_search(pag_group(pag), fbno, flen)) {
+ 			trace_xfs_discard_busy(pag_group(pag), fbno, flen);
++			tcur->busy_skipped++;
+ 			goto next_extent;
+ 		}
+ 
+@@ -345,7 +388,8 @@ xfs_trim_perag_extents(
+ 	struct xfs_perag	*pag,
+ 	xfs_agblock_t		start,
+ 	xfs_agblock_t		end,
+-	xfs_extlen_t		minlen)
++	xfs_extlen_t		minlen,
++	unsigned int		*busy_skipped)
+ {
+ 	struct xfs_trim_cur	tcur = {
+ 		.start		= start,
+@@ -394,6 +438,7 @@ xfs_trim_perag_extents(
+ 
+ 	} while (tcur.count != 0);
+ 
++	*busy_skipped += tcur.busy_skipped;
+ 	return error;
+ 
+ }
+@@ -403,7 +448,8 @@ xfs_trim_datadev_extents(
+ 	struct xfs_mount	*mp,
+ 	xfs_daddr_t		start,
+ 	xfs_daddr_t		end,
+-	xfs_extlen_t		minlen)
++	xfs_extlen_t		minlen,
++	unsigned int		*busy_skipped)
+ {
+ 	xfs_agnumber_t		start_agno, end_agno;
+ 	xfs_agblock_t		start_agbno, end_agbno;
+@@ -424,7 +470,8 @@ xfs_trim_datadev_extents(
+ 
+ 		if (pag_agno(pag) == end_agno)
+ 			agend = end_agbno;
+-		error = xfs_trim_perag_extents(pag, start_agbno, agend, minlen);
++		error = xfs_trim_perag_extents(pag, start_agbno, agend, minlen,
++				busy_skipped);
+ 		if (error)
+ 			last_error = error;
+ 
+@@ -812,6 +859,59 @@ xfs_trim_rtdev_extents(
+ # define xfs_trim_rtdev_extents(...)	(-EOPNOTSUPP)
+ #endif /* CONFIG_XFS_RT */
+ 
++/*
++ * Whether a trim of [start, end] reaches every free extent of the data device:
++ * all of it, with no extent too small to be trimmed, on a filesystem that
++ * discards everything it frees from then on.
++ */
++static bool
++xfs_trim_frees_all(
++	struct xfs_mount	*mp,
++	xfs_daddr_t		start,
++	xfs_daddr_t		end,
++	xfs_extlen_t		minlen)
++{
++	return xfs_is_pnfs_discard_all(mp) && start == 0 && minlen <= 1 &&
++	       end >= XFS_FSB_TO_BB(mp, mp->m_sb.sb_dblocks) - 1 &&
++	       !xfs_trim_should_stop();
++}
++
++/*
++ * After a full trim, all free space reads as zeros, except for the free
++ * extents the trim skipped because part of them was busy. Those are trimmed
++ * again once nothing is busy, a few times at most, which on a filesystem not
++ * yet in use the first pass already is.
++ */
++static void
++xfs_trim_mark_free_zeroed(
++	struct xfs_mount	*mp,
++	xfs_daddr_t		start,
++	xfs_daddr_t		end,
++	xfs_extlen_t		minlen,
++	unsigned int		busy_skipped)
++{
++	int			pass;
++
++	for (pass = 0; busy_skipped && pass < 3; pass++) {
++		xfs_log_force(mp, XFS_LOG_SYNC);
++		xfs_extent_busy_wait_all(mp);
++		busy_skipped = 0;
++		if (xfs_trim_datadev_extents(mp, start, end, minlen,
++					     &busy_skipped) ||
++		    !xfs_trim_frees_all(mp, start, end, minlen))
++			return;
++	}
++	if (busy_skipped)
++		return;
++	/*
++	 * The trim's own discards may still be in flight, and their extents
++	 * stay busy until they complete, so nothing is allocated from them
++	 * before they read as zeros.
++	 */
++	if (!xfs_set_pnfs_free_zeroed(mp))
++		xfs_info(mp, "free space reads as zeros; pNFS write layouts no longer zero it");
++}
++
+ /*
+  * trim a range of the filesystem.
+  *
+@@ -836,6 +936,7 @@ xfs_ioc_trim(
+ 	xfs_daddr_t		start, end;
+ 	xfs_extlen_t		minlen;
+ 	xfs_rfsblock_t		max_blocks;
++	unsigned int		busy_skipped = 0;
+ 	int			error, last_error = 0;
+ 
+ 	if (!capable(CAP_SYS_ADMIN))
+@@ -881,9 +982,13 @@ xfs_ioc_trim(
+ 	end = start + BTOBBT(range.len) - 1;
+ 
+ 	if (bdev_max_discard_sectors(mp->m_ddev_targp->bt_bdev)) {
+-		error = xfs_trim_datadev_extents(mp, start, end, minlen);
++		error = xfs_trim_datadev_extents(mp, start, end, minlen,
++				&busy_skipped);
+ 		if (error)
+ 			last_error = error;
++		if (!error && xfs_trim_frees_all(mp, start, end, minlen))
++			xfs_trim_mark_free_zeroed(mp, start, end, minlen,
++					busy_skipped);
+ 	}
+ 
+ 	if (rt_bdev && !xfs_trim_should_stop()) {
+diff --git a/fs/xfs/xfs_extent_busy.h b/fs/xfs/xfs_extent_busy.h
+index 3e6e019b6..b6dc286f3 100644
+--- a/fs/xfs/xfs_extent_busy.h
++++ b/fs/xfs/xfs_extent_busy.h
+@@ -41,6 +41,9 @@ struct xfs_busy_extents {
+ 	 * xfs_busy_extents object needs freeing, then point this at itself.
+ 	 */
+ 	void			*owner;
++
++	/* A discard of the list failed, or was never issued. */
++	bool			failed;
+ };
+ 
+ void xfs_extent_busy_insert(struct xfs_trans *tp, struct xfs_group *xg,
+diff --git a/fs/xfs/xfs_iomap.c b/fs/xfs/xfs_iomap.c
+index c81a81794..f669fe6ff 100644
+--- a/fs/xfs/xfs_iomap.c
++++ b/fs/xfs/xfs_iomap.c
+@@ -267,7 +267,7 @@ xfs_iomap_write_direct(
+ 	xfs_fileoff_t		offset_fsb,
+ 	xfs_fileoff_t		count_fsb,
+ 	unsigned int		flags,
+-	bool			zero,
++	enum xfs_iomap_init	init,
+ 	struct xfs_bmbt_irec	*imap,
+ 	u64			*seq)
+ {
+@@ -310,16 +310,21 @@ xfs_iomap_write_direct(
+ 	 * the reserve block pool for bmbt block allocation if there is no space
+ 	 * left but we need to do unwritten extent conversion.
+ 	 *
+-	 * A caller that asks for zero gets the same, for blocks another system
+-	 * writes to directly and whose conversion from unwritten it cannot rely
+-	 * on being told about.
++	 * A caller that asks for zeroed blocks gets the same, for blocks another
++	 * system writes to directly and whose conversion from unwritten it
++	 * cannot rely on being told about. One that knows free space reads as
++	 * zeros has a hole allocated written without the zeroing.
+ 	 */
+-	if ((flags & IOMAP_DAX) || zero) {
++	if ((flags & IOMAP_DAX) || init != XFS_IOMAP_INIT_UNWRITTEN) {
+ 		bmapi_flags = XFS_BMAPI_CONVERT | XFS_BMAPI_ZERO;
+ 		if (imap->br_state == XFS_EXT_UNWRITTEN) {
+ 			force = true;
+ 			nr_exts = XFS_IEXT_WRITE_UNWRITTEN_CNT;
+ 			dblocks = XFS_DIOSTRAT_SPACE_RES(mp, 0) << 1;
++		} else if (!(flags & IOMAP_DAX) &&
++			   init == XFS_IOMAP_INIT_WRITTEN &&
++			   imap->br_startblock == HOLESTARTBLOCK) {
++			bmapi_flags = 0;
+ 		}
+ 	}
+ 
+@@ -1012,7 +1017,7 @@ xfs_direct_write_iomap_begin(
+ 	xfs_iunlock(ip, lockmode);
+ 
+ 	error = xfs_iomap_write_direct(ip, offset_fsb, end_fsb - offset_fsb,
+-			flags, false, &imap, &seq);
++			flags, XFS_IOMAP_INIT_UNWRITTEN, &imap, &seq);
+ 	if (error)
+ 		return error;
+ 
+diff --git a/fs/xfs/xfs_iomap.h b/fs/xfs/xfs_iomap.h
+index 3cf86cf68..4d1679320 100644
+--- a/fs/xfs/xfs_iomap.h
++++ b/fs/xfs/xfs_iomap.h
+@@ -12,9 +12,22 @@ struct xfs_inode;
+ struct xfs_bmbt_irec;
+ struct xfs_zone_alloc_ctx;
+ 
++/* How xfs_iomap_write_direct initializes the blocks it allocates. */
++enum xfs_iomap_init {
++	/* Unwritten, converted once the data is written. */
++	XFS_IOMAP_INIT_UNWRITTEN,
++	/* Zeroed and written, and an unwritten extent zeroed and converted. */
++	XFS_IOMAP_INIT_ZEROED,
++	/*
++	 * As ZEROED, except that a hole is allocated written without the
++	 * zeroing, for free space known to read as zeros.
++	 */
++	XFS_IOMAP_INIT_WRITTEN,
++};
++
+ int xfs_iomap_write_direct(struct xfs_inode *ip, xfs_fileoff_t offset_fsb,
+ 		xfs_fileoff_t count_fsb, unsigned int flags,
+-		bool zero,
++		enum xfs_iomap_init init,
+ 		struct xfs_bmbt_irec *imap, u64 *sequence);
+ int xfs_iomap_write_unwritten(struct xfs_inode *, xfs_off_t, xfs_off_t, bool);
+ xfs_fileoff_t xfs_iomap_eof_align_last_fsb(struct xfs_inode *ip,
+diff --git a/fs/xfs/xfs_mount.h b/fs/xfs/xfs_mount.h
+index b871dfde3..ba97e4e1c 100644
+--- a/fs/xfs/xfs_mount.h
++++ b/fs/xfs/xfs_mount.h
+@@ -577,6 +577,10 @@ __XFS_HAS_FEAT(nouuid, NOUUID)
+ #define XFS_OPSTATE_WARNED_ZONED	19
+ /* (Zoned) GC is in progress */
+ #define XFS_OPSTATE_ZONEGC_RUNNING	20
++/* Every extent freed is discarded, and a discarded extent reads as zeros. */
++#define XFS_OPSTATE_PNFS_DISCARD_ALL	21
++/* All free space reads as zeros: a full FITRIM completed under DISCARD_ALL. */
++#define XFS_OPSTATE_PNFS_FREE_ZEROED	22
+ 
+ #define __XFS_IS_OPSTATE(name, NAME) \
+ static inline bool xfs_is_ ## name (struct xfs_mount *mp) \
+@@ -598,6 +602,8 @@ __XFS_IS_OPSTATE(shutdown, SHUTDOWN)
+ __XFS_IS_OPSTATE(inode32, INODE32)
+ __XFS_IS_OPSTATE(readonly, READONLY)
+ __XFS_IS_OPSTATE(inodegc_enabled, INODEGC_ENABLED)
++__XFS_IS_OPSTATE(pnfs_discard_all, PNFS_DISCARD_ALL)
++__XFS_IS_OPSTATE(pnfs_free_zeroed, PNFS_FREE_ZEROED)
+ __XFS_IS_OPSTATE(blockgc_enabled, BLOCKGC_ENABLED)
+ #ifdef CONFIG_XFS_QUOTA
+ __XFS_IS_OPSTATE(quotacheck_running, QUOTACHECK_RUNNING)
+@@ -641,7 +647,9 @@ xfs_should_warn(struct xfs_mount *mp, long nr)
+ 	{ (1UL << XFS_OPSTATE_WARNED_LARP),		"wlarp" }, \
+ 	{ (1UL << XFS_OPSTATE_QUOTACHECK_RUNNING),	"quotacheck" }, \
+ 	{ (1UL << XFS_OPSTATE_UNSET_LOG_INCOMPAT),	"unset_log_incompat" }, \
+-	{ (1UL << XFS_OPSTATE_USE_LARP),		"logged_xattrs" }
++	{ (1UL << XFS_OPSTATE_USE_LARP),		"logged_xattrs" }, \
++	{ (1UL << XFS_OPSTATE_PNFS_DISCARD_ALL),	"pnfs_discard_all" }, \
++	{ (1UL << XFS_OPSTATE_PNFS_FREE_ZEROED),	"pnfs_free_zeroed" }
+ 
+ /*
+  * Max and min values for mount-option defined I/O
+diff --git a/fs/xfs/xfs_pnfs.c b/fs/xfs/xfs_pnfs.c
+index 92aecbe12..7b74e8dbe 100644
+--- a/fs/xfs/xfs_pnfs.c
++++ b/fs/xfs/xfs_pnfs.c
+@@ -50,6 +50,49 @@ module_param_named(pnfs_zeroed_layout_max_mb, xfs_pnfs_zeroed_layout_max_mb,
+ MODULE_PARM_DESC(pnfs_zeroed_layout_max_mb,
+ 	"Largest allocation, in MiB, a zeroed pNFS write layout zeroes in one LAYOUTGET (0 = no limit)");
+ 
++/*
++ * Hand out zeroed write layouts over free space without zeroing it, on a
++ * filesystem whose free space is known to read as zeros.
++ *
++ * XFS cannot tell space it never used from space it freed, so a zeroed write
++ * layout writes zeroes over every allocation, and space a volume has written
++ * before is zeroed for real, in the nfsd thread, before LAYOUTGET is answered.
++ * Free space reads as zeros when every freed extent is discarded and the
++ * device returns zeros for a discarded range. With this set, a filesystem
++ * mounted with -o discard on a device that announces deallocated blocks read
++ * as zeros discards every extent it frees, and once a FITRIM of the whole data
++ * device has completed, a zeroed write layout allocates written extents from
++ * free space without the WRITE ZEROES. An unwritten extent under a write
++ * layout is still zeroed before it is converted.
++ *
++ * Read only after load: a mount decides at mount time.
++ */
++static bool xfs_pnfs_discarded_free_space;
++module_param_named(pnfs_discarded_free_space, xfs_pnfs_discarded_free_space,
++		   bool, 0444);
++MODULE_PARM_DESC(pnfs_discarded_free_space,
++	"Skip zeroing free space for zeroed pNFS write layouts on a discard mount of a device whose discarded blocks read as zeros, once a full FITRIM has run");
++
++/*
++ * Latch at mount whether every extent this filesystem frees is discarded to
++ * zeros. The device's announcement is read once: a limit changed through sysfs
++ * later does not change what an already-mounted filesystem relies on.
++ */
++void
++xfs_pnfs_mount_discard(
++	struct xfs_mount	*mp)
++{
++	if (!READ_ONCE(xfs_pnfs_discarded_free_space) || !xfs_has_discard(mp))
++		return;
++	if (!bdev_write_zeroes_unmap_sectors(mp->m_ddev_targp->bt_bdev)) {
++		xfs_warn(mp,
++	"pnfs_discarded_free_space set, but the device does not announce that discarded blocks read as zeros");
++		return;
++	}
++	xfs_set_pnfs_discard_all(mp);
++	xfs_info(mp, "discarding every freed extent; run FITRIM to stop zeroing free space for pNFS write layouts");
++}
++
+ /*
+  * Ensure that we do not have any outstanding pNFS layouts that can be used by
+  * clients to directly read from or write to this inode.  This must be called
+@@ -172,6 +215,7 @@ xfs_fs_map_blocks(
+ 	int			error = 0;
+ 	u64			seq;
+ 	bool			zeroed;
++	enum xfs_iomap_init	init = XFS_IOMAP_INIT_UNWRITTEN;
+ 
+ 	if (xfs_is_shutdown(mp))
+ 		return -EIO;
+@@ -241,7 +285,16 @@ xfs_fs_map_blocks(
+ 				    imap.br_state == XFS_EXT_UNWRITTEN))
+ 			end_fsb = min(end_fsb, imap.br_startoff +
+ 					       imap.br_blockcount);
+-		if (zeroed) {
++		if (zeroed)
++			init = XFS_IOMAP_INIT_ZEROED;
++		/*
++		 * A hole is allocated from free space, which reads as zeros
++		 * already once the filesystem is known to discard all of it.
++		 */
++		if (zeroed && nimaps && imap.br_startblock == HOLESTARTBLOCK &&
++		    xfs_is_pnfs_free_zeroed(mp))
++			init = XFS_IOMAP_INIT_WRITTEN;
++		if (init == XFS_IOMAP_INIT_ZEROED) {
+ 			unsigned int max_mb =
+ 				READ_ONCE(xfs_pnfs_zeroed_layout_max_mb);
+ 
+@@ -252,7 +305,7 @@ xfs_fs_map_blocks(
+ 		xfs_iunlock(ip, lock_flags);
+ 
+ 		error = xfs_iomap_write_direct(ip, offset_fsb,
+-				end_fsb - offset_fsb, 0, zeroed, &imap, &seq);
++				end_fsb - offset_fsb, 0, init, &imap, &seq);
+ 		if (error)
+ 			goto out_unlock;
+ 
+diff --git a/fs/xfs/xfs_pnfs.h b/fs/xfs/xfs_pnfs.h
+index bd28c0bfe..66ff9bc1b 100644
+--- a/fs/xfs/xfs_pnfs.h
++++ b/fs/xfs/xfs_pnfs.h
+@@ -9,6 +9,7 @@ int xfs_fs_map_blocks(struct inode *inode, loff_t offset, u64 length,
+ int xfs_fs_commit_blocks(struct inode *inode, struct iomap *maps, int nr_maps,
+ 		struct iattr *iattr);
+ u32 xfs_fs_layout_generation(struct super_block *sb);
++void xfs_pnfs_mount_discard(struct xfs_mount *mp);
+ 
+ int xfs_break_leased_layouts(struct inode *inode, uint *iolock,
+ 		bool *did_unlock);
+@@ -18,5 +19,7 @@ xfs_break_leased_layouts(struct inode *inode, uint *iolock, bool *did_unlock)
+ {
+ 	return 0;
+ }
++
++static inline void xfs_pnfs_mount_discard(struct xfs_mount *mp) { }
+ #endif /* CONFIG_EXPORTFS_BLOCK_OPS */
+ #endif /* _XFS_PNFS_H */
+diff --git a/fs/xfs/xfs_super.c b/fs/xfs/xfs_super.c
+index bc71aa9dc..39bed7d8a 100644
+--- a/fs/xfs/xfs_super.c
++++ b/fs/xfs/xfs_super.c
+@@ -47,6 +47,7 @@
+ #include "xfs_parent.h"
+ #include "xfs_rtalloc.h"
+ #include "xfs_zone_alloc.h"
++#include "xfs_pnfs.h"
+ #include "scrub/stats.h"
+ #include "scrub/rcbag_btree.h"
+ 
+@@ -1913,6 +1914,7 @@ xfs_fs_fill_super(
+ 	"mounting with \"discard\" option, but the device does not support discard");
+ 		mp->m_features &= ~XFS_FEAT_DISCARD;
+ 	}
++	xfs_pnfs_mount_discard(mp);
+ 
+ 	if (xfs_has_zoned(mp)) {
+ 		if (!xfs_has_metadir(mp)) {
+-- 
+2.54.0 (Apple Git-157)
+

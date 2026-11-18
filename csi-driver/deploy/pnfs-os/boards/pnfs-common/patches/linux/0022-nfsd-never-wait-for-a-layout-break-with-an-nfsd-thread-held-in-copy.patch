@@ -1,0 +1,75 @@
+From 7b247eadaba0c5603111db7c0edaf17c4b8d9230 Mon Sep 17 00:00:00 2001
+From: Max Schettler <max@simplyblock.io>
+Date: Mon, 2 Nov 2026 13:41:44 +0100
+Subject: [PATCH] nfsd: never wait for a layout break with an nfsd thread held
+ in COPY
+
+A COPY into a file that still carries another client's pNFS write layout
+breaks that layout the same way an ordinary write does, and XFS waits for
+it with the calling thread held (xfs_break_leased_layouts, by way of
+vfs_copy_file_range's splice or reflink fallback). Commit 3448b03
+(pnfs-common: nfsd never waits for a layout break with a thread held) fixed
+this for nfsd_setattr, nfsd4_vfs_fallocate, and nfsd_vfs_write, three call
+sites that all extend or remap a file the same way, but never reached
+nfsd_copy_file_range, which sits right above nfsd4_vfs_fallocate in the
+same file and has the identical hazard.
+
+For a synchronous COPY this merely reproduces the bug 3448b03 fixed, bounded
+by nfsd's own layout-recall timeout. For an asynchronous one it does not
+reproduce it: the copy runs in its own kthread (nfsd4_do_async_copy, not an
+nfsd service thread), so the wait never starves the thread pool the way
+3448b03 described, but the kthread itself blocks uninterruptibly and never
+returns, so nfsd4_send_cb_offload is never reached and CB_OFFLOAD is never
+sent. The client's handle_async_copy then waits for a reply that will not
+come, and because the wait is uninterruptible, the thread and its OS thread
+are never released.
+
+First seen as an S3 CompleteMultipartUpload that never returned: the join
+of two uploaded parts is a copy_file_range the gateway's posix backend
+issues against the destination object's file, which still carried the
+write layout the gateway's own preceding writes had taken out on it. Every
+pNFS ReadWriteMany consumer is equally exposed: an ordinary cp between two
+files on the same pNFS mount reaches the same copy_file_range.
+
+The fix is the same as 3448b03's: start the break without waiting, and
+answer the caller with an error it already knows how to turn into a retry
+rather than block. nfsd_copy_file_range returns a negative errno on failure
+like any other ssize_t-returning VFS helper, and nfsd4_do_copy already maps
+a negative return into an NFS4 error when nothing was copied yet
+(status = nfserrno(bytes)), for both the synchronous and asynchronous
+caller, so no further plumbing is needed: the synchronous RPC answers with
+that error directly, and the asynchronous kthread carries it into
+nfsd4_send_cb_offload instead of hanging before ever reaching it.
+---
+ fs/nfsd/vfs.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/fs/nfsd/vfs.c b/fs/nfsd/vfs.c
+index 46c526f..a78edc0 100644
+--- a/fs/nfsd/vfs.c
++++ b/fs/nfsd/vfs.c
+@@ -710,6 +710,21 @@ ssize_t nfsd_copy_file_range(struct file *src, u64 src_pos, struct file *dst,
+ {
+ 	ssize_t ret;
+ 
++	/*
++	 * A copy into this file breaks the pNFS layouts other clients hold on
++	 * it the same way a write does, and the filesystem would wait for
++	 * them with this thread held: an ordinary nfsd thread for a
++	 * synchronous copy, the dedicated copy thread of nfsd4_do_async_copy
++	 * for an asynchronous one. See nfsd_vfs_write: start the break
++	 * without waiting and have the client retry while layouts are still
++	 * out. Unlike a blocked nfsd thread, a blocked copy thread never
++	 * times out on its own, and never reaches nfsd4_send_cb_offload, so
++	 * the client's wait for CB_OFFLOAD does not time out either.
++	 */
++	ret = break_layout(file_inode(dst), false);
++	if (ret)
++		return ret;
++
+ 	/*
+ 	 * Limit copy to 4MB to prevent indefinitely blocking an nfsd
+ 	 * thread and client rpc slot.  The choice of 4MB is somewhat
+-- 
+2.56.0
+

@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Dai Ngo <dai.ngo@oracle.com>
+Date: Tue, 19 May 2026 17:32:58 -0700
+Subject: [PATCH] xfs: fix use of uninitialized imap in xfs_fs_map_blocks error
+ path
+
+commit 97bdbf2613eb89428b739ce09d1a6e1c8435a286 upstream.
+
+xfs_fs_map_blocks() acquires the data map lock and then calls
+xfs_bmapi_read(). If xfs_bmapi_read() fails, the function currently
+still falls through to xfs_bmbt_to_iomap(), which consumes an
+uninitialized imap record and may return invalid data to the caller.
+
+Fix this by releasing the data map lock and returning immediately when
+xfs_bmapi_read() reports an error. This prevents xfs_bmbt_to_iomap()
+from being called with an uninitialized xfs_bmbt_irec.
+
+Fixes: 527851124d10f ("xfs: implement pNFS export operations")
+Signed-off-by: Dai Ngo <dai.ngo@oracle.com>
+Reviewed-by: Carlos Maiolino <cmaiolino@redhat.com>
+Reviewed-by: Christoph Hellwig <hch@lst.de>
+Signed-off-by: Carlos Maiolino <cem@kernel.org>
+[ Backport: Context adjusted for 0005, which widened the condition the error
+check is lifted out of. ]
+---
+ fs/xfs/xfs_pnfs.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/fs/xfs/xfs_pnfs.c b/fs/xfs/xfs_pnfs.c
+index 99df177ba8b..1d40a791945 100644
+--- a/fs/xfs/xfs_pnfs.c
++++ b/fs/xfs/xfs_pnfs.c
+@@ -194,12 +194,16 @@ xfs_fs_map_blocks(
+ 	lock_flags = xfs_ilock_data_map_shared(ip);
+ 	error = xfs_bmapi_read(ip, offset_fsb, end_fsb - offset_fsb,
+ 				&imap, &nimaps, bmapi_flags);
++	if (error) {
++		xfs_iunlock(ip, lock_flags);
++		goto out_unlock;
++	}
+ 	seq = xfs_iomap_inode_sequence(ip, 0);
+ 
+ 	ASSERT(!nimaps || imap.br_startblock != DELAYSTARTBLOCK);
+ 
+ 	zeroed = write && READ_ONCE(xfs_pnfs_zeroed_layouts);
+-	if (!error && write &&
++	if (write &&
+ 	    (!nimaps || imap.br_startblock == HOLESTARTBLOCK ||
+ 	     (zeroed && imap.br_state == XFS_EXT_UNWRITTEN))) {
+ 		if (offset + length > XFS_ISIZE(ip))

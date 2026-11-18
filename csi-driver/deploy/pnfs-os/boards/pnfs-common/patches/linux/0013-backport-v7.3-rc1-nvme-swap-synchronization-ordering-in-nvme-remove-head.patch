@@ -1,0 +1,72 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: John Garry <john.g.garry@oracle.com>
+Date: Tue, 7 Jul 2026 14:57:44 +0100
+Subject: [PATCH] nvme: swap synchronization ordering in nvme_remove_head()
+
+commit 627e8bb91a8fdec02cfb68a98d360cec4bafa122 upstream.
+
+sashiko bot reported a potential issue in the requeue handling in [0] -
+the code there is same as the NVMe driver.
+
+The issue is that when we schedule the requeue work, if a bio is added to
+the requeue list afterwards in nvme_ns_head_submit_bio(), it is missed by
+the requeue worker.
+
+This issue can be recreated by hacking a large delay in the bio submission
+requeue path:
+
+        } else if (nvme_available_path(head)) {
+                dev_warn_ratelimited(dev, "no usable path - requeuing I/O\n");
+
++               msleep(30000);
+                spin_lock_irq(&head->requeue_lock);
+                bio_list_add(&head->requeue_list, bio);
+                spin_unlock_irq(&head->requeue_lock);
+
+Then if we issue a write after removing all paths, a hang can be seen:
+
+# echo 20 > /sys/devices/virtual/nvme-subsystem/nvme-subsys1/nvme1n1/delayed_removal_secs
+#
+# ./ini_nvme_teardown.sh
+[   25.877224] nvme nvme1: Removing ctrl: NQN "nvme-test-target"
+[   25.939569] nvme nvme2: Removing ctrl: NQN "nvme-test-target"
+#
+# xfs_io -d -C "pwrite -b 64k -V 1 -D 0 64k" /dev/nvme1n1p1
+[   29.883653] block nvme1n1: no usable path - requeuing I/O
+
+Fix by re-ordering the SRCU synchronization and scheduling the requeue
+work.
+
+[0] https://lore.kernel.org/linux-scsi/20260703102918.3723667-1-john.g.garry@oracle.com/T/#m72af1f29deb0ebfb2973464207f201f1be1f660c
+
+Reviewed-by: Christoph Hellwig <hch@lst.de>
+Reviewed-by: Nilay Shroff <nilay@linux.ibm.com>
+Signed-off-by: John Garry <john.g.garry@oracle.com>
+Signed-off-by: Keith Busch <kbusch@kernel.org>
+---
+ drivers/nvme/host/multipath.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/nvme/host/multipath.c b/drivers/nvme/host/multipath.c
+index d61c4e95430..bd5f62aa46e 100644
+--- a/drivers/nvme/host/multipath.c
++++ b/drivers/nvme/host/multipath.c
+@@ -696,14 +696,15 @@ static void nvme_remove_head(struct nvme_ns_head *head)
+ {
+ 	if (test_and_clear_bit(NVME_NSHEAD_DISK_LIVE, &head->flags)) {
+ 		/*
+-		 * requeue I/O after NVME_NSHEAD_DISK_LIVE has been cleared
+-		 * to allow multipath to fail all I/O.
++		 * Requeue I/O after NVME_NSHEAD_DISK_LIVE has been cleared
++		 * to allow multipath to fail all I/O. First synchronize to
++		 * add any bios to the requeue list.
+ 		 */
++		synchronize_srcu(&head->srcu);
+ 		kblockd_schedule_work(&head->requeue_work);
+ 
+ 		if (test_and_clear_bit(NVME_NSHEAD_CDEV_LIVE, &head->flags))
+ 			nvme_cdev_del(&head->cdev, &head->cdev_device);
+-		synchronize_srcu(&head->srcu);
+ 		del_gendisk(head->disk);
+ 	}
+ 	nvme_put_ns_head(head);
