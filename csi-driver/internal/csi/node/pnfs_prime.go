@@ -15,6 +15,12 @@
 // restart shows on the client. The metadata server's nfsd holds the client's
 // other layouts until the probe has taken one (nfsexport.LayoutProbeName), so
 // the probe is first again rather than racing the application.
+//
+// A fence from the device needs no reconnect: the client marks the device
+// unusable, and the mount's READs and WRITEs go through the server. So a mount
+// whose data goes through the server is probed again too, and one whose probes
+// keep failing is reported, because the mount keeps working and nothing else
+// says so.
 
 package node
 
@@ -43,6 +49,15 @@ const scsiLayout = "LAYOUT_SCSI"
 // server holds a reconnected client's layouts for the length of its grace
 // period and a while after, so seconds are enough to be first.
 const primeInterval = 2 * time.Second
+
+// dataReprobeInterval is how long after a probe that took its layout a mount
+// whose READs and WRITEs still go through the server is probed again.
+const dataReprobeInterval = 30 * time.Second
+
+// unusableReportAfter is how long a mount's probes have to keep failing before
+// it is reported. A restart of the server fails them for its grace period and
+// the layout hold after it, well under this.
+const unusableReportAfter = 5 * time.Minute
 
 // mountWrites is the NFS WRITE count of the mount at path, and false when the
 // client reports no NFS mount there. A variable so the tests can set it.
@@ -131,29 +146,82 @@ type layoutPrimer struct {
 	// carries, whatever kubelet's root directory is.
 	stagingMarker string
 
-	mu sync.Mutex
-	// connects is each primed mount's transport connect count when its
-	// probe was started.
-	connects map[string]uint64
-	running  map[string]bool
+	mu      sync.Mutex
+	mounts  map[string]*mountPrime
+	running map[string]bool
+
+	now func() time.Time
+}
+
+// mountPrime is what the primer knows about one staging mount.
+type mountPrime struct {
+	// primed is whether the last probe took its layout.
+	primed bool
+	// connects is the transport connect count when the last probe started.
+	connects uint64
+	// data is the READs and WRITEs the client had sent through the server at
+	// the last pass.
+	data int64
+	// probedAt is when the last probe that took its layout ended.
+	probedAt time.Time
+	// failingSince is when the current run of failed probes began, zero
+	// outside one, and lastErr is its latest probe's error.
+	failingSince time.Time
+	lastErr      error
+	// reported is whether the current run of failures has been reported.
+	reported bool
 }
 
 func newLayoutPrimer(driverName string) *layoutPrimer {
 	return &layoutPrimer{
 		stagingMarker: "/plugins/kubernetes.io/csi/" + driverName + "/",
-		connects:      map[string]uint64{},
+		mounts:        map[string]*mountPrime{},
 		running:       map[string]bool{},
+		now:           time.Now,
 	}
 }
 
+// unusableLayout is a staging mount whose probes have kept failing.
+type unusableLayout struct {
+	Path       string
+	FailingFor time.Duration
+	Err        error
+}
+
+// overdue returns the staging mounts whose probes have failed for
+// unusableReportAfter, once per run of failures.
+func (p *layoutPrimer) overdue() []unusableLayout {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	now := p.now()
+	var out []unusableLayout
+	for path, st := range p.mounts {
+		if st.failingSince.IsZero() || st.reported {
+			continue
+		}
+		if failing := now.Sub(st.failingSince); failing >= unusableReportAfter {
+			st.reported = true
+			out = append(out, unusableLayout{Path: path, FailingFor: failing, Err: st.lastErr})
+		}
+	}
+	return out
+}
+
 // due returns the staging mounts to probe now and marks them running: one this
-// process has not seen, and one whose client has reconnected since its last
-// probe. A pod's bind of a staging mount is skipped, since it shares the
-// staging mount's client, and so is any mount without a SCSI layout.
+// process has not seen, one whose last probe failed, one whose client has
+// reconnected since its last probe, and one whose READs and WRITEs went
+// through the server since the last pass, at most once per
+// dataReprobeInterval. The last is how a fence shows on the client when it
+// brought no reconnect: the device was marked unusable, and only a probe from
+// this container, which has the host's /dev, takes the layout again. A pod's
+// bind of a staging mount is skipped, since it shares the staging mount's
+// client, and so is any mount without a SCSI layout.
 func (p *layoutPrimer) due(mounts []nfsclient.Mount) []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	now := p.now()
 	var out []string
 	present := map[string]bool{}
 	for _, m := range mounts {
@@ -161,35 +229,55 @@ func (p *layoutPrimer) due(mounts []nfsclient.Mount) []string {
 			continue
 		}
 		present[m.MountPoint] = true
+		st, seen := p.mounts[m.MountPoint]
+		if !seen {
+			st = &mountPrime{}
+			p.mounts[m.MountPoint] = st
+		}
+		data := m.Ops["READ"] + m.Ops["WRITE"]
+		grew := seen && data > st.data
+		st.data = data
 		if p.running[m.MountPoint] {
 			continue
 		}
-		if last, seen := p.connects[m.MountPoint]; seen && last == m.Connects {
+		probe := !seen || !st.primed || st.connects != m.Connects ||
+			(grew && now.Sub(st.probedAt) >= dataReprobeInterval)
+		if !probe {
 			continue
 		}
-		p.connects[m.MountPoint] = m.Connects
+		st.connects = m.Connects
 		p.running[m.MountPoint] = true
 		out = append(out, m.MountPoint)
 	}
 	// An unstaged mount is forgotten, so a later stage on the same path is
 	// first seen again.
-	for path := range p.connects {
+	for path := range p.mounts {
 		if !present[path] && !p.running[path] {
-			delete(p.connects, path)
+			delete(p.mounts, path)
 		}
 	}
 	return out
 }
 
-// done records a probe's end. A failed one is forgotten, so the next pass
-// probes the mount again.
+// done records a probe's end. After a failed one the next pass probes the
+// mount again, and the run of failures it belongs to is timed.
 func (p *layoutPrimer) done(path string, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.running, path)
-	if err != nil {
-		delete(p.connects, path)
+	st, ok := p.mounts[path]
+	if !ok {
+		return
 	}
+	if err != nil {
+		st.primed = false
+		st.lastErr = err
+		if st.failingSince.IsZero() {
+			st.failingSince = p.now()
+		}
+		return
+	}
+	*st = mountPrime{primed: true, connects: st.connects, data: st.data, probedAt: p.now()}
 }
 
 func (p *layoutPrimer) isStagingMount(m nfsclient.Mount) bool {
@@ -245,10 +333,13 @@ func reconcileDeviceAliases(ctx context.Context, primer *layoutPrimer, mounts []
 }
 
 // KeepLayoutsPrimed probes every pNFS staging mount of this driver when it is
-// first seen and after every reconnect to its server, until ctx ends. It
-// also keeps every such mount's device alias current; see
-// reconcileDeviceAliases.
-func KeepLayoutsPrimed(ctx context.Context, driverName string) {
+// first seen, after every reconnect to its server, and when its data goes
+// through the server, until ctx ends. It also keeps every such mount's device
+// alias current (see reconcileDeviceAliases), and reports a mount whose probes
+// keep failing through report.
+func KeepLayoutsPrimed(
+	ctx context.Context, driverName string, report func(context.Context, string, time.Duration, error),
+) {
 	primer := newLayoutPrimer(driverName)
 	ticker := time.NewTicker(primeInterval)
 	defer ticker.Stop()
@@ -270,6 +361,13 @@ func KeepLayoutsPrimed(ctx context.Context, driverName string) {
 				}
 				primer.done(path, err)
 			}(path)
+		}
+		for _, u := range primer.overdue() {
+			klog.Errorf("pnfs: %s has sent its I/O through the metadata server for %s: "+
+				"its probes cannot take the block layout: %v", u.Path, u.FailingFor.Round(time.Second), u.Err)
+			if report != nil {
+				report(ctx, u.Path, u.FailingFor, u.Err)
+			}
 		}
 		select {
 		case <-ctx.Done():

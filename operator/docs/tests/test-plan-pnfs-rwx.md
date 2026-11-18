@@ -148,6 +148,11 @@ restarted rather than migrated (design §13).
 | U-112 | Regression: with the last prime on record, a grow smaller than the size tolerance is waited for until the mount shows more than at that prime, and no layout is taken before           | Regression          | `TestExpandOfAPNFSVolumeWaitsForASmallGrowPastTheRecordedSize`                                                             |
 | U-113 | A grow that reached the mount before the first call primes at once and records the size it primed at with the size asked for; a repeated request for a size primed for is answered     | Positive + Boundary | `TestExpandOfAPNFSVolumePrimesAGrowPastTheRecordedSize`, `TestExpandOfAPNFSVolumeAnswersARepeatedRequestForASizePrimedFor` |
 | U-114 | A failed prime leaves the record unchanged; a prime at stage records the mount's size                                                                                                  | Negative + Positive | `TestExpandOfAPNFSVolumeKeepsTheRecordWhenThePrimeFails`, `TestAPrimeAtStageRecordsTheMountSize`                           |
+| U-129 | Regression (SFAM-2850): a primed staging mount whose READs and WRITEs go through the metadata server is probed again without a reconnect                                               | Regression          | `TestAPrimedMountIsProbedAgainWhenItsDataGoesThroughTheServer`                                                             |
+| U-130 | A primed mount whose data goes through the server is probed at most once per interval, and one whose data stays off the server is not probed again                                     | Boundary + Negative | `TestAMountIsProbedForItsDataAtMostOncePerInterval`, `TestAMountWhoseDataStaysOffTheServerIsNotProbedAgain`                |
+| U-131 | Regression (SFAM-2850): probes failing for the report interval are reported once per run of failures, and a probe that takes its layout ends the run                                   | Regression          | `TestProbesFailingForTheReportIntervalAreReportedOnce`, `TestARunOfFailedProbesEndsWithOneThatTakesItsLayout`              |
+| U-132 | Regression (SFAM-2850): the report is a Warning event on the claim of the volume naming the node, or on its PersistentVolume without a claim                                           | Regression          | `TestAnUnusableLayoutIsReportedOnTheVolumesClaim`, `TestAnUnusableLayoutOfAnUnclaimedVolumeIsReportedOnItsPV`              |
+| U-133 | A volume with no PersistentVolume is not reported, and the report fails                                                                                                                | Negative            | `TestAnUnusableLayoutWithNoPVIsAnError`                                                                                    |
 
 #### NFS client mount statistics, in `atlas-lib/nfsclient/mountstats_test.go`, `csi-driver/e2e/mountstats_test.go`
 
@@ -450,6 +455,7 @@ on the direct path across a restart, not a unit test.
 | F-18 | One client loses its paths to its namespace and heals: its I/O resumes direct, without a restage                                                                                                                      | Positive   | —                                                          |
 | F-19 | Regression (run `pnfs-1791575321`): once the replacement metadata server pod is Ready, no client's NFS flow is still translated to the deleted pod's address                                                          | Regression | —                                                          |
 | F-20 | Regression (run `pnfs-1791620302`): with zeroed layouts on, data written through a layout before an MDS restart reads back intact on another node                                                                     | Regression | —                                                          |
+| F-21 | Regression (SFAM-2850): a metadata server failover fences a client mid-write. Its mount is back on its namespace within the device retry of two minutes, and nothing reports `PNFSDataThroughMDS`                     | Regression | —                                                          |
 
 ---
 
@@ -518,15 +524,15 @@ Struck rows are not counted.
 
 | Class                    | Scenarios | Covered | Not covered |
 |--------------------------|-----------|---------|-------------|
-| Unit (`U-`)              | 80        | 80      | 0           |
+| Unit (`U-`)              | 85        | 85      | 0           |
 | Operator (`O-`)          | 40        | 38      | 2           |
 | Sanity (`SAN-`)          | 2         | 0       | 2           |
 | Integration (`I-`)       | 3         | 3       | 0           |
 | End-to-end (`E-`)        | 18        | 12      | 6           |
-| Failure injection (`F-`) | 14        | 4       | 10          |
+| Failure injection (`F-`) | 15        | 4       | 11          |
 | Security (`SEC-`)        | 8         | 0       | 8           |
 | Load and soak (`L-`)     | 6         | 0       | 6           |
-| **Total**                | **171**   | **137** | **34**      |
+| **Total**                | **177**   | **142** | **35**      |
 
 Unit and operator coverage follows the code. The live classes are the gaps: four
 `F-` rows rest on a recorded run with a manual pod delete rather than on a suite
@@ -546,6 +552,7 @@ that deletes the pod itself.
 | F-15 … F-18     | Guest crash in place, restart with a client down, back-to-back restarts, client path loss    | Not run. F-16 and F-17 are the boundaries of the grace period the nfsd patches rely on                                                                                                            |
 | F-19            | Clients reaching the deleted pod's address after its replacement is Ready                    | The fix is unit-tested (O-43 … O-45). A `pnfs-fio` run with an MDS restart, judged clean by `pnfs.conntrack-pinned`, has not run against it yet                                                   |
 | F-20            | Data written through a layout surviving an MDS restart                                       | U-92 covers only the command line. Needs `pnfs-fio` with zeroed layouts, its guaranteed MDS restart, and cross-readers, judged clean by `fio.checksum`                                            |
+| F-21            | A fenced client returning to its namespace                                                   | U-129 … U-133 cover the node plugin, and the nfsd hold re-arm is vela-os patch 0026. Needs a run with a failover, judged by mountstats on every client                                            |
 | SEC-01 … SEC-08 | Every security scenario                                                                      | No security suite exists for pNFS. SEC-07 is the known exposure of admitting pod CIDRs (MDS design §8.3)                                                                                          |
 | L-01 … L-08     | Load, scale, and soak                                                                        | No long-running pNFS suite exists                                                                                                                                                                 |
 | —               | Two storage clusters with exports in one run                                                 | Per-cluster names are unit-tested (O-15, O-32), but no live run has had two metadata servers                                                                                                      |

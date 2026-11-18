@@ -423,3 +423,138 @@ func TestReconcileDeviceAliasesDerivesTheVolumeIDFromTheMountPoint(t *testing.T)
 		t.Errorf("resolved volume ID %q, want c:p:6e17 (the mount point's last segment)", got)
 	}
 }
+
+// primerClock is a clock a test moves by hand.
+type primerClock struct{ t time.Time }
+
+func (c *primerClock) now() time.Time          { return c.t }
+func (c *primerClock) advance(d time.Duration) { c.t = c.t.Add(d) }
+
+func primerAt(clock *primerClock) *layoutPrimer {
+	p := newLayoutPrimer(primeDriver)
+	p.now = clock.now
+	return p
+}
+
+// dataMount is the staging mount, its client having sent the given number of
+// READs and WRITEs through the server.
+func dataMount(connects uint64, reads, writes int64) nfsclient.Mount {
+	m := pnfsMount(stagingMount, connects)
+	m.Ops = map[string]int64{"READ": reads, "WRITE": writes}
+	return m
+}
+
+// Regression: SFAM-2850. A fence that brought no reconnect left the client
+// with a device it could not use, and every READ and WRITE of the mount went
+// through the metadata server. The primer probed only after a reconnect, so
+// nothing took the layout again from a namespace that can see the device.
+func TestAPrimedMountIsProbedAgainWhenItsDataGoesThroughTheServer(t *testing.T) {
+	clock := &primerClock{t: time.Unix(1_000_000, 0)}
+	p := primerAt(clock)
+	p.done(p.due([]nfsclient.Mount{dataMount(6, 10, 10)})[0], nil)
+
+	clock.advance(dataReprobeInterval)
+	if got := p.due([]nfsclient.Mount{dataMount(6, 900, 400)}); !slices.Equal(got, []string{stagingMount}) {
+		t.Errorf("due = %q while the mount's data goes through the server, want the staging mount", got)
+	}
+}
+
+// Some I/O goes through the server by design, unaligned direct I/O among it,
+// so a mount whose probe took its layout is not probed on every pass.
+func TestAMountIsProbedForItsDataAtMostOncePerInterval(t *testing.T) {
+	clock := &primerClock{t: time.Unix(1_000_000, 0)}
+	p := primerAt(clock)
+	p.done(p.due([]nfsclient.Mount{dataMount(6, 10, 10)})[0], nil)
+
+	clock.advance(primeInterval)
+	if got := p.due([]nfsclient.Mount{dataMount(6, 900, 400)}); len(got) != 0 {
+		t.Errorf("due = %q %s after a probe that took its layout, want nothing", got, primeInterval)
+	}
+}
+
+// A mount whose data stays on the device is not probed again.
+func TestAMountWhoseDataStaysOffTheServerIsNotProbedAgain(t *testing.T) {
+	clock := &primerClock{t: time.Unix(1_000_000, 0)}
+	p := primerAt(clock)
+	p.done(p.due([]nfsclient.Mount{dataMount(6, 10, 10)})[0], nil)
+
+	clock.advance(time.Hour)
+	if got := p.due([]nfsclient.Mount{dataMount(6, 10, 10)}); len(got) != 0 {
+		t.Errorf("due = %q with no data through the server, want nothing", got)
+	}
+}
+
+func overduePaths(u []unusableLayout) []string {
+	paths := make([]string, 0, len(u))
+	for _, l := range u {
+		paths = append(paths, l.Path)
+	}
+	return paths
+}
+
+// failProbes fails a probe of every mount due now.
+func failProbes(p *layoutPrimer, mounts []nfsclient.Mount) {
+	for _, path := range p.due(mounts) {
+		p.done(path, errProbeForTest)
+	}
+}
+
+// Regression: SFAM-2850. The mount's probes failed for 16 minutes, 482 of
+// them, while all of its I/O went through the metadata server, and nothing
+// but a warning per probe in the node plugin's log said so.
+func TestProbesFailingForTheReportIntervalAreReportedOnce(t *testing.T) {
+	clock := &primerClock{t: time.Unix(1_000_000, 0)}
+	p := primerAt(clock)
+	mounts := []nfsclient.Mount{dataMount(6, 10, 10)}
+
+	failProbes(p, mounts)
+	for elapsed := time.Duration(0); elapsed < unusableReportAfter-primeInterval; elapsed += primeInterval {
+		clock.advance(primeInterval)
+		failProbes(p, mounts)
+		if got := p.overdue(); len(got) != 0 {
+			t.Fatalf("overdue = %q after %s of failed probes, want nothing yet", overduePaths(got), elapsed+primeInterval)
+		}
+	}
+	clock.advance(primeInterval)
+	failProbes(p, mounts)
+	got := p.overdue()
+	if !slices.Equal(overduePaths(got), []string{stagingMount}) {
+		t.Fatalf("overdue = %q after %s of failed probes, want the staging mount", overduePaths(got), unusableReportAfter)
+	}
+	if got[0].FailingFor < unusableReportAfter || !errors.Is(got[0].Err, errProbeForTest) {
+		t.Errorf("report = %+v, want %s or more and the last probe's error", got[0], unusableReportAfter)
+	}
+
+	clock.advance(primeInterval)
+	failProbes(p, mounts)
+	if got := p.overdue(); len(got) != 0 {
+		t.Errorf("overdue = %q again in the same run of failures, want it reported once", overduePaths(got))
+	}
+}
+
+// A probe that takes its layout ends the run, and a later run is reported
+// again.
+func TestARunOfFailedProbesEndsWithOneThatTakesItsLayout(t *testing.T) {
+	clock := &primerClock{t: time.Unix(1_000_000, 0)}
+	p := primerAt(clock)
+	mounts := []nfsclient.Mount{dataMount(6, 10, 10)}
+
+	failProbes(p, mounts)
+	clock.advance(unusableReportAfter)
+	failProbes(p, mounts)
+	p.overdue()
+
+	p.done(p.due(mounts)[0], nil)
+	clock.advance(unusableReportAfter)
+	if got := p.overdue(); len(got) != 0 {
+		t.Fatalf("overdue = %q after a probe took its layout, want nothing", overduePaths(got))
+	}
+
+	mounts = []nfsclient.Mount{dataMount(7, 10, 10)}
+	failProbes(p, mounts)
+	clock.advance(unusableReportAfter)
+	failProbes(p, mounts)
+	if got := p.overdue(); !slices.Equal(overduePaths(got), []string{stagingMount}) {
+		t.Errorf("overdue = %q for a second run of failures, want the staging mount", overduePaths(got))
+	}
+}
