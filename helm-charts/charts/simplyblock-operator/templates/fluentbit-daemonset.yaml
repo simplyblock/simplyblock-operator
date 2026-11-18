@@ -62,7 +62,7 @@ spec:
               - key: {{ .Values.controlplane.nodeSelector.key }}
                 operator: In
                 values:
-                - {{ .Values.controlplane.nodeSelector.value }}
+                - {{ .Values.controlplane.nodeSelector.value | quote }}
             {{- end }}
       {{- if .Values.controlplane.tolerations.create }}
       tolerations:
