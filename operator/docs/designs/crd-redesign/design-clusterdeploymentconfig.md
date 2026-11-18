@@ -283,6 +283,22 @@ node, and overriding that answer gives the fleet a configuration it cannot run. 
 on a Vanilla document, they resolve as before: the kubelet configured, CPU
 topology off.
 
+**A group states its own environment when its workers are another provider's.**
+One control plane can run workers from several providers: Google Anthos joins
+EKS and OKE node groups to a GKE cluster. `spec.environment` is then the control
+plane's, which is what the cluster's flags are resolved from, and a group whose
+workers another provider built states that provider in its own `environment`.
+The cluster carries one value per flag for the whole storage-node DaemonSet, so
+the group's answer goes on its nodes instead: the expansion resolves the group's
+environment to `StorageNode.spec.config.enableKubeletConfiguration`, and the node
+carries it into its own per-node ConfigMap entry, as it does `reservedSystemCPU`.
+A document that states `spec.cluster.enableKubeletConfiguration` has decided it
+for the whole fleet, and no group's environment overrides that. `OpenShift` and
+`Talos` are refused for a group, and an `OpenShift` or a `Talos` document admits no
+group environment at all, because each of the two is what every worker of its
+cluster runs. The kubelet flag is the only thing a group environment changes,
+and the storage node acts on it only where CPU topology is enabled.
+
 **`spec.hostOS` is the other half of the same question, and it is a separate
 field because it has a separate answer.** The distribution decides what
 Kubernetes does to a machine; the host OS decides what the machine itself
@@ -1474,6 +1490,7 @@ type NetworkAttachmentSelection struct {
 // makes ten identical machines one entry rather than ten.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.networkAttachment) || (!has(self.mgmtInterface) && !has(self.dataInterfaces))",message="a group names its network interfaces or its network attachments, not both"
+// +kubebuilder:validation:XValidation:rule="!has(self.environment) || !(self.environment in ['OpenShift', 'Talos'])",message="a group cannot run OpenShift or Talos, which each run a whole cluster"
 type NodeGroup struct {
 	// Name identifies the group within its node set, for a reader and for the
 	// events a validation failure emits.
@@ -1544,6 +1561,19 @@ type NodeGroup struct {
 	// JournalManager tunes the journal managers on these nodes.
 	// +optional
 	JournalManager *JournalManagerSpec `json:"journalManager,omitempty"`
+
+	// Environment is the Kubernetes distribution these workers run on, where
+	// it is not the one spec.environment names. That is a cluster whose workers
+	// come from more than one provider, such as Google Anthos joining EKS and
+	// OKE node groups to a GKE control plane: spec.environment is the control
+	// plane's, and each group of workers from another provider states its own.
+	// The expansion spends it on the group's nodes, as
+	// StorageNode.spec.config.enableKubeletConfiguration, and a document that
+	// states spec.cluster.enableKubeletConfiguration has decided that for every
+	// group already. Unset is the document's environment. OpenShift and Talos
+	// are refused, because each is what a whole cluster runs.
+	// +optional
+	Environment KubernetesEnvironment `json:"environment,omitempty"`
 }
 
 // NodeSet is the organizational grouping of a deployment, usually a rack: the
@@ -1832,6 +1862,7 @@ type ClusterTemplate struct {
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))) || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group must name the same device class: all nvme or all block"
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, has(g.networkAttachment))) || self.nodeSets.all(s, s.groups.all(g, !has(g.networkAttachment)))",message="every group must use the same networking: all host networking or all network attachments"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
+// +kubebuilder:validation:XValidation:rule="!has(self.environment) || !(self.environment in ['OpenShift', 'Talos']) || self.nodeSets.all(s, s.groups.all(g, !has(g.environment)))",message="every worker of an OpenShift or a Talos cluster runs it, so no group states an environment of its own"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
 	// and is validated but otherwise inert before that, which is what makes
@@ -1845,6 +1876,9 @@ type ClusterDeploymentConfigSpec struct {
 	// produces, after which nothing reads it again. The worker's host OS is not
 	// among them and is stated in hostOS, because a distribution decides what
 	// Kubernetes does to a machine and not which packages the machine has.
+	// In a cluster whose workers come from more than one provider it is the
+	// control plane's, and a group of workers from another provider states its
+	// own in its environment.
 	// +optional
 	Environment KubernetesEnvironment `json:"environment,omitempty"`
 

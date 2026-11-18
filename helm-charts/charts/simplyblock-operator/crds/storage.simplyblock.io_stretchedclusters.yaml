@@ -1526,6 +1526,29 @@ spec:
                                       - message: a device selection names NVMe addresses
                                           or block devices, not both
                                         rule: has(self.nvme) != has(self.block)
+                                    environment:
+                                      description: |-
+                                        Environment is the Kubernetes distribution these workers run on, where
+                                        it is not the one spec.environment names. That is a cluster whose workers
+                                        come from more than one provider, such as Google Anthos joining EKS and
+                                        OKE node groups to a GKE control plane: spec.environment is the control
+                                        plane's, and each group of workers from another provider states its own.
+                                        The expansion spends it on the group's nodes, as
+                                        StorageNode.spec.config.enableKubeletConfiguration, and a document that
+                                        states spec.cluster.enableKubeletConfiguration has decided that for every
+                                        group already. Unset is the document's environment. OpenShift and Talos
+                                        are refused, because each is what a whole cluster runs.
+                                      enum:
+                                      - Vanilla
+                                      - OpenShift
+                                      - Rancher
+                                      - K3s
+                                      - Talos
+                                      - EKS
+                                      - GKE
+                                      - AKS
+                                      - OKE
+                                      type: string
                                     failureDomain:
                                       description: |-
                                         FailureDomain is the label of the fault group every worker in this group
@@ -1646,6 +1669,10 @@ spec:
                                       or its network attachments, not both
                                     rule: '!has(self.networkAttachment) || (!has(self.mgmtInterface)
                                       && !has(self.dataInterfaces))'
+                                  - message: a group cannot run OpenShift or Talos,
+                                      which each run a whole cluster
+                                    rule: '!has(self.environment) || !(self.environment
+                                      in [''OpenShift'', ''Talos''])'
                                 maxItems: 64
                                 minItems: 1
                                 type: array

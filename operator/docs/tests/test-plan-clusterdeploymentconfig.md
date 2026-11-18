@@ -310,6 +310,12 @@ and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-208     | A document that states no init container resources: the cluster states none either                                              | Boundary   | `TestADocumentWithNoInitContainerResourcesLeavesTheClustersUnset` |
 | U-209     | `groups[].reservedSystemCPU`: every node of that group holds back the list the group states                                     | Positive   | `TestTheGroupsReservedCPUsReachEveryNodeOfIt`                     |
 | U-210     | A group that states none: the node states none, and the cluster's fleet-wide value decides                                      | Boundary   | `TestAGroupWithNoReservedCPUsStatesNone`                          |
+| U-249     | A group whose `environment` is another provider's: every node of it states the kubelet flag that provider resolves to           | Positive   | `TestAGroupsEnvironmentDecidesItsNodesKubeletConfiguration`       |
+| U-250     | A group that states no `environment`: its nodes state no kubelet flag, and the cluster's decides                                | Boundary   | `TestAGroupWithNoEnvironmentStatesNoKubeletConfiguration`         |
+| U-251     | A document stating `spec.cluster.enableKubeletConfiguration`: a group's `environment` does not override it                      | Boundary   | `TestAStatedKubeletFlagBeatsAGroupsEnvironment`                   |
+| U-252     | A group naming `OpenShift` or `Talos` is refused at admission                                                                   | Negative   | `TestAGroupMayNotNameOpenShiftOrTalos`                            |
+| U-253     | An `OpenShift` document with a group stating any `environment` is refused at admission                                          | Negative   | `TestAGroupMayNotStateAnEnvironmentUnderOpenShift`                |
+| U-254     | A GKE document with an EKS group is admitted                                                                                    | Positive   | `TestAGroupOnAnotherProviderIsAccepted`                           |
 | U-211     | `spec.cluster.enableNodeAffinity`: the cluster the document creates carries it                                                  | Positive   | `TestNodeAffinityReachesTheCluster`                               |
 | U-212     | A document that states none: the cluster states none, since the control plane bakes it in at create                             | Boundary   | `TestADocumentStatingNoNodeAffinityLeavesTheClusterUnset`         |
 | U-213     | `spec.cluster.ports`: all three reach the cluster fields they name                                                              | Positive   | `TestTheDocumentsPortsReachTheCluster`                            |
@@ -647,11 +653,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 180       | 47      | 133         | 9         |
+| Unit        | 186       | 53      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **250**   | **50**  | **200**     | **12**    |
+| **Total**   | **256**   | **56**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as
