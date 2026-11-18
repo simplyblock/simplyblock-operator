@@ -195,6 +195,8 @@ type mountPrime struct {
 	reported     bool
 	// hungReported is whether the probe running now has been reported.
 	hungReported bool
+	// reportRetryAt is when a report that failed is sent again.
+	reportRetryAt time.Time
 }
 
 func newLayoutPrimer(driverName string) *layoutPrimer {
@@ -228,6 +230,9 @@ func (p *layoutPrimer) overdue() []unusableLayout {
 	now := p.now()
 	var out []unusableLayout
 	for path, st := range p.mounts {
+		if now.Before(st.reportRetryAt) {
+			continue
+		}
 		if started, ok := p.running[path]; ok && !st.hungReported {
 			if running := now.Sub(started); running >= unusableReportAfter {
 				st.hungReported = true
@@ -403,7 +408,7 @@ func reconcileDeviceAliases(ctx context.Context, primer *layoutPrimer, mounts []
 // alias current (see reconcileDeviceAliases), and reports through report a
 // mount whose data keeps going through the server, and one whose probe does
 // not return.
-func KeepLayoutsPrimed(ctx context.Context, driverName string, report func(context.Context, unusableLayout)) {
+func KeepLayoutsPrimed(ctx context.Context, driverName string, report reportFunc) {
 	primer := newLayoutPrimer(driverName)
 	ticker := time.NewTicker(primeInterval)
 	defer ticker.Stop()
@@ -426,23 +431,67 @@ func KeepLayoutsPrimed(ctx context.Context, driverName string, report func(conte
 				primer.done(path, err)
 			}(path)
 		}
-		for _, u := range primer.overdue() {
-			if u.Hung {
-				klog.Errorf("pnfs: the probe of %s has not returned for %s", u.Path, u.For.Round(time.Second))
-			} else {
-				klog.Errorf("pnfs: %s has sent its I/O through the metadata server for %s; last probe: %v",
-					u.Path, u.For.Round(time.Second), probeOutcome(u))
-			}
-			if report != nil {
-				report(ctx, u)
-			}
-		}
+		primer.sendReports(ctx, report)
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
 	}
+}
+
+// reportTimeout bounds one report, and reportRetryInterval is how long a
+// report that failed waits before it is sent again.
+var (
+	reportTimeout       = 30 * time.Second
+	reportRetryInterval = time.Minute
+)
+
+// reportFunc records a report of u, and says whether it was recorded.
+type reportFunc func(ctx context.Context, u unusableLayout) error
+
+// sendReports logs every overdue mount and records its report through report.
+//
+// Each report runs beside the loop, bounded by reportTimeout: it is a call to
+// the API server, and one that never answers must not stop the probes and
+// alias refreshes of every mount on the node. A report that fails is sent
+// again after reportRetryInterval, while the mount is still overdue.
+func (p *layoutPrimer) sendReports(ctx context.Context, report reportFunc) {
+	for _, u := range p.overdue() {
+		if u.Hung {
+			klog.Errorf("pnfs: the probe of %s has not returned for %s", u.Path, u.For.Round(time.Second))
+		} else {
+			klog.Errorf("pnfs: %s has sent its I/O through the metadata server for %s; last probe: %v",
+				u.Path, u.For.Round(time.Second), probeOutcome(u))
+		}
+		if report == nil {
+			continue
+		}
+		go func(u unusableLayout) {
+			rctx, cancel := context.WithTimeout(ctx, reportTimeout)
+			defer cancel()
+			if err := report(rctx, u); err != nil {
+				klog.Warningf("pnfs: could not report %s, retrying in %s: %v", u.Path, reportRetryInterval, err)
+				p.reportFailed(u)
+			}
+		}(u)
+	}
+}
+
+// reportFailed makes u's report due again after reportRetryInterval.
+func (p *layoutPrimer) reportFailed(u unusableLayout) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	st, ok := p.mounts[u.Path]
+	if !ok {
+		return
+	}
+	if u.Hung {
+		st.hungReported = false
+	} else {
+		st.reported = false
+	}
+	st.reportRetryAt = p.now().Add(reportRetryInterval)
 }
 
 // primedSizeFileName is where a staging mount's last prime is recorded, next

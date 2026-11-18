@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -172,5 +173,111 @@ func TestAHungProbeIsReportedUnderItsOwnReason(t *testing.T) {
 		if !strings.Contains(ev.Message, want) {
 			t.Errorf("message %q does not say %q", ev.Message, want)
 		}
+	}
+}
+
+// overduePrimer is a primer whose staging mount is due a report of each kind:
+// its data has gone through the server, and its probe has run, for
+// unusableReportAfter.
+func overduePrimer(clock *primerClock) *layoutPrimer {
+	p := primerAt(clock)
+	since := clock.t.Add(-unusableReportAfter)
+	p.mounts[stagingMount] = &mountPrime{throughSince: since, lastThrough: clock.t}
+	p.running[stagingMount] = since
+	return p
+}
+
+// Regression: 2026-11-18-pnfs-report-blocks-primer (review of #931). The
+// report ran in the primer's only loop with no deadline, so an API server
+// that accepted the request and never answered stopped every mount's probes
+// and alias refreshes on the node. A report runs beside the loop, bounded.
+func TestAReportThatDoesNotAnswerDoesNotHoldThePrimer(t *testing.T) {
+	p := overduePrimer(&primerClock{t: time.Unix(1_000_000, 0)})
+	deadlines := make(chan time.Duration, 2)
+	report := func(ctx context.Context, _ unusableLayout) error {
+		if deadline, ok := ctx.Deadline(); ok {
+			deadlines <- time.Until(deadline)
+		} else {
+			deadlines <- -1
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	returned := make(chan struct{})
+	go func() {
+		p.sendReports(context.Background(), report)
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("sendReports is still waiting on a report that does not answer")
+	}
+	for range 2 {
+		if left := <-deadlines; left < 0 || left > reportTimeout {
+			t.Errorf("report context deadline in %s, want one within %s", left, reportTimeout)
+		}
+	}
+}
+
+// Regression: 2026-11-18-pnfs-report-lost-on-error (review of #931). The mount
+// was marked reported before the report was recorded, so a report the API
+// refused was never sent again while the mount stayed affected. A failed
+// report is retried after reportRetryInterval, and one recorded is not.
+func TestAFailedReportIsSentAgain(t *testing.T) {
+	clock := &primerClock{t: time.Unix(1_000_000, 0)}
+	p := overduePrimer(clock)
+	var fail atomic.Bool
+	fail.Store(true)
+	var sent atomic.Int32
+	report := func(context.Context, unusableLayout) error {
+		sent.Add(1)
+		if fail.Load() {
+			return errProbeForTest
+		}
+		return nil
+	}
+	// settled waits for the reports in flight to finish: a failed one is
+	// marked unreported again once it has.
+	settled := func(wantUnreported bool) {
+		t.Helper()
+		deadline := time.Now().Add(time.Second)
+		for {
+			p.mu.Lock()
+			st := p.mounts[stagingMount]
+			unreported := !st.reported && !st.hungReported
+			p.mu.Unlock()
+			if unreported == wantUnreported {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("reports still in flight after 1s")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	send := func(wantUnreported bool) int32 {
+		before := sent.Load()
+		p.sendReports(context.Background(), report)
+		settled(wantUnreported)
+		time.Sleep(20 * time.Millisecond)
+		return sent.Load() - before
+	}
+
+	if n := send(true); n != 2 {
+		t.Fatalf("%d reports sent, want one of each kind", n)
+	}
+	if n := send(true); n != 0 {
+		t.Fatalf("%d reports sent again at once after they failed, want none before the retry interval", n)
+	}
+	clock.advance(reportRetryInterval)
+	fail.Store(false)
+	if n := send(false); n != 2 {
+		t.Fatalf("%d reports sent %s after they failed, want both again", n, reportRetryInterval)
+	}
+	clock.advance(reportRetryInterval)
+	if n := send(false); n != 0 {
+		t.Errorf("%d reports sent again after they were recorded, want none", n)
 	}
 }

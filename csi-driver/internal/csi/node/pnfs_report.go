@@ -20,7 +20,6 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/klog"
 )
 
 // The reasons of the events a report records: the mount's I/O has gone
@@ -33,7 +32,7 @@ const (
 // NewLayoutReporter returns the report KeepLayoutsPrimed takes: a Warning
 // event on the claim of the volume, recorded as this node's plugin. Without a
 // Kubernetes client it returns nil, and the primer only logs.
-func NewLayoutReporter(kube kubernetes.Interface, nodeName string) func(context.Context, unusableLayout) {
+func NewLayoutReporter(kube kubernetes.Interface, nodeName string) reportFunc {
 	if kube == nil {
 		return nil
 	}
@@ -41,10 +40,8 @@ func NewLayoutReporter(kube kubernetes.Interface, nodeName string) func(context.
 	broadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: kube.CoreV1().Events("")})
 	recorder := broadcaster.NewRecorder(scheme.Scheme,
 		corev1.EventSource{Component: "simplyblock-csi-node", Host: nodeName})
-	return func(ctx context.Context, u unusableLayout) {
-		if err := reportUnusableLayout(ctx, kube, recorder, nodeName, u); err != nil {
-			klog.Warningf("pnfs: could not report %s: %v", u.Path, err)
-		}
+	return func(ctx context.Context, u unusableLayout) error {
+		return reportUnusableLayout(ctx, kube, recorder, nodeName, u)
 	}
 }
 
