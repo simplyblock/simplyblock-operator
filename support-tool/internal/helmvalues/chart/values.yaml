@@ -1155,196 +1155,6 @@ opensearch:
     # -- Enables the OpenSearch security configuration.
     enabled: false
 
-prometheus:
-  # The operator runs Prometheus and its Thanos sidecar as a ControlPlane
-  # component, so the subchart stays off; enabling it creates a second
-  # simplyblock-prometheus that the operator and Helm fight over.
-  # -- Installs the Prometheus subchart. Off: the ControlPlane installs Prometheus.
-  enabled: false
-  simplyblock:
-    # -- Prometheus service name the Control Center queries when `controlCenter.prometheusUrl` is
-    # empty.
-    prometheusURL: simplyblock-prometheus
-    # -- Prometheus service port the Control Center queries when `controlCenter.prometheusUrl` is
-    # empty.
-    prometheusPORT: 9090   
-  server:
-    image:
-      # -- Prometheus image.
-      repository: quay.io/simplyblock-io/prometheus
-      # -- Prometheus image tag.
-      tag: v2.51.0
-    # -- Name of the Prometheus server resources.
-    fullnameOverride: simplyblock-prometheus
-    # -- Deploys the Prometheus server.
-    enabled: true
-    statefulSet:
-      # -- Runs the server as a StatefulSet.
-      enabled: true
-    # -- Prometheus server name.
-    name: simplyblock-prometheus
-    # -- Number of Prometheus replicas.
-    replicaCount: 1
-    # -- Prometheus pod labels.
-    podLabels:
-      app: simplyblock-prometheus
-    # -- Prometheus pod annotations, for log collection.
-    podAnnotations:
-      log-collector/enabled: "true"
-    # -- Node selector for the Prometheus server.
-    nodeSelector: {}
-    # -- Tolerations for the Prometheus server.
-    tolerations: []
-    # -- Affinity of the Prometheus pods. The default spreads them across nodes.
-    affinity:
-      podAntiAffinity:
-        requiredDuringSchedulingIgnoredDuringExecution:
-          - labelSelector:
-              matchExpressions:
-                - key: app.kubernetes.io/component
-                  operator: In
-                  values:
-                    - simplyblock-prometheus
-            topologyKey: "kubernetes.io/hostname"
-    service:
-      # -- Service port.
-      servicePort: 9090
-      # -- Service type.
-      type: ClusterIP
-      gRPC:
-        # -- Exposes the Thanos sidecar gRPC port on the Service.
-        enabled: true
-        # -- gRPC service port.
-        servicePort: 10901
-      # -- Additional Service ports. The default exposes the Thanos sidecar HTTP port `10902`.
-      additionalPorts:
-        - name: http-thanos
-          port: 10902
-          targetPort: 10902
-          protocol: TCP
-    securityContext:
-      # -- File system group of the server pod.
-      fsGroup: 65534
-    persistentVolume:
-      # -- Stores the time series on a persistent volume.
-      enabled: true
-      # -- Size of the Prometheus volume.
-      size: 20Gi
-      # -- StorageClass of the Prometheus volume. Empty uses the cluster default.
-      storageClass:
-    # -- Additional Prometheus arguments. The default sets a 2-hour block duration for the Thanos
-    # sidecar.
-    extraArgs:
-      storage.tsdb.min-block-duration: 2h
-      storage.tsdb.max-block-duration: 2h
-    # -- Sidecar containers of the Prometheus pod. The default runs the Thanos sidecar, which uploads
-    # blocks to the object store.
-    sidecarContainers:
-      thanos-sidecar:
-        image: quay.io/simplyblock-io/thanos:v0.31.0
-        args:
-          - sidecar
-          - --tsdb.path=/prometheus
-          - --prometheus.url=http://localhost:9090
-          - --objstore.config-file=/etc/thanos/objstore.yml
-        ports:
-          - name: grpc
-            containerPort: 10901
-          - name: http
-            containerPort: 10902
-        volumeMounts:
-          - name: storage-volume
-            mountPath: /prometheus
-          - name: objstore-config
-            mountPath: /etc/thanos
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "256Mi"
-          limits:
-            cpu: "250m"
-            memory: "1Gi"
-    resources:
-      requests:
-        # -- Prometheus CPU request.
-        cpu: "100m"
-        # -- Prometheus memory request.
-        memory: "512Mi"
-      limits:
-        # -- Prometheus CPU limit.
-        cpu: "500m"
-        # -- Prometheus memory limit.
-        memory: "1Gi"
-    # -- Path of the simplyblock Prometheus configuration.
-    configPath: /etc/simplyblock-config/prometheus.yml
-    # -- Additional volumes of the Prometheus pod: the scrape configuration, the object store
-    # configuration, and the TLS CA.
-    extraVolumes:
-      - name: simplyblock-prometheus-config
-        configMap:
-          name: simplyblock-prometheus-config
-      - name: objstore-config
-        configMap:
-          name: simplyblock-objstore-config
-      # The CA the control plane's certificate is verified against: a scrape
-      # that encrypts without verifying is one an in-cluster impersonator answers.
-      - name: prometheus-ca-tls
-        secret:
-          secretName: simplyblock-ca-bundle-tls
-          optional: true
-    # -- Mounts of `prometheus.server.extraVolumes`.
-    extraVolumeMounts:
-      - name: simplyblock-prometheus-config
-        mountPath: /etc/simplyblock-config
-      - name: prometheus-ca-tls
-        mountPath: /etc/prometheus/ca
-        readOnly: true
-  alertmanager:
-    # -- Deploys Alertmanager.
-    enabled: false
-
-  prometheus-pushgateway:
-    # -- Deploys the Pushgateway.
-    enabled: false
-
-  prometheus-node-exporter:
-    # -- Deploys the node exporter.
-    enabled: false
-
-  kube-state-metrics:
-    # -- Deploys kube-state-metrics.
-    enabled: false
-  configmapReload:
-    prometheus:
-      image:
-        # -- Configuration reloader image.
-        repository: quay.io/simplyblock-io/prometheus-config-reloader
-        # -- Configuration reloader image tag.
-        tag: v0.72.0
-      # The scrape configuration is not the subchart's own ConfigMap: it is
-      # `simplyblock-prometheus-config`, mounted at `configPath`. Without this
-      # the sidecar watches a directory nothing writes to.
-      # -- Mounts of the reloader sidecar. The scrape configuration, so that a change reloads it.
-      extraVolumeMounts:
-        - name: simplyblock-prometheus-config
-          mountPath: /etc/simplyblock-config
-          readOnly: true
-      # -- Directories the reloader sidecar watches, beside the subchart's own.
-      extraVolumeDirs:
-        - /etc/simplyblock-config
-
-  defaultBackend:
-    # -- Deploys the default backend.
-    enabled: false
-    # -- Default backend name.
-    name: defaultbackend
-    image:
-      # -- Default backend image registry.
-      registry: "quay.io/simplyblock-io"
-      # -- Default backend image.
-      image: defaultbackend-amd64
-      # -- Default backend image tag.
-      tag: "1.5"
 # The Control Center — the simplyblock web console (control-center/ in the
 # monorepo). Off by default: it proxies the Kubernetes API with the pod's
 # ServiceAccount token, so enabling it is a deliberate decision about who may
@@ -1431,8 +1241,10 @@ controlCenter:
   # -- CA file the Kubernetes API server is verified against.
   kubernetesApiCaFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
   # Empty defaults resolve to this chart's own services: the operator API on
-  # http://simplyblock-operator:8080 and Prometheus per
-  # prometheus.simplyblock.prometheusURL/prometheusPORT.
+  # http://simplyblock-operator:8080, and Prometheus per
+  # prometheus.simplyblock.prometheusURL/prometheusPORT when that is set —
+  # this chart deploys no Prometheus of its own, so there is nothing to
+  # resolve to otherwise.
   # -- Simplyblock Operator API URL. Empty uses the operator of this release.
   operatorUrl: ""
   # -- Helm API URL. Empty uses the default of this release.
@@ -1688,6 +1500,117 @@ ramen:
   nodeSelector: {}
   # -- Tolerations of the Ramen operators.
   tolerations: []
+
+# Monitoring: on, this chart scrapes itself with a prometheus-operator,
+# bundled by default (the kube-prometheus-stack dependency below) so nothing
+# needs installing beforehand. Off by default means no monitoring wiring at
+# all, not a choice between two kinds of it.
+prometheus:
+  enabled: false
+  # The labels the selected `Prometheus` CR matches on, via its
+  # serviceMonitorSelector/podMonitorSelector/ruleSelector/
+  # scrapeConfigSelector. The ServiceMonitor, PodMonitor, ScrapeConfig, and
+  # PrometheusRule objects below all carry these. The bundled
+  # kube-prometheus-stack's own Prometheus is configured below to select
+  # everything regardless of label, so this is only worth setting when
+  # pointed at a prometheus-operator the customer already runs and its
+  # selector is narrower than that.
+  additionalLabels: {}
+  interval: 30s
+  # The ServiceAccount the scraping Prometheus pod itself runs as (not the
+  # selector above): webappapi does a TokenReview on every scrape's bearer
+  # token and otherwise trusts no identity at all, so every scrape gets a 401
+  # until its identity is named here. Defaults to the bundled
+  # kube-prometheus-stack's own Prometheus, whose ServiceAccount name is
+  # fixed below (kube-prometheus-stack.prometheus.serviceAccount.name) rather
+  # than left to its usual release-derived default, precisely so this can
+  # name it without having to predict it. Pointed at a prometheus-operator
+  # the customer already runs instead, set this to that Prometheus's own
+  # ServiceAccount: `kubectl get prometheus -A
+  # -o jsonpath='{.items[0].spec.serviceAccountName}'`.
+  serviceAccount:
+    name: simplyblock-prometheus-operator
+    namespace: ""
+  # Fallback for Control Center's own Prometheus link, when
+  # controlCenter.prometheusUrl is unset. prometheus-operator always names its
+  # governing Service "prometheus-operated" in the Prometheus CR's own
+  # namespace, regardless of the CR's name or which release created it, so
+  # this resolves correctly for the bundled Prometheus and for a
+  # same-namespace one the customer already runs alike. Only a
+  # prometheus-operator in another namespace needs this overridden.
+  simplyblock:
+    prometheusURL: "prometheus-operated"
+    prometheusPORT: 9090
+
+# The prometheus-operator this chart bundles when prometheus.enabled is true
+# (see prometheus-operator-servicemonitors.yaml) — CRDs, the controller, one
+# Prometheus, and Alertmanager (for the PrometheusRule/AlertmanagerConfig
+# objects that file also renders). Grafana, node-exporter, and
+# kube-state-metrics stay off: this is a scrape target for the customer's own
+# dashboards, not a second monitoring stack to look at.
+#
+# To use a prometheus-operator the customer already runs instead, every
+# component kube-prometheus-stack would otherwise render has to be turned
+# off, not only the four below: its default cluster-component scrapers
+# (kubelet, kubeApiServer, kubeControllerManager, kubeScheduler, kubeProxy,
+# kubeEtcd, coreDns) and its default alerting rules (defaultRules) are
+# separate toggles that do not follow prometheusOperator.enabled or
+# prometheus.enabled, and are left on at their own chart defaults here
+# because they are genuinely useful cluster-health signal with nothing
+# redundant about them when this is the only prometheus-operator present.
+# Also point prometheus.serviceAccount at the existing installation's own
+# Prometheus:
+#
+#   --set kube-prometheus-stack.crds.enabled=false
+#   --set kube-prometheus-stack.prometheusOperator.enabled=false
+#   --set kube-prometheus-stack.prometheus.enabled=false
+#   --set kube-prometheus-stack.alertmanager.enabled=false
+#   --set kube-prometheus-stack.defaultRules.create=false
+#   --set kube-prometheus-stack.kubelet.enabled=false
+#   --set kube-prometheus-stack.kubeApiServer.enabled=false
+#   --set kube-prometheus-stack.kubeControllerManager.enabled=false
+#   --set kube-prometheus-stack.kubeScheduler.enabled=false
+#   --set kube-prometheus-stack.kubeProxy.enabled=false
+#   --set kube-prometheus-stack.kubeEtcd.enabled=false
+#   --set kube-prometheus-stack.coreDns.enabled=false
+#   --set prometheus.serviceAccount.name=<its Prometheus's own ServiceAccount>
+#   --set prometheus.serviceAccount.namespace=<its namespace>
+#
+# Left on with monitoring.coreos.com CRDs already present from elsewhere —
+# whether or not every override above was remembered — the chart refuses to
+# install rather than risk two prometheus-operators fighting over the same
+# CRDs (prometheus-operator-servicemonitors.yaml).
+kube-prometheus-stack:
+  crds:
+    enabled: true
+  prometheusOperator:
+    enabled: true
+  prometheus:
+    enabled: true
+    serviceAccount:
+      # Fixed rather than left to the chart's own release-derived default, so
+      # prometheus.serviceAccount.name above can name it without having to
+      # predict it.
+      name: simplyblock-prometheus-operator
+    prometheusSpec:
+      # kube-prometheus-stack's own default is nil-uses-Helm-values, which
+      # restricts these to objects carrying this release's own `release:`
+      # label. The ServiceMonitor/PodMonitor/ScrapeConfig/PrometheusRule
+      # objects this chart renders carry no such label by default
+      # (prometheus.additionalLabels above), so without this they are
+      # discovered and then immediately filtered back out.
+      serviceMonitorSelectorNilUsesHelmValues: false
+      podMonitorSelectorNilUsesHelmValues: false
+      ruleSelectorNilUsesHelmValues: false
+      scrapeConfigSelectorNilUsesHelmValues: false
+  alertmanager:
+    enabled: true
+  grafana:
+    enabled: false
+  nodeExporter:
+    enabled: false
+  kubeStateMetrics:
+    enabled: false
 
 tls:
   # On by default. Everything this chart deploys reaches the control plane over
