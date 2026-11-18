@@ -656,11 +656,27 @@ Requirements that fall out:
 
 ### 7.3 Kernel / Capability Enforcement
 
-At Helm install and continuously via the operator, each worker node that may host
-RWX pods is checked for a kernel carrying `nvme_get_unique_id` and the pNFS block
-layout client. A node that does not qualify is marked **not compatible** (label +
-event) so scheduling can avoid it. No node is checked for server capabilities,
-because the MDS guest brings its own kernel and NFS server.
+The client looks the layout's device up under `/dev/disk/by-id` with name prefixes
+compiled into `blocklayoutdriver`: `dm-uuid-mpath-0x`, `wwn-0x`, and, from upstream
+6.11 and RHEL 9 after 5.14.0-503, `nvme-eui.`. A client that finds no name sends
+every byte through the metadata server, and nothing fails. The node plugin
+therefore links the device under both `nvme-eui.` and `wwn-0x`, with the same hex,
+so a kernel that predates `nvme-eui.` finds it too.
+
+At start, the CSI node plugin reads its kernel's `blocklayoutdriver` from
+`/lib/modules`, decompressing `.xz`, `.zst`, and `.gz`, and labels its own node
+`storage.simplyblock.io/pnfs-client-capable` `true` when the module knows either
+linked prefix, and `false` otherwise or when the module is absent. A layout client
+built into the kernel counts as capable, since every kernel with the SCSI layout
+tries `wwn-0x`. The module is read rather than the kernel version compared,
+because distributions backport the prefix. A hand-set label, one without the
+`pnfs-client-capable-managed-by` annotation, is left alone, as for `vdo-capable`.
+
+The controller plugin pins every pNFS volume to nodes labeled `true`, through the
+PersistentVolume's node affinity, so a pod using it is not scheduled where its I/O
+would go through the metadata server. The probe logs what it found instead of
+recording an event. No node is checked for server capabilities, because the MDS
+guest brings its own kernel and NFS server.
 
 ---
 

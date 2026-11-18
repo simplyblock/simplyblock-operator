@@ -9,10 +9,12 @@ require (
 	github.com/aws/smithy-go v1.28.2
 	github.com/container-storage-interface/spec v1.12.0
 	github.com/csi-addons/spec v0.2.1-0.20260515055340-d4a373713b9a
+	github.com/klauspost/compress v1.20.1
 	github.com/kubernetes-csi/csi-lib-utils v0.24.0
 	github.com/kubernetes-csi/csi-test/v5 v5.5.0
 	github.com/onsi/gomega v1.42.1
 	github.com/simplyblock/atlas v0.0.0-00010101000000-000000000000
+	github.com/ulikunitz/xz v0.5.12
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
 	golang.org/x/crypto v0.58.0
@@ -58,7 +60,6 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
-	github.com/klauspost/compress v1.20.1 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/oapi-codegen/oapi-codegen/v2 v2.8.0 // indirect
 	github.com/oapi-codegen/runtime v1.6.0 // indirect

@@ -13,6 +13,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -21,6 +22,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/klog/v2"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/lvol"
 	export "github.com/simplyblock/atlas/nfsexport"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
@@ -291,14 +293,31 @@ func (cs *Server) createPNFSVolume(
 	}
 
 	volume := &csi.Volume{
-		VolumeId:      csiVolume.GetVolumeId(),
-		CapacityBytes: csiVolume.GetCapacityBytes(),
-		VolumeContext: volumeContextFor(record),
-	}
-	if csiVolume.GetAccessibleTopology() != nil {
-		volume.AccessibleTopology = csiVolume.GetAccessibleTopology()
+		VolumeId:           csiVolume.GetVolumeId(),
+		CapacityBytes:      csiVolume.GetCapacityBytes(),
+		VolumeContext:      volumeContextFor(record),
+		AccessibleTopology: pnfsClientTopology(csiVolume.GetAccessibleTopology()),
 	}
 	return &csi.CreateVolumeResponse{Volume: volume}, nil
+}
+
+// pnfsClientTopology is the backing volume's topology with every segment also
+// requiring a node whose NFS client can open the layout's device. A pod
+// anywhere else sends every byte through the metadata server. Read from the
+// node label rather than the CSINode topology, for the reason vdoCapableSegment
+// gives.
+func pnfsClientTopology(backing []*csi.Topology) []*csi.Topology {
+	if len(backing) == 0 {
+		return []*csi.Topology{{Segments: map[string]string{kube.LabelPNFSClientCapable: vdoCapableTrue}}}
+	}
+	out := make([]*csi.Topology, 0, len(backing))
+	for _, t := range backing {
+		segments := make(map[string]string, len(t.GetSegments())+1)
+		maps.Copy(segments, t.GetSegments())
+		segments[kube.LabelPNFSClientCapable] = vdoCapableTrue
+		out = append(out, &csi.Topology{Segments: segments})
+	}
+	return out
 }
 
 // refuseWithoutMetadataServer refuses a pNFS claim when no SimplyblockDriver

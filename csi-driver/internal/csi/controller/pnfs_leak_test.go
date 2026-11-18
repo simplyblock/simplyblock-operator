@@ -17,6 +17,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/simplyblock/atlas/kube"
+
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
@@ -134,5 +136,31 @@ func TestPendingPNFSExportKeepsItsVolume(t *testing.T) {
 	if len(registry.deleted) != 0 || mockVolumeCount(mock) != 1 {
 		t.Errorf("a pending export was rolled back: deleted=%v volumes=%d",
 			registry.deleted, mockVolumeCount(mock))
+	}
+}
+
+// Regression: 2026-11-18-pnfs-rhel95-no-nvme-eui (lab cluster 111). A pod on a
+// node whose NFS client cannot open the layout's device sends every byte
+// through the metadata server, so a pNFS volume is pinned to the nodes that
+// can, as a VDO volume is to the nodes that can run VDO.
+func TestAPNFSVolumeIsPinnedToNodesWhoseClientCanOpenItsDevice(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newPNFSTestServer(t, mock, &fakeRegistry{
+		record: ExportRecord{Phase: "Ready", ServiceAddress: "10.0.0.9"},
+	})
+
+	resp, err := cs.CreateVolume(context.Background(), pnfsCreateVolumeRequest("pvc-pinned"))
+	if err != nil {
+		t.Fatalf("CreateVolume: %v", err)
+	}
+	topology := resp.GetVolume().GetAccessibleTopology()
+	if len(topology) == 0 {
+		t.Fatal("no accessible topology, want the pnfs-client-capable segment")
+	}
+	for _, segment := range topology {
+		if got := segment.GetSegments()[kube.LabelPNFSClientCapable]; got != vdoCapableTrue {
+			t.Errorf("segment %v has %s=%q, want true", segment.GetSegments(), kube.LabelPNFSClientCapable, got)
+		}
 	}
 }

@@ -427,6 +427,7 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 
 	go advertiseVDOCapability(kubeClient, nodeName)
 	go advertiseKVMCapability(kubeClient, nodeName)
+	go advertisePNFSClientCapability(kubeClient, nodeName)
 	go advertiseSubnets(kubeClient, nodeName)
 	go advertiseHostNQN(kubeClient, nodeName)
 
@@ -449,6 +450,16 @@ func advertiseKVMCapability(kubeClient kubernetes.Interface, nodeName string) {
 	err := node.AdvertiseKVMCapability(context.Background(), kubeClient, nodeName)
 	if err != nil {
 		klog.Errorf("failed to advertise kvm-capable for node %s: %v", nodeName, err)
+	}
+}
+
+// advertisePNFSClientCapability publishes whether this node's NFS client can
+// open the device a pNFS layout names, in the background for the same reason
+// as the VDO probe.
+func advertisePNFSClientCapability(kubeClient kubernetes.Interface, nodeName string) {
+	err := node.AdvertisePNFSClientCapability(context.Background(), kubeClient, nodeName)
+	if err != nil {
+		klog.Errorf("failed to advertise pnfs-client-capable for node %s: %v", nodeName, err)
 	}
 }
 

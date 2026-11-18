@@ -236,6 +236,19 @@ const (
 	AnnoKVMCapableManagedBy = "storage.simplyblock.io/kvm-capable-managed-by"
 	// AnnoKVMCapableManagedByAutoDetect is AnnoKVMCapableManagedBy's one value.
 	AnnoKVMCapableManagedByAutoDetect = "auto-detect"
+	// LabelPNFSClientCapable marks a node whose NFS client can open the
+	// device a pNFS SCSI layout names, self-probed and self-applied by the CSI
+	// node plugin the same way as LabelVDOCapable. A pNFS volume is pinned to
+	// nodes carrying it: elsewhere every byte goes through the metadata server.
+	LabelPNFSClientCapable = "storage.simplyblock.io/pnfs-client-capable"
+	// AnnoPNFSClientCapableManagedBy stamps every LabelPNFSClientCapable value
+	// the node plugin's own probe writes, with
+	// AnnoPNFSClientCapableManagedByAutoDetect. A label without it is a hand-set
+	// override and is left alone.
+	AnnoPNFSClientCapableManagedBy = "storage.simplyblock.io/pnfs-client-capable-managed-by"
+	// AnnoPNFSClientCapableManagedByAutoDetect is AnnoPNFSClientCapableManagedBy's
+	// one value.
+	AnnoPNFSClientCapableManagedByAutoDetect = "auto-detect"
 	// AnnoSelectedStorageNode pins a PVC's logical volume to a specific storage
 	// node. It is the canonical placement/pin annotation: the operator's pin
 	// controller, drain, and rebalancer key off it, and the CSI controller reads
