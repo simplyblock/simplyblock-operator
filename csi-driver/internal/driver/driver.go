@@ -247,7 +247,9 @@ func Run(conf *config.Config) {
 //
 // A node plugin also serves the swap service when it has one, which is what
 // lets the operator move a staged volume's namespace to another subsystem.
-func startLink(ctx context.Context, conf *config.Config, ns *node.Server, swapper *swaprpc.Swapper) (*link.Agent, error) {
+func startLink(
+	ctx context.Context, conf *config.Config, ns *node.Server, swapper *swaprpc.Swapper,
+) (*link.Agent, error) {
 	cfg := csilink.Config{
 		HubAddress:  conf.LinkHubAddress,
 		CAFile:      conf.LinkCAFile,

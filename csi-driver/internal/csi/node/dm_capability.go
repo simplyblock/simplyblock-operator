@@ -42,7 +42,7 @@ func (ns *Server) ProbeDeviceMapper(ctx context.Context, nodeName string) {
 func probeDeviceMapper(ctx context.Context, nodeName string, run commandRunner) bool {
 	// A kernel with device-mapper built in has no module to load, so a failed
 	// modprobe is reported and is not the verdict. dmsetup is.
-	if out, err := run(ctx, "modprobe", "dm_mod"); err != nil {
+	if out, err := run(ctx, modprobeCommand, "dm_mod"); err != nil {
 		klog.Infof("device-mapper probe: node %s cannot load dm_mod: %s", nodeName, orErr(out, err))
 	}
 	out, err := run(ctx, "dmsetup", "targets")

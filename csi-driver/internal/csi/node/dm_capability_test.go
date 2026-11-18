@@ -24,7 +24,7 @@ type fakeDMHost struct {
 func (h *fakeDMHost) run(_ context.Context, name string, args ...string) (string, error) {
 	h.asked = append(h.asked, strings.Join(append([]string{name}, args...), " "))
 	switch name {
-	case "modprobe":
+	case modprobeCommand:
 		return "", nil
 	case "dmsetup":
 		if h.targetsErr != nil {

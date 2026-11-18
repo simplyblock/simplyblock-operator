@@ -44,7 +44,7 @@ func (k *fabricsHost) run(_ context.Context, name string, args ...string) (strin
 	switch name {
 	case "uname":
 		return awsKernel, nil
-	case "modprobe":
+	case modprobeCommand:
 		k.modprobed++
 		if k.modprobe != nil {
 			return "modprobe: FATAL: Module " + args[0] + " not found in directory /lib/modules/" + awsKernel, k.modprobe
