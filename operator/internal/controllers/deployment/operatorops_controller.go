@@ -180,9 +180,14 @@ func (r *OperatorOpsReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// Terminal and staying that way: the run is the audit record now.
+	// The one exception is a waiver added after the run, which the status records.
 	switch ops.Status.Phase {
-	case simplyblockv1alpha2.OperatorOpsPhaseSucceeded,
-		simplyblockv1alpha2.OperatorOpsPhaseFailed,
+	case simplyblockv1alpha2.OperatorOpsPhaseSucceeded:
+		if len(ops.Status.Findings) > 0 && refreshWaivers(&ops) {
+			return ctrl.Result{}, r.status(ctx, &ops)
+		}
+		return ctrl.Result{}, nil
+	case simplyblockv1alpha2.OperatorOpsPhaseFailed,
 		simplyblockv1alpha2.OperatorOpsPhaseAborted:
 		return ctrl.Result{}, nil
 	}
@@ -672,6 +677,7 @@ func (r *OperatorOpsReconciler) write(
 		r.event(ops, corev1.EventTypeWarning, found.Reason, found.Message)
 	}
 
+	recordFindings(ops, plan.Findings)
 	ops.Status.ConfigRef = config.Name
 	ops.Status.Message = fmt.Sprintf("wrote %s awaiting approval: %s", config.Name, plan.Summary())
 	observeDevicesFound(ops.Namespace, plan.DeviceCount())

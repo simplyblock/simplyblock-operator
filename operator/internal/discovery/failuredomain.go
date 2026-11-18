@@ -47,7 +47,7 @@ func (p *Plan) assignFailureDomains(label string) {
 			unlabeled = append(unlabeled, worker.Name)
 		case len(value) > maxFailureDomainLength || !failureDomainPattern.MatchString(value):
 			invalid++
-			p.Findings = append(p.Findings, Finding{Reason: FailureDomainInvalid, Message: fmt.Sprintf(
+			p.Findings = append(p.Findings, Finding{Node: worker.Name, Severity: SeverityWarn, Reason: FailureDomainInvalid, Message: fmt.Sprintf(
 				"worker %s carries %s=%q, which is not a failure domain (at most %d letters, digits, "+
 					"'-', '_', or '.', starting and ending with a letter or digit), so it has none in the draft",
 				worker.Name, label, value, maxFailureDomainLength)})
@@ -58,7 +58,7 @@ func (p *Plan) assignFailureDomains(label string) {
 
 	labeled := len(p.Workers) - len(unlabeled) - invalid
 	if labeled > 0 && len(unlabeled) > 0 {
-		p.Findings = append(p.Findings, Finding{Reason: TopologyIncomplete, Message: fmt.Sprintf(
+		p.Findings = append(p.Findings, Finding{Severity: SeverityWarn, Reason: TopologyIncomplete, Message: fmt.Sprintf(
 			"%s %s no %s label while other workers do, so the draft gives %s no failure domain and "+
 				"does not enable failure domains: label %s and run discovery again",
 			strings.Join(unlabeled, ", "), plural(len(unlabeled), "carries", "carry"), label,
