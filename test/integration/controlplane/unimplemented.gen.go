@@ -277,7 +277,7 @@ func (s *Server) ClustersExpandApiV2ClustersClusterIdExpandPost(w http.ResponseW
 	notImplemented(w, r)
 }
 
-func (s *Server) ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID, _ ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams) {
+func (s *Server) ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID) {
 	notImplemented(w, r)
 }
 
