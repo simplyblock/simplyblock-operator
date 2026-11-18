@@ -40,8 +40,10 @@ So a host that runs this unattended needs these, and nothing wider:
 <user> ALL=(root) NOPASSWD: /usr/bin/pkill -x bootpd
 ```
 
-`talosctl` needs `SETENV` because the harness passes `-E`: talosctl reads `HOME`
-for its image cache. The two `chown` rules hand back what talosctl wrote as
+`talosctl` needs `SETENV` because the harness sets `HOME` and `KUBECONFIG` on the
+sudo command line: talosctl reads `HOME` for its image cache and cluster state,
+and `KUBECONFIG` keeps it from merging into the developer's own kubeconfig. They
+are passed as `VAR=value` arguments rather than with `-E`, which sudo-rs ignores. The two `chown` rules hand back what talosctl wrote as
 root, one for the run's work directory and one for the QEMU monitor sockets the
 defect cases connect to. The `rm` rule clears a state directory talosctl left
 behind. `pkill -x bootpd` is the macOS case below, and `-x` matches that one
