@@ -531,22 +531,36 @@ func sudoCommand(ctx context.Context, args ...string) *exec.Cmd {
 //
 // -E preserves the environment: talosctl reads HOME for its image cache, and
 // losing it would re-download the image on every run.
+// talosctlCommand is the talosctl invocation run makes, elevated when the
+// configuration asks for sudo.
+//
+// talosctl keeps its cluster state under HOME, where stateDir looks for it, and
+// merges what it fetches into the caller's own kubeconfig unless it is pointed
+// somewhere else. Left alone, every run leaves an admin@<cluster> context
+// behind in a file the tests have no business writing, so KUBECONFIG names the
+// cluster's own file. Under sudo both are passed by name through env rather
+// than kept with -E: sudo-rs, which Ubuntu 26.04 ships, ignores -E.
+func (c *Cluster) talosctlCommand(ctx context.Context, args ...string) *exec.Cmd {
+	kubeconfig := "KUBECONFIG=" + c.kubeconfig
+	bin, full := c.cfg.TalosctlPath, args
+	if *c.cfg.Sudo {
+		vars := []string{kubeconfig}
+		if home, err := os.UserHomeDir(); err == nil {
+			vars = append(vars, "HOME="+home)
+		}
+		full = append(append(append([]string{"env"}, vars...), c.cfg.TalosctlPath), args...)
+		bin = "sudo"
+	}
+	cmd := exec.CommandContext(ctx, bin, full...) //nolint:gosec // fixed binary, structured args
+	cmd.Env = append(os.Environ(), kubeconfig)
+	return cmd
+}
+
 func (c *Cluster) run(ctx context.Context, timeout time.Duration, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	bin, full := c.cfg.TalosctlPath, args
-	if *c.cfg.Sudo {
-		bin, full = "sudo", append([]string{"-E", c.cfg.TalosctlPath}, args...)
-	}
-	cmd := exec.CommandContext(ctx, bin, full...) //nolint:gosec // fixed binary, structured args
-
-	// talosctl merges what it fetches into the caller's own kubeconfig unless it
-	// is pointed somewhere else, and sudo here preserves HOME, so the caller it
-	// means is the developer. Left alone, every run leaves an admin@<cluster>
-	// context behind in a file the tests have no business writing. Naming the
-	// cluster's own file sends any such merge there instead.
-	cmd.Env = append(os.Environ(), "KUBECONFIG="+c.kubeconfig)
+	cmd := c.talosctlCommand(ctx, args...)
 
 	var captured bytes.Buffer
 	sink := io.Writer(&captured)

@@ -1,7 +1,10 @@
 package cluster
 
 import (
+	"context"
 	"errors"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -165,5 +168,30 @@ func TestDefaultConfigNarrates(t *testing.T) {
 
 	if cfg.Logf == nil {
 		t.Error("a defaulted Config discards talosctl's output, so a create is silent until it returns")
+	}
+}
+
+// Regression: 2026-11-18-ubuntu-2604-sudo-rs. Ubuntu 26.04 runners ship
+// sudo-rs, which ignores -E with a warning on stderr. talosctl then ran with
+// root's HOME and no KUBECONFIG, and the warning landed in the JSON the
+// harness parses, so every suite failed to bring its cluster up. Under sudo the
+// variables talosctl needs are passed by name, which both sudo builds keep.
+func TestSudoPassesHomeAndKubeconfigByName(t *testing.T) {
+	sudo := true
+	c := &Cluster{cfg: Config{TalosctlPath: "talosctl", Sudo: &sudo}, kubeconfig: "/work/kubeconfig"}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home directory to pass: %v", err)
+	}
+
+	args := c.talosctlCommand(context.Background(), "config", "info").Args
+	if slices.Contains(args, "-E") {
+		t.Errorf("args = %q, want no -E, which sudo-rs ignores", args)
+	}
+	for _, want := range []string{"HOME=" + home, "KUBECONFIG=/work/kubeconfig"} {
+		i := slices.Index(args, want)
+		if i < 0 || i > slices.Index(args, "talosctl") {
+			t.Errorf("args = %q, want %s before talosctl", args, want)
+		}
 	}
 }
