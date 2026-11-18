@@ -183,7 +183,7 @@ D 12.
   [Set when every worker has exactly one disk smaller than all its others. Logical block device mode needs one.],
   [D 10, R 5.3],
   [The wrong platform (OpenShift, Talos, EKS, ...)], [`status.environment` of the OperatorOps, and an `EnvironmentPartiallyRead` warning],
-  [The markers that identify each platform were missing, or the API groups could not be listed. Set `spec.environment` in the draft.],
+  [The markers that identify each platform were missing, or the API server's groups or version could not be read. Set `spec.environment` in the draft.],
   [D 2, R 8.1],
 )
 

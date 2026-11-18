@@ -429,7 +429,7 @@ func (r *OperatorOpsReconciler) inspect(
 		// Half the evidence still yields a conclusion, and the field is one a
 		// reviewer corrects, so this is recorded and not fatal.
 		r.event(ops, corev1.EventTypeWarning, EnvironmentPartiallyRead,
-			fmt.Sprintf("the API groups could not be listed, so the distribution was concluded from the nodes alone: %v", err))
+			fmt.Sprintf("the API server's groups or version could not be read, so the distribution was concluded from what could: %v", err))
 	}
 
 	if len(workers) == 0 {

@@ -155,7 +155,7 @@ func (r *ControlPlaneReconciler) choosesEBSClass(ctx context.Context, cp *simply
 	if err := r.List(ctx, &nodes); err != nil {
 		return false, fmt.Errorf("listing nodes to tell the Kubernetes distribution: %w", err)
 	}
-	if inventory.DetectEnvironment(nil, nodes.Items).Distribution != inventory.DistributionEKS {
+	if inventory.DetectEnvironment(inventory.ControlPlane{}, nodes.Items).Distribution != inventory.DistributionEKS {
 		return false, nil
 	}
 	fdb := &unstructured.Unstructured{}

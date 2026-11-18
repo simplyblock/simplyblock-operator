@@ -11,6 +11,7 @@
 package inventory
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"slices"
@@ -18,6 +19,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/version"
+	discoveryfake "k8s.io/client-go/discovery/fake"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 // node builds a worker carrying the labels, annotations, and node info a test
@@ -65,7 +69,7 @@ func evidenceFor(env Environment, dist Distribution) bool {
 func TestDetectEnvironmentRecognizesOpenShiftByItsAPIGroups(t *testing.T) {
 	groups := []string{"apps", "config.openshift.io", "route.openshift.io", "security.openshift.io"}
 
-	env := DetectEnvironment(groups, []corev1.Node{node("worker-1", osImage("Red Hat Enterprise Linux CoreOS 419"))})
+	env := DetectEnvironment(ControlPlane{APIGroups: groups}, []corev1.Node{node("worker-1", osImage("Red Hat Enterprise Linux CoreOS 419"))})
 
 	if env.Distribution != DistributionOpenShift {
 		t.Errorf("concluded %q, want %q", env.Distribution, DistributionOpenShift)
@@ -90,7 +94,7 @@ func TestDetectEnvironmentRecognizesOpenShiftByANodeLabelAlone(t *testing.T) {
 	// A cluster whose API groups could not be listed, on nodes running RHEL
 	// rather than CoreOS, still carries the label the installer put there. It
 	// is the weakest of the four sources and it is read for exactly this case.
-	env := DetectEnvironment(nil, []corev1.Node{
+	env := DetectEnvironment(ControlPlane{}, []corev1.Node{
 		node("worker-1", labeled("node.openshift.io/os_id", "rhel")),
 	})
 
@@ -103,7 +107,7 @@ func TestDetectEnvironmentRecognizesOpenShiftByANodeLabelAlone(t *testing.T) {
 }
 
 func TestDetectEnvironmentRecognizesTalosByItsNodeImage(t *testing.T) {
-	env := DetectEnvironment(nil, []corev1.Node{node("worker-1", osImage("Talos (v1.9.2)"))})
+	env := DetectEnvironment(ControlPlane{}, []corev1.Node{node("worker-1", osImage("Talos (v1.9.2)"))})
 
 	if env.Distribution != DistributionTalos {
 		t.Errorf("concluded %q, want %q", env.Distribution, DistributionTalos)
@@ -114,7 +118,7 @@ func TestDetectEnvironmentRecognizesTalosByItsAnnotations(t *testing.T) {
 	// A Talos node whose image string a release changed still carries the
 	// annotations the machine config writes, which is why more than one marker
 	// is read for every distribution.
-	env := DetectEnvironment(nil, []corev1.Node{
+	env := DetectEnvironment(ControlPlane{}, []corev1.Node{
 		node("worker-1", annotated("talos.dev/owned-labels", "[]")),
 	})
 
@@ -124,7 +128,7 @@ func TestDetectEnvironmentRecognizesTalosByItsAnnotations(t *testing.T) {
 }
 
 func TestDetectEnvironmentRecognizesK3sByItsKubeletVersion(t *testing.T) {
-	env := DetectEnvironment(nil, []corev1.Node{node("worker-1", kubelet("v1.31.4+k3s1"))})
+	env := DetectEnvironment(ControlPlane{}, []corev1.Node{node("worker-1", kubelet("v1.31.4+k3s1"))})
 
 	if env.Distribution != DistributionK3s {
 		t.Errorf("concluded %q, want %q", env.Distribution, DistributionK3s)
@@ -135,7 +139,7 @@ func TestDetectEnvironmentReadsRKE2AsRancher(t *testing.T) {
 	// Rancher is the enum's name for the whole family: RKE2 is a distribution
 	// in its own right and there is no separate value for it, so its marker
 	// resolves here.
-	env := DetectEnvironment(nil, []corev1.Node{node("worker-1", kubelet("v1.31.4+rke2r1"))})
+	env := DetectEnvironment(ControlPlane{}, []corev1.Node{node("worker-1", kubelet("v1.31.4+rke2r1"))})
 
 	if env.Distribution != DistributionRancher {
 		t.Errorf("concluded %q, want %q", env.Distribution, DistributionRancher)
@@ -148,7 +152,7 @@ func TestDetectEnvironmentReadsRKE2AsRancher(t *testing.T) {
 // wrote `environment: K3s` for an RKE2 cluster.
 func TestDetectEnvironmentReadsAnRKE2ClusterThatServesTheK3sGroupAsRancher(t *testing.T) {
 	env := DetectEnvironment(
-		[]string{"apps", "helm.cattle.io", "k3s.cattle.io"},
+		ControlPlane{APIGroups: []string{"apps", "helm.cattle.io", "k3s.cattle.io"}},
 		[]corev1.Node{
 			node("server-1", kubelet("v1.36.6+rke2r1"), annotated("rke2.io/node-args", "[\"server\"]")),
 			node("agent-1", kubelet("v1.36.6+rke2r1")),
@@ -167,7 +171,7 @@ func TestDetectEnvironmentReadsAnRKE2ClusterThatServesTheK3sGroupAsRancher(t *te
 // The group alone says "K3s or RKE2". With no kubelet to ask, the precedence
 // decides as before.
 func TestDetectEnvironmentReadsTheK3sGroupAloneAsK3s(t *testing.T) {
-	env := DetectEnvironment([]string{"apps", "k3s.cattle.io"}, nil)
+	env := DetectEnvironment(ControlPlane{APIGroups: []string{"apps", "k3s.cattle.io"}}, nil)
 
 	if env.Distribution != DistributionK3s {
 		t.Errorf("concluded %q, want %q", env.Distribution, DistributionK3s)
@@ -189,7 +193,7 @@ func TestDetectEnvironmentKeepsK3sWhereAK3sKubeletRuns(t *testing.T) {
 	}
 	for name, nodes := range cases {
 		t.Run(name, func(t *testing.T) {
-			env := DetectEnvironment([]string{"k3s.cattle.io", "management.cattle.io"}, nodes)
+			env := DetectEnvironment(ControlPlane{APIGroups: []string{"k3s.cattle.io", "management.cattle.io"}}, nodes)
 			if env.Distribution != DistributionK3s {
 				t.Errorf("concluded %q, want %q", env.Distribution, DistributionK3s)
 			}
@@ -199,7 +203,7 @@ func TestDetectEnvironmentKeepsK3sWhereAK3sKubeletRuns(t *testing.T) {
 
 func TestDetectEnvironmentRecognizesRancherManagement(t *testing.T) {
 	env := DetectEnvironment(
-		[]string{"apps", "management.cattle.io"},
+		ControlPlane{APIGroups: []string{"apps", "management.cattle.io"}},
 		[]corev1.Node{node("worker-1", annotated("rke.cattle.io/machine", "abc"))},
 	)
 
@@ -214,7 +218,7 @@ func TestDetectEnvironmentPrefersTheDistributionOverTheManagementLayer(t *testin
 	// that installed the kubelet, so K3s is the answer, and the Rancher
 	// evidence stays on the record because a reviewer may want the other one.
 	env := DetectEnvironment(
-		[]string{"management.cattle.io"},
+		ControlPlane{APIGroups: []string{"management.cattle.io"}},
 		[]corev1.Node{node("worker-1",
 			kubelet("v1.31.4+k3s1"),
 			annotated("management.cattle.io/pod-requests", "{}"),
@@ -234,7 +238,7 @@ func TestDetectEnvironmentPrefersOpenShiftOverEverything(t *testing.T) {
 	// the one that changes what a storage node needs: the SCCs, the kubelet
 	// this product does not reconfigure, and the host assumptions of CoreOS.
 	env := DetectEnvironment(
-		[]string{"config.openshift.io", "management.cattle.io"},
+		ControlPlane{APIGroups: []string{"config.openshift.io", "management.cattle.io"}},
 		[]corev1.Node{node("worker-1",
 			osImage("Red Hat Enterprise Linux CoreOS 419"),
 			annotated("management.cattle.io/pod-requests", "{}"),
@@ -250,7 +254,7 @@ func TestDetectEnvironmentPrefersOpenShiftOverEverything(t *testing.T) {
 }
 
 func TestDetectEnvironmentConcludesVanillaWhenNothingIsDistinctive(t *testing.T) {
-	env := DetectEnvironment([]string{"apps", "batch"}, []corev1.Node{node("worker-1"), node("worker-2")})
+	env := DetectEnvironment(ControlPlane{APIGroups: []string{"apps", "batch"}}, []corev1.Node{node("worker-1"), node("worker-2")})
 
 	if env.Distribution != DistributionVanilla {
 		t.Errorf("concluded %q, want %q", env.Distribution, DistributionVanilla)
@@ -265,7 +269,7 @@ func TestDetectEnvironmentConcludesVanillaWithNothingToReadAtAll(t *testing.T) {
 	// A caller that could read neither the API groups nor the nodes gets an
 	// answer rather than a failure, because the field it fills in is a starting
 	// point a reviewer corrects.
-	env := DetectEnvironment(nil, nil)
+	env := DetectEnvironment(ControlPlane{}, nil)
 
 	if env.Distribution != DistributionVanilla {
 		t.Errorf("concluded %q, want %q", env.Distribution, DistributionVanilla)
@@ -281,8 +285,8 @@ func TestDetectEnvironmentEvidenceIsOrdered(t *testing.T) {
 		node("worker-1", kubelet("v1.31.4+k3s1")),
 	}
 
-	first := DetectEnvironment(groups, nodes)
-	second := DetectEnvironment(slices.Clone(groups), slices.Clone(nodes))
+	first := DetectEnvironment(ControlPlane{APIGroups: groups}, nodes)
+	second := DetectEnvironment(ControlPlane{APIGroups: slices.Clone(groups)}, slices.Clone(nodes))
 
 	if len(first.Evidence) != len(second.Evidence) {
 		t.Fatalf("two runs recorded %d and %d findings", len(first.Evidence), len(second.Evidence))
@@ -298,7 +302,7 @@ func TestDetectEnvironmentEvidenceIsOrdered(t *testing.T) {
 func TestDetectEnvironmentReadsEveryNodeAndNotOnlyTheFirst(t *testing.T) {
 	// A fleet mid-migration has nodes of two shapes, and the distribution is a
 	// property of the cluster rather than of whichever node was listed first.
-	env := DetectEnvironment(nil, []corev1.Node{
+	env := DetectEnvironment(ControlPlane{}, []corev1.Node{
 		node("worker-1"),
 		node("worker-2", kubelet("v1.31.4+k3s1")),
 	})
@@ -328,7 +332,7 @@ func TestDetectEnvironmentRecognizesTheManagedServices(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			env := DetectEnvironment(nil, []corev1.Node{c.worker})
+			env := DetectEnvironment(ControlPlane{}, []corev1.Node{c.worker})
 			if env.Distribution != c.want {
 				t.Errorf("concluded %q, want %q", env.Distribution, c.want)
 			}
@@ -341,7 +345,7 @@ func TestDetectEnvironmentIgnoresTheCloudProvidersOwnLabels(t *testing.T) {
 	// manager too, and that labels the nodes it registers. Those labels say
 	// which cloud the machine is in, not who installed its kubelet. The AKS
 	// keys are whole keys, so a longer key that starts with one is not AKS.
-	env := DetectEnvironment(nil, []corev1.Node{node("worker-1",
+	env := DetectEnvironment(ControlPlane{}, []corev1.Node{node("worker-1",
 		labeled("oci.oraclecloud.com/fault-domain", "FAULT-DOMAIN-1"),
 		labeled("topology.k8s.aws/zone-id", "euc1-az2"),
 		labeled("kubernetes.azure.com/managed", "false"),
@@ -358,7 +362,7 @@ func TestDetectEnvironmentPrefersTheManagedServiceOverRancher(t *testing.T) {
 	// An EKS cluster imported into Rancher carries both. The managed service
 	// installed the kubelet and owns its configuration, so it is the answer.
 	env := DetectEnvironment(
-		[]string{"management.cattle.io"},
+		ControlPlane{APIGroups: []string{"management.cattle.io"}},
 		[]corev1.Node{node("worker-1",
 			kubelet("v1.30.8-eks-2d5f260"),
 			annotated("management.cattle.io/pod-requests", "{}"),
@@ -386,7 +390,7 @@ func TestARealGKENodeReadsAsGKE(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env := DetectEnvironment(nil, list.Items)
+	env := DetectEnvironment(ControlPlane{}, list.Items)
 
 	if env.Distribution != DistributionGKE {
 		t.Fatalf("distribution = %s, want GKE: %+v", env.Distribution, env.Evidence)
@@ -416,7 +420,7 @@ func TestARealEKSNodeReadsAsEKS(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env := DetectEnvironment(nil, list.Items)
+	env := DetectEnvironment(ControlPlane{}, list.Items)
 
 	if env.Distribution != DistributionEKS {
 		t.Fatalf("distribution = %s, want EKS: %+v", env.Distribution, env.Evidence)
@@ -430,5 +434,113 @@ func TestARealEKSNodeReadsAsEKS(t *testing.T) {
 	}
 	if !sources[SourceKubeletVersion] || !sources[SourceNodeLabel] {
 		t.Errorf("evidence came from %v, want both the kubelet version and the node labels", sources)
+	}
+}
+
+// managedWorkers is a fleet whose workers three providers built: a GKE node
+// pool, an EKS node group, and an OKE node pool, all joined to one control
+// plane, which is what a Google Anthos deployment spanning clouds looks like.
+func managedWorkers() []corev1.Node {
+	return []corev1.Node{
+		node("gke-1", labeled("cloud.google.com/gke-nodepool", "storage"), kubelet("v1.31.2-gke.1100000")),
+		node("eks-1", labeled("eks.amazonaws.com/nodegroup", "storage"), kubelet("v1.31.2-eks-7f9249a")),
+		node("oke-1", labeled("oke.oraclecloud.com/pool.name", "storage")),
+	}
+}
+
+func TestDetectEnvironmentLetsTheControlPlaneDecideAFleetOfSeveralProviders(t *testing.T) {
+	// The workers disagree, so no worker is the cluster's answer. The control
+	// plane is: its API server is GKE's build.
+	env := DetectEnvironment(ControlPlane{Version: "v1.31.2-gke.1100000"}, managedWorkers())
+
+	if env.Distribution != DistributionGKE {
+		t.Errorf("concluded %q for a fleet whose control plane is GKE's, want %q",
+			env.Distribution, DistributionGKE)
+	}
+	// The workers' own markers stay on the record for the reviewer.
+	for _, dist := range []Distribution{DistributionEKS, DistributionOKE} {
+		if !evidenceFor(env, dist) {
+			t.Errorf("recorded %+v, and the %s markers are missing from it", env.Evidence, dist)
+		}
+	}
+}
+
+func TestDetectEnvironmentReadsTheServerVersion(t *testing.T) {
+	// A managed control plane runs no node a cluster can list, so the API
+	// server's own build is the one mark it leaves.
+	env := DetectEnvironment(ControlPlane{Version: "v1.30.8-eks-2d5f260"}, nil)
+
+	if env.Distribution != DistributionEKS {
+		t.Errorf("concluded %q from an EKS server version, want %q", env.Distribution, DistributionEKS)
+	}
+}
+
+func TestDetectEnvironmentKeepsTheFleetsAnswerWhenItsWorkersAgree(t *testing.T) {
+	// An AKS cluster imported into Rancher: the API groups are Rancher's and
+	// the API server's version is AKS's plain one, and every worker says AKS.
+	// A fleet that agrees is answered as it always was, so the control plane's
+	// Rancher marks do not overrule it.
+	env := DetectEnvironment(
+		ControlPlane{APIGroups: []string{"management.cattle.io"}, Version: "v1.31.2"},
+		[]corev1.Node{
+			node("worker-1", labeled("kubernetes.azure.com/agentpool", "storage"),
+				annotated("management.cattle.io/pod-requests", "{}")),
+			node("worker-2", labeled("kubernetes.azure.com/agentpool", "storage")),
+		},
+	)
+
+	if env.Distribution != DistributionAKS {
+		t.Errorf("concluded %q, want %q", env.Distribution, DistributionAKS)
+	}
+}
+
+func TestDetectEnvironmentFallsBackToTheFleetWhenTheControlPlaneSaysNothing(t *testing.T) {
+	// Workers that disagree under a control plane with no marks of its own
+	// leave the precedence to decide, which is the answer before the control
+	// plane was asked.
+	env := DetectEnvironment(ControlPlane{Version: "v1.31.2"}, managedWorkers()[1:])
+
+	if env.Distribution != DistributionEKS {
+		t.Errorf("concluded %q, want %q", env.Distribution, DistributionEKS)
+	}
+}
+
+func TestNodeDistributionReadsOneNodesOwnMarkers(t *testing.T) {
+	cases := []struct {
+		name   string
+		worker corev1.Node
+		want   Distribution
+		found  bool
+	}{
+		{"an EKS node", managedWorkers()[1], DistributionEKS, true},
+		{"an OKE node", managedWorkers()[2], DistributionOKE, true},
+		{"a Rancher-managed K3s node", node("worker-1", kubelet("v1.31.4+k3s1"),
+			annotated("management.cattle.io/pod-requests", "{}")), DistributionK3s, true},
+		{"an RKE2 node", node("worker-1", kubelet("v1.31.4+rke2r1")), DistributionRancher, true},
+		// A node with no mark says nothing about itself, which is not the
+		// same as saying it is vanilla Kubernetes.
+		{"a node with no marks", node("worker-1"), "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, found := NodeDistribution(c.worker)
+			if got != c.want || found != c.found {
+				t.Errorf("concluded (%q, %t), want (%q, %t)", got, found, c.want, c.found)
+			}
+		})
+	}
+}
+
+func TestCollectEnvironmentAsksTheAPIServerForItsVersion(t *testing.T) {
+	disco := &discoveryfake.FakeDiscovery{Fake: &clienttesting.Fake{}}
+	disco.FakedServerVersion = &version.Info{GitVersion: "v1.31.2-gke.1100000"}
+
+	env, err := CollectEnvironment(context.Background(), disco, managedWorkers())
+	if err != nil {
+		t.Fatalf("collecting the environment: %v", err)
+	}
+
+	if env.Distribution != DistributionGKE {
+		t.Errorf("concluded %q under a GKE API server, want %q", env.Distribution, DistributionGKE)
 	}
 }

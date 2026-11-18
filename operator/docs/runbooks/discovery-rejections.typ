@@ -437,7 +437,7 @@ the draft is what gets deployed and a later fix means a new CDC.
   [`ControlPlaneNodeIncluded`], [`<worker> is <role> and is in the draft because spec.discover.enableControlPlaneNodes is set`],
   [The control-plane node hosts a storage node.],
   [Confirm with the customer that storage on control-plane nodes is intended. That is typical for three-node compact clusters. Otherwise, remove the setting and run discovery again.],
-  [`EnvironmentPartiallyRead`], [`the API groups could not be listed, so the distribution was concluded from the nodes alone: <error>`],
+  [`EnvironmentPartiallyRead`], [`the API server's groups or version could not be read, so the distribution was concluded from what could: <error>`],
   [`status.environment` (OpenShift, Talos, EKS, and so on) may be wrong, and with it the settings the draft derives from it.],
   [Check `status.environment` of the OperatorOps against the actual platform. If it is wrong, set `spec.environment` in the draft CDC before approving it. Look into the error, usually RBAC or an API server problem.],
   [`ReportUnreadable`], [`<ns>/<configmap>: the probe report is version <n> and this operator reads version <m>, so the probe has to be re-run`, `parse the probe report: ...`, or `the ConfigMap <ns>/<configmap> carries no report.json, so the probe did not finish writing it`],
