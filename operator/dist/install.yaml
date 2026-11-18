@@ -1050,8 +1050,8 @@ spec:
                   enableCpuTopology:
                     description: |-
                       EnableCpuTopology turns on topology-aware CPU assignment on the storage
-                      nodes. Unset leaves it to spec.environment: OpenShift turns it on, and
-                      every other environment leaves it off. Stated, it replaces what the
+                      nodes. Unset leaves it to spec.environment: OpenShift and Talos turn it on,
+                      and every other environment leaves it off. Stated, it replaces what the
                       environment decides, for a fleet whose workers the environment does not
                       describe.
                     type: boolean
@@ -1101,7 +1101,8 @@ spec:
                       and the rolling reboot of that pool which applying it takes.
 
                       Unset leaves it to spec.environment: on for Vanilla, OpenShift, Rancher,
-                      and K3s, and off for Talos, EKS, GKE, AKS, and OKE, whose kubelet
+                      K3s, and Talos (whose kubelet is configured through the Talos API), and
+                      off for EKS, GKE, AKS, and OKE, whose kubelet
                       configuration is not writable or is rebuilt with every node. Stated, it
                       replaces what the environment decides. A fleet that manages its kubelet
                       configuration itself states it false: a storage node then neither
@@ -1551,6 +1552,19 @@ spec:
                       rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks)
                         ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4, 1],
                         [1, 2], [2, 2], [4, 2]]'
+                  talosMachineConfig:
+                    description: |-
+                      TalosMachineConfig is who writes a Talos worker's machine config, the
+                      huge-page pool and the kubelet's CPU topology. Preprovisioned, the
+                      default, is the cluster's operator, before the nodes are added: a node
+                      verifies and fails its add with the patch to apply. Managed is the node
+                      itself, through the Talos API, which needs the os:admin credentials
+                      Secret in the namespace. It is valid only when spec.environment is
+                      Talos, and lands on StorageCluster.spec.storageNodes.talosMachineConfig.
+                    enum:
+                    - Preprovisioned
+                    - Managed
+                    type: string
                   tolerations:
                     description: |-
                       Tolerations are what the storage-node pods tolerate, and they expand into
@@ -1795,6 +1809,23 @@ spec:
                         - Always
                         - Never
                         - IfNotPresent
+                        type: string
+                    type: object
+                  talosctl:
+                    description: |-
+                      Talosctl is the talosctl image a Talos worker's node runs as a Job to
+                      reserve its huge pages through the Talos API. It is the fleet's, written
+                      to StorageCluster.spec.storageNodes.talosctlImage: one DaemonSet, one Job
+                      image. Unstated keeps the node agent's default; a deployment pins it to
+                      the cluster's Talos minor, or to a mirror on an air-gapped site. Read only
+                      for a document whose environment is Talos.
+                    properties:
+                      image:
+                        description: |-
+                          Image is the repository and tag, optionally digest-pinned, on any
+                          registry. An empty value is not written downstream, so the field it would
+                          fill keeps its own default.
+                        pattern: ^($|[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?/[a-z0-9][a-z0-9._/-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                         type: string
                     type: object
                 type: object
@@ -2090,6 +2121,10 @@ spec:
                 states, so spec.environment has to be OpenShift
               rule: '!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment)
                 && self.environment == ''OpenShift'')'
+            - message: spec.cluster.talosMachineConfig is what a deployment onto Talos
+                states, so spec.environment has to be Talos
+              rule: '!has(self.cluster) || !has(self.cluster.talosMachineConfig) ||
+                (has(self.environment) && self.environment == ''Talos'')'
           status:
             properties:
               clusterRef:
@@ -4649,6 +4684,9 @@ spec:
     - jsonPath: .spec.relocate.targetClusterRef
       name: Target Cluster
       type: string
+    - jsonPath: .spec.joinConsistencyGroup.groupName
+      name: Group
+      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
@@ -4697,8 +4735,8 @@ spec:
               PersistentVolume.
 
               The action and its parameter block have to agree: Migrate requires
-              spec.migrate and Relocate requires spec.relocate, and neither action
-              accepts the other's block.
+              spec.migrate, Relocate requires spec.relocate, and JoinConsistencyGroup
+              requires spec.joinConsistencyGroup, and no action accepts another's block.
             properties:
               abort:
                 description: |-
@@ -4714,6 +4752,7 @@ spec:
                 enum:
                 - Migrate
                 - Relocate
+                - JoinConsistencyGroup
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -4751,6 +4790,38 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              joinConsistencyGroup:
+                description: JoinConsistencyGroup parameterizes action JoinConsistencyGroup.
+                properties:
+                  groupName:
+                    description: |-
+                      GroupName is the consistency group to join, by the name its members'
+                      claims carry in the storage.simplyblock.io/consistency-group label.
+                    maxLength: 63
+                    minLength: 1
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  suspendTimeoutSeconds:
+                    default: 10
+                    description: |-
+                      SuspendTimeoutSeconds is the longest time any node may hold the I/O of a
+                      moving volume while its namespace changes subsystem. A node that has not
+                      been released by then resumes the volume on its own. Defaults to 10.
+                    format: int32
+                    maximum: 30
+                    minimum: 1
+                    type: integer
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                required:
+                - groupName
+                type: object
+                x-kubernetes-validations:
+                - message: field suspendTimeoutSeconds is immutable once set
+                  rule: '!has(oldSelf.suspendTimeoutSeconds) || has(self.suspendTimeoutSeconds)'
               migrate:
                 description: Migrate parameterizes action Migrate.
                 properties:
@@ -4826,6 +4897,10 @@ spec:
             - message: relocate is required for action Relocate and must be absent
                 otherwise
               rule: 'self.action == ''Relocate'' ? has(self.relocate) : !has(self.relocate)'
+            - message: joinConsistencyGroup is required for action JoinConsistencyGroup
+                and must be absent otherwise
+              rule: 'self.action == ''JoinConsistencyGroup'' ? has(self.joinConsistencyGroup)
+                : !has(self.joinConsistencyGroup)'
           status:
             description: PersistentVolumeOpsStatus is the observed state of one volume
               operation.
@@ -4844,6 +4919,158 @@ spec:
                   needs to see that the operation is waiting and since when.
                 format: date-time
                 type: string
+              joinConsistencyGroup:
+                description: JoinConsistencyGroup is the progress of a JoinConsistencyGroup.
+                properties:
+                  groupUUID:
+                    description: GroupUUID is the group's backend UUID, resolved from
+                      spec.groupName.
+                    type: string
+                  hosts:
+                    description: Hosts are the nodes consuming any of those volumes.
+                    items:
+                      description: |-
+                        SwapHost is one node consuming a moving volume, and how far its part of the
+                        swap got.
+                      properties:
+                        instanceUID:
+                          description: |-
+                            InstanceUID identifies the CSI node plugin process that acknowledged the
+                            steps below. A different value means the plugin restarted since.
+                          type: string
+                        node:
+                          description: Node is the Kubernetes node.
+                          type: string
+                        persistentVolumes:
+                          description: |-
+                            PersistentVolumes are the moving volumes the node consumes, which are
+                            the ones it holds and releases.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: set
+                        prepared:
+                          description: Prepared is set once the node holds paths to
+                            the target subsystem.
+                          type: boolean
+                        released:
+                          description: |-
+                            Released is set once the node disconnected the subsystem it no longer
+                            uses.
+                          type: boolean
+                        resumed:
+                          description: |-
+                            Resumed is set once the node released that I/O on the subsystem named by
+                            namespacesAt.
+                          type: boolean
+                        suspended:
+                          description: |-
+                            Suspended is set once the node holds the I/O of every moving volume it
+                            consumes.
+                          type: boolean
+                      required:
+                      - node
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - node
+                    x-kubernetes-list-type: map
+                  joined:
+                    description: Joined is set once the volume is a member of the
+                      group.
+                    type: boolean
+                  leave:
+                    description: |-
+                      Leave is the progress of leaving the consistency group the volume was a
+                      member of when the operation started. It is absent when the volume was in
+                      no group, or already in the one spec.groupName names.
+                    properties:
+                      detached:
+                        description: Detached is set once the volume is no longer
+                          a member of that group.
+                        type: boolean
+                      groupUUID:
+                        description: GroupUUID is the backend UUID of the group the
+                          volume leaves.
+                        type: string
+                      split:
+                        description: |-
+                          Split is set once the volume no longer shares an NVMe-oF subsystem with
+                          the members of the group it leaves.
+                        type: boolean
+                      splitNQN:
+                        description: |-
+                          SplitNQN is the NVMe-oF subsystem the volume was moved into when it
+                          shared its subsystem with that group's members. It is empty when the
+                          volume shared its subsystem with no other volume.
+                        type: string
+                    required:
+                    - groupUUID
+                    type: object
+                  migrationName:
+                    description: |-
+                      MigrationName is the Migrate operation this one created to bring the
+                      volume onto the group's node, when it needed one.
+                    type: string
+                  moveID:
+                    description: MoveID is the backend's identity for the subsystem
+                      move.
+                    type: string
+                  namespacesAt:
+                    description: NamespacesAt is the subsystem the moving namespaces
+                      are exported by now.
+                    enum:
+                    - Source
+                    - Target
+                    type: string
+                  rollbackReason:
+                    description: |-
+                      RollbackReason is why the move is being taken back, set once the
+                      operation stops moving the group forward. The operation ends Failed with
+                      it once every node is back on the subsystem it started on.
+                    type: string
+                  suspendDeadline:
+                    description: |-
+                      SuspendDeadline is the time by which every node resumes, whatever
+                      happened.
+                    format: date-time
+                    type: string
+                  targetIsNew:
+                    description: TargetIsNew is set when the target subsystem was
+                      created for this move.
+                    type: boolean
+                  targetNQN:
+                    description: TargetNQN is the subsystem the group ends up in.
+                    type: string
+                  volumes:
+                    description: Volumes are the volumes whose namespaces change subsystem.
+                    items:
+                      description: MovingVolume is one volume whose namespace changes
+                        NVMe-oF subsystem.
+                      properties:
+                        persistentVolumeName:
+                          description: PersistentVolumeName is the volume's PersistentVolume,
+                            when it has one.
+                          type: string
+                        sourceNQN:
+                          description: SourceNQN is the subsystem the namespace leaves.
+                          type: string
+                        targetNSID:
+                          description: TargetNSID is the namespace ID the volume takes
+                            in the target subsystem.
+                          format: int32
+                          type: integer
+                        volumeUUID:
+                          description: VolumeUUID is the volume's backend UUID.
+                          type: string
+                      required:
+                      - volumeUUID
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - volumeUUID
+                    x-kubernetes-list-type: map
+                type: object
               message:
                 description: |-
                   Message is the reason the phase is what it is: one sentence, replaced as
@@ -5165,7 +5392,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'',''Verifying'',''Replicating'',''Committing'',''AwaitingCutover'',''AttachingPaths'',''Proceeding'',''Completed'']'
+                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'',''Verifying'',''Replicating'',''Committing'',''AwaitingCutover'',''AttachingPaths'',''Proceeding'',''Completed'',''Planning'',''Joining'',''SelectingSubsystem'',''PreparingTarget'',''Suspending'',''MovingNamespaces'',''Resuming'',''ReleasingPaths'',''Leaving'']'
             type: object
         type: object
     served: true
@@ -6429,6 +6656,15 @@ spec:
                       type: string
                   type: object
                 type: array
+              disableDeviceMapperIndirection:
+                description: |-
+                  DisableDeviceMapperIndirection stages new volumes directly on their NVMe
+                  device instead of behind a device-mapper linear device. Without that
+                  layer a volume cannot move to another NVMe subsystem while a pod uses
+                  it, so it cannot join a consistency group live. The layer costs a little
+                  CPU per I/O. A change applies to volumes staged after it; a volume keeps
+                  the layout it was staged with until its pods stop and it is staged again.
+                type: boolean
               driverName:
                 default: csi.simplyblock.io
                 description: |-
@@ -10188,6 +10424,37 @@ spec:
                     items:
                       type: string
                     type: array
+                  talos:
+                    description: |-
+                      Talos states that the workers run Talos Linux: an immutable host with no
+                      shell, which the node therefore never touches directly. It reserves the
+                      huge pages a worker needs through the Talos API instead, and skips the
+                      host-configuration Jobs that would nsenter into the host. The expansion
+                      sets it from spec.environment, as it sets OpenShift; the node agent reads
+                      it as TALOS_CLUSTER.
+                    type: boolean
+                  talosMachineConfig:
+                    description: |-
+                      TalosMachineConfig is who writes a Talos worker's machine config: the
+                      huge-page pool (machine.sysfs) and the kubelet's CPU topology
+                      (machine.kubelet.extraConfig). Preprovisioned, the default, is the
+                      cluster's operator, before the node is added: the node verifies both,
+                      applies nothing, and fails the add with the patch to apply, so no Talos
+                      API credentials exist in the namespace. Managed is the node itself,
+                      through the Talos API as talosctl Jobs, which needs the os:admin Secret
+                      the Talos API access feature issues. Read only when Talos is stated; the
+                      node agent reads it as TALOS_MACHINE_CONFIG.
+                    enum:
+                    - Preprovisioned
+                    - Managed
+                    type: string
+                  talosctlImage:
+                    description: |-
+                      TalosctlImage is the talosctl image the node runs as a Job on a Talos
+                      worker to reach its Talos API. Empty keeps the node agent's own default;
+                      a deployment pins it to the cluster's Talos minor, or to a mirror on an
+                      air-gapped site. It is spec.images.talosctl on the deployment config.
+                    type: string
                   tolerations:
                     description: Tolerations are applied to the storage-node pods.
                     items:
@@ -16300,8 +16567,8 @@ spec:
                       enableCpuTopology:
                         description: |-
                           EnableCpuTopology turns on topology-aware CPU assignment on the storage
-                          nodes. Unset leaves it to spec.environment: OpenShift turns it on, and
-                          every other environment leaves it off. Stated, it replaces what the
+                          nodes. Unset leaves it to spec.environment: OpenShift and Talos turn it on,
+                          and every other environment leaves it off. Stated, it replaces what the
                           environment decides, for a fleet whose workers the environment does not
                           describe.
                         type: boolean
@@ -16351,7 +16618,8 @@ spec:
                           and the rolling reboot of that pool which applying it takes.
 
                           Unset leaves it to spec.environment: on for Vanilla, OpenShift, Rancher,
-                          and K3s, and off for Talos, EKS, GKE, AKS, and OKE, whose kubelet
+                          K3s, and Talos (whose kubelet is configured through the Talos API), and
+                          off for EKS, GKE, AKS, and OKE, whose kubelet
                           configuration is not writable or is rebuilt with every node. Stated, it
                           replaces what the environment decides. A fleet that manages its kubelet
                           configuration itself states it false: a storage node then neither
@@ -16802,6 +17070,19 @@ spec:
                           rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks)
                             ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4,
                             1], [1, 2], [2, 2], [4, 2]]'
+                      talosMachineConfig:
+                        description: |-
+                          TalosMachineConfig is who writes a Talos worker's machine config, the
+                          huge-page pool and the kubelet's CPU topology. Preprovisioned, the
+                          default, is the cluster's operator, before the nodes are added: a node
+                          verifies and fails its add with the patch to apply. Managed is the node
+                          itself, through the Talos API, which needs the os:admin credentials
+                          Secret in the namespace. It is valid only when spec.environment is
+                          Talos, and lands on StorageCluster.spec.storageNodes.talosMachineConfig.
+                        enum:
+                        - Preprovisioned
+                        - Managed
+                        type: string
                       tolerations:
                         description: |-
                           Tolerations are what the storage-node pods tolerate, and they expand into
@@ -17439,6 +17720,23 @@ spec:
                         - IfNotPresent
                         type: string
                     type: object
+                  talosctl:
+                    description: |-
+                      Talosctl is the talosctl image a Talos worker's node runs as a Job to
+                      reserve its huge pages through the Talos API. It is the fleet's, written
+                      to StorageCluster.spec.storageNodes.talosctlImage: one DaemonSet, one Job
+                      image. Unstated keeps the node agent's default; a deployment pins it to
+                      the cluster's Talos minor, or to a mirror on an air-gapped site. Read only
+                      for a document whose environment is Talos.
+                    properties:
+                      image:
+                        description: |-
+                          Image is the repository and tag, optionally digest-pinned, on any
+                          registry. An empty value is not written downstream, so the field it would
+                          fill keeps its own default.
+                        pattern: ^($|[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?/[a-z0-9][a-z0-9._/-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                        type: string
+                    type: object
                 type: object
               sites:
                 description: |-
@@ -18000,8 +18298,8 @@ spec:
                             enableCpuTopology:
                               description: |-
                                 EnableCpuTopology turns on topology-aware CPU assignment on the storage
-                                nodes. Unset leaves it to spec.environment: OpenShift turns it on, and
-                                every other environment leaves it off. Stated, it replaces what the
+                                nodes. Unset leaves it to spec.environment: OpenShift and Talos turn it on,
+                                and every other environment leaves it off. Stated, it replaces what the
                                 environment decides, for a fleet whose workers the environment does not
                                 describe.
                               type: boolean
@@ -18051,7 +18349,8 @@ spec:
                                 and the rolling reboot of that pool which applying it takes.
 
                                 Unset leaves it to spec.environment: on for Vanilla, OpenShift, Rancher,
-                                and K3s, and off for Talos, EKS, GKE, AKS, and OKE, whose kubelet
+                                K3s, and Talos (whose kubelet is configured through the Talos API), and
+                                off for EKS, GKE, AKS, and OKE, whose kubelet
                                 configuration is not writable or is rebuilt with every node. Stated, it
                                 replaces what the environment decides. A fleet that manages its kubelet
                                 configuration itself states it false: a storage node then neither
@@ -18508,6 +18807,19 @@ spec:
                                   has(self.parityChunks) ? self.parityChunks : 1]
                                   in [[1, 0], [1, 1], [2, 1], [4, 1], [1, 2], [2,
                                   2], [4, 2]]'
+                            talosMachineConfig:
+                              description: |-
+                                TalosMachineConfig is who writes a Talos worker's machine config, the
+                                huge-page pool and the kubelet's CPU topology. Preprovisioned, the
+                                default, is the cluster's operator, before the nodes are added: a node
+                                verifies and fails its add with the patch to apply. Managed is the node
+                                itself, through the Talos API, which needs the os:admin credentials
+                                Secret in the namespace. It is valid only when spec.environment is
+                                Talos, and lands on StorageCluster.spec.storageNodes.talosMachineConfig.
+                              enum:
+                              - Preprovisioned
+                              - Managed
+                              type: string
                             tolerations:
                               description: |-
                                 Tolerations are what the storage-node pods tolerate, and they expand into

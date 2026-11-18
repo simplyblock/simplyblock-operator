@@ -131,6 +131,16 @@ type PersistentVolumeOpsReconciler struct {
 	// whose consumer was missed is one whose host never gets the target's
 	// paths and loses its volume at cutover.
 	Reader client.Reader
+
+	// Join is the control-plane surface of a JoinConsistencyGroup, and Swap
+	// reaches the CSI node plugins that hold a moving volume's I/O. A join
+	// fails when either is missing rather than running half a swap.
+	Join JoinClient
+	Swap SwapPeers
+
+	// Clock is the time the suspend window is measured against, so a test can
+	// close it. Nil is the wall clock.
+	Clock func() time.Time
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=persistentvolumeops,verbs=get;list;watch;create;update;patch;delete
@@ -143,6 +153,7 @@ type PersistentVolumeOpsReconciler struct {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=volumeattachments,verbs=get;list;watch
 
 // SetupWithManager registers the controller, the field index the queue reads,
 // and the watch that wakes a queued operation when the volume's lock frees.
@@ -266,6 +277,10 @@ func (r *PersistentVolumeOpsReconciler) Reconcile(
 			return r.finish(ctx, &ops, simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed, fatal.Error())
 		}
 		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, &ops, err.Error())
+	}
+
+	if ops.Spec.Action == simplyblockv1alpha2.PersistentVolumeOpsActionJoinConsistencyGroup {
+		return r.reconcileJoin(ctx, &ops, subject)
 	}
 
 	// The named volume's pin is read before anything else is waited on, so a
@@ -457,7 +472,7 @@ func (r *PersistentVolumeOpsReconciler) enterInitialStep(
 			State:    string(machine.CurrentState()),
 			Deadline: &deadline,
 		}
-		status.Message = "the operation holds the volume and is running"
+		status.Message = runningMessage
 		if status.StartedAt == nil {
 			status.StartedAt = &now
 		}
@@ -559,6 +574,11 @@ func (r *PersistentVolumeOpsReconciler) teardown(
 ) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(ops, opsFinalizer) {
 		return ctrl.Result{}, nil
+	}
+
+	if ops.Spec.Action == simplyblockv1alpha2.PersistentVolumeOpsActionJoinConsistencyGroup &&
+		!terminal(ops.Status.Phase) {
+		return r.teardownJoin(ctx, ops)
 	}
 
 	if !terminal(ops.Status.Phase) {
@@ -682,6 +702,9 @@ func (r *PersistentVolumeOpsReconciler) note(
 // recordStep persists the step the operation is about to be in, with the
 // instant it expires. Both travel together, because a step persisted without
 // its deadline restores as a step that can never time out.
+//
+// The message is reset with it: whatever the previous step was waiting on is
+// no longer what the operation waits on.
 func (r *PersistentVolumeOpsReconciler) recordStep(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.PersistentVolumeOps,
@@ -691,8 +714,13 @@ func (r *PersistentVolumeOpsReconciler) recordStep(
 	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.PersistentVolumeOpsStatus) {
 		status.Phase = simplyblockv1alpha2.PersistentVolumeOpsPhaseRunning
 		status.Step = statemachine.KubeSnapshot{State: string(next), Deadline: deadline}
+		status.Message = runningMessage
 	})
 }
+
+// runningMessage is status.message while a step runs and has nothing to say
+// about what it waits on.
+const runningMessage = "the operation holds the volume and is running"
 
 // writeStatus applies the mutation and patches only when something changed.
 //
