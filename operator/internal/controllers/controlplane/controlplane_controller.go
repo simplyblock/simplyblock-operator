@@ -98,6 +98,7 @@ type ControlPlaneReconciler struct {
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=create
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;patch,resourceNames=foundationdbbackups.apps.foundationdb.org;foundationdbclusters.apps.foundationdb.org;foundationdbrestores.apps.foundationdb.org;certificaterequests.cert-manager.io;certificates.cert-manager.io;challenges.acme.cert-manager.io;clusterissuers.cert-manager.io;issuers.cert-manager.io;orders.acme.cert-manager.io;volumesnapshotclasses.snapshot.storage.k8s.io;volumesnapshotcontents.snapshot.storage.k8s.io;volumesnapshots.snapshot.storage.k8s.io;volumegroupsnapshotclasses.groupsnapshot.storage.k8s.io;volumegroupsnapshotcontents.groupsnapshot.storage.k8s.io;volumegroupsnapshots.groupsnapshot.storage.k8s.io
 // +kubebuilder:rbac:groups=cert-manager.io,resources=clusterissuers,verbs=get;create;patch
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;create;patch
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=mutatingwebhookconfigurations;validatingwebhookconfigurations,verbs=get;create;patch

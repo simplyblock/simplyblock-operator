@@ -1,18 +1,30 @@
 // The Prometheus a managed control plane runs, applied with the management API.
 // Every control-plane container pushes to it, and its Thanos sidecar uploads
 // each two-hour block to the object store the datastore step created.
+//
+// It exists for the installs nothing else scrapes: an OperatorHub install runs
+// no Helm chart, so without this one nothing deployed Prometheus for it. Where
+// a prometheus-operator already scrapes this namespace's management API, through
+// the chart's own prometheus.enabled path (bundled, or bring-your-own), this one
+// is left out of the apply instead of run beside it. See
+// prometheusScrapesTheManagementAPI.
 
 package controlplane
 
 import (
+	"context"
+	"fmt"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/ptr"
@@ -65,6 +77,53 @@ func prometheusObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 		objects = append(objects, prometheusClientCertificateObject(ns))
 	}
 	return objects
+}
+
+// serviceMonitorGVK is the prometheus-operator kind
+// prometheusScrapesTheManagementAPI looks for.
+var serviceMonitorGVK = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"}
+
+// prometheusScrapesTheManagementAPI reports whether a prometheus-operator
+// already scrapes this namespace's management API, through the ServiceMonitor
+// named like ComponentWebAPI the chart renders either under its own
+// prometheus.enabled path (bundled, or against a prometheus-operator the
+// customer runs some other way). Present, this control plane's own Prometheus
+// would only scrape the same target a second time.
+func prometheusScrapesTheManagementAPI(
+	ctx context.Context, c client.Client, mapper meta.RESTMapper, namespace string,
+) (bool, error) {
+	if _, err := mapper.RESTMapping(serviceMonitorGVK.GroupKind(), serviceMonitorGVK.Version); err != nil {
+		if meta.IsNoMatchError(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("looking up %s: %w", serviceMonitorGVK, err)
+	}
+	sm := &unstructured.Unstructured{}
+	sm.SetGroupVersionKind(serviceMonitorGVK)
+	switch err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: ComponentWebAPI}, sm); {
+	case err == nil:
+		return true, nil
+	case apierrors.IsNotFound(err):
+		return false, nil
+	default:
+		return false, fmt.Errorf("getting the %s ServiceMonitor: %w", ComponentWebAPI, err)
+	}
+}
+
+// withoutPrometheus drops this control plane's own Prometheus: the
+// StatefulSet, its Services, its ServiceAccount, its RBAC, its ConfigMap, and
+// its client certificate, every one named with ComponentPrometheus as a
+// prefix. Used once a prometheus-operator is found already scraping the
+// management API, so that one is not scraped a second time by this one too.
+func withoutPrometheus(objects []client.Object) []client.Object {
+	kept := objects[:0:0]
+	for _, o := range objects {
+		if strings.HasPrefix(o.GetName(), ComponentPrometheus) {
+			continue
+		}
+		kept = append(kept, o)
+	}
+	return kept
 }
 
 // prometheusHasOwnCertificate says whether Prometheus presents a client

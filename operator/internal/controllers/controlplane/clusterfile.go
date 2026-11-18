@@ -34,6 +34,14 @@ func (r *ControlPlaneReconciler) managementAPIStamped(
 ) ([]client.Object, error) {
 	objects := managementAPIObjects(cp)
 
+	scraped, err := prometheusScrapesTheManagementAPI(ctx, r.Client, r.RESTMapper(), cp.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	if scraped {
+		objects = withoutPrometheus(objects)
+	}
+
 	var file corev1.ConfigMap
 	key := client.ObjectKey{Namespace: cp.Namespace, Name: clusterFileConfigMapName}
 	if err := r.Get(ctx, key, &file); err != nil {
