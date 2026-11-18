@@ -473,6 +473,9 @@ func TestDisablingDeviceMapperIndirectionReachesOnlyTheNodePlugin(t *testing.T) 
 	controller := containerNamed(controllerStatefulSet(d, testImage).Spec.Template.Spec.Containers, "csi-controller")
 	if e := envNamed(controller, "SPDKCSI_DM_INDIRECTION"); e != nil {
 		t.Errorf("the controller plugin carries SPDKCSI_DM_INDIRECTION = %q", e.Value)
+	}
+}
+
 // U-111: enableNVMeTCPModuleInstall adds the nvme-tcp-module init container.
 // It runs the driver's own image under the driver's pull policy, so a mirrored
 // or air-gapped registry needs nothing more, and it reaches the host through a
