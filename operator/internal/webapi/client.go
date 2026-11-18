@@ -3,6 +3,8 @@
 package webapi
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"net/http"
 	"os"
 	"strings"
@@ -112,6 +114,27 @@ func NewClient(baseURL ...string) *Client {
 	}
 
 	return c
+}
+
+// NewRemoteClient is a client for the control plane of a storage cluster
+// outside this Kubernetes cluster. That endpoint is exposed under its own
+// hostname, so its certificate is verified against that hostname, not the
+// in-cluster webappapi Service name, and against the system trust store plus
+// this cluster's CA bundle when one is mounted.
+func NewRemoteClient(baseURL string) *Client {
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if caPEM, err := os.ReadFile(tlsutil.ServiceCABundlePath); err == nil {
+		pool.AppendCertsFromPEM(caPEM)
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
+	return &Client{
+		BaseURL:    baseURL,
+		HttpClient: &http.Client{Timeout: RequestTimeout, Transport: transport},
+	}
 }
 
 // StreamClient carries what a long-lived streaming request needs against the
