@@ -83,9 +83,10 @@ func TestClientCreateClusterSendsTheSpecsFieldNames(t *testing.T) {
 	}
 }
 
-// The three integrity settings are sent when on and left out when off, so a
-// control plane that predates one is never sent a key it does not know for a
-// setting nobody asked for.
+// Checksum validation and atomicity are sent when on and left out when off,
+// which is the control plane's own default for both. The metadata journal is
+// the other way about: the control plane journals unless told not to, so off
+// has to be said.
 func TestClientCreateClusterSendsTheIntegritySettings(t *testing.T) {
 	for _, on := range []bool{true, false} {
 		var body map[string]any
@@ -107,7 +108,7 @@ func TestClientCreateClusterSendsTheIntegritySettings(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		for _, key := range []string{"inline_checksum", "atomic_4k", "md_journal"} {
+		for _, key := range []string{"inline_checksum", "atomic_4k"} {
 			value, sent := body[key]
 			if on && value != true {
 				t.Errorf("on: body[%q] = %v, want true", key, value)
@@ -115,6 +116,9 @@ func TestClientCreateClusterSendsTheIntegritySettings(t *testing.T) {
 			if !on && sent {
 				t.Errorf("off: body[%q] = %v, want it left out", key, value)
 			}
+		}
+		if value, sent := body["md_journal"]; !sent || value != on {
+			t.Errorf("body[md_journal] = %v (sent %v), want %v stated", value, sent, on)
 		}
 	}
 }
