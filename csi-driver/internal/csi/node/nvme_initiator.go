@@ -88,7 +88,7 @@ func (c initiatorCheck) ensure(ctx context.Context) error {
 	if c.present(initiatorModuleDir) {
 		return nil
 	}
-	out, err := c.run(ctx, "modprobe", initiatorModule)
+	out, err := c.run(ctx, modprobeCommand, initiatorModule)
 	if err == nil {
 		return nil
 	}

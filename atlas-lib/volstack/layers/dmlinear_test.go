@@ -3,6 +3,7 @@ package layers
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/simplyblock/atlas/blockdev"
@@ -167,5 +168,103 @@ func TestDMLinearReleaseRemovesTheMappingAndDestroyKeepsNothing(t *testing.T) {
 	}
 	if err := layer.Destroy(context.Background(), volstack.Artifact{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// growDM reaches the layer through the runner's contract, which is the only way
+// an expand reaches it: a layer that is not a Grower is walked past.
+func growDM(t *testing.T, layer *DMLinear, below volstack.Artifact) (volstack.Artifact, error) {
+	t.Helper()
+	grower, ok := any(layer).(volstack.Grower)
+	if !ok {
+		t.Fatal("the dmLinear layer does not implement Grower, so an expand walks past it " +
+			"and the mapping keeps the size it was created with")
+	}
+	return grower.Grow(context.Background(), below)
+}
+
+// The namespace grew: the mapping is extended to the device's new size, so the
+// filesystem or the raw block consumer above sees the space. The device the
+// mapping points at and the device above it stay the same.
+func TestDMLinearGrowExtendsTheMappingToTheDeviceBelow(t *testing.T) {
+	m := newFakeMapper()
+	layer := dmLayer(m)
+	below := nvmeBelow("/dev/nvme1n1", 259, 3)
+	if _, err := layer.Ensure(context.Background(), below); err != nil {
+		t.Fatal(err)
+	}
+	m.sectors["/dev/nvme1n1"] = 4096
+
+	own, err := growDM(t, layer, below)
+	if err != nil {
+		t.Fatalf("grow: %v", err)
+	}
+	got := m.tables["sb-vol-1"]
+	if got.Sectors != 4096 {
+		t.Fatalf("mapping is %d sectors after the grow, want the device's 4096", got.Sectors)
+	}
+	if got.Device != "259:3" {
+		t.Fatalf("grow re-pointed the mapping at %s, want it on 259:3", got.Device)
+	}
+	if len(own.Devices) != 1 || own.Devices[0].Path != "/dev/mapper/sb-vol-1" {
+		t.Fatalf("grow exposes %v, want the mapping", own.Devices)
+	}
+}
+
+// kubelet reissues NodeExpandVolume after one that already succeeded. A mapping
+// already the device's size is left alone: a reload suspends the consumer's I/O
+// for nothing.
+func TestDMLinearGrowIsConvergent(t *testing.T) {
+	m := newFakeMapper()
+	layer := dmLayer(m)
+	below := nvmeBelow("/dev/nvme1n1", 259, 3)
+	if _, err := layer.Ensure(context.Background(), below); err != nil {
+		t.Fatal(err)
+	}
+	m.sectors["/dev/nvme1n1"] = 4096
+	for i := range 2 {
+		if _, err := growDM(t, layer, below); err != nil {
+			t.Fatalf("grow %d: %v", i+1, err)
+		}
+	}
+	swaps := 0
+	for _, c := range m.calls {
+		if strings.HasPrefix(c, "swap ") {
+			swaps++
+		}
+	}
+	if swaps != 1 {
+		t.Fatalf("reloaded the mapping %d times across two expands, want once: %v", swaps, m.calls)
+	}
+}
+
+// A device that reads smaller than the mapping is never a reason to cut the
+// mapping: the data past the new end would vanish under a mounted filesystem.
+func TestDMLinearGrowNeverShrinksTheMapping(t *testing.T) {
+	m := newFakeMapper()
+	layer := dmLayer(m)
+	below := nvmeBelow("/dev/nvme1n1", 259, 3)
+	if _, err := layer.Ensure(context.Background(), below); err != nil {
+		t.Fatal(err)
+	}
+	m.sectors["/dev/nvme1n1"] = 1024
+
+	if _, err := growDM(t, layer, below); err != nil {
+		t.Fatalf("grow: %v", err)
+	}
+	if got := m.tables["sb-vol-1"].Sectors; got != 2048 {
+		t.Fatalf("mapping is %d sectors, want it kept at 2048", got)
+	}
+}
+
+// An expand with no device below has nothing to size the mapping from.
+func TestDMLinearGrowWithNothingBelowFails(t *testing.T) {
+	m := newFakeMapper()
+	layer := dmLayer(m)
+	if _, err := layer.Ensure(context.Background(), nvmeBelow("/dev/nvme1n1", 259, 3)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := growDM(t, layer, volstack.Artifact{}); err == nil {
+		t.Fatal("growing over nothing must fail")
 	}
 }

@@ -97,6 +97,22 @@ func TestADocumentStatingTheKubeletAndTopologyFlagsIsAdmittedOnEveryEnvironment(
 	}
 }
 
+// Who writes a Talos worker's machine config is a question only a Talos
+// deployment has, so a document states it only for a Talos fleet.
+func TestTheTalosMachineConfigModeNeedsATalosEnvironment(t *testing.T) {
+	found := refusals(t, cdc(simplyblockv1alpha2.KubernetesEnvironmentVanilla, func(c *simplyblockv1alpha2.ClusterTemplate) {
+		c.TalosMachineConfig = simplyblockv1alpha2.TalosMachineConfigManaged
+	}))
+	if !contains(found, "Talos") {
+		t.Errorf("the refusals are %v", found)
+	}
+	if found := refusals(t, cdc(simplyblockv1alpha2.KubernetesEnvironmentTalos, func(c *simplyblockv1alpha2.ClusterTemplate) {
+		c.TalosMachineConfig = simplyblockv1alpha2.TalosMachineConfigManaged
+	})); len(found) != 0 {
+		t.Errorf("a Talos document stating the mode is refused: %v", found)
+	}
+}
+
 func TestAnEnvironmentOutsideTheSetIsRefused(t *testing.T) {
 	if found := refusals(t, cdc("Nomad", nil)); !contains(found, "environment") {
 		t.Errorf("the refusals are %v", found)

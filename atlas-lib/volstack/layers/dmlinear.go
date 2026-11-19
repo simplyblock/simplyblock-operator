@@ -63,7 +63,7 @@ func NewDMLinear(cfg DMLinearConfig) *DMLinear {
 // Name is what the record calls this layer.
 func (d *DMLinear) Name() string { return "dmLinear" }
 
-// DMLinearName is the mapping name of the volume with UUID uuid.
+// DMLinearName is the mapping name of the volume with the given UUID.
 func DMLinearName(uuid string) string { return "sb-" + uuid }
 
 func deviceNumber(dev blockdev.Device) string { return fmt.Sprintf("%d:%d", dev.Major, dev.Minor) }
@@ -173,6 +173,37 @@ func (d *DMLinear) Heal(ctx context.Context, below, _ volstack.Artifact) error {
 		return err
 	}
 	return d.swap(ctx, below)
+}
+
+// Grow extends the mapping to the size of the device below, which the namespace
+// took when the volume was expanded. The table's length is fixed when it is
+// loaded, so without a reload the consumer keeps the size it was staged with.
+// Convergent: a mapping already that size is not reloaded, since a reload holds
+// the consumer's I/O. A device that reads smaller never shrinks the mapping.
+func (d *DMLinear) Grow(ctx context.Context, below volstack.Artifact) (volstack.Artifact, error) {
+	dev, ok := belowDevice(below)
+	if !ok {
+		return volstack.Artifact{}, fmt.Errorf("dmLinear: cannot grow %s: no device below", d.cfg.Name)
+	}
+	target, err := d.cfg.Mapper.Table(ctx, d.cfg.Name)
+	if err != nil {
+		return volstack.Artifact{}, fmt.Errorf("dmLinear: read %s: %w", d.cfg.Name, err)
+	}
+	// Re-pointing is the heal's, which runs before an expand finds the volume.
+	if target.Device != deviceNumber(dev) {
+		return volstack.Artifact{}, fmt.Errorf("dmLinear: cannot grow %s: it maps %s, not the device below (%s)",
+			d.cfg.Name, target.Device, deviceNumber(dev))
+	}
+	sectors, err := d.cfg.Mapper.Sectors(ctx, dev.Path)
+	if err != nil {
+		return volstack.Artifact{}, fmt.Errorf("dmLinear: %w", err)
+	}
+	if sectors > target.Sectors {
+		if err := d.cfg.Mapper.Swap(ctx, d.cfg.Name, target.Device, sectors); err != nil {
+			return volstack.Artifact{}, fmt.Errorf("dmLinear: %w", err)
+		}
+	}
+	return d.own()
 }
 
 // DMLinearParams is what the record keeps of this layer.

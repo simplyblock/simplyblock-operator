@@ -131,8 +131,7 @@ that skips it is silently absent from every install path:
    subresource, `+kubebuilder:printcolumn` for `kubectl get`, `+kubebuilder:resource:shortName=…`,
    and the validation and immutability markers. These are the API's contract, and the
    CRD is only their transcript.
-4. **Then sync:** `make -C operator build-installer` and `make helm-sync`, and
-   commit what they change.
+4. **Then sync:** `make helm-sync`, and commit what it changes.
 
 Optional, and only where they earn their keep: a per-kind
 `<kind>_{admin,editor,viewer}_role.yaml` in `config/rbac` (4 of 17 kinds have

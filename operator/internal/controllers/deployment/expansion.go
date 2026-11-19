@@ -450,6 +450,11 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		workload.Image = images.NodeAgent.Image
 		workload.ImagePullPolicy = images.NodeAgent.ImagePullPolicy
 	}
+	// The talosctl slot is the fleet's too: one Job image for every Talos worker
+	// the DaemonSet reaches. Unstated leaves the node agent's default in place.
+	if images := config.Spec.Images; images != nil && images.Talosctl != nil {
+		workload.TalosctlImage = images.Talosctl.Image
+	}
 
 	// The host OS is spent here too, and on one flag. Ubuntu keeps the NVMe-oF
 	// modules in linux-modules-extra rather than in the base install, so a
@@ -477,9 +482,23 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		// OpenShift deployment does.
 		workload.EnableKubeletConfiguration = ptr.To(true)
 	case simplyblockv1alpha2.KubernetesEnvironmentTalos:
-		// Talos has no writable kubelet configuration and no package manager, so
-		// the node applies neither.
-		workload.EnableKubeletConfiguration = ptr.To(false)
+		// Talos has no package manager and no writable kubelet configuration
+		// file, but it has the Talos API: the node configures the kubelet's
+		// CPU topology through machine.kubelet.extraConfig, the way it reserves
+		// huge pages, so the kubelet configuration is enabled as on any other
+		// distribution. Stated to the node as well, which is what selects that
+		// path over a write to a host it cannot reach. The CPU topology is on,
+		// as on OpenShift: it is what the kubelet configuration is for, and a
+		// Talos document cannot state it itself.
+		workload.Talos = ptr.To(true)
+		workload.EnableKubeletConfiguration = ptr.To(true)
+		workload.EnableCpuTopology = ptr.To(true)
+		// Who writes the machine config those settings live in. Unstated is
+		// Preprovisioned, the agent's own default, left unstated here too so
+		// the cluster reads as the document did.
+		if config.Spec.Cluster != nil {
+			workload.TalosMachineConfig = config.Spec.Cluster.TalosMachineConfig
+		}
 	case simplyblockv1alpha2.KubernetesEnvironmentEKS,
 		simplyblockv1alpha2.KubernetesEnvironmentGKE,
 		simplyblockv1alpha2.KubernetesEnvironmentAKS,

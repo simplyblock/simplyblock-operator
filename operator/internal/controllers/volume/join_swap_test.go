@@ -1,0 +1,686 @@
+// The JoinConsistencyGroup swap: the consuming hosts, the suspend window, the
+// move, the resume, the commit, and every rollback out of the window
+// (design-cg-live-subsystem-flip.md §6, §7, §11).
+
+package volume
+
+import (
+	"context"
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/volstack/swaprpc"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+)
+
+func (w *joinWorld) node(name string) *fakeSwapNode { return w.peers.nodes[name] }
+
+// U-72
+func TestTheConsumingHostsAreTheNodesOfTheVolumeAttachments(t *testing.T) {
+	w := newJoinWorld(t)
+
+	ops := w.runUntil(stepSuspending, 25)
+	hosts := map[string][]string{}
+	for _, h := range ops.Status.JoinConsistencyGroup.Hosts {
+		hosts[h.Node] = h.PersistentVolumes
+	}
+	if len(hosts) != 2 || !slices.Equal(hosts[joinHost], []string{testPVName}) ||
+		!slices.Equal(hosts[memberHost], []string{memberPVName}) {
+		t.Errorf("hosts = %v, want %s with the joiner and %s with the member", hosts, joinHost, memberHost)
+	}
+	for _, name := range []string{joinHost, memberHost} {
+		if w.log.index("prepare "+name+" "+joinTargetNQN+" 2") < 0 {
+			t.Errorf("%s was not given both paths to the target", name)
+		}
+	}
+}
+
+// Regression: 2026-11-02-cg-flip-prepare-without-host — the operator asked the
+// control plane to prepare the target without naming a host, the control plane
+// answered with no connect entries, and every host's Prepare was refused for
+// having no path, so a live flip never got past AttachingPaths.
+func TestEachHostIsPreparedWithItsOwnHostNQNAndGetsTheTargetPaths(t *testing.T) {
+	w := newJoinWorld(t)
+
+	ops := w.runUntil(stepSuspending, 25)
+	if ops.Status.Step.State != string(stepSuspending) {
+		t.Fatalf("step = %q (%s), want Suspending", ops.Status.Step.State, ops.Status.Message)
+	}
+	for _, name := range []string{joinHost, memberHost} {
+		if !slices.Contains(w.api.prepareHosts, hostNQNOf(name)) {
+			t.Errorf("no prepare named %s's host NQN %s; prepares named %q", name, hostNQNOf(name), w.api.prepareHosts)
+		}
+		if w.log.index("prepare "+name+" "+joinTargetNQN+" 2") < 0 {
+			t.Errorf("%s was not given both paths to the target: %v", name, w.log.calls)
+		}
+	}
+}
+
+// U-68, U-83, U-86, U-87
+func TestAFlipSuspendsEveryHostBeforeMovingAndResumesThemOnTheTarget(t *testing.T) {
+	w := newJoinWorld(t)
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
+	}
+
+	move := w.log.index("move")
+	if move < 0 {
+		t.Fatal("the namespaces were never moved")
+	}
+	for _, name := range []string{joinHost, memberHost} {
+		if s := w.log.index("suspend " + name); s < 0 || s > move {
+			t.Errorf("%s was suspended at %d, the move ran at %d", name, s, move)
+		}
+		if r := w.log.index("resume " + name + " " + joinTargetNQN); r < move {
+			t.Errorf("%s was resumed on the target at %d, before the move at %d", name, r, move)
+		}
+	}
+	if w.log.count("move") != 1 || w.log.count("commit") != 1 {
+		t.Errorf("moves = %d, commits = %d, want 1 each", w.log.count("move"), w.log.count("commit"))
+	}
+	if w.log.index("commit") < w.log.last("resume ") {
+		t.Error("the move was committed before every host resumed")
+	}
+	if w.log.index("release "+joinHost+" "+joinSourceNQN) < 0 ||
+		w.log.index("release "+memberHost+" "+memberNQN) < 0 {
+		t.Errorf("the sources were not released: %v", w.log.calls)
+	}
+	if w.node(joinHost).pointsAt[handleOf(testVolumeID)] != joinTargetNQN {
+		t.Error("the joiner's host does not point at the target")
+	}
+	if ops.Status.JoinConsistencyGroup.NamespacesAt != simplyblockv1alpha2.SubsystemSideTarget {
+		t.Errorf("namespacesAt = %q, want Target", ops.Status.JoinConsistencyGroup.NamespacesAt)
+	}
+	events := w.events()
+	if !hasEvent(events, ReasonConsistencyGroupColocated) || !hasEvent(events, ReasonSubsystemSwapCompleted) {
+		t.Errorf("events = %v, want ConsistencyGroupColocated and SubsystemSwapCompleted", events)
+	}
+}
+
+// U-74
+func TestAHostWithoutTheSwapCapabilityFailsBeforeAnythingIsSuspended(t *testing.T) {
+	w := newJoinWorld(t)
+	w.peers.incapable[memberHost] = true
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed {
+		t.Fatalf("phase = %q (%s), want Failed", ops.Status.Phase, ops.Status.Message)
+	}
+	if n := w.log.count("suspend") + w.log.count("move"); n != 0 {
+		t.Errorf("suspended or moved %d times with a host that cannot swap", n)
+	}
+	if w.log.count("rollback") == 0 {
+		t.Error("the reserved move was not rolled back")
+	}
+	if e := eventWith(w.events(), ReasonSubsystemSwapUnavailable); !strings.Contains(e, memberHost) {
+		t.Errorf("SubsystemSwapUnavailable event = %q, want it to name %s", e, memberHost)
+	}
+}
+
+// U-74, a host with no link at all
+func TestAHostWithNoLinkFailsBeforeAnythingIsSuspended(t *testing.T) {
+	w := newJoinWorld(t)
+	delete(w.peers.nodes, memberHost)
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed {
+		t.Fatalf("phase = %q (%s), want Failed", ops.Status.Phase, ops.Status.Message)
+	}
+	if w.log.count("suspend") != 0 {
+		t.Error("a host was suspended")
+	}
+}
+
+// U-75
+func TestAVolumeThatCannotSwapFailsNamingItsClaim(t *testing.T) {
+	w := newJoinWorld(t)
+	w.node(memberHost).notSwappable[handleOf(memberVolumeID)] = true
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed {
+		t.Fatalf("phase = %q (%s), want Failed", ops.Status.Phase, ops.Status.Message)
+	}
+	if w.log.count("suspend") != 0 {
+		t.Error("a host was suspended")
+	}
+	if e := eventWith(w.events(), ReasonSubsystemSwapUnavailable); !strings.Contains(e, "app/member") {
+		t.Errorf("SubsystemSwapUnavailable event = %q, want it to name claim app/member", e)
+	}
+}
+
+// csiDriver is the SimplyblockDriver that provisioned the test volumes.
+func csiDriver(disableIndirection bool) *simplyblockv1alpha2.SimplyblockDriver {
+	return &simplyblockv1alpha2.SimplyblockDriver{
+		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock", Namespace: testNamespace},
+		Spec: simplyblockv1alpha2.SimplyblockDriverSpec{
+			DriverName:                     CSIDriverName,
+			DisableDeviceMapperIndirection: disableIndirection,
+		},
+	}
+}
+
+// A volume staged without the device-mapper layer is restaged with it once its
+// pod restarts, unless the driver stages every volume without it. Then the
+// restart the refusal suggests stages the volume the same way, and the retry
+// fails the same way, so the refusal names the field that has to change first.
+func TestAVolumeThatCannotSwapUnderADriverWithoutTheIndirectionNamesTheField(t *testing.T) {
+	w := newJoinWorld(t, csiDriver(true))
+	w.node(memberHost).notSwappable[handleOf(memberVolumeID)] = true
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed {
+		t.Fatalf("phase = %q (%s), want Failed", ops.Status.Phase, ops.Status.Message)
+	}
+	e := eventWith(w.events(), ReasonSubsystemSwapUnavailable)
+	if !strings.Contains(e, "app/member") {
+		t.Errorf("SubsystemSwapUnavailable event = %q, want it to name claim app/member", e)
+	}
+	if !strings.Contains(e, "SimplyblockDriver "+testNamespace+"/simplyblock") ||
+		!strings.Contains(e, "spec.disableDeviceMapperIndirection") {
+		t.Errorf("SubsystemSwapUnavailable event = %q, want it to name SimplyblockDriver %s/simplyblock "+
+			"and spec.disableDeviceMapperIndirection", e, testNamespace)
+	}
+}
+
+// Under a driver that leaves the indirection on, a restart is the whole remedy,
+// and the refusal does not send anyone to a field that is already right.
+func TestAVolumeThatCannotSwapUnderADriverWithTheIndirectionSuggestsOnlyARestart(t *testing.T) {
+	w := newJoinWorld(t, csiDriver(false))
+	w.node(memberHost).notSwappable[handleOf(memberVolumeID)] = true
+
+	w.run(40)
+	e := eventWith(w.events(), ReasonSubsystemSwapUnavailable)
+	if !strings.Contains(e, "restart its pod") {
+		t.Errorf("SubsystemSwapUnavailable event = %q, want it to suggest restarting the pod", e)
+	}
+	if strings.Contains(e, "disableDeviceMapperIndirection") {
+		t.Errorf("SubsystemSwapUnavailable event = %q names a field the driver leaves unset", e)
+	}
+}
+
+// U-76
+func TestAMoveWithNoAttachedVolumeSkipsTheNodes(t *testing.T) {
+	w := newJoinWorld(t)
+	for _, pv := range []string{testPVName, memberPVName} {
+		va := attachment(pv, "")
+		if err := w.r.Delete(context.Background(), va); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
+	}
+	if w.log.count("move") != 1 {
+		t.Errorf("moves = %d, want 1", w.log.count("move"))
+	}
+	for _, prefix := range []string{"describe", "prepare ", "suspend", "resume", "release"} {
+		if n := w.log.count(prefix); n != 0 {
+			t.Errorf("%s called %d times with no consuming host", prefix, n)
+		}
+	}
+}
+
+// U-77
+func TestTheSuspendDeadlineIsPersistedBeforeTheFirstSuspend(t *testing.T) {
+	w := newJoinWorld(t)
+	want := w.now.Add(10 * time.Second)
+
+	w.runUntil(stepSuspending, 25)
+	w.run(1)
+	if w.log.count("suspend") == 0 {
+		w.run(1)
+	}
+	got := w.ops().Status.JoinConsistencyGroup.SuspendDeadline
+	if got == nil || !got.Time.Equal(want) {
+		t.Fatalf("suspendDeadline = %v, want %v", got, want)
+	}
+	if d := w.node(joinHost).deadline; !d.Equal(want) {
+		t.Errorf("the host was given %v, want the persisted %v", d, want)
+	}
+	w.run(5)
+	if len(w.api.deadlines) == 0 || !w.api.deadlines[0].Equal(want) {
+		t.Errorf("the move was given %v, want %v", w.api.deadlines, want)
+	}
+}
+
+// rolledBack asserts the rollback's common outcome: the move taken back, no
+// host left on the target, and the operation failed with the event.
+func (w *joinWorld) rolledBack(ops *simplyblockv1alpha2.PersistentVolumeOps) {
+	w.t.Helper()
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed {
+		w.t.Fatalf("phase = %q (%s), want Failed", ops.Status.Phase, ops.Status.Message)
+	}
+	if w.log.count("rollback") == 0 {
+		w.t.Error("the move was not rolled back")
+	}
+	if w.log.count("commit") != 0 {
+		w.t.Error("a rolled-back move was committed")
+	}
+	if ops.Status.JoinConsistencyGroup.RollbackReason == "" {
+		w.t.Error("status.rollbackReason is empty")
+	}
+	if !hasEvent(w.events(), ReasonSubsystemSwapRolledBack) {
+		w.t.Error("no SubsystemSwapRolledBack event")
+	}
+}
+
+// U-78
+func TestOneHostFailingToSuspendRollsBackWithoutMoving(t *testing.T) {
+	w := newJoinWorld(t)
+	w.node(memberHost).suspendErr = fmt.Errorf("dmsetup suspend: %w", swaprpc.ErrNotSwappable)
+
+	ops := w.run(40)
+	w.rolledBack(ops)
+	if w.log.count("move") != 0 {
+		t.Error("the namespaces were moved although a host was not suspended")
+	}
+	if w.node(joinHost).suspended[handleOf(testVolumeID)] {
+		t.Error("the host that suspended was never resumed")
+	}
+	if w.log.index("resume "+joinHost+" "+joinSourceNQN) < 0 {
+		t.Errorf("the joiner's host was not resumed on its source: %v", w.log.calls)
+	}
+	if w.log.index("release "+joinHost+" "+joinTargetNQN) < 0 {
+		t.Errorf("the target was not released after the rollback: %v", w.log.calls)
+	}
+}
+
+// U-79
+func TestAHostThatRestartedBeforeTheMoveRollsBack(t *testing.T) {
+	w := newJoinWorld(t)
+
+	w.runUntil(stepMovingNamespaces, 30)
+	w.node(memberHost).instance = "instance-restarted"
+	w.node(memberHost).suspended = map[string]bool{}
+
+	w.rolledBack(w.run(40))
+	if w.log.count("move") != 0 {
+		t.Error("the namespaces were moved under a restarted host")
+	}
+}
+
+// U-80
+func TestAHostNoLongerSuspendedBeforeTheMoveRollsBack(t *testing.T) {
+	w := newJoinWorld(t)
+
+	w.runUntil(stepMovingNamespaces, 30)
+	w.node(joinHost).suspended[handleOf(testVolumeID)] = false
+
+	w.rolledBack(w.run(40))
+	if w.log.count("move") != 0 {
+		t.Error("the namespaces were moved under a resumed host")
+	}
+}
+
+// U-81
+func TestAMoveRefusedForItsDeadlineRollsBack(t *testing.T) {
+	w := newJoinWorld(t)
+	w.api.startErr = fmt.Errorf("move: %w", controlplane.ErrDeadlinePassed)
+
+	ops := w.run(40)
+	w.rolledBack(ops)
+	if w.log.index("resume "+memberHost+" "+memberNQN) < 0 {
+		t.Errorf("the member's host was not resumed on its source: %v", w.log.calls)
+	}
+}
+
+// U-82
+func TestAPartialMoveResumesEveryHostOnTheSource(t *testing.T) {
+	w := newJoinWorld(t)
+	w.api.startErr = fmt.Errorf("move: %w", controlplane.ErrMoveFailed)
+
+	ops := w.run(40)
+	w.rolledBack(ops)
+	if ops.Status.JoinConsistencyGroup.NamespacesAt != simplyblockv1alpha2.SubsystemSideSource {
+		t.Errorf("namespacesAt = %q, want Source", ops.Status.JoinConsistencyGroup.NamespacesAt)
+	}
+	if w.log.count("resume "+joinHost+" "+joinTargetNQN)+w.log.count("resume "+memberHost+" "+joinTargetNQN) != 0 {
+		t.Error("a host was resumed on the target after a failed move")
+	}
+}
+
+// A control plane that is briefly unreachable is retried inside the window.
+func TestATransientMoveFailureIsRetriedInsideTheWindow(t *testing.T) {
+	w := newJoinWorld(t)
+	w.api.startErr = statusErr
+
+	w.runUntil(stepMovingNamespaces, 30)
+	w.run(2)
+	w.api.startErr = nil
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
+	}
+}
+
+// The window closing on an unreachable control plane rolls back.
+func TestAMoveStillFailingAtTheDeadlineRollsBack(t *testing.T) {
+	w := newJoinWorld(t)
+	w.api.startErr = statusErr
+
+	w.runUntil(stepMovingNamespaces, 30)
+	w.now = w.now.Add(11 * time.Second)
+	w.rolledBack(w.run(40))
+}
+
+// U-84
+func TestAHostThatCannotFindTheNamespaceRollsBackToTheSource(t *testing.T) {
+	w := newJoinWorld(t)
+	w.node(memberHost).resumeErrs = []error{fmt.Errorf("resume: %w", swaprpc.ErrNamespaceNotFound)}
+
+	ops := w.run(40)
+	w.rolledBack(ops)
+	if w.log.index("resume "+memberHost+" "+memberNQN) < 0 {
+		t.Errorf("the member's host was not resumed on its source: %v", w.log.calls)
+	}
+	if w.log.index("resume "+joinHost+" "+joinSourceNQN) < 0 {
+		t.Errorf("the joiner's host, already on the target, was not taken back to its source: %v", w.log.calls)
+	}
+}
+
+// U-85
+func TestACommitFailureIsRetriedWithoutSuspendingAgain(t *testing.T) {
+	w := newJoinWorld(t)
+	w.api.commitErrs = []error{statusErr, statusErr}
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
+	}
+	if w.log.count("commit") != 3 {
+		t.Errorf("commits = %d, want two failures and a success", w.log.count("commit"))
+	}
+	for _, name := range []string{joinHost, memberHost} {
+		if n := w.log.count("suspend " + name); n != 1 {
+			t.Errorf("%s suspended %d times, want 1", name, n)
+		}
+	}
+}
+
+// U-134
+// Regression: 2026-11-03-cg-join-member-count — a volume moved alone into the
+// subsystem its group already had reported no other member in it, while the
+// group's existing member was sitting there.
+func TestAJoinIntoTheGroupsExistingSubsystemSaysSoAndCountsWhatMoved(t *testing.T) {
+	w := newJoinWorld(t)
+	w.api.move = controlplane.SubsystemMove{
+		ID: joinMoveID, TargetNQN: memberNQN, NamespacesAt: controlplane.NamespacesAtSource,
+		Volumes: []controlplane.MovingNamespace{
+			{LvolID: testVolumeID, SourceNQN: joinSourceNQN, SourceNSID: 1, NSUUID: testVolumeID, TargetNSID: 2},
+		},
+	}
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
+	}
+	want := "1 namespace(s) moved into the group's existing subsystem " + memberNQN
+	if ops.Status.Message != want {
+		t.Errorf("message = %q, want %q", ops.Status.Message, want)
+	}
+	if got := eventWith(w.events(), ReasonConsistencyGroupColocated); !strings.Contains(got, want) {
+		t.Errorf("ConsistencyGroupColocated = %q, want it to say %q", got, want)
+	}
+}
+
+// U-134
+func TestAWholeGroupMoveIntoAFreshSubsystemCountsEveryNamespace(t *testing.T) {
+	w := newJoinWorld(t)
+
+	ops := w.run(40)
+	want := "2 namespace(s) moved into the group's new subsystem " + joinTargetNQN
+	if ops.Status.Message != want {
+		t.Errorf("message = %q, want %q", ops.Status.Message, want)
+	}
+}
+
+// lateHost is a third node that attaches the joining volume while the
+// operation runs, as a pod rescheduled onto it would.
+const lateHost = "worker-7"
+
+func (w *joinWorld) attachLate(pv, node string, staged bool) {
+	w.t.Helper()
+	n := &fakeSwapNode{
+		name: node, log: w.log, instance: "instance-" + node,
+		notSwappable: map[string]bool{}, notStaged: map[string]bool{}, suspended: map[string]bool{}, pointsAt: map[string]string{},
+	}
+	if !staged {
+		n.notStaged[handleOf(testVolumeID)] = true
+	}
+	w.peers.nodes[node] = n
+	va := attachment(pv, node)
+	va.Name += "-" + node
+	for _, obj := range []client.Object{hostNode(node), va} {
+		if err := w.r.Create(context.Background(), obj); err != nil {
+			w.t.Fatal(err)
+		}
+	}
+}
+
+// Review finding on #835 (frozen host list): a host that attaches the volume
+// after the hosts were recorded, while the target is still being prepared, is
+// recorded too, prepared, and held through the window like the others, so its
+// I/O is never left on a namespace that is leaving.
+func TestAHostThatAttachesBeforeTheWindowIsPreparedAndHeldToo(t *testing.T) {
+	w := newJoinWorld(t)
+	w.runUntil(stepJoinAttachingPaths, 25)
+	w.attachLate(testPVName, lateHost, true)
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
+	}
+	move := w.log.index("move")
+	if p := w.log.index("prepare " + lateHost + " " + joinTargetNQN + " 2"); p < 0 || p > move {
+		t.Errorf("%s was prepared at %d, the move ran at %d; calls %v", lateHost, p, move, w.log.calls)
+	}
+	if s := w.log.index("suspend " + lateHost); s < 0 || s > move {
+		t.Errorf("%s was held at %d, the move ran at %d", lateHost, s, move)
+	}
+	if r := w.log.index("resume " + lateHost + " " + joinTargetNQN); r < move {
+		t.Errorf("%s was resumed on the target at %d, before the move at %d", lateHost, r, move)
+	}
+	if w.node(lateHost).pointsAt[handleOf(testVolumeID)] != joinTargetNQN {
+		t.Error("the late host does not point at the target")
+	}
+}
+
+// A host that attaches after the hosts were prepared, and has the volume
+// staged, holds a path the operation cannot hold: it rolls back before the
+// window opens, and nothing moves.
+func TestAHostThatAttachesAtSuspendingRollsBackBeforeAnythingIsHeld(t *testing.T) {
+	w := newJoinWorld(t)
+	w.runUntil(stepSuspending, 25)
+	w.attachLate(testPVName, lateHost, true)
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed {
+		t.Fatalf("phase = %q (%s), want Failed", ops.Status.Phase, ops.Status.Message)
+	}
+	if !strings.Contains(ops.Status.Message, lateHost) {
+		t.Errorf("message %q does not name the host that attached late", ops.Status.Message)
+	}
+	if w.log.index("move") >= 0 || w.log.index("suspend ") >= 0 {
+		t.Errorf("the operation held or moved something after a late consumer appeared: %v", w.log.calls)
+	}
+	if !hasEvent(w.events(), ReasonSubsystemSwapRolledBack) {
+		t.Errorf("events = %v, want SubsystemSwapRolledBack", w.events())
+	}
+}
+
+// A host whose attachment exists but whose stage has not run (or was refused
+// while the move exists) holds no path: it is left out of the swap rather than
+// failing the operation with a request to restart its pod.
+func TestAHostWithTheVolumeAttachedButNotStagedIsLeftOutOfTheSwap(t *testing.T) {
+	w := newJoinWorld(t)
+	w.node(joinHost).notStaged = map[string]bool{handleOf(testVolumeID): true}
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
+	}
+	if w.log.index("suspend "+joinHost) >= 0 || w.log.index("prepare "+joinHost+" ") >= 0 {
+		t.Errorf("%s was prepared or held with nothing staged: %v", joinHost, w.log.calls)
+	}
+	if w.log.index("suspend "+memberHost) < 0 {
+		t.Errorf("%s, which has its volume staged, was not held", memberHost)
+	}
+	for _, h := range ops.Status.JoinConsistencyGroup.Hosts {
+		if h.Node == joinHost {
+			t.Errorf("%s is still listed with %v", joinHost, h.PersistentVolumes)
+		}
+	}
+	if hasEvent(w.events(), ReasonSubsystemSwapUnavailable) {
+		t.Errorf("events = %v: an unstaged volume was reported as staged without the indirection", w.events())
+	}
+}
+
+// Inside the window the same check runs once more, last before the move: a
+// consumer that appeared since Suspending sends the operation back.
+func TestAHostThatAttachesInsideTheWindowRollsBackBeforeTheMove(t *testing.T) {
+	w := newJoinWorld(t)
+	w.runUntil(stepMovingNamespaces, 25)
+	w.attachLate(testPVName, lateHost, true)
+
+	ops := w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed {
+		t.Fatalf("phase = %q (%s), want Failed", ops.Status.Phase, ops.Status.Message)
+	}
+	if w.log.index("move") >= 0 {
+		t.Errorf("the namespaces moved under an unheld consumer: %v", w.log.calls)
+	}
+	for _, name := range []string{joinHost, memberHost} {
+		if w.log.index("resume "+name+" ") < 0 {
+			t.Errorf("%s was left suspended by the rollback", name)
+		}
+	}
+}
+
+// Live 2026-11-10 (regression_test/26 edge-operator-window): the operator was
+// killed after the control plane had moved the namespaces and before the
+// status recorded it. The node's watchdog resumed the host on the target at
+// the deadline, the new operator pod read "not moved" from its status, found
+// the host's plugin not yet re-linked, and rolled the move back: the control
+// plane took the namespace out from under a live mapping and the pod got I/O
+// errors. A move that happened is learned from the control plane and, once
+// the deadline has passed, only ever committed.
+func TestAMoveThatHappenedBeforeTheOperatorDiedIsCommittedNeverRolledBack(t *testing.T) {
+	w := newJoinWorld(t)
+	w.runUntil(stepMovingNamespaces, 30)
+
+	// The control plane did the move; the status write that would say so was lost.
+	w.api.move.NamespacesAt = controlplane.NamespacesAtTarget
+	ops := w.ops()
+	if ops.Status.JoinConsistencyGroup.NamespacesAt == simplyblockv1alpha2.SubsystemSideTarget {
+		t.Fatal("precondition: the status already says the namespaces are at the target")
+	}
+	// The deadline passed while nobody was reconciling: the watchdog resumed
+	// each host on the target on its own.
+	w.now = w.now.Add(2 * suspendTimeout(ops))
+	for _, name := range []string{joinHost, memberHost} {
+		w.node(name).suspended = map[string]bool{}
+		for h := range w.node(name).pointsAt {
+			w.node(name).pointsAt[h] = joinTargetNQN
+		}
+	}
+	// And the new operator pod cannot reach one host yet.
+	w.peers.unreachable[memberHost] = true
+
+	for range 6 {
+		if _, err := w.pass(); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	if w.log.count("rollback") != 0 {
+		t.Fatalf("the move was rolled back under a host that may run on the target: %v", w.log.calls)
+	}
+	if w.log.count("move") != 0 {
+		t.Fatalf("the move was started again: %v", w.log.calls)
+	}
+	if phase := w.ops().Status.Phase; terminal(phase) {
+		t.Fatalf("the operation ended %s while a host was unreachable", phase)
+	}
+
+	w.peers.unreachable[memberHost] = false
+	ops = w.run(40)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
+	}
+	if w.log.count("commit") != 1 || w.log.count("rollback") != 0 {
+		t.Errorf("commits = %d, rollbacks = %d, want 1 and 0: %v", w.log.count("commit"), w.log.count("rollback"), w.log.calls)
+	}
+	if w.log.index("resume "+memberHost+" "+joinTargetNQN) < 0 {
+		t.Errorf("%s was not resumed on the target once reachable: %v", memberHost, w.log.calls)
+	}
+}
+
+// The same lost write, but the operation fails (its step outlived its
+// deadline because the host never came back): it still commits rather than
+// rolls back, because the host may be running on the target. The step deadline
+// runs on wall time, so the failure is driven directly.
+func TestAMoveThatHappenedIsCommittedEvenWhenTheOperationFails(t *testing.T) {
+	w := newJoinWorld(t)
+	w.runUntil(stepMovingNamespaces, 30)
+	w.api.move.NamespacesAt = controlplane.NamespacesAtTarget
+	w.now = w.now.Add(2 * suspendTimeout(w.ops()))
+
+	ops := w.ops()
+	subject, err := w.r.resolve(context.Background(), ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.r.failJoin(context.Background(), ops, subject, ReasonStepDeadlineExceeded, "step Resuming outlived its deadline"); err != nil {
+		t.Fatal(err)
+	}
+	ops = w.ops()
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed {
+		t.Fatalf("phase = %q (%s), want Failed", ops.Status.Phase, ops.Status.Message)
+	}
+	if w.log.count("rollback") != 0 || w.log.count("commit") != 1 {
+		t.Errorf("commits = %d, rollbacks = %d, want 1 and 0: %v", w.log.count("commit"), w.log.count("rollback"), w.log.calls)
+	}
+	if !strings.Contains(ops.Status.Message, "committed") {
+		t.Errorf("message %q does not say the move was committed", ops.Status.Message)
+	}
+}
+
+// A failure before the window closed releases the move as before: the hosts
+// are still held, and nothing can have resumed on the target.
+func TestAFailureBeforeTheDeadlineStillReleasesTheMove(t *testing.T) {
+	w := newJoinWorld(t)
+	w.runUntil(stepMovingNamespaces, 30)
+	w.api.move.NamespacesAt = controlplane.NamespacesAtTarget
+
+	ops := w.ops()
+	subject, err := w.r.resolve(context.Background(), ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.r.failJoin(context.Background(), ops, subject, ReasonStepDeadlineExceeded, "step outlived its deadline"); err != nil {
+		t.Fatal(err)
+	}
+	if w.log.count("rollback") != 1 || w.log.count("commit") != 0 {
+		t.Errorf("commits = %d, rollbacks = %d, want 0 and 1: %v", w.log.count("commit"), w.log.count("rollback"), w.log.calls)
+	}
+}
+
+// Before the deadline the hosts are still held, so a namespace that never
+// appears on a host is still answered by rolling the move back (design §11).
+func TestANamespaceThatNeverAppearsBeforeTheDeadlineStillRollsBack(t *testing.T) {
+	w := newJoinWorld(t)
+	w.runUntil(stepJoinResuming, 30)
+	w.node(memberHost).resumeErrs = []error{fmt.Errorf("%w: never appeared", swaprpc.ErrNamespaceNotFound)}
+
+	w.rolledBack(w.run(40))
+}

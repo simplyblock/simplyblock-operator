@@ -16,6 +16,7 @@ on:
     paths:
       - "operator/cmd/simplyblock-upgrade/**"
       - "operator/internal/upgrade/**"
+      - "operator/config/crd/**"
       - "operator/api/**"
       - "operator/go.mod"
       - "operator/go.sum"
@@ -80,12 +81,12 @@ jobs:
           go-version-file: operator/go.mod
           cache-dependency-path: operator/go.sum
 
-      - name: Regenerate the manifests and the embedded copy
+      - name: Regenerate the manifests the tool embeds
         run: make -C operator manifests
 
       - name: Fail on drift
         run: |
-          if ! git diff --exit-code -- operator/config/crd/bases operator/internal/upgrade/crds/manifests; then
-            echo "::error::The embedded CRDs are behind the generated ones. Run 'make -C operator manifests' and commit the result."
+          if ! git diff --exit-code -- operator/config/crd/bases; then
+            echo "::error::The committed CRDs are behind the API types. Run 'make -C operator manifests' and commit the result."
             exit 1
           fi

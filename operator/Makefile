@@ -89,21 +89,9 @@ help: ## Display this help.
 manifests: controller-gen yq ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd:allowDangerousTypes=true webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 	@# controller-gen has no marker for spec.conversion, so the stanza is written
-	@# back after every regeneration. It runs before crd-embed so that the copy the
-	@# upgrade tool carries is the one with the stanza in it.
+	@# back after every regeneration. The upgrade tool embeds these files through
+	@# config/crd/bases/bases.go, so the stanza reaches its binary too.
 	@bash hack/apply-conversion-webhook.sh config/crd/bases "$(YQ)"
-	$(MAKE) crd-embed
-
-# The upgrade tool applies the CRDs itself (design-api-upgrade.md §11) and
-# carries them in its binary, so that the CRDs a run installs are the ones the
-# conversion code in the same binary was built against. go:embed cannot reach
-# outside the directory its source file is in, so the generated CRDs are copied
-# next to the package that embeds them. The copy is committed and regenerated
-# here, which is the same arrangement helm-sync uses for the chart's copy.
-.PHONY: crd-embed
-crd-embed: ## Copy the generated CRDs next to the package that embeds them.
-	rm -f internal/upgrade/crds/manifests/*.yaml
-	cp config/crd/bases/*.yaml internal/upgrade/crds/manifests/
 
 .PHONY: generate
 generate: controller-gen openapi ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
