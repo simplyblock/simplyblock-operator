@@ -126,6 +126,7 @@ Regression id for the rows marked so: `2026-10-05-drain-target-memory`.
 | U-74 | A refusal's message is the control plane's reason and names no target of its own (2026-10-06-pvops-refusal-names-the-target) | Regression | `TestARefusalKeepsTheControlPlanesWordsAndNamesNoTargetOfItsOwn` |
 | U-75 | Every pin spelling, canonical keys included, reaches the validator (2026-10-06-pinned-volume-matchcondition-canonical-key)   | Regression | `TestPinnedVolumeMatchConditionCoversEverySpelling`              |
 | U-95 | A repeat pin to an earlier target raises a new move and keeps the old (2026-10-07-pin-repin-to-previous-target)              | Regression | `TestPVCReconcile_RepinToAPreviousTargetRaisesANewMove`          |
+| U-96 | A 400 reporting a rebalancing cluster, as release 26.3 answers it, is waited on like a 409                                   | Negative   | `TestARebalancingClusterAnsweredWithA400IsWaitedOn`              |
 
 ### The Namespace Scan (design §5)
 
@@ -204,6 +205,18 @@ the rows marked so without one of their own: `2026-10-07-pvops-complete-job-read
 | U-92 | The only result comes from a pod another Job controls: not accepted (2026-10-07-pvops-result-from-a-stale-pod) | Regression | `TestAResultFromAPodOfAnotherJobIsNotAccepted`                 |
 | U-93 | The validate mode writes `validated` or `skipped` as its result                                                | Regression | `TestTheValidateModeReportsWhatItConcluded`                    |
 | U-94 | The Job names one path for the binary's `VMIG_RESULT_PATH` and the container's `terminationMessagePath`        | Boundary   | `TestTheValidationJobReadsTheResultFromWhereTheBinaryWritesIt` |
+
+### Taking a Migration Back (design §5)
+
+A cancel the control plane refuses because the migration has already ended is the state
+the cancel asks for. Regression id for the rows marked so: `SFAM-2824`.
+
+| #     | Scenario                                                                                             | Type       | Test                                                         |
+|-------|------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------------|
+| U-97  | A failure whose cancel is refused as not active still deletes the Jobs and releases the target paths | Regression | `TestAFailedMigrationReleasesItsPathsWhenTheCancelIsRefused` |
+| U-98  | An abort whose cancel is refused as not active ends the operation `Aborted` and releases the lock    | Regression | `TestAnAbortOfAnEndedMigrationFinishes`                      |
+| U-99  | A delete whose cancel answers 404 releases the finalizer                                             | Regression | `TestDeletingAnOperationWhoseMigrationIsGoneLetsTheObjectGo` |
+| U-100 | An abort whose cancel is refused for any other reason is held                                        | Negative   | `TestAnAbortHeldOnAnyOtherRefusedCancelWaits`                |
 
 ---
 
