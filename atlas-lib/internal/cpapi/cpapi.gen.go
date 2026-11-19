@@ -1522,6 +1522,7 @@ type ClusterParams struct {
 	CapCrit                *int                     `json:"cap_crit,omitempty"`
 	CapWarn                *int                     `json:"cap_warn,omitempty"`
 	ClientDataNic          *string                  `json:"client_data_nic,omitempty"`
+	ContainerImagePrefix   *string                  `json:"container_image_prefix,omitempty"`
 	CrName                 *string                  `json:"cr_name,omitempty"`
 	CrNamespace            *string                  `json:"cr_namespace,omitempty"`
 	CrPlural               *string                  `json:"cr_plural,omitempty"`
@@ -1584,8 +1585,10 @@ type ConsistencyGroupColocateDTO struct {
 // ConsistencyGroupColocationDTO The subsystem move a late join would end in, computed against the state
 // the pinned node has once the join's migration landed. Nothing is reserved.
 // “target_nqn“ is empty for a fresh subsystem (“target_is_new“), and
-// “refusal“ names why the group could not be brought into one subsystem
-// (“SubsystemLimitReached: ...“) -- the join would be refused for it.
+// “refusal“ names why the group could not be brought into one subsystem:
+// “SubsystemLimitReached: ...“ is final (the join would be refused for
+// it); “SubsystemBusy: ...“ is a subsystem held by an active migration or
+// move, which ends, so the join is waited, not refused.
 type ConsistencyGroupColocationDTO struct {
 	MovingLvolIds *[]string `json:"moving_lvol_ids,omitempty"`
 	Refusal       *string   `json:"refusal,omitempty"`
@@ -1723,10 +1726,12 @@ type ConsistencyGroupResolutionDTO struct {
 	Members         *[]ConsistencyGroupLineageMemberDTO `json:"members,omitempty"`
 }
 
-// ConsistencyGroupSubsystemMoveCreateDTO Request body for a subsystem move: “lvol_id“ is the member that just
-// joined, or with “purpose“ “leave“ the member about to leave, which is
-// split out of the subsystem it shares into a fresh one on its node. A retry
-// with the same “request_id“ answers with the same move.
+// ConsistencyGroupSubsystemMoveCreateDTO Request body for a subsystem move. With “purpose“ “join“ (the
+// default), “lvol_id“ is the member that just joined and the group is
+// brought into one subsystem. With “leave“, “lvol_id“ is a member about
+// to leave, and its namespace moves out of the subsystem it shares into a
+// fresh one of its own. A retry with the same “request_id“ answers with
+// the same move.
 type ConsistencyGroupSubsystemMoveCreateDTO struct {
 	LvolId    string                                         `json:"lvol_id"`
 	Purpose   *ConsistencyGroupSubsystemMoveCreateDTOPurpose `json:"purpose,omitempty"`
@@ -1744,6 +1749,7 @@ type ConsistencyGroupSubsystemMoveDTO struct {
 	Deadline     *int                                      `json:"deadline,omitempty"`
 	Id           string                                    `json:"id"`
 	NamespacesAt *string                                   `json:"namespaces_at,omitempty"`
+	Purpose      *string                                   `json:"purpose,omitempty"`
 	RequestId    *string                                   `json:"request_id,omitempty"`
 	Status       *string                                   `json:"status,omitempty"`
 	TargetIsNew  *bool                                     `json:"target_is_new,omitempty"`
@@ -5141,7 +5147,9 @@ type ClientInterface interface {
 	// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithBody Clusters:Consistency-Groups:Subsystem-Moves:Create
 	//
 	// Bring the group into one subsystem now that ``lvol_id`` joined it
-	// (design-cg-live-subsystem-flip §5, §9): picks the target and reserves it.
+	// (design-cg-live-subsystem-flip §5, §9), or, with ``purpose`` ``leave``,
+	// take ``lvol_id`` out of the subsystem it shares before it leaves the
+	// group: picks the target and reserves it.
 	//
 	// 409 ``SubsystemLimitReached`` (with ``node_id`` and ``limit``) when the
 	// group needs a fresh subsystem on a node at its limit, ``MoveConflict`` while
@@ -5156,7 +5164,9 @@ type ClientInterface interface {
 	// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost Clusters:Consistency-Groups:Subsystem-Moves:Create
 	//
 	// Bring the group into one subsystem now that ``lvol_id`` joined it
-	// (design-cg-live-subsystem-flip §5, §9): picks the target and reserves it.
+	// (design-cg-live-subsystem-flip §5, §9), or, with ``purpose`` ``leave``,
+	// take ``lvol_id`` out of the subsystem it shares before it leaves the
+	// group: picks the target and reserves it.
 	//
 	// 409 ``SubsystemLimitReached`` (with ``node_id`` and ``limit``) when the
 	// group needs a fresh subsystem on a node at its limit, ``MoveConflict`` while
@@ -5178,7 +5188,8 @@ type ClientInterface interface {
 	// ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost Clusters:Consistency-Groups:Subsystem-Moves:Commit
 	//
 	// Switch the moving volumes to the target and end the move. Idempotent;
-	// 409 ``MoveConflict`` while the namespaces are not on the target.
+	// 409 ``MoveConflict`` while the namespaces are not on the target, or after
+	// waiting out another step of the move.
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/commit (the `ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost` operationId).
 	ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -5189,8 +5200,10 @@ type ClientInterface interface {
 	//
 	// 409 ``DeadlinePassed`` before anything is touched once ``deadline`` has
 	// passed; 409 ``MoveFailed`` with ``namespaces_at`` when a namespace could
-	// not be moved (the sources are restored first). A repeat after success
-	// answers with ``namespaces_at: target``.
+	// not be moved: ``source`` once the sources are restored, ``target`` when
+	// restoring failed too and a rollback has to make them whole. A repeat after success
+	// answers with ``namespaces_at: target``. 409 ``MoveConflict`` when the move
+	// is not prepared, or after waiting out another step of it.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -5203,8 +5216,10 @@ type ClientInterface interface {
 	//
 	// 409 ``DeadlinePassed`` before anything is touched once ``deadline`` has
 	// passed; 409 ``MoveFailed`` with ``namespaces_at`` when a namespace could
-	// not be moved (the sources are restored first). A repeat after success
-	// answers with ``namespaces_at: target``.
+	// not be moved: ``source`` once the sources are restored, ``target`` when
+	// restoring failed too and a rollback has to make them whole. A repeat after success
+	// answers with ``namespaces_at: target``. 409 ``MoveConflict`` when the move
+	// is not prepared, or after waiting out another step of it.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -5215,7 +5230,8 @@ type ClientInterface interface {
 	//
 	// Create a fresh target on every HA node and assign the moving
 	// namespaces their nsids there. Returns the target's connect entries for
-	// ``host_nqn``. Idempotent.
+	// ``host_nqn``. Idempotent; 409 ``MoveConflict`` after waiting out another
+	// step of the move.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -5226,7 +5242,8 @@ type ClientInterface interface {
 	//
 	// Create a fresh target on every HA node and assign the moving
 	// namespaces their nsids there. Returns the target's connect entries for
-	// ``host_nqn``. Idempotent.
+	// ``host_nqn``. Idempotent; 409 ``MoveConflict`` after waiting out another
+	// step of the move.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -5236,7 +5253,8 @@ type ClientInterface interface {
 	// ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost Clusters:Consistency-Groups:Subsystem-Moves:Rollback
 	//
 	// Put every namespace back into its source and end the move. Idempotent;
-	// 409 ``MoveFailed`` when a namespace could not be restored.
+	// 409 ``MoveFailed`` when a namespace could not be restored, ``MoveConflict``
+	// after waiting out another step of the move.
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/rollback (the `ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost` operationId).
 	ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -8044,7 +8062,9 @@ func (c *Client) ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdC
 // ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithBody Clusters:Consistency-Groups:Subsystem-Moves:Create
 //
 // Bring the group into one subsystem now that “lvol_id“ joined it
-// (design-cg-live-subsystem-flip §5, §9): picks the target and reserves it.
+// (design-cg-live-subsystem-flip §5, §9), or, with “purpose“ “leave“,
+// take “lvol_id“ out of the subsystem it shares before it leaves the
+// group: picks the target and reserves it.
 //
 // 409 “SubsystemLimitReached“ (with “node_id“ and “limit“) when the
 // group needs a fresh subsystem on a node at its limit, “MoveConflict“ while
@@ -8069,7 +8089,9 @@ func (c *Client) ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClust
 // ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost Clusters:Consistency-Groups:Subsystem-Moves:Create
 //
 // Bring the group into one subsystem now that “lvol_id“ joined it
-// (design-cg-live-subsystem-flip §5, §9): picks the target and reserves it.
+// (design-cg-live-subsystem-flip §5, §9), or, with “purpose“ “leave“,
+// take “lvol_id“ out of the subsystem it shares before it leaves the
+// group: picks the target and reserves it.
 //
 // 409 “SubsystemLimitReached“ (with “node_id“ and “limit“) when the
 // group needs a fresh subsystem on a node at its limit, “MoveConflict“ while
@@ -8111,7 +8133,8 @@ func (c *Client) ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterI
 // ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost Clusters:Consistency-Groups:Subsystem-Moves:Commit
 //
 // Switch the moving volumes to the target and end the move. Idempotent;
-// 409 “MoveConflict“ while the namespaces are not on the target.
+// 409 “MoveConflict“ while the namespaces are not on the target, or after
+// waiting out another step of the move.
 //
 // Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/commit (the `ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost` operationId).
 func (c *Client) ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -8132,8 +8155,10 @@ func (c *Client) ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClust
 //
 // 409 “DeadlinePassed“ before anything is touched once “deadline“ has
 // passed; 409 “MoveFailed“ with “namespaces_at“ when a namespace could
-// not be moved (the sources are restored first). A repeat after success
-// answers with “namespaces_at: target“.
+// not be moved: “source“ once the sources are restored, “target“ when
+// restoring failed too and a rollback has to make them whole. A repeat after success
+// answers with “namespaces_at: target“. 409 “MoveConflict“ when the move
+// is not prepared, or after waiting out another step of it.
 //
 // Takes any type of body and a specified content type.
 //
@@ -8156,8 +8181,10 @@ func (c *Client) ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersCluster
 //
 // 409 “DeadlinePassed“ before anything is touched once “deadline“ has
 // passed; 409 “MoveFailed“ with “namespaces_at“ when a namespace could
-// not be moved (the sources are restored first). A repeat after success
-// answers with “namespaces_at: target“.
+// not be moved: “source“ once the sources are restored, “target“ when
+// restoring failed too and a rollback has to make them whole. A repeat after success
+// answers with “namespaces_at: target“. 409 “MoveConflict“ when the move
+// is not prepared, or after waiting out another step of it.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -8178,7 +8205,8 @@ func (c *Client) ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersCluster
 //
 // Create a fresh target on every HA node and assign the moving
 // namespaces their nsids there. Returns the target's connect entries for
-// “host_nqn“. Idempotent.
+// “host_nqn“. Idempotent; 409 “MoveConflict“ after waiting out another
+// step of the move.
 //
 // Takes any type of body and a specified content type.
 //
@@ -8199,7 +8227,8 @@ func (c *Client) ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClus
 //
 // Create a fresh target on every HA node and assign the moving
 // namespaces their nsids there. Returns the target's connect entries for
-// “host_nqn“. Idempotent.
+// “host_nqn“. Idempotent; 409 “MoveConflict“ after waiting out another
+// step of the move.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -8219,7 +8248,8 @@ func (c *Client) ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClus
 // ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost Clusters:Consistency-Groups:Subsystem-Moves:Rollback
 //
 // Put every namespace back into its source and end the move. Idempotent;
-// 409 “MoveFailed“ when a namespace could not be restored.
+// 409 “MoveFailed“ when a namespace could not be restored, “MoveConflict“
+// after waiting out another step of the move.
 //
 // Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/rollback (the `ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost` operationId).
 func (c *Client) ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -21809,7 +21839,9 @@ type ClientWithResponsesInterface interface {
 	// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithBodyWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Create
 	//
 	// Bring the group into one subsystem now that ``lvol_id`` joined it
-	// (design-cg-live-subsystem-flip §5, §9): picks the target and reserves it.
+	// (design-cg-live-subsystem-flip §5, §9), or, with ``purpose`` ``leave``,
+	// take ``lvol_id`` out of the subsystem it shares before it leaves the
+	// group: picks the target and reserves it.
 	//
 	// 409 ``SubsystemLimitReached`` (with ``node_id`` and ``limit``) when the
 	// group needs a fresh subsystem on a node at its limit, ``MoveConflict`` while
@@ -21824,7 +21856,9 @@ type ClientWithResponsesInterface interface {
 	// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Create
 	//
 	// Bring the group into one subsystem now that ``lvol_id`` joined it
-	// (design-cg-live-subsystem-flip §5, §9): picks the target and reserves it.
+	// (design-cg-live-subsystem-flip §5, §9), or, with ``purpose`` ``leave``,
+	// take ``lvol_id`` out of the subsystem it shares before it leaves the
+	// group: picks the target and reserves it.
 	//
 	// 409 ``SubsystemLimitReached`` (with ``node_id`` and ``limit``) when the
 	// group needs a fresh subsystem on a node at its limit, ``MoveConflict`` while
@@ -21848,7 +21882,8 @@ type ClientWithResponsesInterface interface {
 	// ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Commit
 	//
 	// Switch the moving volumes to the target and end the move. Idempotent;
-	// 409 ``MoveConflict`` while the namespaces are not on the target.
+	// 409 ``MoveConflict`` while the namespaces are not on the target, or after
+	// waiting out another step of the move.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -21861,8 +21896,10 @@ type ClientWithResponsesInterface interface {
 	//
 	// 409 ``DeadlinePassed`` before anything is touched once ``deadline`` has
 	// passed; 409 ``MoveFailed`` with ``namespaces_at`` when a namespace could
-	// not be moved (the sources are restored first). A repeat after success
-	// answers with ``namespaces_at: target``.
+	// not be moved: ``source`` once the sources are restored, ``target`` when
+	// restoring failed too and a rollback has to make them whole. A repeat after success
+	// answers with ``namespaces_at: target``. 409 ``MoveConflict`` when the move
+	// is not prepared, or after waiting out another step of it.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -21875,8 +21912,10 @@ type ClientWithResponsesInterface interface {
 	//
 	// 409 ``DeadlinePassed`` before anything is touched once ``deadline`` has
 	// passed; 409 ``MoveFailed`` with ``namespaces_at`` when a namespace could
-	// not be moved (the sources are restored first). A repeat after success
-	// answers with ``namespaces_at: target``.
+	// not be moved: ``source`` once the sources are restored, ``target`` when
+	// restoring failed too and a rollback has to make them whole. A repeat after success
+	// answers with ``namespaces_at: target``. 409 ``MoveConflict`` when the move
+	// is not prepared, or after waiting out another step of it.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -21887,7 +21926,8 @@ type ClientWithResponsesInterface interface {
 	//
 	// Create a fresh target on every HA node and assign the moving
 	// namespaces their nsids there. Returns the target's connect entries for
-	// ``host_nqn``. Idempotent.
+	// ``host_nqn``. Idempotent; 409 ``MoveConflict`` after waiting out another
+	// step of the move.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -21898,7 +21938,8 @@ type ClientWithResponsesInterface interface {
 	//
 	// Create a fresh target on every HA node and assign the moving
 	// namespaces their nsids there. Returns the target's connect entries for
-	// ``host_nqn``. Idempotent.
+	// ``host_nqn``. Idempotent; 409 ``MoveConflict`` after waiting out another
+	// step of the move.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -21908,7 +21949,8 @@ type ClientWithResponsesInterface interface {
 	// ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Rollback
 	//
 	// Put every namespace back into its source and end the move. Idempotent;
-	// 409 ``MoveFailed`` when a namespace could not be restored.
+	// 409 ``MoveFailed`` when a namespace could not be restored, ``MoveConflict``
+	// after waiting out another step of the move.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -33051,7 +33093,9 @@ func (c *ClientWithResponses) ClustersConsistencyGroupsSnapshotsDetailApiV2Clust
 // ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithBodyWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Create
 //
 // Bring the group into one subsystem now that “lvol_id“ joined it
-// (design-cg-live-subsystem-flip §5, §9): picks the target and reserves it.
+// (design-cg-live-subsystem-flip §5, §9), or, with “purpose“ “leave“,
+// take “lvol_id“ out of the subsystem it shares before it leaves the
+// group: picks the target and reserves it.
 //
 // 409 “SubsystemLimitReached“ (with “node_id“ and “limit“) when the
 // group needs a fresh subsystem on a node at its limit, “MoveConflict“ while
@@ -33072,7 +33116,9 @@ func (c *ClientWithResponses) ClustersConsistencyGroupsSubsystemMovesCreateApiV2
 // ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Create
 //
 // Bring the group into one subsystem now that “lvol_id“ joined it
-// (design-cg-live-subsystem-flip §5, §9): picks the target and reserves it.
+// (design-cg-live-subsystem-flip §5, §9), or, with “purpose“ “leave“,
+// take “lvol_id“ out of the subsystem it shares before it leaves the
+// group: picks the target and reserves it.
 //
 // 409 “SubsystemLimitReached“ (with “node_id“ and “limit“) when the
 // group needs a fresh subsystem on a node at its limit, “MoveConflict“ while
@@ -33108,7 +33154,8 @@ func (c *ClientWithResponses) ClustersConsistencyGroupsSubsystemMovesGetApiV2Clu
 // ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPostWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Commit
 //
 // Switch the moving volumes to the target and end the move. Idempotent;
-// 409 “MoveConflict“ while the namespaces are not on the target.
+// 409 “MoveConflict“ while the namespaces are not on the target, or after
+// waiting out another step of the move.
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -33127,8 +33174,10 @@ func (c *ClientWithResponses) ClustersConsistencyGroupsSubsystemMovesCommitApiV2
 //
 // 409 “DeadlinePassed“ before anything is touched once “deadline“ has
 // passed; 409 “MoveFailed“ with “namespaces_at“ when a namespace could
-// not be moved (the sources are restored first). A repeat after success
-// answers with “namespaces_at: target“.
+// not be moved: “source“ once the sources are restored, “target“ when
+// restoring failed too and a rollback has to make them whole. A repeat after success
+// answers with “namespaces_at: target“. 409 “MoveConflict“ when the move
+// is not prepared, or after waiting out another step of it.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -33147,8 +33196,10 @@ func (c *ClientWithResponses) ClustersConsistencyGroupsSubsystemMovesMoveApiV2Cl
 //
 // 409 “DeadlinePassed“ before anything is touched once “deadline“ has
 // passed; 409 “MoveFailed“ with “namespaces_at“ when a namespace could
-// not be moved (the sources are restored first). A repeat after success
-// answers with “namespaces_at: target“.
+// not be moved: “source“ once the sources are restored, “target“ when
+// restoring failed too and a rollback has to make them whole. A repeat after success
+// answers with “namespaces_at: target“. 409 “MoveConflict“ when the move
+// is not prepared, or after waiting out another step of it.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -33165,7 +33216,8 @@ func (c *ClientWithResponses) ClustersConsistencyGroupsSubsystemMovesMoveApiV2Cl
 //
 // Create a fresh target on every HA node and assign the moving
 // namespaces their nsids there. Returns the target's connect entries for
-// “host_nqn“. Idempotent.
+// “host_nqn“. Idempotent; 409 “MoveConflict“ after waiting out another
+// step of the move.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -33182,7 +33234,8 @@ func (c *ClientWithResponses) ClustersConsistencyGroupsSubsystemMovesPrepareApiV
 //
 // Create a fresh target on every HA node and assign the moving
 // namespaces their nsids there. Returns the target's connect entries for
-// “host_nqn“. Idempotent.
+// “host_nqn“. Idempotent; 409 “MoveConflict“ after waiting out another
+// step of the move.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -33198,7 +33251,8 @@ func (c *ClientWithResponses) ClustersConsistencyGroupsSubsystemMovesPrepareApiV
 // ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPostWithResponse Clusters:Consistency-Groups:Subsystem-Moves:Rollback
 //
 // Put every namespace back into its source and end the move. Idempotent;
-// 409 “MoveFailed“ when a namespace could not be restored.
+// 409 “MoveFailed“ when a namespace could not be restored, “MoveConflict“
+// after waiting out another step of the move.
 //
 // Returns a wrapper object for the known response body format(s).
 //
