@@ -17,6 +17,7 @@ package volstack
 
 import (
 	"context"
+	"errors"
 
 	"github.com/simplyblock/atlas/blockdev"
 )
@@ -123,6 +124,16 @@ type Artifact struct {
 	// Geometry is the stripe layout of Devices, for a layer above that aligns to
 	// it.
 	Geometry Geometry
+
+	// Interrupted reports that every path behind Devices was lost while a layer
+	// above held them, and that a heal brings the data back under the same
+	// device rather than a new one. Whatever held the device through the loss
+	// saw its I/O fail: an ext4 journal aborts and an XFS log shuts down, and
+	// neither recovers while it stays mounted. Without an indirection the
+	// device would have gone with its paths and the layer above would have been
+	// remade on the new one; Interrupted is how a layer that keeps the device
+	// says the same thing.
+	Interrupted bool
 }
 
 // Device is the single device an artifact exposes, and reports whether there was
@@ -158,6 +169,22 @@ type Healer interface {
 	// Heal repairs the layer against the layer below, which may itself have just
 	// been healed.
 	Heal(ctx context.Context, below, own Artifact) error
+}
+
+// ErrHeldElsewhere reports that a layer cannot let go of what it holds because
+// something outside the stack holds the same object. It is a wait, not a
+// failure: the caller retries once the other holder is gone.
+var ErrHeldElsewhere = errors.New("volstack: held outside the stack")
+
+// Yielder is implemented by a layer that has to let go of the layer below
+// before that layer heals, because what it holds would not survive the heal.
+// A heal of an Interrupted layer yields every layer above it first, top down,
+// and the rest of the heal brings them back.
+type Yielder interface {
+	// Yield releases this layer's hold for a heal underneath, keeping its data.
+	// It returns ErrHeldElsewhere, wrapped, while letting go here would leave
+	// the object held by something outside the stack.
+	Yield(ctx context.Context, below, own Artifact) error
 }
 
 // Grower is implemented by a layer that has to be enlarged when the volume

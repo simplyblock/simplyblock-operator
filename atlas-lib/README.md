@@ -84,7 +84,7 @@ atlas/
 │   ├── devices.go          ForgetDevice: prune the node's LVM devices file
 │   └── vdo.go              The VDO VolumeProvisioning handler, registered by this package's init
 ├── volstack/               A volume's node-side stack, as ordered layers
-│   ├── layer.go            Layer, State, Artifact, Geometry + the optional interfaces (Composite, Healer, Grower, NodeRequirements, Recorder), Plan
+│   ├── layer.go            Layer, State, Artifact, Geometry + the optional interfaces (Composite, Healer, Yielder, Grower, NodeRequirements, Recorder), Plan
 │   ├── runner.go           Runner: Up / Down / Heal / Grow, and the order they walk the plan in
 │   ├── record.go           Store: what was planned for a volume and how far bring-up got
 │   ├── layers/             The layer implementations

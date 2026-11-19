@@ -149,9 +149,15 @@ func (r *Runner) Down(ctx context.Context, handle string, plan Plan) error {
 // workload stays down. A layer that implements no Healer keeps the old
 // behavior, because nothing in the plan can repair it and the layers above it
 // would be walked against a reading nobody has.
+//
+// A layer whose own artifact is Interrupted is healed only after every Yielder
+// above it has let go, top down; the rest of the walk finds those layers
+// unhealthy and brings them back over the healed device. A yield that has to
+// wait stops the heal before the interrupted layer is touched, so the retry
+// finds the interruption where it was.
 func (r *Runner) Heal(ctx context.Context, handle string, plan Plan) error {
 	below := Artifact{}
-	for _, layer := range plan {
+	for i, layer := range plan {
 		// A read, not a bring-up: a heal repairs what is broken and must not
 		// build the layers it passes through on the way there.
 		_, own, err := layer.Observe(ctx, below)
@@ -182,11 +188,43 @@ func (r *Runner) Heal(ctx context.Context, handle string, plan Plan) error {
 			return fmt.Errorf("volstack: check %s: %w", layer.Name(), err)
 		}
 		if !healthy {
+			if own.Interrupted {
+				if err := r.yieldAbove(ctx, plan[i+1:], own); err != nil {
+					return err
+				}
+			}
 			if err := healer.Heal(ctx, below, own); err != nil {
 				return fmt.Errorf("volstack: heal %s: %w", layer.Name(), err)
 			}
 		}
 		below = own
+	}
+	return nil
+}
+
+// yieldAbove asks every Yielder in above to let go of what it holds, top down,
+// above standing on base. Each is handed what it was observed standing on; a
+// layer that cannot be read hands an empty artifact upward, which is what a
+// dead mount over an interrupted device gives.
+func (r *Runner) yieldAbove(ctx context.Context, above Plan, base Artifact) error {
+	inputs := make([]Artifact, len(above))
+	owns := make([]Artifact, len(above))
+	below := base
+	for j, layer := range above {
+		inputs[j] = below
+		if _, own, err := layer.Observe(ctx, below); err == nil {
+			owns[j] = own
+		}
+		below = owns[j]
+	}
+	for j := len(above) - 1; j >= 0; j-- {
+		yielder, ok := above[j].(Yielder)
+		if !ok {
+			continue
+		}
+		if err := yielder.Yield(ctx, inputs[j], owns[j]); err != nil {
+			return fmt.Errorf("volstack: yield %s: %w", above[j].Name(), err)
+		}
 	}
 	return nil
 }

@@ -178,3 +178,17 @@ func TestAConnectHeldByAMoveIsUnavailableNotInternal(t *testing.T) {
 		t.Fatalf("message %q lost the control plane's reason", msg)
 	}
 }
+
+// A heal after total path loss waits while the old pod's bind mount still holds
+// the filesystem it has to remount. That clears with the old pod's unpublish,
+// so it comes back Unavailable for kubelet to retry, naming what it waits on.
+func TestAHealWaitingOnAnotherMountIsUnavailable(t *testing.T) {
+	held := fmt.Errorf("volstack: yield filesystem: /staging is also mounted at /pods/a: %w", volstack.ErrHeldElsewhere)
+	err := stackError(held, "heal volume %s before publish", "c:p:v")
+	if code := status.Code(err); code != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", code)
+	}
+	if !strings.Contains(err.Error(), "/pods/a") {
+		t.Fatalf("message %q does not name the other mount", err)
+	}
+}

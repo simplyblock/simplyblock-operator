@@ -115,3 +115,49 @@ func TestMountCreatesTheStagingDirectory(t *testing.T) {
 		t.Fatalf("the staging directory was not created: %v", err)
 	}
 }
+
+const (
+	testStaging = "/var/lib/kubelet/plugins/kubernetes.io/csi/csi.simplyblock.io/abc/globalmount/c:p:v"
+	testPodBind = "/var/lib/kubelet/pods/1020b550/volumes/kubernetes.io~csi/pvc-45f9/mount"
+)
+
+// opsOverMountTable returns operations reading the given mount table.
+func opsOverMountTable(t *testing.T, table string) *FilesystemOperations {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "mountinfo")
+	if err := os.WriteFile(path, []byte(table), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ops := NewWith(nil, nil).FilesystemOps()
+	ops.mountinfo = path
+	return ops
+}
+
+// A pod's bind mount of the staged filesystem carries the staging mount's device
+// number, and is what a heal has to wait out before it may unmount and mount the
+// filesystem again. A mount of another device is not.
+func TestOtherMountsListsTheBindMountsOfTheStagedFilesystem(t *testing.T) {
+	ops := opsOverMountTable(t, ""+
+		"25 1 253:0 / / rw shared:1 - xfs /dev/mapper/root rw\n"+
+		"300 25 253:7 / "+testStaging+" rw shared:90 - ext4 /dev/mapper/sb-v rw\n"+
+		"310 25 253:7 / "+testPodBind+" rw shared:90 - ext4 /dev/mapper/sb-v rw\n"+
+		"320 25 253:8 / /var/lib/kubelet/pods/other/volumes/x/mount rw - ext4 /dev/mapper/sb-w rw\n")
+	others, err := ops.OtherMounts(context.Background(), testStaging)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(others) != 1 || others[0] != testPodBind {
+		t.Fatalf("OtherMounts = %v, want only the pod's bind mount", others)
+	}
+}
+
+// Once the old pod is unpublished, the staging mount is the filesystem's only
+// holder, and so is a path that is not mounted at all.
+func TestOtherMountsOfASolelyHeldOrUnmountedPathIsNone(t *testing.T) {
+	ops := opsOverMountTable(t, "300 25 253:7 / "+testStaging+" rw - ext4 /dev/mapper/sb-v rw\n")
+	for _, path := range []string{testStaging, "/not/mounted"} {
+		if others, err := ops.OtherMounts(context.Background(), path); err != nil || len(others) != 0 {
+			t.Errorf("OtherMounts(%s) = %v, %v; want none", path, others, err)
+		}
+	}
+}
