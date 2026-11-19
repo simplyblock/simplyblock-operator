@@ -1,30 +1,14 @@
-apiVersion: storage.simplyblock.io/v1alpha2
-kind: ClusterDeploymentConfig
 metadata:
   labels:
-    storage.simplyblock.io/component: nodeprobe
     storage.simplyblock.io/nodeprobe-run: discover-pci-13
   name: discovered-discover-pci-13
-  namespace: simplyblock
 spec:
-  approved: false
   cluster:
     clusterMode: Dual
-    enableDriveFormat: true
     enableNodeAffinity: true
-    maxSubsystemCount: 30
-    minHugePagesSize: 16G
     name: discovered-discover-pci-13-cluster
-    network:
-      spdkOnHostNetwork: true
     stripe:
       dataChunks: 1
-      parityChunks: 1
-    vcpuCount: 5
-  environment: K3s
-  hostOS:
-    distro: ubuntu
-    family: Debian
   nodeSets:
   - groups:
     - dataInterfaces:
@@ -39,5 +23,3 @@ spec:
       - worker-01
       - worker-02
     name: discovered
-status:
-  step: {}
