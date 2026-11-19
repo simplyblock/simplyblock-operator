@@ -6,7 +6,9 @@
 # A change to one default rewrites the same line in hundreds of expected files
 # under internal/controllers/deployment/testdata/discovery (#805 changed 396 of
 # them), which no reviewer reads file by file and which GitHub stops rendering
-# past 300 files. Grouping identical added and removed lines turns that into a
+# past 300 files. The cases are recorded against baseline.yaml now, which takes
+# a change every case shares, but one shared by many cases short of a majority
+# still lands in each of them. Grouping identical added and removed lines turns that into a
 # handful of rows that say what changed and in how many places. Lines that occur
 # once stay visible as rows of their own, so a case-specific change is not
 # folded into the bulk.
@@ -36,13 +38,13 @@ MAX_WIDTH=200
 files=()
 while IFS= read -r file; do
 	files+=("$file")
-done < <(git diff --name-only --relative "$base...$head" -- "$CASES" | grep -E '/expected[^/]*$' || true)
+done < <(git diff --name-only --relative "$base...$head" -- "$CASES" | grep -E '/(expected[^/]*|baseline\.yaml)$' || true)
 if ((${#files[@]} == 0)); then
 	exit 0
 fi
 
 file_count="${#files[@]}"
-case_count="$(printf '%s\n' "${files[@]}" | xargs -n1 dirname | sort -u | wc -l | tr -d ' ')"
+case_count="$(printf '%s\n' "${files[@]}" | awk '!/\/baseline\.yaml$/ { sub(/\/[^\/]*$/, ""); print }' | sort -u | wc -l | tr -d ' ')"
 
 # Every added or removed line, without the +++/--- headers, grouped by content.
 rows="$(git diff --no-color --unified=0 --relative "$base...$head" -- "${files[@]}" |
@@ -53,6 +55,10 @@ row_count="$(printf '%s\n' "$rows" | wc -l | tr -d ' ')"
 echo "### Discovery expectations"
 echo
 echo "This branch changes ${file_count} expected files across ${case_count} cases. Identical lines are grouped, most frequent first."
+if printf '%s\n' "${files[@]}" | grep -q '/baseline\.yaml$'; then
+	echo
+	echo "It changes baseline.yaml, so a line of it counted once here applies to every case that does not set it differently."
+fi
 echo
 echo '```diff'
 printf '%s\n' "$rows" | head -n "$MAX_ROWS" | awk -v width="$MAX_WIDTH" '{

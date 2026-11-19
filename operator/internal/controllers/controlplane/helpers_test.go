@@ -9,6 +9,7 @@ package controlplane
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -197,15 +198,26 @@ func findClusterRole(t *testing.T, objects []client.Object, name string) *rbacv1
 }
 
 // unstructuredStub and unstructuredListStub let the scheme name the FoundationDB
-// kinds. The fake client stores and returns unstructured objects for them; these
-// exist only so the kind resolves.
+// kinds. The fake client converts an unstructured object of a registered kind
+// into its typed form to store it, so the stub carries spec and status as maps:
+// a test that writes status.processGroups into a FoundationDBCluster reads them
+// back through an unstructured Get.
 type unstructuredStub struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              map[string]any `json:"spec,omitempty"`
+	Status            map[string]any `json:"status,omitempty"`
 }
 
 func (in *unstructuredStub) DeepCopyObject() runtime.Object {
 	out := *in
+	in.DeepCopyInto(&out.ObjectMeta)
+	if in.Spec != nil {
+		out.Spec = runtime.DeepCopyJSON(in.Spec)
+	}
+	if in.Status != nil {
+		out.Status = runtime.DeepCopyJSON(in.Status)
+	}
 	return &out
 }
 
@@ -225,15 +237,28 @@ func (in *unstructuredListStub) DeepCopyObject() runtime.Object {
 // has one method that matters here, and a fake is less machinery than a real
 // broadcaster with a fake clientset behind it.
 type recordingRecorder struct {
-	reasons []string
-	types   []string
+	reasons  []string
+	types    []string
+	messages []string
 }
 
 func (r *recordingRecorder) Eventf(
-	_ runtime.Object, _ runtime.Object, eventType, reason, _, _ string, _ ...any,
+	_ runtime.Object, _ runtime.Object, eventType, reason, _, note string, args ...any,
 ) {
 	r.types = append(r.types, eventType)
 	r.reasons = append(r.reasons, reason)
+	r.messages = append(r.messages, fmt.Sprintf(note, args...))
+}
+
+// last returns the message of the most recent event with a reason, or "" when
+// none was emitted, which is what a test asserting what an event says needs.
+func (r *recordingRecorder) last(reason string) string {
+	for i := len(r.reasons) - 1; i >= 0; i-- {
+		if r.reasons[i] == reason {
+			return r.messages[i]
+		}
+	}
+	return ""
 }
 
 // count returns how many events carried a reason, which is what a test

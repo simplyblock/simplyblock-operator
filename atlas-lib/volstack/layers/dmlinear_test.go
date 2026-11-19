@@ -3,6 +3,7 @@ package layers
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -266,5 +267,154 @@ func TestDMLinearGrowWithNothingBelowFails(t *testing.T) {
 	}
 	if _, err := growDM(t, layer, volstack.Artifact{}); err == nil {
 		t.Fatal("growing over nothing must fail")
+	}
+}
+
+// Regression: 2026-11-19-ext4-stays-aborted-behind-dmlinear (e2e run
+// 44487645991). After total path loss the mapping points at a namespace the
+// kernel removed, and the filesystem above it saw its I/O fail. The layer says
+// so, which is what makes the heal remount the filesystem rather than keep it.
+func TestDMLinearReportsAMappingWhoseNamespaceWasRemovedAsInterrupted(t *testing.T) {
+	m := newFakeMapper()
+	layer := dmLayer(m)
+	if _, err := layer.Ensure(context.Background(), nvmeBelow("/dev/nvme1n1", 259, 3)); err != nil {
+		t.Fatal(err)
+	}
+	layer.cfg.Gone = func(device string) bool { return device == "259:3" }
+
+	_, own, err := layer.Observe(context.Background(), nvmeBelow("/dev/nvme2n1", 259, 9))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !own.Interrupted {
+		t.Fatal("a mapping over a removed namespace is not reported Interrupted")
+	}
+	if err := layer.Heal(context.Background(), nvmeBelow("/dev/nvme2n1", 259, 9), own); err != nil {
+		t.Fatalf("heal: %v", err)
+	}
+	if _, own, _ = layer.Observe(context.Background(), nvmeBelow("/dev/nvme2n1", 259, 9)); own.Interrupted {
+		t.Fatal("still Interrupted after the mapping was re-pointed")
+	}
+}
+
+// A namespace that moved while the old one is still on the host is the live
+// subsystem flip, and the filesystem above it keeps serving through it.
+func TestDMLinearAMovedNamespaceIsNotAnInterruption(t *testing.T) {
+	m := newFakeMapper()
+	layer := dmLayer(m)
+	if _, err := layer.Ensure(context.Background(), nvmeBelow("/dev/nvme1n1", 259, 3)); err != nil {
+		t.Fatal(err)
+	}
+	layer.cfg.Gone = func(string) bool { return false }
+	if _, own, _ := layer.Observe(context.Background(), nvmeBelow("/dev/nvme4n2", 259, 11)); own.Interrupted {
+		t.Fatal("a move without loss is reported Interrupted")
+	}
+}
+
+// reconnectedFabric exposes the namespace a reconnect brought the volume back
+// as, which is what the fabric layer hands upward after total path loss.
+type reconnectedFabric struct{ dev blockdev.Device }
+
+func (r reconnectedFabric) Name() string                                     { return "fabric" }
+func (r reconnectedFabric) Release(context.Context, volstack.Artifact) error { return nil }
+func (r reconnectedFabric) Destroy(context.Context, volstack.Artifact) error { return nil }
+func (r reconnectedFabric) Ensure(context.Context, volstack.Artifact) (volstack.Artifact, error) {
+	return volstack.Artifact{Devices: []blockdev.Device{r.dev}}, nil
+}
+func (r reconnectedFabric) Observe(context.Context, volstack.Artifact) (volstack.State, volstack.Artifact, error) {
+	return volstack.StateReady, volstack.Artifact{Devices: []blockdev.Device{r.dev}}, nil
+}
+
+// unmountFirstMapper fails a test that re-points the mapping while the
+// filesystem on it is still mounted.
+type unmountFirstMapper struct {
+	*fakeMapper
+	fs *fakeFS
+	t  *testing.T
+}
+
+func (u unmountFirstMapper) Swap(ctx context.Context, name, device string, sectors uint64) error {
+	if u.fs.mountPoints[stagingPath] {
+		u.t.Errorf("re-pointed %s while the filesystem on it was still mounted", name)
+	}
+	return u.fakeMapper.Swap(ctx, name, device, sectors)
+}
+
+// totalLossStack is an indirect filesystem stack the moment after total path
+// loss: the mapping points at 259:3, which the kernel removed, the fabric
+// brought the volume back as 259:9, and the dead ext4 is still mounted.
+func totalLossStack(t *testing.T) (volstack.Plan, *fakeMapper, *fakeFS) {
+	m := newFakeMapper()
+	m.tables[DMLinearName("vol-1")] = devmapper.Target{Sectors: 2048, Device: "259:3"}
+	fs := newFakeFS()
+	fs.mountPoints[stagingPath] = true
+	dm := NewDMLinear(DMLinearConfig{
+		Name:   DMLinearName("vol-1"),
+		Mapper: unmountFirstMapper{fakeMapper: m, fs: fs, t: t},
+		Resolve: func(path string) (blockdev.Device, error) {
+			return blockdev.Device{Path: path, Name: "dm-7", Major: 253, Minor: 7}, nil
+		},
+		Gone: func(device string) bool { return device == "259:3" },
+	})
+	fsLayer := newFS(t, fs, blockdev.Reading{Content: blockdev.ContentFilesystem, Type: "ext4"}, nil)
+	fabric := reconnectedFabric{dev: blockdev.Device{Path: "/dev/nvme2n1", Major: 259, Minor: 9}}
+	return volstack.Plan{fabric, dm, fsLayer}, m, fs
+}
+
+// Regression: 2026-11-19-ext4-stays-aborted-behind-dmlinear (e2e run
+// 44487645991). The heal re-pointed the mapping under the mounted ext4 and kept
+// the mount, whose journal had aborted during the outage, so every write after
+// it failed read-only. The heal unmounts first and mounts the filesystem again
+// over the re-pointed mapping, which replays its journal.
+func TestTotalPathLossUnderTheIndirectionRemountsTheFilesystem(t *testing.T) {
+	plan, m, fs := totalLossStack(t)
+	if err := volstack.NewRunner(volstack.NewStore(t.TempDir())).Heal(context.Background(), "vol-1", plan); err != nil {
+		t.Fatalf("Heal: %v", err)
+	}
+	if got := m.tables[DMLinearName("vol-1")].Device; got != "259:9" {
+		t.Fatalf("mapping points at %s, want the reconnected namespace 259:9", got)
+	}
+	if !slices.Contains(fs.unmounted, stagingPath) {
+		t.Fatalf("the filesystem was never unmounted: %v", fs.unmounted)
+	}
+	if len(fs.mounted) == 0 || fs.mounted[len(fs.mounted)-1].source != "/dev/mapper/sb-vol-1" {
+		t.Fatalf("the filesystem was not mounted again over the mapping: %+v", fs.mounted)
+	}
+}
+
+// A pod's bind mount shares the superblock, so unmounting the staging path under
+// it would let the next mount pick the aborted filesystem up again. The heal
+// waits instead, and touches neither the mount nor the mapping.
+func TestTotalPathLossWaitsForTheFilesystemsOtherMounts(t *testing.T) {
+	plan, m, fs := totalLossStack(t)
+	fs.others = map[string][]string{stagingPath: {"/var/lib/kubelet/pods/a/volumes/v/mount"}}
+	err := volstack.NewRunner(volstack.NewStore(t.TempDir())).Heal(context.Background(), "vol-1", plan)
+	if !errors.Is(err, volstack.ErrHeldElsewhere) {
+		t.Fatalf("Heal = %v, want ErrHeldElsewhere", err)
+	}
+	if !strings.Contains(err.Error(), "/var/lib/kubelet/pods/a/volumes/v/mount") {
+		t.Errorf("the error does not name the other mount: %v", err)
+	}
+	if !fs.mountPoints[stagingPath] || m.tables[DMLinearName("vol-1")].Device != "259:3" {
+		t.Error("the heal changed the stack while the filesystem was held elsewhere")
+	}
+}
+
+// An unmount that fails means something still has the filesystem open. The
+// lazy unmount a teardown falls back to would only detach the path and leave
+// the aborted superblock alive for the next mount, while the swap erased the
+// interruption that asked for a fresh one. The heal waits instead.
+func TestTotalPathLossWaitsWhileTheFilesystemIsBusy(t *testing.T) {
+	plan, m, fs := totalLossStack(t)
+	fs.unmountErr = errors.New("umount: target is busy")
+	err := volstack.NewRunner(volstack.NewStore(t.TempDir())).Heal(context.Background(), "vol-1", plan)
+	if !errors.Is(err, volstack.ErrHeldElsewhere) {
+		t.Fatalf("Heal = %v, want ErrHeldElsewhere", err)
+	}
+	if len(fs.forceUnmounted) != 0 {
+		t.Errorf("the busy filesystem was detached lazily: %v", fs.forceUnmounted)
+	}
+	if m.tables[DMLinearName("vol-1")].Device != "259:3" {
+		t.Error("the mapping was re-pointed under a filesystem that is still held")
 	}
 }
