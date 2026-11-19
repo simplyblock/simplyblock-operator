@@ -395,8 +395,10 @@ func compactNode(node *corev1.Node) {
 	labeled("node-role.kubernetes.io/worker", "")(node)
 }
 
-// A compact cluster has no machine that is not a control-plane node, so a run
-// that leaves enableControlPlaneNodes unset uses them and says why.
+// Regression: 2026-11-19-compact-cluster-finds-no-worker. On an OpenShift
+// compact cluster every node is a control-plane node that also carries the
+// worker role, so a run that left enableControlPlaneNodes unset found no worker
+// at all. Such a run now uses them and says why.
 func TestDiscoverUsesTheControlPlaneOfACompactCluster(t *testing.T) {
 	r := newRunner(t, discoverRun(nil),
 		worker("master-0", compactNode), worker("master-1", compactNode), worker("master-2", compactNode))
