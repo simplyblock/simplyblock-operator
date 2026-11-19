@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/placement/placementrpc"
 
 	"github.com/simplyblock/csi-driver/internal/clusters"
@@ -107,10 +108,16 @@ func segmentsOf(topologies []*csi.Topology) []map[string]string {
 
 // sourceCluster is the backend cluster of a clone's or restore's source, read
 // from its handle, or empty for a new volume or a handle that does not parse.
+// A striped snapshot's id is its first member's with the width appended, and
+// the first member is in the cluster every member is.
 func sourceCluster(source *csi.VolumeContentSource) string {
 	switch {
 	case source.GetSnapshot() != nil:
-		if snapshot, err := parseSnapshotID(source.GetSnapshot().GetSnapshotId()); err == nil {
+		id, _, ok := lvol.SplitStripeMarker(source.GetSnapshot().GetSnapshotId())
+		if !ok {
+			return ""
+		}
+		if snapshot, err := parseSnapshotID(id); err == nil {
 			return snapshot.clusterID
 		}
 	case source.GetVolume() != nil:

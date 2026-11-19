@@ -31,6 +31,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/ptr"
 
@@ -198,7 +199,7 @@ func (r *PersistentVolumeOpsReconciler) createMigration(
 		var err error
 		migration, err = r.API.CreateMigration(ctx, subject.clusterUUID, volume.NQN, subject.targetUUID)
 		if err != nil {
-			if refusal := refusedCreate(err, subject.targetUUID); refusal != nil {
+			if refusal := refusedCreate(err); refusal != nil {
 				return refusal
 			}
 			// The request may have taken effect despite the error: a create
@@ -422,9 +423,13 @@ func (r *PersistentVolumeOpsReconciler) discardMigration(
 		return nil
 	}
 
-	if err := r.API.CancelMigration(ctx,
-		migration.ClusterUUID, migration.SubsystemNQN, migration.MigrationUUID); err != nil {
-		return fmt.Errorf("cancel migration %s: %w", migration.MigrationUUID, err)
+	// A migration that has already ended, or that the control plane no longer
+	// knows, is refused the cancel, and is equally the state being asked for.
+	// It is the commonest answer here, since a failed migration is what fails
+	// the operation, and what it built on the hosts still has to be released.
+	err := r.API.CancelMigration(ctx, migration.ClusterUUID, migration.SubsystemNQN, migration.MigrationUUID)
+	if err != nil && !errors.Is(err, controlplane.ErrMigrationNotActive) && !errors.Is(err, errs.ErrNotFound) {
+		return err
 	}
 
 	if err := r.deleteValidationJobs(ctx, ops); err != nil {
@@ -483,32 +488,26 @@ func expectedMembers(members []lvol.Volume, volumeUUID string) map[string]struct
 // reason otherwise.
 //
 // The control plane answers 400 for a request it will never accept (a target
-// serving as the fallback source, one with no lvstore, one it does not know)
-// and 409 for one it cannot accept yet (another migration of the subsystem is
-// active, a precondition that clears by itself). Three 400s that also clear by
-// themselves are matched on their wording and waited on like a 409: a cluster
-// rebalancing, a node busy with a data migration, and an active migration of
-// the subsystem, which some control planes answer with a 400 rather than a
-// 409. A timeout and a 5xx say nothing about whether the create landed, so
-// they are retried as well.
+// serving as the fallback source, one with no lvstore, one it does not know).
+// A refusal that clears by itself (a cluster rebalancing, a node busy with a
+// data migration, an active migration of the subsystem) is a 409 on later
+// releases and a 400 on 26.3; the client names both ErrMigrationBlocked, and
+// it is waited on. A timeout and a 5xx say nothing about whether the create
+// landed, so they are retried as well.
 //
 // Failing at once is what tells whatever raised the operation that its target
 // refused, while there is still time to choose another. The message is the
 // control plane's reason and nothing else: whoever reads it decides from those
 // words whether the refusal was about the target, and a message that named the
 // target on the operator's behalf would make every refusal look like one.
-func refusedCreate(err error, targetUUID string) error {
-	var answer *controlplane.StatusError
-	if !errors.As(err, &answer) || answer.StatusCode != http.StatusBadRequest {
-		return nil
-	}
-	body := strings.ToLower(answer.Body)
-	if strings.Contains(body, "is rebalancing") || strings.Contains(body, "data migration in progress") ||
-		(strings.Contains(body, "already exists") && strings.Contains(body, "migration")) {
-		return nil
-	}
-	if strings.Contains(body, "is already on node "+strings.ToLower(targetUUID)) {
+func refusedCreate(err error) error {
+	if errors.Is(err, controlplane.ErrMigrationAlreadyOnTarget) {
 		return errAlreadyOnTarget
+	}
+	var answer *controlplane.StatusError
+	if errors.Is(err, controlplane.ErrMigrationBlocked) ||
+		!errors.As(err, &answer) || answer.StatusCode != http.StatusBadRequest {
+		return nil
 	}
 	return fatalf("the control plane refused the migration: %s", answer.Body)
 }

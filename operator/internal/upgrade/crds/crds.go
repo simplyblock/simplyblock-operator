@@ -6,10 +6,9 @@
 // installed a schema its own converter had never seen would be converting
 // blind.
 //
-// They are a committed copy of what controller-gen writes into
-// config/crd/bases, because go:embed cannot reach outside the directory of the
-// file that declares it. `make -C operator manifests` refreshes the copy, which
-// is the same arrangement the Helm chart's copy of the same files uses.
+// They are what controller-gen writes into config/crd/bases, embedded by the
+// package in that directory because go:embed cannot reach outside the
+// directory of the file that declares it.
 //
 // Which CRD belongs to which of §11's groups is read from the CRD rather than
 // listed here. A table of kinds is a second place to edit when a kind is added,
@@ -18,7 +17,6 @@
 package crds
 
 import (
-	"embed"
 	"fmt"
 	"io/fs"
 	"path"
@@ -27,14 +25,12 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"sigs.k8s.io/yaml"
+
+	"github.com/simplyblock/simplyblock-operator/config/crd/bases"
 )
 
-// manifests holds the generated CRDs. The pattern is deliberately narrow: a
-// stray file in the directory would otherwise be embedded and then fail to
-// parse as a CRD at run time, which is a failure the build should have had.
-//
-//go:embed manifests/*.yaml
-var manifests embed.FS
+// manifests holds the generated CRDs.
+var manifests = bases.FS
 
 // Shape is which of §11's groups a CRD is in, worked out from its content.
 type Shape string
@@ -157,9 +153,9 @@ func Load() ([]Definition, error) {
 	return out, nil
 }
 
-// manifestDir is where the copied CRDs live, named once so the embed pattern
-// and the read agree.
-const manifestDir = "manifests"
+// manifestDir is where the CRDs sit inside the embedded file system, which is
+// its root because the embedding package lives in the directory itself.
+const manifestDir = "."
 
 // parse reads one CRD.
 func parse(raw []byte, source string) (Definition, error) {

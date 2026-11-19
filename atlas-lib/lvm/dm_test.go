@@ -159,3 +159,10 @@ func TestManager_HasOrphanedDMNodes(t *testing.T) {
 		}
 	})
 }
+
+func TestDeviceMapperNameDoublesTheDashes(t *testing.T) {
+	lv := LogicalVolume{VolumeGroup: VolumeGroup{Name: "vol-8e2d-1b"}, Name: "lv-8e2d-1b"}
+	if got, want := DeviceMapperName(lv), "vol--8e2d--1b-lv--8e2d--1b"; got != want {
+		t.Errorf("DeviceMapperName = %q, want %q", got, want)
+	}
+}

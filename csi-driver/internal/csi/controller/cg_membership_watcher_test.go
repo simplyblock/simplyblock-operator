@@ -448,3 +448,44 @@ func TestALateLabelNamingAGroupInAnotherClusterIsRefused(t *testing.T) {
 		t.Errorf("a join was sent: here %v, there %v", here.joined, there.joined)
 	}
 }
+
+// Regression: 2026-11-17-striped-handle-parsers (PR #922 review). A striped
+// volume's handle names its first member, and the watcher read it like any
+// other: a consistency-group label added after the claim was bound joined the
+// first member alone, or filed a migration that could move it onto a node
+// holding another member. A striped volume never joins a group, so the label
+// is refused with an event and the backend is not touched.
+func TestAStripedVolumeIsNeverJoinedToAGroup(t *testing.T) {
+	membership := &fakeMembership{
+		groupsByName: map[string]*controlplane.ConsistencyGroupSummary{"orders": {ID: "cg-1", Name: "orders"}},
+	}
+	migrations := &fakeMigrations{}
+	watcher, pvc, recorder := watcherFixture(t, map[string]string{consistencyGroupLabel: "orders"}, testDriver, membership)
+	watcher.migrations = migrations
+
+	pvs := watcher.kube.CoreV1().PersistentVolumes()
+	pv, err := pvs.Get(context.Background(), "pv-data", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("read the fixture's PV: %v", err)
+	}
+	pv.Spec.CSI.VolumeHandle += ":s2"
+	if _, err := pvs.Update(context.Background(), pv, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("make the fixture's PV striped: %v", err)
+	}
+
+	if err := watcher.reconcile(context.Background(), pvc); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(membership.joined) != 0 || len(membership.colocated) != 0 || len(migrations.requests) != 0 {
+		t.Errorf("a striped volume was acted on: joined %v, colocated %v, migrations %v",
+			membership.joined, membership.colocated, migrations.requests)
+	}
+	select {
+	case event := <-recorder.Events:
+		if !strings.Contains(event, "Warning") || !strings.Contains(event, "striped") {
+			t.Errorf("event = %q, want a warning that the volume is striped", event)
+		}
+	default:
+		t.Error("the refusal raised no event, so the label reads as a stalled controller")
+	}
+}

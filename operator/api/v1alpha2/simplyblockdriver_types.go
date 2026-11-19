@@ -217,6 +217,13 @@ type DriverPNFSMDS struct {
 	// server.
 	// +optional
 	DataNetwork *DriverPNFSDataNetwork `json:"dataNetwork,omitempty"`
+
+	// UnhealthyDeadline is how long a booted guest may stay unhealthy before
+	// the pod restarts. The metadata server is a singleton in the data path of
+	// every pNFS volume, so a restart pauses all of them. 0s never restarts it.
+	// Unset keeps the runner's default of 90s.
+	// +optional
+	UnhealthyDeadline *metav1.Duration `json:"unhealthyDeadline,omitempty"`
 }
 
 // DriverPNFSDataNetwork is the storage data network the metadata server is
@@ -338,6 +345,30 @@ type SimplyblockDriverSpec struct {
 	// +kubebuilder:default=false
 	// +optional
 	EnableCSIAddons *bool `json:"enableCSIAddons,omitempty"`
+
+	// DisableDeviceMapperIndirection stages new volumes directly on their NVMe
+	// device instead of behind a device-mapper linear device. Without that
+	// layer a volume cannot move to another NVMe subsystem while a pod uses
+	// it, so it cannot join a consistency group live. The layer costs a little
+	// CPU per I/O. A change applies to volumes staged after it; a volume keeps
+	// the layout it was staged with until its pods stop and it is staged again.
+	// +optional
+	DisableDeviceMapperIndirection bool `json:"disableDeviceMapperIndirection,omitempty"`
+	// EnableNVMeTCPModuleInstall loads the nvme-tcp kernel module on every
+	// worker that runs the node plugin, before the plugin starts. A privileged
+	// init container mounts the host's root and reads its /etc/os-release. On an
+	// Ubuntu host it loads nvme-tcp, installs linux-modules-extra for the
+	// running kernel with apt when the module is missing, and adds nvme-tcp to
+	// /etc/modules-load.d so it loads again after a reboot. Any other host is
+	// left unchanged with a warning in the init container's log. An Ubuntu
+	// worker needs its apt mirror when the package is missing, which is again
+	// the case after a kernel upgrade, and an install that fails holds the node
+	// plugin in Init and stalls a rolling update of the DaemonSet. Turning it
+	// off leaves /etc/modules-load.d/nvme-tcp.conf on the hosts. Changing it
+	// restarts every node plugin.
+	// +kubebuilder:default=false
+	// +optional
+	EnableNVMeTCPModuleInstall *bool `json:"enableNVMeTCPModuleInstall,omitempty"`
 
 	// TLS configures whether both plugins reach the control plane over TLS.
 	// Unset is plaintext, the shape every deployment ran before this field

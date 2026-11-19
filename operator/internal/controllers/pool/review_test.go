@@ -36,6 +36,30 @@ func TestTwoNamespacesGetDistinctDefaultClassNames(t *testing.T) {
 	}
 }
 
+// The class name opens with simplyblock, and a namespace or cluster that opens
+// with it too would otherwise repeat it: the operator's own namespace is
+// simplyblock, so every default class it wrote read simplyblock-simplyblock-....
+func TestADefaultClassNameSaysSimplyblockOnce(t *testing.T) {
+	cases := []struct {
+		namespace, cluster, want string
+	}{
+		{"simplyblock", "discovered-initial-discovery-3441a6c3-cluster",
+			"simplyblock-discovered-initial-discovery-3441a6c3-cluster"},
+		{"simplyblock", "production", "simplyblock-production"},
+		{"simplyblock", "simplyblock-cluster", "simplyblock-cluster"},
+		{"simplyblock-system", "production", "simplyblock-system-production"},
+		{"simplyblock", "simplyblock", "simplyblock"},
+		{"tenants", "production", "simplyblock-tenants-production"},
+		{"tenants", "simplyblock-cluster", "simplyblock-tenants-simplyblock-cluster"},
+	}
+	for _, c := range cases {
+		if got := DefaultStorageClassName(c.namespace, c.cluster); got != c.want {
+			t.Errorf("namespace %q, cluster %q: derived %q, want %q",
+				c.namespace, c.cluster, got, c.want)
+		}
+	}
+}
+
 // The managed-by label is the whole of the difference between a class the
 // operator deletes with its pool and one it refuses to touch, so the value has
 // to match rather than merely be present.

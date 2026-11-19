@@ -621,23 +621,40 @@ type ClusterTemplate struct {
 	EnableAtomicity4K *bool `json:"enableAtomicity4K,omitempty"`
 
 	// EnableCpuTopology turns on topology-aware CPU assignment on the storage
-	// nodes. It is valid only when spec.environment is Vanilla, whose workers
-	// the environment does not describe. Every other environment decides it:
-	// OpenShift turns it on, and the rest leave it off. Unset on a Vanilla
-	// document leaves it off.
+	// nodes. Unset leaves it to spec.environment: OpenShift and Talos turn it on,
+	// and every other environment leaves it off. Stated, it replaces what the
+	// environment decides, for a fleet whose workers the environment does not
+	// describe.
 	// +optional
 	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`
 
 	// EnableKubeletConfiguration lets the storage nodes rewrite the kubelet
-	// configuration of their workers and restart the kubelet. It is valid only
-	// when spec.environment is Vanilla, for a fleet whose workers keep the
-	// configuration where the storage node cannot write it. Every other
-	// environment decides it: on for OpenShift, Rancher, and K3s, and off for
-	// Talos, EKS, GKE, AKS, and OKE, whose kubelet configuration is not
-	// writable or is rebuilt with every node. Unset on a Vanilla document
-	// turns it on.
+	// configuration of their workers and restart the kubelet. On OpenShift that
+	// is the KubeletConfig a storage node creates for its machine-config pool,
+	// and the rolling reboot of that pool which applying it takes.
+	//
+	// Unset leaves it to spec.environment: on for Vanilla, OpenShift, Rancher,
+	// K3s, and Talos (whose kubelet is configured through the Talos API), and
+	// off for EKS, GKE, AKS, and OKE, whose kubelet
+	// configuration is not writable or is rebuilt with every node. Stated, it
+	// replaces what the environment decides. A fleet that manages its kubelet
+	// configuration itself states it false: a storage node then neither
+	// rewrites the kubelet nor, on OpenShift, creates a KubeletConfig or waits
+	// for the pool to roll, so CPU pinning holds only if that kubelet already
+	// runs the static CPU manager. Stating it true on an environment whose
+	// kubelet is not writable makes the storage nodes fail to configure it.
 	// +optional
 	EnableKubeletConfiguration *bool `json:"enableKubeletConfiguration,omitempty"`
+
+	// TalosMachineConfig is who writes a Talos worker's machine config, the
+	// huge-page pool and the kubelet's CPU topology. Preprovisioned, the
+	// default, is the cluster's operator, before the nodes are added: a node
+	// verifies and fails its add with the patch to apply. Managed is the node
+	// itself, through the Talos API, which needs the os:admin credentials
+	// Secret in the namespace. It is valid only when spec.environment is
+	// Talos, and lands on StorageCluster.spec.storageNodes.talosMachineConfig.
+	// +optional
+	TalosMachineConfig TalosMachineConfigMode `json:"talosMachineConfig,omitempty"`
 
 	// Stripe is the erasure-coding layout.
 	// +optional
@@ -817,6 +834,30 @@ type DeploymentImages struct {
 	// SPDKProxy is the SPDK proxy image, written per node for the reason SPDK is.
 	// +optional
 	SPDKProxy *ImageSpec `json:"spdkProxy,omitempty"`
+
+	// Talosctl is the talosctl image a Talos worker's node runs as a Job to
+	// reserve its huge pages through the Talos API. It is the fleet's, written
+	// to StorageCluster.spec.storageNodes.talosctlImage: one DaemonSet, one Job
+	// image. Unstated keeps the node agent's default; a deployment pins it to
+	// the cluster's Talos minor, or to a mirror on an air-gapped site. Read only
+	// for a document whose environment is Talos.
+	// +optional
+	Talosctl *ExternalImageSpec `json:"talosctl,omitempty"`
+}
+
+// ExternalImageSpec is an image this product does not build, stated the way
+// ImageSpec states one it does. It exists because ImageSpec holds every image to
+// simplyblock's own registries, which is right for software simplyblock publishes
+// and wrong for talosctl: Sidero publishes it on ghcr.io, and a deployment that
+// mirrors it names its own registry. Any registry is admitted; the shape of a
+// reference is still checked.
+type ExternalImageSpec struct {
+	// Image is the repository and tag, optionally digest-pinned, on any
+	// registry. An empty value is not written downstream, so the field it would
+	// fill keeps its own default.
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?/[a-z0-9][a-z0-9._/-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	Image string `json:"image,omitempty"`
 }
 
 // ClusterDeploymentConfigSpec is a whole simplyblock deployment as one
@@ -833,7 +874,7 @@ type DeploymentImages struct {
 // +kubebuilder:validation:XValidation:rule="size(self.nodeSets) > 1 || has(self.clusterRef) || self.nodeSets.all(s, !has(s.cluster))",message="a node set overrides the cluster template only when the document has more than one node set or names a cluster in clusterRef"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.network) || (has(self.cluster.network.spdkOnHostNetwork) && self.cluster.network.spdkOnHostNetwork) || self.nodeSets.all(s, s.groups.all(g, !has(g.dataInterfaces)))",message="group dataInterfaces are allowed only with cluster.network.spdkOnHostNetwork"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
-// +kubebuilder:validation:XValidation:rule="!has(self.cluster) || (!has(self.cluster.enableCpuTopology) && !has(self.cluster.enableKubeletConfiguration)) || (has(self.environment) && self.environment == 'Vanilla')",message="spec.cluster.enableCpuTopology and spec.cluster.enableKubeletConfiguration are stated only when spec.environment is Vanilla: every other environment decides both"
+// +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.talosMachineConfig) || (has(self.environment) && self.environment == 'Talos')",message="spec.cluster.talosMachineConfig is what a deployment onto Talos states, so spec.environment has to be Talos"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
 	// and is validated but otherwise inert before that, which is what makes

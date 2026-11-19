@@ -32,7 +32,7 @@ Reference material:
 
 |               | Generated (committed)                                                                                                                                                                                                                 | Built (ignored)                                                                            |
 |---------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------|
-| Examples      | `operator/config/crd/bases/*.yaml`, `operator/config/rbac/role.yaml`, `zz_generated.deepcopy.go`, `operator/dist/install.yaml`, `helm-charts/charts/simplyblock-operator/{crds,templates/roles}`, `atlas-lib/internal/cpapi/*.gen.go` | `operator/build/manager`, `csi-driver/build/spdkcsi`, container images, `operator/bundle/` |
+| Examples      | `operator/config/crd/bases/*.yaml`, `operator/config/rbac/role.yaml`, `zz_generated.deepcopy.go`, `helm-charts/charts/simplyblock-operator/{crds,templates/roles}`, `atlas-lib/internal/cpapi/*.gen.go` | `operator/build/manager`, `csi-driver/build/spdkcsi`, container images, `operator/bundle/` |
 | Lives in git  | **yes,** a stale copy is a review-visible defect                                                                                                                                                                                      | no (`.gitignore`: `build/`, `.bin/`)                                                       |
 | CI enforces   | yes, `make <target>` then `git diff --exit-code`                                                                                                                                                                                      | only that it compiles                                                                      |
 | After running | **commit the diff**                                                                                                                                                                                                                   | nothing to commit                                                                          |
@@ -102,12 +102,13 @@ Chart **packaging** is not part of `make`: the release workflow runs
 ### The installer and the OpenShift/OLM bundle
 
 ```bash
-make -C operator build-installer         # dist/install.yaml, committed
+make -C operator build-installer         # dist/install.yaml, not committed
 make -C operator bundle                  # bundle/, needs a pushed image
 ```
 
 `build-installer` regenerates the manifests, then `kustomize build config/default`
-into `dist/install.yaml`.
+into `dist/install.yaml`. The file is ignored by git: the release workflow
+renders it against the release's image and attaches it to the GitHub release.
 
 `bundle` is the OpenShift path and is the one target that reaches outside the
 repository. Before running it, know these four things:

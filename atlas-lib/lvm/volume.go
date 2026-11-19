@@ -26,6 +26,11 @@ type LogicalVolumeDefinition struct {
 	// applies only alongside a stripe count, since there is nothing for a chunk
 	// size to describe on a linear volume.
 	StripeChunkBytes int64
+
+	// LogicalSizeBytes is the size of a pooled type's volume inside its pool,
+	// VDO's virtual size, and zero lets the pool size it from its own physical
+	// space.
+	LogicalSizeBytes int64
 }
 
 type VolumeProvisioning interface {
@@ -130,23 +135,31 @@ func (m *Manager) CreateVolumeGroup(
 
 // ActivateVolumeGroup activates volumeGroup's logical volumes (vgchange -ay),
 // never recreating or reformatting anything.
-func (m *Manager) ActivateVolumeGroup(ctx context.Context, volumeGroup VolumeGroup) error {
-	if err := m.requireOwned(ctx, volumeGroup); err != nil {
+//
+// pvs are the group's own physical volumes, and naming them scopes the
+// command, and the ownership read before it, to them. Unscoped, LVM considers
+// every device carrying the group's physical volumes, and a clone attached on
+// the same host and not yet re-identified carries every one of them a second
+// time, which LVM refuses to activate over. No pvs is unscoped.
+func (m *Manager) ActivateVolumeGroup(ctx context.Context, volumeGroup VolumeGroup, pvs ...PhysicalVolume) error {
+	devices := devicePaths(pvs)
+	if err := m.requireOwnedOn(ctx, devices, volumeGroup); err != nil {
 		return err
 	}
-	if _, err := m.exec(ctx, nil, "vgchange", "-ay", volumeGroup.Name); err != nil {
+	if _, err := m.exec(ctx, devices, "vgchange", "-ay", volumeGroup.Name); err != nil {
 		return fmt.Errorf("activate VG %s: %w", volumeGroup.Name, err)
 	}
 	return nil
 }
 
 // DeactivateVolumeGroup deactivates (but does not destroy) volumeGroup
-// (vgchange -an).
-func (m *Manager) DeactivateVolumeGroup(ctx context.Context, volumeGroup VolumeGroup) error {
-	if err := m.requireOwned(ctx, volumeGroup); err != nil {
+// (vgchange -an), scoped to pvs as ActivateVolumeGroup is.
+func (m *Manager) DeactivateVolumeGroup(ctx context.Context, volumeGroup VolumeGroup, pvs ...PhysicalVolume) error {
+	devices := devicePaths(pvs)
+	if err := m.requireOwnedOn(ctx, devices, volumeGroup); err != nil {
 		return err
 	}
-	if _, err := m.exec(ctx, nil, "vgchange", "-an", volumeGroup.Name); err != nil {
+	if _, err := m.exec(ctx, devices, "vgchange", "-an", volumeGroup.Name); err != nil {
 		return fmt.Errorf("deactivate VG %s: %w", volumeGroup.Name, err)
 	}
 	return nil

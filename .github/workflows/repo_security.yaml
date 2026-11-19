@@ -96,7 +96,7 @@ jobs:
           fi
           # Refuse a tag that does not look like a release, such as a stray
           # tag that happens to share the prefix.
-          if [[ ! "$tag" =~ ^v[0-9]+(\.[0-9]+){1,3}(-[A-Za-z0-9]+)?$ ]]; then
+          if [[ ! "$tag" =~ ^v[0-9]+(\.[0-9]+){1,3}(-[A-Za-z0-9]+(\.[A-Za-z0-9]+)*)?$ ]]; then
             echo "::error::Resolved tag '${tag}' for line ${LINE} does not match the release-tag shape."
             exit 1
           fi
@@ -271,21 +271,55 @@ jobs:
           echo "A scan of the branch image found vulnerabilities at or above the medium cutoff."
           exit 1
 
-      - name: Notify Slack on scan failure
-        if: failure()
+      # Scoped to the two gating-scan steps specifically (not bare failure()):
+      # a bare failure() also fires when an earlier infra step (image pull,
+      # registry login, tag resolution) fails before any scan ran, posting a
+      # "vulnerabilities found" alert for a problem that has nothing to do
+      # with vulnerabilities.
+      #
+      # always() is required here: neither branch of this condition calls a
+      # status-check function, so GitHub Actions implicitly ANDs it with
+      # success() -- and by this point "Fail job if a gating scan found
+      # vulnerabilities" has already failed the job, so without always() this
+      # step would always be skipped, silently.
+      - name: Notify Slack on gating scan failure
+        if: always() && (steps.grype-branch.outcome == 'failure' || steps.trivy-branch.outcome == 'failure')
         uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a # v2
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": ":rotating_light: *Security scan failed* for `${{ matrix.image }}`",
+              "text": ":rotating_light: *Security scan failed* — vulnerabilities found in `${{ matrix.image }}`",
               "attachments": [
                 {
                   "color": "danger",
                   "fields": [
                     { "title": "Line",     "value": "${{ matrix.line }}", "short": true },
                     { "title": "Image",    "value": "${{ matrix.image }}:${{ steps.tags.outputs.branch_tag }}", "short": true },
+                    { "title": "Workflow", "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>", "short": false }
+                  ]
+                }
+              ]
+            }
+
+      # Catches everything else that fails the job -- a flaky image pull,
+      # registry login, or tag resolution -- so it still gets surfaced, but
+      # as an infra failure rather than a false CVE alert.
+      - name: Notify Slack on workflow failure
+        if: failure() && steps.grype-branch.outcome != 'failure' && steps.trivy-branch.outcome != 'failure'
+        uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a # v2
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": ":warning: *Security scan workflow failed* (not a vulnerability finding) for `${{ matrix.image }}`",
+              "attachments": [
+                {
+                  "color": "warning",
+                  "fields": [
+                    { "title": "Line",     "value": "${{ matrix.line }}", "short": true },
                     { "title": "Workflow", "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>", "short": false }
                   ]
                 }

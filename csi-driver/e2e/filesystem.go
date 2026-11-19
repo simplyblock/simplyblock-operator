@@ -20,7 +20,7 @@ var _ = ginkgo.Describe("SPDKCSI-FILESYSTEM", func() {
 	// -------------------------------------------------------------------------
 
 	// A unique StorageClass name is generated per test so parallel runs do not
-	// collide. The class names xfs explicitly rather than leaning on the default
+	// collide. The class names XFS explicitly rather than leaning on the default
 	// every class this suite writes carries: XFS is what this spec is about, so
 	// it says so, and it keeps asserting XFS if that default ever moves.
 	ginkgo.It("XFS volume is provisioned and data persists across pod restarts", func() {
@@ -63,8 +63,11 @@ var _ = ginkgo.Describe("SPDKCSI-FILESYSTEM", func() {
 
 		ginkgo.By("verify the mounted filesystem is XFS")
 		// Alpine's `df` supports `-T`, and an XFS mount reports type `xfs`.
+		// `-P` keeps each mount on one line: busybox otherwise puts a device
+		// name longer than 20 characters on a line of its own, and a dm-linear
+		// volume's /dev/mapper/sb-<uuid> is one.
 		fsType, _ := execCommandInPod(f,
-			"df -T /spdkvol | awk 'NR==2 {print $2}'",
+			"df -PT /spdkvol | awk 'NR==2 {print $2}'",
 			ns, &xfsPodLabel)
 		gomega.Expect(fsType).To(gomega.ContainSubstring("xfs"),
 			"filesystem type should be xfs")
@@ -134,7 +137,7 @@ var _ = ginkgo.Describe("SPDKCSI-FILESYSTEM", func() {
 		// only one of them is this spec's to know. A literal would assert how
 		// this spec's class happens to be built instead of whether the driver
 		// recorded what it staged.
-		mounted, _ := execCommandInPod(f, "df -T /spdkvol | awk 'NR==2 {print $2}'", ns, &testPodLabel)
+		mounted, _ := execCommandInPod(f, "df -PT /spdkvol | awk 'NR==2 {print $2}'", ns, &testPodLabel)
 		mounted = strings.TrimSpace(mounted)
 		gomega.Expect(mounted).NotTo(gomega.BeEmpty(), "read the filesystem mounted at /spdkvol")
 

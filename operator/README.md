@@ -220,10 +220,10 @@ account token.
 - Access to a Kubernetes v1.11.3+ cluster
 - A reachable simplyblock control plane (Web API)
 
-**Apply the pre-built installer bundle** (CRDs, RBAC, and the manager deployment):
+**Apply the installer attached to a release** (CRDs, RBAC, and the manager deployment):
 
 ```sh
-kubectl apply -f https://raw.githubusercontent.com/simplyblock/simplyblock-operator/main/operator/dist/install.yaml
+kubectl apply -f https://github.com/simplyblock/simplyblock-operator/releases/download/<release-tag>/install.yaml
 kubectl -n simplyblock-operator get pods        # manager pod should be Running
 kubectl apply -k config/samples/                # control plane, CSI driver, and a discovery run
 ```

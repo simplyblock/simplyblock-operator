@@ -58,7 +58,7 @@ func (k *fakeKernel) run(_ context.Context, name string, args ...string) (string
 		return k.release, nil
 	case "lvm":
 		return k.segtype, nil
-	case "modprobe":
+	case modprobeCommand:
 		module := args[0]
 		if k.loads[module] {
 			return "", nil
@@ -118,7 +118,7 @@ func TestAdvertiseVDOCapabilityFallsBackToKvdo(t *testing.T) {
 		t.Fatalf("advertiseVDOCapability: %v", err)
 	}
 
-	if !kernel.askedFor("modprobe", "kvdo") {
+	if !kernel.askedFor(modprobeCommand, "kvdo") {
 		t.Errorf("kvdo was never tried: %v", kernel.asked)
 	}
 	node, _ := client.CoreV1().Nodes().Get(context.Background(), "node-a", metav1.GetOptions{})
@@ -138,7 +138,7 @@ func TestAdvertiseVDOCapabilityStopsAtTheFirstModuleThatLoads(t *testing.T) {
 		t.Fatalf("advertiseVDOCapability: %v", err)
 	}
 
-	if kernel.askedFor("modprobe", "kvdo") {
+	if kernel.askedFor(modprobeCommand, "kvdo") {
 		t.Errorf("kvdo was tried after dm-vdo had already loaded: %v", kernel.asked)
 	}
 }
@@ -170,8 +170,8 @@ func TestTheProbeAsksWhatAReaderNeedsToDiagnoseIt(t *testing.T) {
 
 	for _, want := range [][]string{
 		{"uname", "-r"},
-		{"modprobe", "dm-vdo"},
-		{"modprobe", "kvdo"},
+		{modprobeCommand, "dm-vdo"},
+		{modprobeCommand, "kvdo"},
 		{"lvm", "segtypes"},
 	} {
 		if !kernel.askedFor(want[0], want[1:]...) {
@@ -218,7 +218,7 @@ func TestAdvertiseVDOCapabilityLeavesAnOperatorSetLabelAlone(t *testing.T) {
 	}
 	// It still probed: an override that disagrees with the kernel under it is
 	// worth being able to see.
-	if !kernel.askedFor("modprobe", "dm-vdo") {
+	if !kernel.askedFor(modprobeCommand, "dm-vdo") {
 		t.Error("the probe skipped the kernel entirely on an overridden node")
 	}
 }

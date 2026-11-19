@@ -180,3 +180,73 @@ func TestManager_ResolveClonedVolumeGroup_WrapsAProbeFailure(t *testing.T) {
 		t.Errorf("ResolveClonedVolumeGroup() error = %v, want wrapping %v", err, wantErr)
 	}
 }
+
+// A group on several devices is imported by one vgimportclone naming them all,
+// scoped to them all: LVM refuses a group whose other devices a command was
+// scoped away from.
+func TestManager_ResolveClonedVolumeGroupSet_ImportsEveryDeviceAtOnce(t *testing.T) {
+	probe := func(dev string) string {
+		return joinKey([]string{"pvs", "--devices", dev, "--reportformat", "json", "-o", "vg_name", dev})
+	}
+	lvs := joinKey([]string{"lvs", "--reportformat", "json", "-o", "lv_name", "vol-clone"})
+	fake := &fakeRunner{
+		out: map[string]string{
+			probe("/dev/nvme0n1"): `{"report":[{"pv":[{"vg_name":"vol-source"}]}]}`,
+			probe("/dev/nvme1n1"): `{"report":[{"pv":[{"vg_name":"vol-source"}]}]}`,
+			lvs:                   `{"report":[{"lv":[{"lv_name":"lv-source"}]}]}`,
+		},
+		err: map[string]error{},
+	}
+	mgr := NewManagerWithRunner(fake.run)
+
+	pvs := []PhysicalVolume{{DevicePath: "/dev/nvme0n1"}, {DevicePath: "/dev/nvme1n1"}}
+	previous, err := mgr.ResolveClonedVolumeGroupSet(context.Background(), pvs, VolumeGroup{Name: "vol-clone"}, "lv-clone", nil)
+	if err != nil {
+		t.Fatalf("ResolveClonedVolumeGroupSet: %v", err)
+	}
+	if want := (VolumeGroup{Name: "vol-source"}); previous != want {
+		t.Errorf("previous VG = %v, want %v", previous, want)
+	}
+	want := [][]string{
+		{"pvscan", "--devices", "/dev/nvme0n1,/dev/nvme1n1", "--cache"},
+		{"vgimportclone", "--devices", "/dev/nvme0n1,/dev/nvme1n1", "--basevgname", "vol-clone", "/dev/nvme0n1", "/dev/nvme1n1"},
+		{"lvrename", "vol-clone", "lv-source", "lv-clone"},
+	}
+	if !reflect.DeepEqual(fake.mutating(), want) {
+		t.Errorf("recorded calls =\n%v\nwant\n%v", fake.mutating(), want)
+	}
+}
+
+// Devices that disagree about their group are not one clone, whichever way
+// they disagree, and nothing is imported or renamed.
+func TestManager_ResolveClonedVolumeGroupSet_RefusesASplitSet(t *testing.T) {
+	probe := func(dev string) string {
+		return joinKey([]string{"pvs", "--devices", dev, "--reportformat", "json", "-o", "vg_name", dev})
+	}
+	for name, second := range map[string]string{
+		"one already re-stamped": `{"report":[{"pv":[{"vg_name":"vol-clone"}]}]}`,
+		"two different sources":  `{"report":[{"pv":[{"vg_name":"vol-other"}]}]}`,
+		"one blank":              `{"report":[{"pv":[]}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeRunner{
+				out: map[string]string{
+					probe("/dev/nvme0n1"): `{"report":[{"pv":[{"vg_name":"vol-source"}]}]}`,
+					probe("/dev/nvme1n1"): second,
+				},
+				err: map[string]error{},
+			}
+			mgr := NewManagerWithRunner(fake.run)
+			pvs := []PhysicalVolume{{DevicePath: "/dev/nvme0n1"}, {DevicePath: "/dev/nvme1n1"}}
+			_, err := mgr.ResolveClonedVolumeGroupSet(context.Background(), pvs, VolumeGroup{Name: "vol-clone"}, "lv-clone", nil)
+			if !errors.Is(err, ErrSplitClone) {
+				t.Fatalf("error = %v, want ErrSplitClone", err)
+			}
+			for _, call := range fake.mutating() {
+				if call[0] == "vgimportclone" || call[0] == "lvrename" {
+					t.Errorf("a split set was changed: %v", call)
+				}
+			}
+		})
+	}
+}

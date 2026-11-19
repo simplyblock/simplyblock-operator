@@ -85,3 +85,19 @@ func TestManager_CreateLogicalVolume_VDODefinitionProducesVDOCommand(t *testing.
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }
+
+// Regression: 2026-11-17-vdo-capacity-underreported (PR #922 review). Created
+// without a virtual size, VDO sized its volume from the physical space left
+// after its own metadata, a third short of a 12GiB pool on the runner kernel,
+// and the volume reported the whole. A definition naming the logical size
+// creates the volume at exactly that.
+func TestVDOProvisioning_CreateVolumeArgsCarryTheLogicalSize(t *testing.T) {
+	got := (&vdoProvisioning{}).CreateVolumeArgs(LogicalVolumeDefinition{Compression: true, LogicalSizeBytes: 6 << 30})
+	want := []string{
+		"--type", "vdo", "--config", "activation{checks=0}", "--compression", "y", "--deduplication", "n",
+		"-V", "6442450944B",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("CreateVolumeArgs = %v, want %v", got, want)
+	}
+}

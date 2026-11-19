@@ -283,12 +283,42 @@ Grows the physical volume to the device's new full size, then the VDO pool to
 consume the newly available space (`ExpandLogicalVolume`'s `-l+100%FREE`, which
 is additive, not the absolute-size form `-l100%FREE` would be), then reads the
 pool's new size back and grows the VDO logical volume to match it exactly
-(`ExtendLogicalVolumeToSize`, an explicit byte count). The VDO logical volume
+(`ExtendLogicalVolumeToSize`, an explicit byte count). A definition naming a
+logical size (`LogicalSizeBytes`, see *Sizing* below) grows the VDO logical
+volume to that size instead of the pool's, which counts VDO's metadata as
+capacity. The VDO logical volume
 cannot be grown by the same free-space percentage the pool was, because only the
 pool is a real, physical-extent-consuming volume group member. The VDO logical
 volume on top is a virtual device sized in bytes, and after the pool's own
 `100%FREE` grow there are no volume-group extents left for a second
 percentage-based call to reference.
+
+### Sizing
+
+A VDO volume reports the capacity its claim asked for, in whole GiB, and the VDO
+logical volume is created at exactly that (`lvcreate -V`, from
+`LogicalSizeBytes`, which the node reads from the volume context's
+`vdoLogicalBytes`). The control-plane volume under it is larger by what LVM keeps of
+a physical volume (`lvm.PhysicalVolumeOverheadBytes`, one 4MiB extent) and by
+what VDO keeps of its pool (`lvm.VDOOverheadBytes`), so the pool has physical
+space for the whole logical volume even when nothing compresses or
+deduplicates. Created without a virtual size, VDO sized the volume from the
+space its metadata left, and on the runner kernel that was 7.98GiB of a 12GiB
+pool, a third short of what the volume reported.
+
+`lvm.VDOOverheadBytes` is an estimate made generous on purpose: 5GiB, for the
+deduplication index at its default memory setting, the recovery journal, and up
+to one 2GiB slab a pool that is not a whole number of slabs cannot use, plus
+1/256 of the logical size, twice what the block map, the reference counts, and
+the slab journals take. The on-node suite checks it on the runner kernel
+(`TestVDOStackHoldsItsLogicalSizeInPhysicalSpace`): the largest volume the
+driver would put on a 12GiB namespace comes up at exactly its logical size,
+with at least as much physical space free.
+
+An expansion grows the control-plane volume the same way, and the node grows
+the VDO logical volume to the new requested size in whole GiB, which it learns
+from the request. A volume created before the logical size was named keeps the
+size VDO gave it until its first expansion.
 
 ### `SetFeatures` and node-side logging
 

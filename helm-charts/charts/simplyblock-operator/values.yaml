@@ -96,6 +96,13 @@ csiConfig:
     # -- Name of the StorageClass rendered for `csiConfig.simplybk.pool`. Empty uses
     # `simplyblock-<pool>`.
     storageClassName:
+    # -- Stripes each volume of the rendered StorageClass across this many storage nodes of the
+    # cluster, 2 to 128 (`stripe_width`). Empty, 0, or 1 is an ordinary volume. See
+    # csi-driver/docs/striped-volumes.md.
+    stripeWidth:
+    # -- Chunk each member of a striped volume takes, a power of two from `4Ki` to `1Mi`
+    # (`stripe_size`). Empty uses the driver's 64Ki. Requires stripeWidth of 2 or more.
+    stripeSize:
 
 # Configuration for the csiSecret
 csiSecret:
@@ -107,15 +114,17 @@ multiCluster:
   # -- Writes one entry per item in `multiCluster.clusters` instead of the single cluster above.
   enable: false
   # -- Storage clusters the CSI driver connects to, when `multiCluster.enable` is `true`. Each entry
-  # has `cluster_id`, `secret`, `workers`, `pool`, and `storageClassName`, with the same meaning as
-  # the matching `csiConfig` and `csiSecret` values.
+  # has `cluster_id`, `secret`, `workers`, `pool`, `storageClassName`, `stripeWidth`, and
+  # `stripeSize`, with the same meaning as the matching `csiConfig` and `csiSecret` values.
   clusters:
   - cluster_id:
     secret:
     workers:
-    # As csiConfig.simplybk.pool and storageClassName, for this cluster.
+    # As csiConfig.simplybk.pool, storageClassName, stripeWidth, and stripeSize, for this cluster.
     pool:
     storageClassName:
+    stripeWidth:
+    stripeSize:
       
 deployment:
   # One of: standalone, managed, empty.
@@ -288,6 +297,19 @@ discovery:
   # carves journal partitions out of every device, and a discovery run over logical block devices
   # fails. The draft notes which disk was taken.
   forceJournalDevice: false
+
+  # Override whether the draft proposes failure-domain mode, which the run
+  # otherwise decides from the workers' topology: on when every worker carries a
+  # failure-domain label in a layout the control plane accepts, off otherwise.
+  #
+  # Set false to turn the mode off and read no failure domains at all, so a fleet
+  # spread over zones it does not want treated as failure domains is grouped by
+  # hardware alone into one cluster. Set true to propose the mode on; the layout
+  # must still pass the control plane's activation rules. Left out (the default),
+  # the run decides.
+  #   enableFailureDomains: false
+  # -- Overrides whether the draft proposes failure-domain mode. `false` reads no failure domains and
+  # groups the fleet as one cluster; `true` proposes the mode on. Omitted leaves the decision to the run.
 
   # The cluster network the draft proposes. With neither set, the SPDK pods run on
   # the host network. The two are exclusive.
@@ -529,6 +551,17 @@ driver:
   nodeSelector: {}
   # -- Tolerations for the CSI node plugin.
   tolerations: []
+
+  # Workers running Ubuntu often lack nvme-tcp until linux-modules-extra for
+  # the running kernel is installed. True adds a privileged init container to
+  # the node plugin that loads the module, installs that package with apt when
+  # the module is missing, and adds nvme-tcp to /etc/modules-load.d. It reads
+  # each host's /etc/os-release and leaves any host that is not Ubuntu as it is,
+  # so a mixed fleet can turn it on.
+  # -- Loads the `nvme-tcp` kernel module on the workers running the CSI node plugin, installing
+  # `linux-modules-extra-$(uname -r)` with apt on Ubuntu hosts when the module is missing. Other
+  # distributions are left unchanged.
+  enableNVMeTCPModuleInstall: false
 
   # Where the controller plugin runs. This is ordinary pod placement for one
   # workload, unlike the pair above.

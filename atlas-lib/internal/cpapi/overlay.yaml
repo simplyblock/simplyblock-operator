@@ -1,0 +1,33 @@
+overlay: 1.0.0
+info:
+  title: Fixups for the simplyblock control-plane OpenAPI export
+  version: 0.0.0
+actions:
+  # ClusterParams.kms_settings is a oneOf/discriminator inlined directly on the
+  # property (KMSSettings is a bare pydantic type alias on the sbcli side, not
+  # a class, so FastAPI never gives it its own named schema). oapi-codegen only
+  # generates usable As*/From* union helpers for a oneOf reached through a
+  # $ref to a named schema; an inline one becomes an unexported, unconstructable
+  # `struct { union json.RawMessage }`. Give it a name here instead of changing
+  # the Python type's shape to chase this Go-side limitation.
+  # kms_settings is itself `KMSSettingsDTO | None`, which pydantic renders as
+  # `anyOf: [<the oneOf+discriminator>, {type: null}]` -- the oneOf/discriminator
+  # to rename live one level down, at anyOf[0].
+  - target: "$.components.schemas.ClusterParams.properties.kms_settings.anyOf[0].oneOf"
+    remove: true
+  - target: "$.components.schemas.ClusterParams.properties.kms_settings.anyOf[0].discriminator"
+    remove: true
+  - target: "$.components.schemas.ClusterParams.properties.kms_settings.anyOf[0]"
+    update:
+      $ref: "#/components/schemas/KMSSettings"
+  - target: "$.components.schemas"
+    update:
+      KMSSettings:
+        oneOf:
+          - $ref: "#/components/schemas/VaultKMSSettings"
+          - $ref: "#/components/schemas/KMIPKMSSettings"
+        discriminator:
+          propertyName: provider
+          mapping:
+            vault: "#/components/schemas/VaultKMSSettings"
+            kmip: "#/components/schemas/KMIPKMSSettings"

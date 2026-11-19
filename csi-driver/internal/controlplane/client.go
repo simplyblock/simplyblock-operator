@@ -26,7 +26,13 @@ import (
 
 // errors deserve special care
 var (
-	ErrVolumeNotFound   = errors.New("volume not found")
+	ErrVolumeNotFound = errors.New("volume not found")
+	// ErrVolumeHeldByMove is a connect the control plane refused with a 409
+	// because a consistency-group subsystem move holds the volume's subsystem.
+	// Transient: the move's suspend window is bounded. A caller retries it and
+	// never attaches from anything older, because the subsystem the volume is
+	// in is about to change.
+	ErrVolumeHeldByMove = errors.New("volume held by a consistency-group subsystem move")
 	ErrVolumeExists     = errors.New("volume already exists")
 	ErrSnapshotNotFound = errors.New("snapshot not found")
 	ErrSnapshotExists   = errors.New("snapshot already exists")
@@ -631,6 +637,9 @@ func (client APIClient) getLvolConnections(
 		var httpErr *HTTPError
 		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
 			return nil, fmt.Errorf("%w: %s", ErrVolumeNotFound, httpErr.Message)
+		}
+		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusConflict {
+			return nil, fmt.Errorf("%w: %s", ErrVolumeHeldByMove, httpErr.Message)
 		}
 		return nil, err
 	}

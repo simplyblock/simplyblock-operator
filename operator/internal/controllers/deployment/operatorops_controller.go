@@ -818,8 +818,9 @@ func (r *OperatorOpsReconciler) draftFor(
 
 		template, err := discoverypkg.ClusterTemplateFor(clusterName, plan,
 			discoverypkg.TemplateOptions{
-				ForceJournalDevice: ptr.BoolFromOrFalse(spec.ForceJournalDevice),
-				Network:            spec.Network,
+				ForceJournalDevice:   ptr.BoolFromOrFalse(spec.ForceJournalDevice),
+				Network:              spec.Network,
+				EnableFailureDomains: spec.EnableFailureDomains,
 			})
 		if err != nil {
 			return nil, notes, err

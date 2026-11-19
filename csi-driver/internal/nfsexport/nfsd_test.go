@@ -123,26 +123,43 @@ func TestCheckFailsClosedWithoutReachingInnerWhenNFSDsControlFileIsAbsent(t *tes
 	}
 }
 
-// startFakeProcess launches a process whose kernel comm is name, by copying a
-// real binary to a temp path under that name and executing it there.
+// fakeProcessEnv makes the test binary sleep instead of running tests, which
+// is how startFakeProcess's copy of it stays up.
+const fakeProcessEnv = "NFSEXPORT_FAKE_PROCESS"
+
+// TestMain lets the test binary stand in for a long-running daemon when
+// startFakeProcess runs a copy of it.
+func TestMain(m *testing.M) {
+	if os.Getenv(fakeProcessEnv) != "" {
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// startFakeProcess launches a process whose kernel comm is name, by copying
+// this test binary to a temp path under that name and executing it there.
 // /proc/pid/comm reflects the executed file's own basename, not argv[0], so
 // this is the one portable way to make a process idmapdRunning would actually
-// find, without needing a real rpc.idmapd on the test machine.
+// find, without needing a real rpc.idmapd on the test machine. The test
+// binary rather than sleep: a multicall sleep (uutils, busybox) copied under
+// another name refuses to run.
 func startFakeProcess(t *testing.T, name string) {
 	t.Helper()
-	sleep, err := exec.LookPath("sleep")
+	self, err := os.Executable()
 	if err != nil {
-		t.Skipf("no sleep binary on PATH to fake a process with: %v", err)
+		t.Skipf("no test binary to fake a process with: %v", err)
 	}
-	data, err := os.ReadFile(sleep)
+	data, err := os.ReadFile(self)
 	if err != nil {
-		t.Fatalf("reading %s: %v", sleep, err)
+		t.Fatalf("reading %s: %v", self, err)
 	}
 	fake := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(fake, data, 0o755); err != nil {
 		t.Fatalf("writing %s: %v", fake, err)
 	}
-	cmd := exec.Command(fake, "30")
+	cmd := exec.Command(fake)
+	cmd.Env = append(os.Environ(), fakeProcessEnv+"=1")
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting %s: %v", fake, err)
 	}
@@ -150,6 +167,20 @@ func startFakeProcess(t *testing.T, name string) {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	})
+}
+
+// Regression: 2026-11-18-ubuntu-2604-uutils. Ubuntu 26.04 runners ship uutils
+// coreutils, whose sleep is one multicall binary that picks the utility from
+// its own name. Copied as rpc.idmapd it refused to run and exited, so
+// whether the "already running" tests saw it was a race they lost on every CI
+// run. The fake has to stay up for as long as a test looks at it.
+func TestAFakeProcessKeepsRunning(t *testing.T) {
+	startFakeProcess(t, "rpc.idmapd")
+	waitForProcessRunning(t, "rpc.idmapd", true)
+	time.Sleep(300 * time.Millisecond)
+	if running, err := processRunning("rpc.idmapd"); err != nil || !running {
+		t.Errorf("processRunning(rpc.idmapd) = %v, %v 300ms after it started, want it still running", running, err)
+	}
 }
 
 // processStatusIsZombie is processRunning's decision, pulled out so it is

@@ -30,3 +30,7 @@ go.work
 
 # OLM bundle directory
 bundle/
+
+# The installer is rendered by `make build-installer` and attached to each
+# GitHub release rather than committed.
+/dist/
