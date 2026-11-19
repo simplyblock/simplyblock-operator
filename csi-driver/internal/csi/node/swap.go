@@ -23,6 +23,7 @@ import (
 	"k8s.io/klog"
 
 	"github.com/simplyblock/atlas/devmapper"
+	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/volstack"
 	"github.com/simplyblock/atlas/volstack/swaprpc"
@@ -92,6 +93,16 @@ func (ns *Server) NewSwapper(cfg SwapperConfig) (*swaprpc.Swapper, error) {
 	if ns.volumeLocks != nil {
 		swap.Lock = ns.volumeLocks.Lock
 	}
+	// A swap connects the target subsystem's paths (Prepare) as this node's own
+	// host, the identity NodeStage and the reconnect loop present. Without it
+	// the connector falls back to the kernel default, a different host to the
+	// control plane's fencing, allowed_hosts and DHCHAP.
+	if hostNQN := ns.nodeHostNQN(context.Background(), cfg.NodeName); hostNQN != "" {
+		swap.HostNQN = hostNQN
+		if hostID, ok := nqn.HostUUID(hostNQN); ok {
+			swap.HostID = hostID
+		}
+	}
 	if ns.kubeClient != nil {
 		broadcaster := record.NewBroadcaster()
 		broadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: ns.kubeClient.CoreV1().Events("")})
@@ -152,4 +163,18 @@ func (e claimEvents) claimOf(ctx context.Context, handle string) (*corev1.Object
 		return &ref, nil
 	}
 	return nil, nil
+}
+
+// nodeHostNQN is this node's simplyblock host NQN, or empty when the node
+// cannot be read (no client, or the API refused).
+func (ns *Server) nodeHostNQN(ctx context.Context, nodeName string) string {
+	if ns.kubeClient == nil || nodeName == "" {
+		return ""
+	}
+	node, err := ns.kubeClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+	if err != nil {
+		klog.Warningf("swap: failed to read node %s for its host NQN: %v", nodeName, err)
+		return ""
+	}
+	return nqn.Host(string(node.UID))
 }
