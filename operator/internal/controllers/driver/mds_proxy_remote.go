@@ -70,7 +70,7 @@ func (r *SimplyblockDriverReconciler) remoteListenerPorts(ctx context.Context, n
 
 // clusterListenerPorts asks one cluster's control plane for its nodes' ports.
 func clusterListenerPorts(ctx context.Context, e clustercontroller.CSIClusterEntry) ([]int32, error) {
-	cfg := webapi.NewRemoteClient(e.ClusterEndpoint).AtlasConfig(webapi.WithBearerToken(ctx, e.ClusterSecret))
+	cfg := webapi.NewClient(e.ClusterEndpoint).AtlasConfig(webapi.WithBearerToken(ctx, e.ClusterSecret))
 	api, err := atlascp.New(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("control-plane client for cluster %s: %w", e.ClusterID, err)
