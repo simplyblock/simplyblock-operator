@@ -446,6 +446,7 @@ rules:
   - controlplaneops/finalizers
   - controlplanes/finalizers
   - nfsexports/finalizers
+  - objectstores/finalizers
   - operatorops/finalizers
   - persistentvolumeops/finalizers
   - replicationops/finalizers
