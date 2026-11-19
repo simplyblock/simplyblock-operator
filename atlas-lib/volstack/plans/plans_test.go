@@ -349,7 +349,7 @@ func (r *recordingLVM) run(_ context.Context, args ...string) (string, error) {
 	return reportWrap(args, r.out[args[0]]), nil
 }
 
-// reportWrap wraps out as pvs/lvs --reportformat json would, when args asked for
+// reportWrap wraps out as `pvs/lvs --reportformat json` would, when args asked for
 // it; every other answer passes through unchanged. out is treated as
 // whitespace-separated field values, matching how a test already scripts a
 // plain-text answer for the pre-JSON form of these same commands.
@@ -437,6 +437,8 @@ func (r *recordingFS) IsMountPoint(_ context.Context, path string) (bool, error)
 	r.checked = append(r.checked, path)
 	return r.isMounted, nil
 }
+
+func (r *recordingFS) OtherMounts(context.Context, string) ([]string, error) { return nil, nil }
 
 // blankDevice is a layers.ContentReader for a device carrying nothing, which is
 // the only reading that permits a format.

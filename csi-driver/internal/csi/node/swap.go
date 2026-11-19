@@ -24,6 +24,7 @@ import (
 
 	"github.com/simplyblock/atlas/devmapper"
 	"github.com/simplyblock/atlas/nvme"
+	"github.com/simplyblock/atlas/volstack"
 	"github.com/simplyblock/atlas/volstack/swaprpc"
 
 	"github.com/simplyblock/csi-driver/internal/controlplane"
@@ -61,11 +62,13 @@ func (ns *Server) refuseWhileHeld(volumeID string) error {
 }
 
 // stackError is the gRPC status of a failure to plan or heal a volume's stack.
-// A control plane holding the volume's subsystem for a move is transient and
-// answered Unavailable, which kubelet retries; anything else is Internal.
+// Two failures are transient and answered Unavailable, which kubelet retries: a
+// control plane holding the volume's subsystem for a move, and a heal waiting
+// for another mount of the filesystem it has to remount to go away. Anything
+// else is Internal.
 func stackError(err error, format string, args ...any) error {
 	code := codes.Internal
-	if errors.Is(err, controlplane.ErrVolumeHeldByMove) {
+	if errors.Is(err, controlplane.ErrVolumeHeldByMove) || errors.Is(err, volstack.ErrHeldElsewhere) {
 		code = codes.Unavailable
 	}
 	return status.Errorf(code, format+": %v", append(args, err)...)

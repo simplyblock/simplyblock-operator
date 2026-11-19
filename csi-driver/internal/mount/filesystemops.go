@@ -20,13 +20,22 @@ import (
 	"fmt"
 	"os"
 
+	k8smount "k8s.io/mount-utils"
+
 	"github.com/simplyblock/atlas/volstack/layers"
 )
 
 // FilesystemOperations is the stack's FilesystemOps over one node's mounter.
 type FilesystemOperations struct {
 	m *Mounter
+	// mountinfo is the mount table OtherMounts reads; empty means this
+	// process's own, which shares /var/lib/kubelet with the host through
+	// bidirectional propagation and so lists every pod's bind mount.
+	mountinfo string
 }
+
+// selfMountinfo is this process's mount table.
+const selfMountinfo = "/proc/self/mountinfo"
 
 // FilesystemOps returns the operations the stack's filesystem layer is built
 // with.
@@ -123,6 +132,42 @@ func (o *FilesystemOperations) IsMountPoint(_ context.Context, path string) (boo
 		return false, fmt.Errorf("%s: %w", path, ErrDeadMount)
 	}
 	return mounted, nil
+}
+
+// OtherMounts lists every mount point other than path that holds the
+// filesystem mounted at path, matched by device number: a bind mount carries
+// the device of what it binds, whatever subdirectory it binds and whatever name
+// the mount source was given. A path that is not mounted has none.
+//
+// It reads the mount table rather than asking the mount, which is the point on
+// the path it serves: a mount over a device that lost every path may answer
+// EIO or hang, and the table is the kernel's own record of it.
+func (o *FilesystemOperations) OtherMounts(_ context.Context, path string) ([]string, error) {
+	table := o.mountinfo
+	if table == "" {
+		table = selfMountinfo
+	}
+	mounts, err := k8smount.ParseMountInfo(table)
+	if err != nil {
+		return nil, fmt.Errorf("read the mount table %s: %w", table, err)
+	}
+	var major, minor int
+	found := false
+	for _, m := range mounts {
+		if m.MountPoint == path {
+			major, minor, found = m.Major, m.Minor, true
+		}
+	}
+	if !found {
+		return nil, nil
+	}
+	var others []string
+	for _, m := range mounts {
+		if m.MountPoint != path && m.Major == major && m.Minor == minor {
+			others = append(others, m.MountPoint)
+		}
+	}
+	return others, nil
 }
 
 // Grow runs the resize command the filesystem chose. Which tool it is and what

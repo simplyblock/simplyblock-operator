@@ -15,6 +15,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/devmapper"
@@ -41,6 +44,9 @@ type DMLinearConfig struct {
 	// Resolve describes the mapping's device node upward; defaults to
 	// blockdev.ResolveDevice.
 	Resolve DeviceResolver
+	// Gone reports whether the device a mapping points at, as major:minor, has
+	// been removed from the host; defaults to sysfsDeviceGone.
+	Gone func(device string) bool
 }
 
 // DMLinear is the indirection layer.
@@ -57,7 +63,26 @@ func NewDMLinear(cfg DMLinearConfig) *DMLinear {
 	if cfg.Resolve == nil {
 		cfg.Resolve = blockdev.ResolveDevice
 	}
+	if cfg.Gone == nil {
+		cfg.Gone = sysfsDeviceGone
+	}
 	return &DMLinear{cfg: cfg}
+}
+
+// sysfsBlockDevices lists every block device by major:minor.
+const sysfsBlockDevices = "/sys/dev/block"
+
+// sysfsDeviceGone reports whether the block device numbered device has been
+// removed. The kernel drops its sysfs entry when the disk is deleted, while a
+// mapping that still points at it keeps the number allocated, so no other
+// device can have taken it. A host without the directory cannot say, so the
+// answer there is that nothing is gone.
+func sysfsDeviceGone(device string) bool {
+	if _, err := os.Stat(sysfsBlockDevices); err != nil {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(sysfsBlockDevices, device))
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // Name is what the record calls this layer.
@@ -94,6 +119,9 @@ func (d *DMLinear) Observe(ctx context.Context, below volstack.Artifact) (volsta
 	dev, ok := belowDevice(below)
 	d.stale = !ok || target.Device != deviceNumber(dev)
 	if d.stale {
+		// The mapping still points at a namespace the kernel removed: every
+		// path was lost while the consumer above held this device.
+		own.Interrupted = d.cfg.Gone(target.Device)
 		return volstack.StatePartial, own, nil
 	}
 	return volstack.StateReady, own, nil

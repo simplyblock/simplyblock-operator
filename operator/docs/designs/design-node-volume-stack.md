@@ -1096,6 +1096,22 @@ Bottom to top is the only workable order. A remount over a namespace that has no
 been reconnected fails, and a namespace reconnect underneath a filesystem that is
 still holding a dead mount does not clear the dead mount.
 
+**An interrupted layer is healed only after the layers above it yield.** A layer
+that keeps its device across total path loss, which `dmLinear` does, marks its
+artifact `Interrupted` when the device it maps was removed while held. Whatever was
+mounted over it saw its I/O fail through the outage: an ext4 journal aborts and an
+XFS log shuts down, and neither recovers while it stays mounted. Before healing
+such a layer, the runner asks every layer above it that implements `Yielder` to let
+go, top down, and the rest of the walk finds those layers unhealthy and remounts
+them over the re-pointed device, which replays the journal. That is the outcome a
+stack without the indirection reaches by remounting on the new namespace device.
+The `filesystem` layer's `Yield` refuses with `ErrHeldElsewhere` while another
+mount, such as a pod's bind mount, shares its superblock, because unmounting the
+staging path under it would leave the damaged filesystem alive for the next mount
+to pick up. The publish that ran the heal returns `Unavailable` and is retried
+after the old pod's unpublish. A re-point without loss, the live subsystem flip,
+is not `Interrupted` and keeps the mount.
+
 **`Grow` walks the plan bottom to top as well**, and for the same reason: a
 logical volume cannot be extended past a physical volume that has not been
 resized, and a filesystem cannot be grown past its logical volume. Every `Grow` is

@@ -257,23 +257,74 @@ func (f fakeMembers) Observe(context.Context, volstack.Artifact) (volstack.State
 func TestTheMembersAreWhatThePathLossWatchSees(t *testing.T) {
 	vc := stripedContext()
 	members := fakeMembers{paths: []string{"/dev/nvme1n1", "/dev/nvme2n1"}}
-	if !markMembersPresent(context.Background(), volstack.Plan{members}, vc) {
-		t.Fatal("a striped plan was not recognized")
+	if !watchNamespaces(context.Background(), volstack.Plan{members}, vc) {
+		t.Fatal("a striped plan's members were not found")
 	}
-	if vc[stripeDevicePathsKey] != "/dev/nvme1n1,/dev/nvme2n1" {
-		t.Errorf("recorded member devices %q", vc[stripeDevicePathsKey])
+	if vc[watchedDevicePathsKey] != "/dev/nvme1n1,/dev/nvme2n1" {
+		t.Errorf("recorded member devices %q", vc[watchedDevicePathsKey])
 	}
-	forgetMembers(vc)
+	forgetNamespaces(vc)
+}
 
-	plain := stagedContext()
-	s, _ := newTestStack(t, newRecordingRunner())
-	plan := planFor(s.node("", nil), connectionFromContext(plain), stackVolume("/staging", plain, mountCapability()),
-		vdoOptions(plain), shapePlain)
-	if markMembersPresent(context.Background(), plan, plain) {
-		t.Error("an ordinary plan was taken for a striped one")
+// An unstage after an upgrade forgets the members a striped volume recorded
+// under the key an earlier version used, or the watch reports the devices it
+// just tore down as lost.
+func TestAnUnstageForgetsMembersRecordedByAnEarlierVersion(t *testing.T) {
+	var forgotten []string
+	vc := map[string]string{stripeDevicePathsKey: "/dev/nvme1n1,/dev/nvme2n1"}
+	saved := forgetDevice
+	forgetDevice = func(path string) { forgotten = append(forgotten, path) }
+	t.Cleanup(func() { forgetDevice = saved })
+
+	forgetNamespaces(vc)
+	if !slices.Equal(forgotten, []string{"/dev/nvme1n1", "/dev/nvme2n1"}) {
+		t.Errorf("forgot %v, want both members", forgotten)
 	}
-	if _, ok := plain[stripeDevicePathsKey]; ok {
-		t.Error("an ordinary volume's context gained member devices")
+}
+
+// exposingLayer is a layer that is present and exposes fixed devices.
+type exposingLayer struct {
+	name  string
+	paths []string
+}
+
+func (e exposingLayer) Name() string                                     { return e.name }
+func (e exposingLayer) Release(context.Context, volstack.Artifact) error { return nil }
+func (e exposingLayer) Destroy(context.Context, volstack.Artifact) error { return nil }
+func (e exposingLayer) Ensure(ctx context.Context, below volstack.Artifact) (volstack.Artifact, error) {
+	_, a, err := e.Observe(ctx, below)
+	return a, err
+}
+func (e exposingLayer) Observe(context.Context, volstack.Artifact) (volstack.State, volstack.Artifact, error) {
+	var a volstack.Artifact
+	for _, p := range e.paths {
+		a.Devices = append(a.Devices, blockdev.Device{Path: p})
+	}
+	return volstack.StateReady, a, nil
+}
+
+// Regression: 2026-11-19-dm-linear-volume-reported-without-paths (e2e runs
+// 44463031746 and 44487645991). A stage registered the top of the stack with the
+// path-loss watch, and behind the dmLinear indirection that is /dev/dm-N, which
+// the watch's sysfs scan of namespace devices never lists. Its first scan
+// reported the volume as having lost every path, and the guardian restarted a
+// healthy workload. The watch is given the namespace under the indirection.
+func TestThePathLossWatchIsGivenTheNamespaceUnderTheIndirection(t *testing.T) {
+	var watched []string
+	saved := watchDevice
+	watchDevice = func(path, _ string) { watched = append(watched, path) }
+	t.Cleanup(func() { watchDevice = saved })
+
+	plan := volstack.Plan{
+		exposingLayer{name: layerFabric, paths: []string{"/dev/nvme3n1"}},
+		exposingLayer{name: "dmLinear", paths: []string{"/dev/dm-1"}},
+	}
+	top := volstack.Artifact{Devices: []blockdev.Device{{Path: "/dev/dm-1"}}}
+	vc := stagedContext()
+	(&Server{}).rememberStagedVolume(context.Background(), pvcTestHandle, vc, top, plan, blockCapability())
+
+	if !slices.Equal(watched, []string{"/dev/nvme3n1"}) {
+		t.Errorf("the path-loss watch was given %v, want the namespace /dev/nvme3n1", watched)
 	}
 }
 

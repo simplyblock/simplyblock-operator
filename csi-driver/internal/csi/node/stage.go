@@ -234,7 +234,7 @@ func (ns *Server) NodeUnstageVolume(
 		// be reported as one that vanished on its own.
 		initiator.ForgetDevice(devicePath)
 	}
-	forgetMembers(volumeContext)
+	forgetNamespaces(volumeContext)
 
 	if ns.volumeIsBeingDeleted(ctx, volumeID) {
 		// The only caller of Destroy. A volume that is going away for good takes
@@ -341,9 +341,9 @@ func (ns *Server) healStack(
 	}
 	if device, ok := artifact.Device(); ok {
 		volumeContext["devicePath"] = device.Path
-		// A striped stack is watched through its members (striped.go).
-		if !markMembersPresent(ctx, plan, volumeContext) {
-			initiator.MarkDevicePresent(device.Path, deviceLvolID(volumeContext))
+		// The watch is given the namespaces under the stack (striped.go).
+		if !watchNamespaces(ctx, plan, volumeContext) {
+			watchDevice(device.Path, deviceLvolID(volumeContext))
 		}
 	}
 	if err := stashVolumeContext(volumeContext, stagingParentPath); err != nil {
@@ -783,10 +783,10 @@ func (ns *Server) rememberStagedVolume(
 		// Registered here rather than at the next poll of the connection
 		// monitor, because a volume that attaches and loses every path inside
 		// one poll interval would otherwise never have been seen as present and
-		// its loss would go unnoticed. A striped stack is watched through its
-		// members (striped.go).
-		if !markMembersPresent(ctx, plan, vc) {
-			initiator.MarkDevicePresent(device.Path, deviceLvolID(vc))
+		// its loss would go unnoticed. The watch is given the namespaces under
+		// the stack rather than the device on top (striped.go).
+		if !watchNamespaces(ctx, plan, vc) {
+			watchDevice(device.Path, deviceLvolID(vc))
 		}
 	}
 	if volCap.GetBlock() != nil {

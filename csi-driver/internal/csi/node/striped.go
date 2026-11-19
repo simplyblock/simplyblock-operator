@@ -33,10 +33,22 @@ import (
 	"github.com/simplyblock/csi-driver/internal/initiator"
 )
 
-// stripeDevicePathsKey is where the stashed context keeps the namespace device
-// of every member, comma separated in member order, for the unstage that
-// forgets them.
+// watchedDevicePathsKey is where the stashed context keeps the namespace devices
+// the path-loss watch was given, comma separated in member order, for the
+// unstage that forgets them.
+const watchedDevicePathsKey = "watchedDevicePaths"
+
+// stripeDevicePathsKey is where an earlier version kept a striped volume's
+// member devices. An unstage still reads it, for a volume staged before the
+// upgrade.
 const stripeDevicePathsKey = "stripeDevicePaths"
+
+// watchDevice registers a namespace device with the path-loss watch, and
+// forgetDevice drops one. Variables so tests can see what the watch is given.
+var (
+	watchDevice  = initiator.MarkDevicePresent
+	forgetDevice = initiator.ForgetDevice
+)
 
 // stripeWidth is how many members the volume context says the volume is
 // striped across, 1 for an ordinary volume.
@@ -289,19 +301,16 @@ func teardownVolume(volumeID, stagingTargetPath string, vc map[string]string) pl
 	return volume
 }
 
-// memberDevices is the namespace device of every member of a striped plan, in
-// member order, read from the plan's members layer without converging it, or nil
-// for a plan that has none.
-func memberDevices(ctx context.Context, plan volstack.Plan) []string {
+// namespaceDevices is the namespace device under a plan, read from its bottom
+// layer without converging it: every member of a striped plan in member order,
+// or the one namespace of any other plan. nil when the layer cannot be read.
+func namespaceDevices(ctx context.Context, plan volstack.Plan) []string {
 	if len(plan) == 0 {
-		return nil
-	}
-	if _, ok := plan[0].(volstack.Composite); !ok {
 		return nil
 	}
 	_, own, err := plan[0].Observe(ctx, volstack.Artifact{})
 	if err != nil {
-		klog.Warningf("could not read the members of a striped stack: %v", err)
+		klog.Warningf("could not read the namespace devices under a stack: %v", err)
 		return nil
 	}
 	paths := make([]string, 0, len(own.Devices))
@@ -311,33 +320,38 @@ func memberDevices(ctx context.Context, plan volstack.Plan) []string {
 	return paths
 }
 
-// markMembersPresent registers the members' namespace devices with the path-loss
-// watch under the volume's identity, and records them in the context for the
-// unstage that forgets them. It reports whether the plan was a striped one.
+// watchNamespaces registers the namespace devices under a plan with the
+// path-loss watch under the volume's identity, and records them in the context
+// for the unstage that forgets them. It reports whether it found any; a caller
+// that gets false has nothing better to register than the device on top.
 //
 // The watch compares what it holds with the namespace devices sysfs lists, so it
-// is given the members rather than the striped device on top, which is a
-// device-mapper node it would report gone on its first look. Any one member
-// losing every path is the whole volume unable to serve, which is why each is
-// registered under the volume's own id.
-func markMembersPresent(ctx context.Context, plan volstack.Plan, vc map[string]string) bool {
-	paths := memberDevices(ctx, plan)
-	if paths == nil {
+// is given the namespaces rather than the device on top. Behind the dmLinear
+// indirection, the LVM layers, or a stripe, that is a device-mapper node it
+// would report gone on its first look. Any one member of a stripe losing every
+// path is the whole volume unable to serve, which is why each is registered
+// under the volume's own id.
+func watchNamespaces(ctx context.Context, plan volstack.Plan, vc map[string]string) bool {
+	paths := namespaceDevices(ctx, plan)
+	if len(paths) == 0 {
 		return false
 	}
 	for _, path := range paths {
-		initiator.MarkDevicePresent(path, deviceLvolID(vc))
+		watchDevice(path, deviceLvolID(vc))
 	}
-	vc[stripeDevicePathsKey] = strings.Join(paths, ",")
+	vc[watchedDevicePathsKey] = strings.Join(paths, ",")
 	return true
 }
 
-// forgetMembers drops the members' devices a striped unstage tore down from the
-// path-loss watch.
-func forgetMembers(vc map[string]string) {
-	for _, path := range strings.Split(vc[stripeDevicePathsKey], ",") {
-		if path = strings.TrimSpace(path); path != "" {
-			initiator.ForgetDevice(path)
+// forgetNamespaces drops the namespace devices an unstage tore down from the
+// path-loss watch. It also reads the key a striped volume staged by an earlier
+// version recorded its members under.
+func forgetNamespaces(vc map[string]string) {
+	for _, key := range []string{watchedDevicePathsKey, stripeDevicePathsKey} {
+		for _, path := range strings.Split(vc[key], ",") {
+			if path = strings.TrimSpace(path); path != "" {
+				forgetDevice(path)
+			}
 		}
 	}
 }
