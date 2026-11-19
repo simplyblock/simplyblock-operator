@@ -25,8 +25,13 @@ jobs:
         working-directory: operator
 
     steps:
+      # The release's own tag, not the ref the run was started from: a manual
+      # run from main for an older release would otherwise render main's CRDs
+      # and RBAC against that release's image, and replace its assets with them.
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.version || github.event.release.tag_name || github.ref }}
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -102,6 +107,16 @@ jobs:
         run: |
           TAG="${{ steps.version.outputs.tag }}"
           gh release upload "$TAG" "bundle-${TAG}.zip" --clobber
+
+      # The installer is not committed; each release carries its own, pinned to
+      # the operator image of the same tag.
+      - name: Render the installer
+        run: make build-installer IMG_TAG=${{ steps.version.outputs.tag }}
+
+      - name: Attach the installer to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ steps.version.outputs.tag }}" dist/install.yaml --clobber
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
