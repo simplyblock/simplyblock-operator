@@ -96,7 +96,7 @@ jobs:
           fi
           # Refuse a tag that does not look like a release, such as a stray
           # tag that happens to share the prefix.
-          if [[ ! "$tag" =~ ^v[0-9]+(\.[0-9]+){1,3}(-[A-Za-z0-9]+)?$ ]]; then
+          if [[ ! "$tag" =~ ^v[0-9]+(\.[0-9]+){1,3}(-[A-Za-z0-9]+(\.[A-Za-z0-9]+)*)?$ ]]; then
             echo "::error::Resolved tag '${tag}' for line ${LINE} does not match the release-tag shape."
             exit 1
           fi
