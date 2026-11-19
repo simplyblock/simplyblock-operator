@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sync"
 	"testing"
@@ -27,7 +28,7 @@ import (
 const (
 	prefixStart    = "start"
 	prefixWriteKey = "write-key"
-	forgetState    = "forget state-volume"
+	forgetState    = "forget /var/lib/nfs"
 	unmountDir     = "unmount-state /var/lib/nfs"
 )
 
@@ -287,7 +288,7 @@ func TestPromoteU15RunsConnectFenceMountKeyAndStartInOrder(t *testing.T) {
 		"fence /dev/nqn:state",
 		"fence /dev/nqn:a",
 		"fence /dev/nqn:b",
-		"track state-volume nqn:state as " + podHostNQN,
+		"track /var/lib/nfs nqn:state as " + podHostNQN,
 		"track /exports/a nqn:a as " + podHostNQN,
 		"track /exports/b nqn:b as " + podHostNQN,
 		"mount-state /dev/nqn:state at /var/lib/nfs",
@@ -726,6 +727,27 @@ func TestPromoteU32TheKeepersTrackEverythingThePromotionConnected(t *testing.T) 
 	want := []string{"nqn:a as " + podHostNQN, "nqn:b as " + podHostNQN, "nqn:state as " + podHostNQN}
 	if !slices.Equal(got, want) {
 		t.Errorf("reconciled %q, want %q", got, want)
+	}
+}
+
+// Regression: the state volume was kept under a name, not its mount point, so
+// the health check's statfs failed and the runner restarted the active guest.
+func TestPromoteTheKeepersFilesystemCheckFindsTheStateVolumeMounted(t *testing.T) {
+	r := newRig(t)
+	keeper := newKeeper(&reconciles{}, &recordingLog{})
+	r.g.cfg.Tracker = keeper
+
+	r.promote(r.request(2, "a", "b"))
+
+	mounted := map[string]bool{r.g.cfg.StateDir: true, "/exports/a": true, "/exports/b": true}
+	err := keeper.CheckFilesystems(func(path string) error {
+		if !mounted[path] {
+			return fmt.Errorf("statfs %s: %w", path, os.ErrNotExist)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Errorf("CheckFilesystems after a promotion = %v, want nil", err)
 	}
 }
 

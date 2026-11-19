@@ -86,9 +86,6 @@ type GuestConfig struct {
 const (
 	unitNFSDCLD = "nfsdcld.service"
 	unitNFSD    = "nfs-server.service"
-	// stateName is the path keeper's name for the state volume. An export's
-	// name is its absolute path, so the two cannot collide.
-	stateName = "state-volume"
 
 	// tmpfilesConf recreates what the state mount hides; it must run before
 	// nfsd starts.
@@ -216,7 +213,7 @@ func (g *Guest) run(ctx context.Context, req nfsexportrpc.PromoteRequest) (nfsex
 	if err != nil {
 		return nfsexportrpc.PromoteResult{}, fmt.Errorf("promote: the host id of %s: %w", req.HostNQN, err)
 	}
-	vols := []*volume{{name: stateName, conn: *req.StateVolume.Connection}}
+	vols := []*volume{{name: g.cfg.StateDir, conn: *req.StateVolume.Connection}}
 	for _, e := range req.Exports {
 		vols = append(vols, &volume{name: e.Path, conn: *e.Connection})
 	}
