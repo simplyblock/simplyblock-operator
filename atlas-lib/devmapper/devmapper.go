@@ -60,7 +60,7 @@ func Path(name string) string { return "/dev/mapper/" + name }
 type Target struct {
 	// Sectors is the mapped length in 512-byte sectors.
 	Sectors uint64
-	// Device is the underlying device as "major:minor".
+	// Device is the underlying device as major:minor.
 	Device string
 }
 
@@ -121,8 +121,15 @@ func (m *Mapper) Create(ctx context.Context, name, device string, sectors uint64
 // Swap re-points name at device: suspend (in-flight I/O drains, new I/O is
 // queued), load the new table, resume. A failed load resumes on the old table,
 // so a swap never leaves the mapping suspended.
+//
+// The suspend does not freeze a filesystem on top, for the reason
+// SuspendWithoutFreeze gives and one more: the heal swaps after total path
+// loss, when the old table names a namespace that is gone. A freeze there has
+// to write to that namespace. ext4's freeze then fails with EIO, and XFS's
+// blocks indefinitely while it holds the superblock lock, which stalls every
+// sync(2) on the node.
 func (m *Mapper) Swap(ctx context.Context, name, device string, sectors uint64) error {
-	if err := m.Suspend(ctx, name); err != nil {
+	if err := m.SuspendWithoutFreeze(ctx, name); err != nil {
 		return err
 	}
 	if _, err := m.run(ctx, "dmsetup", "reload", name, "--table", table(sectors, device)); err != nil {
