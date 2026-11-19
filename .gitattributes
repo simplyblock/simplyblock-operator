@@ -1,0 +1,21 @@
+# Marks files that a make target generates from a source elsewhere in the
+# repository, so that GitHub collapses them in pull request diffs.
+#
+# Each source stays expanded: a change to an API type shows its schema once, in
+# operator/config/crd/bases, and the copies below are one click away.
+#
+# CI regenerates the chart copies and the operator's zz_generated files and
+# fails on drift. The fleet deepcopy, the control-plane client, and the support
+# tool's chart copy have no drift check.
+
+# make helm-sync: the operator's CRDs, RBAC, and webhook copied into the chart.
+helm-charts/charts/simplyblock-operator/crds/*.yaml linguist-generated=true
+helm-charts/charts/simplyblock-operator/templates/roles/*.yaml linguist-generated=true
+helm-charts/charts/simplyblock-operator/templates/simplyblock-operator-webhook.yaml linguist-generated=true
+support-tool/internal/helmvalues/chart/** linguist-generated=true
+
+# make -C operator generate: the deepcopy methods of the API types.
+**/zz_generated.*.go linguist-generated=true
+
+# make -C atlas-lib generate: the control-plane client built from shared/openapi.json.
+atlas-lib/internal/cpapi/*.gen.go linguist-generated=true
