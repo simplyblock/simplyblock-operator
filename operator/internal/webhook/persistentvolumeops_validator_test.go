@@ -387,3 +387,45 @@ func TestPersistentVolumeOpsIgnoresEverythingButCreateAndDelete(t *testing.T) {
 		t.Errorf("an update was refused: %s", got.Result.Message)
 	}
 }
+
+// joinCreateRequest is a JoinConsistencyGroup create, written as the wire form
+// so the case states exactly what a client sends.
+func joinCreateRequest(pvName, group string) admission.Request {
+	raw := []byte(`{"apiVersion":"storage.simplyblock.io/v1alpha2","kind":"PersistentVolumeOps",` +
+		`"metadata":{"name":"cg-join-1"},"spec":{"persistentVolumeName":"` + pvName + `",` +
+		`"action":"JoinConsistencyGroup","joinConsistencyGroup":{"groupName":"` + group + `"}}}`)
+	return admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Operation: admissionv1.Create,
+		Name:      "cg-join-1",
+		Object:    runtime.RawExtension{Raw: raw},
+	}}
+}
+
+// The group is named by the label its members' claims carry, so the name is
+// checked as a label value and nothing more: the group is a control-plane
+// object with no Kubernetes kind to resolve (design-cg-live-subsystem-flip.md §4).
+func TestPersistentVolumeOpsJoinChecksTheGroupNameAsALabelValue(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		volume  string
+		group   string
+		allowed bool
+		want    string
+	}{
+		{name: "a group named like a label value is admitted", volume: pvopsVolume, group: "orders-db.v2_1", allowed: true},
+		{name: "a group name with a space is refused", volume: pvopsVolume, group: "orders db", want: "groupName"},
+		{name: "a group name ending in a dash is refused", volume: pvopsVolume, group: "orders-", want: "groupName"},
+		{name: "a volume that does not exist is refused", volume: "pvc-missing", group: "orders-db", want: "pvc-missing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := pvopsValidator(t, simplyblockVolume())
+			got := v.Handle(context.Background(), joinCreateRequest(tc.volume, tc.group))
+			if got.Allowed != tc.allowed {
+				t.Fatalf("allowed = %v, want %v (%v)", got.Allowed, tc.allowed, got.Result)
+			}
+			if !tc.allowed && !strings.Contains(got.Result.Message, tc.want) {
+				t.Fatalf("refused for the wrong reason: %s", got.Result.Message)
+			}
+		})
+	}
+}

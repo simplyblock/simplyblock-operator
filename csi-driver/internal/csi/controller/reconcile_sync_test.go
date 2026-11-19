@@ -37,7 +37,7 @@ func (e *existingVolumes) DeleteVolume(_ context.Context, id string) error {
 // and a claim recreated on the surviving site would have deleted it.
 func TestASyncRecreateNeverDeletesAVolumeThatIsNotOnline(t *testing.T) {
 	api := &existingVolumes{volumes: []*controlplane.LvolResp{{Name: "pvc-1", UUID: "v-1", Status: "offline"}}}
-	_, err := reconcileExistingVolume(context.Background(), api, "pvc-1", 0, true)
+	_, err := reconcileExistingVolume(context.Background(), api, "pvc-1", 0, 0, true)
 	if status.Code(err) != codes.Aborted {
 		t.Errorf("err = %v, want Aborted holding the create", err)
 	}
@@ -49,7 +49,7 @@ func TestASyncRecreateNeverDeletesAVolumeThatIsNotOnline(t *testing.T) {
 // Off a sync cluster the leftover of a failed attempt is still cleaned up.
 func TestANonSyncCreateStillDeletesAFailedLeftover(t *testing.T) {
 	api := &existingVolumes{volumes: []*controlplane.LvolResp{{Name: "pvc-1", UUID: "v-1", Status: "offline"}}}
-	if _, err := reconcileExistingVolume(context.Background(), api, "pvc-1", 0, false); err != nil {
+	if _, err := reconcileExistingVolume(context.Background(), api, "pvc-1", 0, 0, false); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if len(api.deleted) != 1 {
@@ -60,7 +60,7 @@ func TestANonSyncCreateStillDeletesAFailedLeftover(t *testing.T) {
 // An online volume of the name is reused on a sync cluster as anywhere.
 func TestASyncRecreateReusesTheOnlineVolume(t *testing.T) {
 	api := &existingVolumes{volumes: []*controlplane.LvolResp{{Name: "pvc-1", UUID: "v-1", Status: "online"}}}
-	id, err := reconcileExistingVolume(context.Background(), api, "pvc-1", 0, true)
+	id, err := reconcileExistingVolume(context.Background(), api, "pvc-1", 0, 0, true)
 	if err != nil || id != "v-1" {
 		t.Errorf("reconcile = %q, %v; want v-1 reused", id, err)
 	}

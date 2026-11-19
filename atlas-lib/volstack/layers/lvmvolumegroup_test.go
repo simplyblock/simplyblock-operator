@@ -10,6 +10,7 @@ package layers
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/simplyblock/atlas/lvm"
@@ -390,5 +391,40 @@ func TestLVMVolumeGroupRefusesToAdoptAGroupHoldingAForeignVolumeBesideItsOwn(t *
 	}
 	if cmds.indexOfWith("vgchange", "--addtag") >= 0 || cmds.ran("lvchange") {
 		t.Fatalf("the refusal adopted the group:\n%s", cmds.issued())
+	}
+}
+
+// scopedTo reports whether a command named exactly these devices in --devices.
+func scopedTo(call []string, devices string) bool {
+	for i, arg := range call {
+		if arg == "--devices" && i+1 < len(call) && call[i+1] == devices {
+			return true
+		}
+	}
+	return false
+}
+
+// Regression: 2026-11-17-striped-activation-unscoped (PR #922 review). The group
+// was activated and deactivated by name alone, so LVM considered every device
+// carrying its physical volumes, a clone attached on the same host and not yet
+// re-identified included, found each twice, and refused ("Cannot activate LVs
+// in VG ... while PVs appear on duplicate devices"). Activation and
+// deactivation name the group's own members only.
+func TestLVMVolumeGroupActsOnItsOwnMembersOnly(t *testing.T) {
+	l, cmds := newLVMGroup(map[string]string{"/dev/nvme0n1": ours(), "/dev/nvme1n1": ours()})
+	below := belowMembers(2)
+
+	if _, err := l.Ensure(context.Background(), below); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	if err := l.Release(context.Background(), below); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	for _, call := range cmds.calls {
+		if call[0] == "vgchange" && (slices.Contains(call, "-ay") || slices.Contains(call, "-an")) {
+			if !scopedTo(call, "/dev/nvme0n1,/dev/nvme1n1") {
+				t.Errorf("%v does not name the group's members", call)
+			}
+		}
 	}
 }

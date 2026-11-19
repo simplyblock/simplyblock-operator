@@ -37,6 +37,18 @@ const (
 	// redundant: the two audiences are different, and the class itself,
 	// cluster-scoped and shared, is a poor place for either to look.
 	QoSParameterConflict = "QoSParameterConflict"
+	// StorageClassDisagreesWithPool says an assigned class departs from its
+	// pool where a class may not: it reaches another cluster or another pool
+	// than its labels assign it to, or it stripes otherwise than the pool's
+	// stripeWidth and stripeSize. The StorageClass admission webhook refuses
+	// such a class when it is written; this reports one written before the pool
+	// existed, or before the webhook did.
+	StorageClassDisagreesWithPool = "StorageClassDisagreesWithPool"
+	// StorageClassOverridesPoolDefault says an assigned class sets a volume
+	// default otherwise than the pool's spec.volumeDefaults. A pool's classes
+	// may differ from one another on purpose (design-storagepool.md §5), so it
+	// is information, not a warning.
+	StorageClassOverridesPoolDefault = "StorageClassOverridesPoolDefault"
 
 	// AllowedNodeMissing says an entry in spec.allowedNodes resolves to no
 	// Kubernetes Node. It is raised once per name rather than every pass,

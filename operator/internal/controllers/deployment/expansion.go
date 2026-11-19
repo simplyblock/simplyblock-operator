@@ -450,6 +450,11 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		workload.Image = images.NodeAgent.Image
 		workload.ImagePullPolicy = images.NodeAgent.ImagePullPolicy
 	}
+	// The talosctl slot is the fleet's too: one Job image for every Talos worker
+	// the DaemonSet reaches. Unstated leaves the node agent's default in place.
+	if images := config.Spec.Images; images != nil && images.Talosctl != nil {
+		workload.TalosctlImage = images.Talosctl.Image
+	}
 
 	// The host OS is spent here too, and on one flag. Ubuntu keeps the NVMe-oF
 	// modules in linux-modules-extra rather than in the base install, so a
@@ -477,9 +482,23 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		// OpenShift deployment does.
 		workload.EnableKubeletConfiguration = ptr.To(true)
 	case simplyblockv1alpha2.KubernetesEnvironmentTalos:
-		// Talos has no writable kubelet configuration and no package manager, so
-		// the node applies neither.
-		workload.EnableKubeletConfiguration = ptr.To(false)
+		// Talos has no package manager and no writable kubelet configuration
+		// file, but it has the Talos API: the node configures the kubelet's
+		// CPU topology through machine.kubelet.extraConfig, the way it reserves
+		// huge pages, so the kubelet configuration is enabled as on any other
+		// distribution. Stated to the node as well, which is what selects that
+		// path over a write to a host it cannot reach. The CPU topology is on,
+		// as on OpenShift: it is what the kubelet configuration is for, and a
+		// Talos document cannot state it itself.
+		workload.Talos = ptr.To(true)
+		workload.EnableKubeletConfiguration = ptr.To(true)
+		workload.EnableCpuTopology = ptr.To(true)
+		// Who writes the machine config those settings live in. Unstated is
+		// Preprovisioned, the agent's own default, left unstated here too so
+		// the cluster reads as the document did.
+		if config.Spec.Cluster != nil {
+			workload.TalosMachineConfig = config.Spec.Cluster.TalosMachineConfig
+		}
 	case simplyblockv1alpha2.KubernetesEnvironmentEKS,
 		simplyblockv1alpha2.KubernetesEnvironmentGKE,
 		simplyblockv1alpha2.KubernetesEnvironmentAKS,
@@ -494,12 +513,15 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		workload.EnableKubeletConfiguration = ptr.To(true)
 	}
 
-	// Vanilla says nothing about how its workers are built, so a Vanilla
-	// document may state both flags itself. Admission refuses them on every
-	// other environment, and they are read only here, so a document admitted
-	// before that rule cannot override what its environment decided.
-	if template := config.Spec.Cluster; template != nil &&
-		config.Spec.Environment == simplyblockv1alpha2.KubernetesEnvironmentVanilla {
+	// What the environment decides above is the default, and a document that
+	// states either flag replaces it. The environment describes the platform,
+	// not where a particular fleet keeps its kubelet configuration: a fleet that
+	// manages its pool's KubeletConfig itself states the kubelet flag false on
+	// OpenShift, and one whose Vanilla workers are built like a managed service's
+	// states it false there. Admission used to refuse a stated flag everywhere
+	// but Vanilla, to keep a reviewer from overriding a decision they did not
+	// understand; it went when that turned out to be a setting fleets need.
+	if template := config.Spec.Cluster; template != nil {
 		if template.EnableKubeletConfiguration != nil {
 			workload.EnableKubeletConfiguration = ptr.To(*template.EnableKubeletConfiguration)
 		}

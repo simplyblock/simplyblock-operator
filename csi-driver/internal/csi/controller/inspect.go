@@ -4,6 +4,8 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -120,13 +122,35 @@ func (cs *Server) ControllerGetVolume(
 		VolumeContext: volumeInfo,
 	}
 
+	condition := &csi.VolumeCondition{}
+	if width := csicommon.StripeWidth(volumeID); width > 1 {
+		condition = stripedCondition(ctx, sbclient, volumeID, spdkVol.VolumeID, width)
+	}
 	return &csi.ControllerGetVolumeResponse{
 		Volume: volume,
-		Status: &csi.ControllerGetVolumeResponse_VolumeStatus{
-			VolumeCondition: &csi.VolumeCondition{
-				Abnormal: false,
-				Message:  "",
-			},
-		},
+		Status: &csi.ControllerGetVolumeResponse_VolumeStatus{VolumeCondition: condition},
 	}, nil
+}
+
+// stripedCondition is a striped volume's condition: abnormal when a member is
+// missing or not online, naming it, since the striped device fails I/O to that
+// member's share of every stripe. The first member was read already.
+func stripedCondition(
+	ctx context.Context, sbclient controlplane.ClusterAPI, volumeID, firstID string, width int,
+) *csi.VolumeCondition {
+	members, err := resolveStripeMembers(ctx, sbclient, firstID, width)
+	if err != nil {
+		return &csi.VolumeCondition{Abnormal: true, Message: fmt.Sprintf("read the members of %s: %v", volumeID, err)}
+	}
+	for i, m := range members {
+		switch {
+		case m == nil:
+			return &csi.VolumeCondition{Abnormal: true,
+				Message: fmt.Sprintf("member %d of striped volume %s is missing from the control plane", i, volumeID)}
+		case !strings.EqualFold(m.Status, lvolOnline):
+			return &csi.VolumeCondition{Abnormal: true,
+				Message: fmt.Sprintf("member %d (%s) of striped volume %s is %s", i, m.UUID, volumeID, m.Status)}
+		}
+	}
+	return &csi.VolumeCondition{}
 }

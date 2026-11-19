@@ -54,7 +54,7 @@ jobs:
       - name: Build installer
         run: |
           make build-installer
-          git diff --exit-code || (echo "dist/install.yaml is out of date. Run 'make build-installer' and commit the result." && exit 1)
+          git diff --exit-code || (echo "make build-installer changed a tracked file; revert the image pin in config/manager/kustomization.yaml." && exit 1)
 
       - name: Validate rendered manifests
         run: |

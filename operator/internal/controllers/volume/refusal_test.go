@@ -12,16 +12,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simplyblock/atlas/controlplane"
-
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 // refusingCreate is a control plane that answers the create with the given
-// status and body.
-func refusingCreate(status int, body string) *fakeControlPlane {
+// status and detail, as the client reports that answer.
+func refusingCreate(t *testing.T, status int, detail string) *fakeControlPlane {
 	api := idleSubsystem()
-	api.createErr = &controlplane.StatusError{Op: "create migration", StatusCode: status, Body: body}
+	api.createErr = createAnswer(t, status, detail)
 	return api
 }
 
@@ -31,7 +29,7 @@ func refusingCreate(status int, body string) *fakeControlPlane {
 // control plane's reason, and raised the next move against the same target.
 func TestARefusedCreateFailsTheOperationAtOnce(t *testing.T) {
 	const reason = "Cannot migrate to node " + testTargetID + ": it serves as the fallback source"
-	api := refusingCreate(400, `{"detail":"`+reason+`"}`)
+	api := refusingCreate(t, 400, reason)
 	r := testReconciler(t, api, testWorld()...)
 
 	for range 3 {
@@ -54,7 +52,7 @@ func TestARefusedCreateFailsTheOperationAtOnce(t *testing.T) {
 // subsystem is active, or a precondition that clears by itself is unmet. It is
 // waited on in the step rather than failed.
 func TestABusyControlPlaneIsWaitedOnRatherThanFailed(t *testing.T) {
-	r := testReconciler(t, refusingCreate(409, `{"detail":"An active migration already exists"}`),
+	r := testReconciler(t, refusingCreate(t, 409, "An active migration already exists"),
 		testWorld()...)
 
 	for range 3 {
@@ -72,8 +70,8 @@ func TestABusyControlPlaneIsWaitedOnRatherThanFailed(t *testing.T) {
 // node. It is the same fact the volume's hosting node states, and it ends the
 // operation the same way.
 func TestARefusalSayingTheVolumeIsAlreadyThereSucceeds(t *testing.T) {
-	api := refusingCreate(400, `{"detail":"LVol `+testVolumeID+` is already on node `+testTargetID+
-		`; cannot migrate to the same node"}`)
+	api := refusingCreate(t, 400, "LVol "+testVolumeID+" is already on node "+testTargetID+
+		"; cannot migrate to the same node")
 	r := testReconciler(t, api, testWorld()...)
 
 	for range 3 {
@@ -92,8 +90,8 @@ func TestARefusalSayingTheVolumeIsAlreadyThereSucceeds(t *testing.T) {
 // client already recognizes. It clears when that migration ends, and failing
 // on it handed the drain a failure that was not one.
 func TestAConflictAnsweredWithA400IsWaitedOn(t *testing.T) {
-	r := testReconciler(t, refusingCreate(400, `{"detail":"An active migration for `+testVolumeID+
-		` already exists targeting a different node (`+testSourceID+`). Cancel it first."}`), testWorld()...)
+	r := testReconciler(t, refusingCreate(t, 400, "An active migration for "+testVolumeID+
+		" already exists targeting a different node ("+testSourceID+"). Cancel it first."), testWorld()...)
 
 	for range 3 {
 		runPass(t, r)
@@ -111,7 +109,7 @@ func TestAConflictAnsweredWithA400IsWaitedOn(t *testing.T) {
 // at once, whatever the control plane had actually objected to.
 func TestARefusalKeepsTheControlPlanesWordsAndNamesNoTargetOfItsOwn(t *testing.T) {
 	const reason = "LVol belongs to a shared NVMe-oF subsystem with 2 member(s). Use --batch to migrate the whole subsystem together."
-	r := testReconciler(t, refusingCreate(400, `{"detail":"`+reason+`"}`), testWorld()...)
+	r := testReconciler(t, refusingCreate(t, 400, reason), testWorld()...)
 
 	for range 3 {
 		runPass(t, r)
@@ -127,5 +125,22 @@ func TestARefusalKeepsTheControlPlanesWordsAndNamesNoTargetOfItsOwn(t *testing.T
 	if strings.Contains(ops.Status.Message, testTargetID) {
 		t.Errorf("message = %q names the target %s, which the control plane's answer did not",
 			ops.Status.Message, testTargetID)
+	}
+}
+
+// Release 26.3 answers a create on a rebalancing cluster with a 400 rather
+// than a 409. It clears when the rebalance ends, and failing on it handed the
+// drain a failure that was not one.
+func TestARebalancingClusterAnsweredWithA400IsWaitedOn(t *testing.T) {
+	r := testReconciler(t, refusingCreate(t, 400,
+		"Cluster "+testClusterID+" is rebalancing; wait for it to finish before migrating"), testWorld()...)
+
+	for range 3 {
+		runPass(t, r)
+	}
+
+	if ops := operationFrom(t, r); ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseRunning {
+		t.Errorf("phase = %q (%s), want Running while the cluster rebalances",
+			ops.Status.Phase, ops.Status.Message)
 	}
 }

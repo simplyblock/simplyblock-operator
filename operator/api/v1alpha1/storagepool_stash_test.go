@@ -33,6 +33,8 @@ func TestStoragePoolHubOnlyFieldsAreStashed(t *testing.T) {
 				EnableClientDeduplication: ptr.To(false),
 				EnableReplication:         ptr.To(false),
 				PriorityClass:             "high",
+				StripeWidth:               ptr.To(int32(4)),
+				StripeSize:                "128Ki",
 			},
 		},
 		Status: v1alpha2.StoragePoolStatus{
@@ -65,7 +67,7 @@ func TestStoragePoolHubOnlyFieldsAreStashed(t *testing.T) {
 	// a false pointer as nothing would drop it.
 	for _, key := range []string{
 		annoEnableCompression, annoEnableClientCompression, annoEnableClientDeduplication,
-		annoEnableReplication, annoPriorityClass,
+		annoEnableReplication, annoPriorityClass, annoStripeWidth, annoStripeSize,
 		annoStatusPhase, annoStatusClassNames, annoStatusDefaultClassName,
 		annoStatusActiveOpsRef, annoStatusMessage, annoStatusObservedGeneraton,
 		annoStatusMembers, annoStatusLimitsCapacity,
@@ -263,5 +265,28 @@ func TestStoragePoolStashLeavesOtherAnnotationsAlone(t *testing.T) {
 
 	if back.Annotations["team.example.com/owner"] != "storage" {
 		t.Errorf("annotations = %v, want the user's own left in place", back.Annotations)
+	}
+}
+
+// A pool whose only default is its stripe still has a volumeDefaults block after
+// being stored and read back. The block is immutable once set, so one lost on a
+// write could never be given back.
+func TestStoragePoolStripeAloneSurvivesTheTrip(t *testing.T) {
+	hub := &v1alpha2.StoragePool{
+		Spec: v1alpha2.StoragePoolSpec{
+			ClusterRef:     "production",
+			VolumeDefaults: &v1alpha2.VolumeDefaults{StripeWidth: ptr.To(int32(3))},
+		},
+	}
+	var stored StoragePool
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StoragePool
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	if diff := cmp.Diff(hub.Spec.VolumeDefaults, back.Spec.VolumeDefaults); diff != "" {
+		t.Errorf("the stripe did not survive the trip (-written +read):\n%s", diff)
 	}
 }

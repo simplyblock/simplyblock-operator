@@ -27,6 +27,19 @@ import (
 // installation points it at a mirror.
 const NUMAPluginImageEnv = "SB_NUMA_PLUGIN_IMAGE"
 
+// numaPluginSELinuxType is the SELinux type the plugin runs with off OpenShift.
+//
+// The plugin registers by connecting to the kubelet's socket, and SELinux decides
+// that by the type the kubelet runs as. The manifest's container_device_plugin_t
+// may connect to OpenShift's kubelet, which runs as kubelet_t. RKE2 runs its
+// kubelet as container_runtime_t, which that type may not connect to: the plugin
+// logged "failed to connect to kubelet: context deadline exceeded", gave up, and
+// the node never advertised numa-align, so no storage pod was scheduled there.
+// What a kubelet runs as is the distribution's choice, so off OpenShift the
+// plugin takes the type no policy confines. It stays unprivileged, with every
+// capability dropped and a read-only root filesystem.
+const numaPluginSELinuxType = "spc_t"
+
 // numaPluginManifest is the plugin's ServiceAccount and DaemonSet.
 //
 //go:embed manifests/numa-resource-plugin.yaml
@@ -51,6 +64,12 @@ func (r *ControlPlaneReconciler) numaPluginObjects(
 	}
 	container := &daemonSet.Spec.Template.Spec.Containers[0]
 	container.Image = image(container.Image)
+	if !r.OpenShift {
+		if container.SecurityContext == nil {
+			container.SecurityContext = &corev1.SecurityContext{}
+		}
+		container.SecurityContext.SELinuxOptions = &corev1.SELinuxOptions{Type: numaPluginSELinuxType}
+	}
 	return []client.Object{account, daemonSet}, nil
 }
 
