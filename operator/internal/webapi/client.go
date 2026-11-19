@@ -120,12 +120,12 @@ const RequestTimeout = 30 * time.Second
 func NewClient(baseURL ...string) *Client {
 	const defaultURL = "http://" + defaultHost
 
-	url, explicit := defaultURL, false
+	address, explicit := defaultURL, false
 	if envURL := os.Getenv("SIMPLYBLOCK_WEBAPI_BASE_URL"); envURL != "" {
-		url, explicit = envURL, true
+		address, explicit = envURL, true
 	}
 	if len(baseURL) > 0 {
-		url, explicit = baseURL[0], true
+		address, explicit = baseURL[0], true
 	}
 
 	httpClient := &http.Client{Timeout: RequestTimeout}
@@ -134,9 +134,9 @@ func NewClient(baseURL ...string) *Client {
 	case !explicit:
 		// The default address, whose scheme the ControlPlane decides per request.
 		httpClient.Transport = &adaptiveTransport{plain: http.DefaultTransport, secure: secureTransport}
-	case strings.HasPrefix(url, "https://"):
+	case strings.HasPrefix(address, "https://"):
 		build := cachedEndpointClient
-		if isInClusterAddress(url) {
+		if isInClusterAddress(address) {
 			build = cachedTLSClient
 		}
 		if c, err := build(); err != nil {
@@ -147,7 +147,7 @@ func NewClient(baseURL ...string) *Client {
 	}
 
 	c := &Client{
-		BaseURL:    url,
+		BaseURL:    address,
 		HttpClient: httpClient,
 		initErr:    initErr,
 	}
