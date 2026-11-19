@@ -268,7 +268,8 @@ func rank(u *unstructured.Unstructured) int {
 // Install server-side applies every object of the manifest. It is idempotent,
 // so an install interrupted part way is finished by calling it again, and it is
 // also the upgrade of an outdated install. Objects an older manifest had and
-// this one dropped are left in place.
+// this one dropped are left in place. A relocatable add-on installed earlier
+// into another namespace has its namespaced objects there removed first.
 func (p Prerequisite) Install(ctx context.Context, c client.Client, opts InstallOptions) error {
 	objs, err := p.objects(opts)
 	if err != nil {
@@ -277,6 +278,13 @@ func (p Prerequisite) Install(ctx context.Context, c client.Client, opts Install
 	if p.mutate != nil {
 		if err := p.mutate(ctx, c, objs); err != nil {
 			return err
+		}
+	}
+	// Before anything is applied, so a removal that fails leaves the marker on
+	// the old digest and the next pass, reading Outdated, tries it again.
+	if p.relocatable && opts.Namespace != "" {
+		if err := p.pruneRelocated(ctx, c, objs, opts.Namespace); err != nil {
+			return fmt.Errorf("installing %s: %w", p.Name, err)
 		}
 	}
 	// The marker goes last: its digest is what records the install as current,
