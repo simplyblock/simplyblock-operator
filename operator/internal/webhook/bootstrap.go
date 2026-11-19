@@ -97,10 +97,10 @@ type trustBootstrapper struct {
 // See this file's opening comment for why it cannot be a Runnable.
 func BootstrapConversionTrust(ctx context.Context, cfg *rest.Config, scheme *runtime.Scheme,
 	namespace, tlsProvider string,
-) error {
+) ([]byte, error) {
 	c, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
-		return fmt.Errorf("build bootstrap client: %w", err)
+		return nil, fmt.Errorf("build bootstrap client: %w", err)
 	}
 
 	b := &trustBootstrapper{
@@ -117,7 +117,7 @@ func BootstrapConversionTrust(ctx context.Context, cfg *rest.Config, scheme *run
 }
 
 // run provisions the serving material and injects the trust that depends on it.
-func (b *trustBootstrapper) run(ctx context.Context) error {
+func (b *trustBootstrapper) run(ctx context.Context) ([]byte, error) {
 	var (
 		ca  []byte
 		err error
@@ -129,10 +129,10 @@ func (b *trustBootstrapper) run(ctx context.Context) error {
 		ca, err = b.ensureSelfSignedMaterial(ctx)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return injectConversionTrustFor(ctx, b.client, b.apiReader, ca, b.namespace, b.serviceName)
+	return ca, injectConversionTrustFor(ctx, b.client, b.apiReader, ca, b.namespace, b.serviceName)
 }
 
 // awaitCertManagerMaterial waits for the Secret cert-manager issues, then writes
