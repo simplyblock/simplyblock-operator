@@ -399,3 +399,22 @@ func TestTotalPathLossWaitsForTheFilesystemsOtherMounts(t *testing.T) {
 		t.Error("the heal changed the stack while the filesystem was held elsewhere")
 	}
 }
+
+// An unmount that fails means something still has the filesystem open. The
+// lazy unmount a teardown falls back to would only detach the path and leave
+// the aborted superblock alive for the next mount, while the swap erased the
+// interruption that asked for a fresh one. The heal waits instead.
+func TestTotalPathLossWaitsWhileTheFilesystemIsBusy(t *testing.T) {
+	plan, m, fs := totalLossStack(t)
+	fs.unmountErr = errors.New("umount: target is busy")
+	err := volstack.NewRunner(volstack.NewStore(t.TempDir())).Heal(context.Background(), "vol-1", plan)
+	if !errors.Is(err, volstack.ErrHeldElsewhere) {
+		t.Fatalf("Heal = %v, want ErrHeldElsewhere", err)
+	}
+	if len(fs.forceUnmounted) != 0 {
+		t.Errorf("the busy filesystem was detached lazily: %v", fs.forceUnmounted)
+	}
+	if m.tables[DMLinearName("vol-1")].Device != "259:3" {
+		t.Error("the mapping was re-pointed under a filesystem that is still held")
+	}
+}

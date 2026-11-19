@@ -337,6 +337,13 @@ func (f *Filesystem) clear(ctx context.Context) error {
 // again instead of reading it from the device. The refusal is
 // volstack.ErrHeldElsewhere: the publish that asked retries, and the old pod's
 // unpublish releases the bind in between.
+//
+// It unmounts the ordinary way only, and a refusal is the same wait. The lazy
+// unmount clear falls back to detaches the path and nothing else, so a
+// filesystem something still has open would outlive it, and the next mount of
+// the device would pick it up after the heal had re-pointed the mapping and
+// with that erased the interruption. The fallback is for a device that is gone,
+// and under the indirection this one is not.
 func (f *Filesystem) Yield(ctx context.Context, _, _ volstack.Artifact) error {
 	mounted, err := f.cfg.Ops.IsMountPoint(ctx, f.cfg.StagingPath)
 	if err == nil && !mounted {
@@ -350,7 +357,10 @@ func (f *Filesystem) Yield(ctx context.Context, _, _ volstack.Artifact) error {
 		return fmt.Errorf("filesystem: %s is also mounted at %s: %w",
 			f.cfg.StagingPath, strings.Join(others, ", "), volstack.ErrHeldElsewhere)
 	}
-	return f.clear(ctx)
+	if err := f.cfg.Ops.Unmount(ctx, f.cfg.StagingPath); err != nil {
+		return fmt.Errorf("filesystem: unmount %s: %w: %w", f.cfg.StagingPath, err, volstack.ErrHeldElsewhere)
+	}
+	return nil
 }
 
 // Destroy does nothing. Removing a filesystem means removing the volume it is
