@@ -14,6 +14,13 @@ helm-charts/charts/simplyblock-operator/templates/roles/*.yaml linguist-generate
 helm-charts/charts/simplyblock-operator/templates/simplyblock-operator-webhook.yaml linguist-generated=true
 support-tool/internal/helmvalues/chart/** linguist-generated=true
 
+# hack/discoveryfixtures: the fleets each discovery case is run from. The
+# builders in that program are what a reviewer reads; the expectations next to
+# these files stay expanded because they are the behavior under review.
+operator/internal/controllers/deployment/testdata/discovery/**/reports/*.yaml linguist-generated=true
+operator/internal/controllers/deployment/testdata/discovery/**/nodes.yaml linguist-generated=true
+operator/internal/controllers/deployment/testdata/discovery/**/ops.yaml linguist-generated=true
+
 # make -C operator generate: the deepcopy methods of the API types.
 **/zz_generated.*.go linguist-generated=true
 
