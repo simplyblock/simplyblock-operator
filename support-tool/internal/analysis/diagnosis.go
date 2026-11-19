@@ -150,7 +150,7 @@ func notInspectedBecause(w Worker) string {
 	}
 	for _, role := range w.Node.Roles {
 		if role == "ControlPlane" {
-			reasons = append(reasons, "it is a control-plane node, which spec.discover.enableControlPlaneNodes includes")
+			reasons = append(reasons, "it is a control-plane node, which spec.discover.enableControlPlaneNodes includes, and the cluster has workers that are not")
 		}
 	}
 	if len(reasons) == 0 {

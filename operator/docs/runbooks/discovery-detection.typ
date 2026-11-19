@@ -118,7 +118,7 @@ service. On EKS, GKE, AKS, OKE, and Talos the storage node leaves the kubelet co
 = Kubernetes node facts
 
 #grid(cols, head,
-  [Role], [Labels `node-role.kubernetes.io/<role>`], [`control-plane` and `master` mean ControlPlane, `infra` means Infra, `worker` means Worker. A node with no role label is a Worker. A node with several roles counts as ControlPlane first, then Infra.], [Worker and Infra nodes are used. ControlPlane nodes only with `spec.discover.enableControlPlaneNodes`. The draft gets one node set per role, named `discovered`, `infra`, or `control-plane`.],
+  [Role], [Labels `node-role.kubernetes.io/<role>`], [`control-plane` and `master` mean ControlPlane, `infra` means Infra, `worker` means Worker. A node with no role label is a Worker. A node with several roles counts as ControlPlane first, then Infra.], [Worker and Infra nodes are used. ControlPlane nodes only with `spec.discover.enableControlPlaneNodes`, or, when the field is unset, on a compact cluster: every node is a control-plane node that also carries the `worker` role. The draft gets one node set per role, named `discovered`, `infra`, or `control-plane`.],
   [Schedulability], [`spec.unschedulable`, `spec.taints`], [Cordoned, or a taint with effect `NoSchedule` or `NoExecute` that `spec.discover.tolerations` does not tolerate.], [Such a node is skipped.],
   [Internal IP], [`status.addresses` of type `InternalIP`], [The first such address.], [Pins the management interface (section 7.2).],
   [CPU and memory], [`status.capacity` and `status.allocatable`], [`cpu`, `memory`. Reserved memory is capacity minus allocatable.], [Shown for review next to the probe's own readings.],

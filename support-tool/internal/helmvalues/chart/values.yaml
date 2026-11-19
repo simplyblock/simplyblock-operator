@@ -249,9 +249,11 @@ discovery:
   # a placement almost nobody intends. The single-node development cluster and the
   # combined three-node deployment are what it is for, and on a single-node
   # cluster it is what makes the run happen at all: the one machine there is the
-  # control-plane node.
-  # -- Lets the discovery run inspect Kubernetes control plane nodes. Required on a single-node
-  # cluster.
+  # control-plane node. Left false, the run still includes them on a cluster whose
+  # every node is a control-plane node that also carries the worker role, which
+  # is how OpenShift labels a compact cluster.
+  # -- Lets the discovery run inspect Kubernetes control plane nodes. Implied when every node is a
+  # control-plane node that also carries the worker role.
   enableControlPlaneNodes: false
 
   # Scan each worker's logical block devices instead of its NVMe devices. It
