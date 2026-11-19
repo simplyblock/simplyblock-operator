@@ -12,6 +12,14 @@ const STORAGE_DR_LAYERS = ["pairs", "rpolicies", "slots", "replops", "zones", "m
 const LAYER_META = {
   clusters: {label: "Clusters", icon: "cluster"}, cluster: {icon: "cluster"},
   cp: {label: "Control plane", icon: "host"},
+  // fleet: sites are tagged nodes, alerts and operations are sections of their own
+  sites: {label: "Sites", icon: "zone"}, site: {icon: "zone"},
+  alerts: {label: "Alerts", icon: "bell"},
+  monitor: {label: "Tasks & operations", icon: "clock"}, work: {icon: "clock"},
+  logs: {label: "Logs", icon: "list"},
+  // custom resources and the drill-down layers they add
+  cr: {icon: "list"}, nodesets: {label: "Node sets", icon: "node"}, served: {label: "Kubernetes consumers", icon: "k8s"},
+  pods: {label: "Pods", icon: "host"}, nodevolumes: {label: "Volumes served", icon: "volume"}, clones: {label: "Clones", icon: "copy"},
   hosts: {label: "Hosts", icon: "host"}, host: {icon: "host"},
   nodes: {label: "Storage nodes", icon: "node"}, node: {icon: "node"},
   devices: {label: "Devices", icon: "device"}, device: {icon: "device"},
@@ -52,6 +60,8 @@ const LAYER_META = {
   appgroups: {label: "Application groups", icon: "cluster"}, appgroup: {icon: "cluster"}
 };
 const pC = cid => [{t: "clusters"}, {t: "cluster", id: cid}];
+const pSites = () => [{t: "clusters"}, {t: "sites"}];
+const pSite = id => [...pSites(), {t: "site", id}];
 const pH = (cid, hid) => [...pC(cid), {t: "hosts"}, {t: "host", id: hid}];
 const pN = (cid, nid) => [...pC(cid), {t: "nodes"}, {t: "node", id: nid}];
 const pD = (cid, nid, did) => [...pN(cid, nid), {t: "devices"}, {t: "device", id: did}];
@@ -117,7 +127,8 @@ const detailPath = o => o.kind === "cluster" ? pC(o.id)
   : [...pC(o.clusterId), {t: "policies"}, {t: "policy", id: o.id}];
 
 const nameOf = o => o.hostname || o.name || (o.mode === "nvme" ? o.serial : o.blockdev) || o.serial || o.chainId || "";
-const segLabel = s => s.id ? (REG[s.id] ? nameOf(REG[s.id]) : shortId(s.id)) : LAYER_META[s.t].label;
+// a site or a work item is named by its id; everything else resolves through the registry
+const segLabel = s => s.t === "site" || s.t === "work" ? s.id : s.t === "cr" ? String(s.id).split("/").slice(2).join(" ") : s.id ? (REG[s.id] ? nameOf(REG[s.id]) : shortId(s.id)) : LAYER_META[s.t].label;
 const searchable = o => [nameOf(o), o.id, o.ip, o.mgmtIp, o.serial, o.pcie, o.blockdev, o.failureDomain,
   o.owner, o.storageClass, ...Object.entries(o.tags || {}).map(([k, v]) => `${k}=${v}`),
   o.physicalLabel, o.poolName, o.volumeName, o.chainId, o.bucket, o.type, o.finest,
@@ -201,13 +212,13 @@ const VIEWS = {
       : p.t === "pool" ? api.poolVolumes(p.id) : api.clusterVolumes(p.id),
     api: p => p.t === "appgroup" ? prop("app-groups/{uuid}/lvols") : ["rpolicy", "cgroup", "migration"].includes(p.t) ? prop(`${p.t}s/{uuid}/lvols`)
       : `GET ${PV}?labelSelector=storage.simplyblock.io/${p.t === "pool" ? "pool" : "cluster"}`},
-  cgroups: {kind: "cgroup", load: p => api.cgroups(p.id), api: () => prop("consistency-groups?cluster={uuid}")},
+  cgroups: {kind: "cgroup", feature: "cgroups", load: p => api.cgroups(p.id), api: () => prop("consistency-groups?cluster={uuid}")},
   k8s: {kind: "k8sc", load: () => api.k8sClusters(), api: () => prop("kubernetes-clusters")},
   deployconfigs: {kind: "deployconfig",
     load: p => p.t === "k8sc" ? api.k8sDeployConfigs(p.id) : api.deployConfigs(),
     api: () => crd("clusterdeploymentconfigs")},
-  mpaths: {kind: "mpath", load: () => api.mpaths(), api: () => prop("migration-paths")},
-  appgroups: {kind: "appgroup", load: p => api.mpathGroups(p.id), api: () => prop("migration-paths/{uuid}/app-groups")},
+  mpaths: {kind: "mpath", feature: "migrationPaths", load: () => api.mpaths(), api: () => prop("migration-paths")},
+  appgroups: {kind: "appgroup", feature: "migrationPaths", load: p => api.mpathGroups(p.id), api: () => prop("migration-paths/{uuid}/app-groups")},
   // ---- DR hub: every layer is a CR list, scoped client-side by the parent ----
   plans: {kind: "pplan", load: () => drhub.plans(), api: () => drcrd("protectionplans")},
   paths: {kind: "drpath",
@@ -234,11 +245,11 @@ const VIEWS = {
     load: p => p.t === "storageclass" ? api.storageClassPvcs(p.id) : p.t === "k8sc" ? api.k8sPvcs(p.id)
       : p.t === "protectedapp" ? api.protectedAppPvcs(p.id) : api.pvcs(),
     api: () => "GET /api/v1/namespaces/{ns}/persistentvolumeclaims"},
-  buckets: {kind: "bucket", load: p => api.buckets(p.id), api: () => prop("buckets?cluster={uuid}")},
-  migrations: {kind: "migration",
+  buckets: {kind: "bucket", feature: "buckets", load: p => api.buckets(p.id), api: () => prop("buckets?cluster={uuid}")},
+  migrations: {kind: "migration", feature: "migrationPaths",
     load: p => p.t === "cluster" ? api.migrations(p.id) : api.allMigrations(),
     api: p => prop(p.t === "cluster" ? "migrations?cluster={uuid}" : "migrations")},
-  cgsnapshots: {kind: "cgsnapshot", load: p => api.cgSnapshots(p.id), api: () => prop("cg-snapshots?group={uuid}")},
+  cgsnapshots: {kind: "cgsnapshot", feature: "cgroups", load: p => api.cgSnapshots(p.id), api: () => prop("cg-snapshots?group={uuid}")},
   // replication reads three CRD lists and joins them: the resources reference
   // each other by name and carry no rollups
   pairs: {kind: "pair", load: () => api.pairs(), api: () => crd("replicationpairs")},
@@ -251,20 +262,28 @@ const VIEWS = {
   rpolicies: {kind: "rpolicy",
     load: p => p.t === "pair" ? api.pairRPolicies(p.id) : p.t === "cluster" ? api.rpolicies(p.id) : api.allRPolicies(),
     api: () => crd("replicationpolicies")},
-  zones: {kind: "zone",
+  zones: {kind: "zone", feature: "zones",
     load: p => p.t === "cluster" ? api.clusterZones(p.id) : p.t === "k8sc" ? api.k8sZones(p.id) : api.zones(),
     api: () => prop("zones")},
   snapshots: {kind: "snapshot",
     load: p => api.snapshots(p.t === "volume" ? "lvols" : p.t === "pool" ? "pools" : "clusters", p.id),
-    api: () => prop("snapshots?parent={uuid}")},
+    api: () => "GET /apis/snapshot.storage.k8s.io/v1/namespaces/{ns}/volumesnapshots"},
   backups: {kind: "backup",
     load: p => api.backups(p.t === "volume" ? "lvols" : p.t === "pool" ? "pools" : "clusters", p.id),
     api: () => crd("storagebackups", CLUS)},
-  policies: {kind: "policy", load: p => api.policies(p.id), api: () => prop("backup-policies?cluster={uuid}")},
+  policies: {kind: "policy", load: p => api.policies(p.id), api: () => crd("backuppolicies")},
+  nodevolumes: {kind: "volume", load: p => api.nodeVolumes(p.id), api: () => `GET ${PV} (primary node from the control plane)`},
+  clones: {kind: "pvc", load: p => api.pvcs().then(ps => { const v = REG[p.id] || {}; const src = v.pvc ? v.pvc.name : v.name; return ps.filter(x => x.dataSource && x.dataSource.name === src && x.ctx === v.ctx); }),
+    api: () => "GET /api/v1/persistentvolumeclaims (spec.dataSource)"},
   clusters: {kind: "cluster",
     load: p => p.t === "zone" ? api.zoneClusters(p.id) : p.t === "k8sc" ? api.k8sStorageClusters(p.id) : api.clusters(),
     api: () => crd("storageclusters")}
 };
+// a layer behind a feature flag answers with the gate's reason instead of a fetch
+const loadLayer = (cfg, parent) => cfg.feature && !feature(cfg.feature)
+  ? Promise.reject(new ApiError(503, `${LAYER_LABEL(cfg)} are not part of this deployment: no API serves them`, "", REASON_FEATURE_DISABLED))
+  : cfg.load(parent || {});
+const LAYER_LABEL = cfg => { const k = Object.keys(VIEWS).find(x => VIEWS[x] === cfg); return (LAYER_META[k] || {}).label || k; };
 const DETAIL_API = {
   cluster: crd1("storageclusters"), node: crd1("storagenodes"), device: crd1("storagedevices"),
   pool: crd1("storagepools"), backup: crd1("storagebackups"),
@@ -295,13 +314,44 @@ const KIND_LABEL = {cluster: "cluster", host: "host", node: "storage node", devi
   deployconfig: "deployment document", mpath: "migration path", appgroup: "application group"};
 
 function ErrorState({error, onRetry, kind, onUp, upLabel}) {
+  if (error.reason === REASON_FEATURE_DISABLED) {
+    return (
+      <div className="empty">
+        <Icon n="link" s={24} c="var(--dim2)" />
+        <b style={{color: "var(--text)"}}>Not part of this deployment</b>
+        <span style={{maxWidth: 480}}>{error.message}</span>
+        <span style={{maxWidth: 480, color: "var(--dim2)"}}>No Kubernetes object and no control plane route serves this yet. The view exists so the design can be seen against the fixture backend.</span>
+        {onUp && <button className="chip" style={{marginTop: 8}} onClick={onUp}>Back to {upLabel}</button>}
+      </div>
+    );
+  }
+  if (error.reason === REASON_NO_CONTROL_PLANE) {
+    return (
+      <div className="empty">
+        <Icon n="link" s={24} c="var(--warn)" />
+        <b style={{color: "var(--text)"}}>Control plane not reachable from the console</b>
+        <span style={{maxWidth: 480}}>{error.message}</span>
+        <span style={{maxWidth: 480, color: "var(--dim2)"}}>Objects and their status still come from the Kubernetes API. Tasks, the event log, and live I/O need a control plane URL on this context in the console's configuration.</span>
+        {onUp && <button className="chip" style={{marginTop: 8}} onClick={onUp}>Back to {upLabel}</button>}
+      </div>
+    );
+  }
+  if (error.reason === "NoPod") {
+    return (
+      <div className="empty">
+        <Icon n="node" s={24} c="var(--warn)" />
+        <b style={{color: "var(--text)"}}>No pod to read</b>
+        <span style={{maxWidth: 480}}>{error.message}</span>
+        {onRetry && <button className="chip" style={{marginTop: 8}} onClick={onRetry}>Try again</button>}
+      </div>
+    );
+  }
   if (error.status === 501) {
     return (
       <div className="empty">
         <Icon n="link" s={24} c="var(--warn)" />
         <b style={{color: "var(--text)"}}>Not available on this cluster</b>
         <span style={{maxWidth: 480}}>{error.message}</span>
-        <span style={{maxWidth: 480, color: "var(--dim2)"}}>Snapshot replication itself still works here — it is the orchestration of asynchronous replication that is unavailable on this cluster.</span>
         {onUp && <button className="chip" style={{marginTop: 8}} onClick={onUp}>Back to {upLabel}</button>}
       </div>
     );
@@ -408,6 +458,11 @@ const kindPlural = kind => {
   return /(s|ss|y)$/.test(l) && !/[aeiou]y$/.test(l) ? l.replace(/y$/, "ies") : l + "s";
 };
 
+// a section whose module is not in this build
+const ComingView = ({name}) => <div className="scroll"><div className="empty"><Icon n="link" s={24} c="var(--dim2)" /><b>{name} is not part of this build</b><span>The module that renders it is not bundled.</span></div></div>;
+// the panels render the same error states as the views
+Object.assign(window, {ErrorState, ComingView});
+
 function OverviewView({seg, parent, nav, prefs, rev, up, upLabel}) {
   const {q, setQ, sort, setSort, filters, setFilters, density, setDensity} = prefs;
   const [sel, setSel] = useState([]);
@@ -426,7 +481,7 @@ function OverviewView({seg, parent, nav, prefs, rev, up, upLabel}) {
     : f === "replicated" ? !!o.replication : f === "unreplicated" ? !o.replication : f === "encrypted" ? o.encrypted : f === "lifecycle" ? (o.lifecycle || []).length > 0 : true);
   const cfg = VIEWS[seg.t];
   const key = seg.t + "|" + (parent ? parent.id : "") + "|" + rev;
-  const {data, loading, error, reload} = useResource(key, () => cfg.load(parent || {}), 6000);
+  const {data, loading, error, reload} = useResource(key, () => loadLayer(cfg, parent), 6000);
   const acc = useAccess();
   // §5.1/§5.2: whole scopes the caller cannot see are hidden (scope discovery);
   // inside a visible scope the API server's list is shown as returned.
@@ -670,11 +725,24 @@ function App() {
   }, [viewKey]);
 
   const go = useCallback(p => { setPath(p); setMenu(false); }, [setPath]);
+  // badges on tiles and detail heads navigate without being handed `nav`
+  useEffect(() => { window.__nav = nav; });
   const nav = useMemo(() => ({
     detail: o => go(detailPath(o)),
     layer: (o, l) => go([...detailPath(o), {t: l}]),
     layerRef: (cid, l) => go([...pC(cid), {t: l}]),
     openCluster: cid => go(pC(cid)),
+    // fleet navigation; the alert, log, and monitor views carry their filter on the segment
+    sites: () => go(pSites()),
+    openSite: name => go(pSite(name)),
+    dashboard: p => go([Object.assign({t: "clusters"}, p ? {p} : {})]),
+    alerts: p => go([Object.assign({t: "alerts"}, p ? {p} : {})]),
+    monitor: p => go(p && p.cluster ? [...pC(p.cluster), Object.assign({t: "monitor"}, {p})] : [Object.assign({t: "monitor"}, p ? {p} : {})]),
+    openWork: (cid, key) => go(cid ? [...pC(cid), {t: "monitor"}, {t: "work", id: key}] : [{t: "monitor"}, {t: "work", id: key}]),
+    logs: (cid, p) => go([...pC(cid), Object.assign({t: "logs"}, p ? {p} : {})]),
+    // any custom resource, as a child of wherever the user is
+    openCR: ref => go([...pathRef.current.filter(s => s.t !== "cr"), {t: "cr", id: objKey(ref.ctx, ref.ns, ref.kind, ref.name), ctx: ref.ctx}]),
+    nodeLogs: (cid, nid, p) => go([...pN(cid, nid), Object.assign({t: "logs"}, p ? {p} : {})]),
     openHost: (cid, hid) => go(pH(cid, hid)),
     openNode: (cid, nid) => go(pN(cid, nid)),
     openDevice: (cid, nid, did) => go(pD(cid, nid, did)),
@@ -752,7 +820,7 @@ function App() {
   const parentSeg = path[path.length - 2];
   const apiHint = cur.id ? DETAIL_API[cur.t] : VIEWS[cur.t] ? VIEWS[cur.t].api(parentSeg || {}) : "—";
   const s0 = path[0] && path[0].t;
-  const section = s0 === "dr" ? "dr" : s0 === "k8s" ? "k8s" : s0 === "cp" ? "cp" : "clusters";
+  const section = s0 === "dr" ? "dr" : s0 === "k8s" ? "k8s" : s0 === "cp" ? "cp" : s0 === "alerts" ? "alerts" : s0 === "monitor" ? "ops" : "clusters";
   const drVisible = DR_ONLY || acc.canAnywhere("read", "drhub") || acc.canAnywhere("read", "drpolicy") || acc.canAnywhere("read", "replicationpolicy") || acc.canAnywhere("read", "application");
   const upOne = path.length > 1 ? () => go(path.slice(0, -1)) : null;
   const upLabel = path.length > 1 ? segLabel(path[path.length - 2]) : "";
@@ -768,6 +836,8 @@ function App() {
         <span className="prod">{DR_ONLY ? "DR Console" : "Control Center"}</span>
         {!DR_ONLY && <div className="sectionsw">
           <button className={section === "clusters" ? "on" : ""} onClick={() => nav.root()} title="Clusters"><Icon n="cluster" s={13} /><span className="swlabel">Clusters</span></button>
+          {window.AlertsView && <button className={section === "alerts" ? "on" : ""} onClick={() => nav.alerts()} title="Alerts"><Icon n="bell" s={13} /><span className="swlabel">Alerts</span></button>}
+          {window.MonitorView && <button className={section === "ops" ? "on" : ""} onClick={() => nav.monitor()} title="Tasks and operations"><Icon n="clock" s={13} /><span className="swlabel">Operations</span></button>}
           {acc.canAnywhere("read", "k8scluster") && <button className={section === "k8s" ? "on" : ""} onClick={() => nav.k8s()} title="Kubernetes"><Icon n="k8s" s={13} /><span className="swlabel">Kubernetes</span></button>}
           {drVisible && <button className={section === "dr" ? "on" : ""} onClick={() => nav.dr()} title="Disaster recovery"><Icon n="shield" s={13} /><span className="swlabel">Disaster recovery</span></button>}
           <button className={section === "cp" ? "on" : ""} onClick={() => nav.cp()} title="Control plane"><Icon n="host" s={13} /><span className="swlabel">Control plane</span></button>
@@ -799,7 +869,9 @@ function App() {
         {window.SB_CONFIG.mock && <MockPanel />}
         {!DR_ONLY && <span className="env"><span className="pulse"></span>control plane healthy</span>}
         {DR_ONLY && <span className="env"><span className="pulse"></span>dr-hub</span>}
-        {!DR_ONLY && <button className="tbtn bellwrap" title={alertCount ? `${alertCount} critical alert(s)` : "No critical alerts"}
+        {!DR_ONLY && window.OpsIndicator && <OpsIndicator nav={nav} />}
+        {!DR_ONLY && window.AlertBell && <AlertBell nav={nav} clusterId={(path.find(x => x.t === "cluster") || {}).id} />}
+        {!DR_ONLY && !window.AlertBell && <button className="tbtn bellwrap" title={alertCount ? `${alertCount} critical alert(s)` : "No critical alerts"}
           onClick={() => { const s = path.find(x => x.t === "cluster"); if (s) nav.openCluster(s.id); else if (clusters.length) nav.openCluster(clusters.find(c => c.status === "degraded") ? clusters.find(c => c.status === "degraded").id : clusters[0].id); }}>
           <Icon n="bell" s={14} />{alertCount > 0 && <span className="bellbadge">{alertCount > 99 ? "99+" : alertCount}</span>}
         </button>}
@@ -826,8 +898,29 @@ function App() {
 
       {!acc.state.ready ? <div className="scroll"><div className="lmsg">Resolving your access…</div></div> :
       <ViewBoundary routeKey={viewKey} onReset={() => nav.root()}>
-      {cur.id
+      {cur.t === "site"
+        ? <SiteDetail key={viewKey} seg={cur} nav={nav} rev={rev} />
+        : cur.t === "cr"
+        ? (window.CRView ? <CRView key={viewKey} seg={cur} nav={nav} /> : <ComingView name="The resource view" />)
+        : cur.t === "nodesets" || cur.t === "served" || cur.t === "pods"
+        ? <div className="scroll" key={viewKey}>{!REG[(parentSeg || {}).id] ? <div className="lmsg">loading…</div>
+            : cur.t === "nodesets" ? <NodeSetsView cluster={REG[parentSeg.id]} nav={nav} />
+            : cur.t === "served" ? <ServedView cluster={REG[parentSeg.id]} nav={nav} />
+            : <NodePodsView node={REG[parentSeg.id]} nav={nav} />}</div>
+        : cur.t === "work"
+        ? (window.WorkItemDetail ? <WorkItemDetail key={viewKey} seg={cur} nav={nav} rev={rev} /> : <ComingView name="The operations monitor" />)
+        : cur.id
         ? <DetailView key={viewKey} seg={cur} nav={nav} rev={rev} up={upOne} upLabel={upLabel} />
+        : cur.t === "clusters" && path.length === 1 && !DR_ONLY
+        ? <DashboardView key={viewKey} seg={cur} nav={nav} rev={rev} />
+        : cur.t === "sites"
+        ? <SitesView key={viewKey} nav={nav} rev={rev} />
+        : cur.t === "alerts"
+        ? (window.AlertsView ? <AlertsView key={viewKey} seg={cur} nav={nav} rev={rev} /> : <ComingView name="The alert view" />)
+        : cur.t === "monitor"
+        ? (window.MonitorView ? <MonitorView key={viewKey} seg={cur} nav={nav} rev={rev} scope={path.find(x => x.t === "cluster")} /> : <ComingView name="The operations monitor" />)
+        : cur.t === "logs"
+        ? (window.LogsView ? <LogsView key={viewKey} seg={cur} nav={nav} rev={rev} clusterSeg={path.find(x => x.t === "cluster")} nodeSeg={path.find(x => x.t === "node")} /> : <ComingView name="The log view" />)
         : cur.t === "dr"
         ? <DrHubHome key={viewKey} nav={nav} />
         : cur.t === "drconfig"

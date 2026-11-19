@@ -80,9 +80,16 @@ func (p *PromAPI) instances() []map[string]string {
 // category, plus two slow sine components and jitter, all seeded per
 // (metric, instance).
 func (p *PromAPI) valueAt(metric, instance string, t time.Time) float64 {
+	return seriesValue(p.seed, metric, instance, t)
+}
+
+// seriesValue is the series function behind both the Prometheus and the
+// control plane iostats and capacity histories: a pure function of (seed,
+// metric, instance, time), so every chart sees one stable, continuous series.
+func seriesValue(seed uint64, metric, instance string, t time.Time) float64 {
 	h := fnv.New64a()
 	h.Write([]byte(metric + "|" + instance))
-	hs := h.Sum64() ^ p.seed
+	hs := h.Sum64() ^ seed
 	rng := rand.New(rand.NewPCG(hs, hs>>7))
 
 	base, span := 1000.0, 800.0

@@ -1,10 +1,12 @@
 # syntax=docker/dockerfile:1
 #
 # simplyblock Control Center — static UI, served by nginx, with an in-pod
-# reverse proxy in front of the Kubernetes API, the operator API and Prometheus.
-# The same image serves the DR-only console (SB_MODE=dr) next to dr-hub on a
-# hub without a simplyblock control plane; there only the Kubernetes API is
-# proxied.
+# reverse proxy in front of the Kubernetes API, the control plane v2 API,
+# the operator API, and Prometheus, plus one Kubernetes API and one control
+# plane location per configured context (a remote cluster the console also
+# shows). The same image serves the DR-only console (SB_MODE=dr) next to
+# dr-hub on a hub without a simplyblock control plane; there only the
+# Kubernetes API is proxied.
 #
 #   docker build -t quay.io/simplyblock-io/control-center:26.3.0 -f deploy/Dockerfile .
 #
@@ -97,7 +99,8 @@ FROM docker.io/library/nginx:1.27-alpine
 
 # nginx must run as a non-root user with a read-only root filesystem, so its
 # writable paths are moved under /tmp and declared as volumes in the manifest.
-RUN apk add --no-cache tini \
+# jq parses the contexts file the entrypoint renders proxy locations from.
+RUN apk add --no-cache tini jq \
  && rm -f /etc/nginx/conf.d/default.conf \
  && mkdir -p /var/cache/nginx /tmp/nginx /etc/nginx/snippets \
  && chown -R 101:101 /var/cache/nginx /tmp/nginx /usr/share/nginx/html
@@ -110,7 +113,12 @@ COPY deploy/nginx-main.conf /etc/nginx/nginx.conf
 COPY deploy/docker-entrypoint.sh /usr/local/bin/sb-entrypoint
 RUN chmod +x /usr/local/bin/sb-entrypoint
 
-# Defaults. Every one is overridable from the Deployment's env.
+# Defaults. Every one is overridable from the Deployment's env. The SB_CP_*
+# values describe the local control plane (/cp/local/): an empty token file
+# means the projected ServiceAccount token, an empty CA file means the system
+# bundle, and an empty host means the URL's own host for SNI. SB_CONTEXTS_FILE
+# is read only when it exists; SB_LOCAL_LABELS is site=...,stage=...,tenant=...
+# and SB_FEATURES a comma list of feature flags, both handed to config.js.
 # Scope envsubst to our own variables, or it would eat nginx's $uri and $host.
 ENV NGINX_ENVSUBST_FILTER=SB_ \
     SB_MODE=full \

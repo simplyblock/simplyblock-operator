@@ -237,13 +237,13 @@ func TestRoleModel(t *testing.T) {
 func TestAuthZScopedDeny(t *testing.T) {
 	sc, _ := scenarioByName("small-healthy")
 	srv := newServer(sc, 1, "simplyblock-system", "", "sb:tenant-admin@sb-tenant-a")
-	if srv.authz.allow("sb-tenant-a", "create", "storageclusters") != true {
+	if srv.local.authz.allow("sb-tenant-a", "create", "storageclusters") != true {
 		t.Fatal("tenant-admin should create storageclusters in its own namespace")
 	}
-	if srv.authz.allow("sb-sc-other", "create", "storageclusters") != false {
+	if srv.local.authz.allow("sb-sc-other", "create", "storageclusters") != false {
 		t.Fatal("tenant-admin must NOT act in another storage cluster's namespace")
 	}
-	if srv.authz.allow("sb-tenant-a", "get", "secrets") != false {
+	if srv.local.authz.allow("sb-tenant-a", "get", "secrets") != false {
 		t.Fatal("tenant-admin role does not include secrets")
 	}
 }

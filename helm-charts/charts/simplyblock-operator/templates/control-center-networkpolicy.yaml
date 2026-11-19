@@ -1,10 +1,11 @@
 {{/*
   NetworkPolicy for the Control Center.
 
-  The console has exactly three upstreams — the Kubernetes API, the operator
-  API and Prometheus — and no route to the internet: React, Babel, the
-  typefaces and the brand mark are vendored into the image. This caps egress
-  to those upstreams plus DNS.
+  The console's upstreams are the Kubernetes API, the control plane v2 API,
+  the operator API, Prometheus, and each configured context's API server and
+  control plane. It has no route to the internet: React, the typefaces, and
+  the brand mark are vendored into the image. This caps egress to those
+  upstreams plus DNS; a context contributes the egress[] entries it declares.
 
   Off by default because the API-server rule is cluster-specific: it ships as
   the RFC1918 ranges, and you should narrow controlCenter.networkPolicy
@@ -42,7 +43,8 @@ spec:
         - protocol: TCP
           port: 8080
   egress:
-    # The operator API and Prometheus, inside the release namespace.
+    # The operator API, the control plane v2 API, and Prometheus, inside the
+    # release namespace. The mock, when enabled, is on 8080 here too.
     - to:
         - namespaceSelector:
             matchLabels:
@@ -51,7 +53,20 @@ spec:
         - protocol: TCP
           port: 8080
         - protocol: TCP
+          port: 5000
+        - protocol: TCP
           port: 9090
+    {{- range $ctx := $cc.contexts }}
+    {{- range $e := $ctx.egress }}
+    # context {{ $ctx.name }}
+    - to:
+        - ipBlock:
+            cidr: {{ required (printf "controlCenter.contexts[%s].egress[].cidr is required" $ctx.name) $e.cidr }}
+      ports:
+        - protocol: TCP
+          port: {{ required (printf "controlCenter.contexts[%s].egress[].port is required" $ctx.name) $e.port }}
+    {{- end }}
+    {{- end }}
     # The Kubernetes API server. Narrow these CIDRs — see the header comment.
     - to:
         {{- range $cidr := $cc.networkPolicy.apiServerCidrs }}

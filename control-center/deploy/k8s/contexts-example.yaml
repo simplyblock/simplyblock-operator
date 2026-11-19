@@ -1,0 +1,86 @@
+# Contexts for the Control Center: the other Kubernetes clusters the console
+# reaches, as the plain-manifest equivalent of controlCenter.contexts in the
+# chart. An example, not something to apply as is: replace site-b with your
+# cluster, fill the Secret from the remote cluster's remote-access.yaml, and
+# uncomment the matching volume and mount in deployment.yaml.
+#
+# The browser calls same-origin /k8s/<name>/ and /cp/<name>/; the console pod
+# proxies each to that cluster's API server and control plane with the
+# credentials mounted from the Secret. The browser never sees a URL, a CA, or
+# a token: config.js carries only the names, labels, namespaces, and paths.
+#
+# A context name is a path segment: lowercase letters, digits, and dashes, at
+# most 32 characters, and none of `api`, `apis`, `version`, `openapi`,
+# `healthz`, `livez`, `readyz`, `metrics`, or `local`. The entrypoint refuses
+# to start otherwise, since a context named `apis` would shadow /k8s/apis/.
+#
+# Fields per context:
+#   name               the path segment and what the console shows
+#   kubernetesApi      the remote API server, https
+#   kubernetesApiHost  SNI and Host for it: a name on its certificate
+#                      (defaults to the URL's host)
+#   namespaces         the namespaces the console manages there
+#   labels             site, stage, tenant: how the fleet views group it
+#   controlPlane.url   that cluster's control plane v2 API, reached directly
+#                      (never through the API server's services/proxy, which
+#                      strips the Authorization header); omit it and
+#                      /cp/<name>/ answers a 503 Status
+#   controlPlane.host  SNI and Host for the control plane (defaults to the
+#                      URL's host)
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: simplyblock-control-center-contexts
+  namespace: simplyblock
+  labels:
+    app.kubernetes.io/name: simplyblock-control-center
+    app.kubernetes.io/component: ui
+data:
+  contexts.json: |
+    [
+      {
+        "name": "site-b",
+        "kubernetesApi": "https://10.1.2.3:6443",
+        "kubernetesApiHost": "kubernetes",
+        "namespaces": ["simplyblock"],
+        "labels": {"site": "ams2", "stage": "prd"},
+        "controlPlane": {"url": "https://cp.site-b.example:5000", "host": "cp.site-b.example"}
+      }
+    ]
+---
+# One Secret per context, mounted at /etc/sb/contexts/<name>/. Produce token
+# and ca.crt on the remote cluster with remote-access.yaml:
+#
+#   kubectl -n simplyblock get secret simplyblock-control-center-remote-token \
+#     -o jsonpath='{.data.token}' | base64 -d > token
+#   kubectl -n simplyblock get secret simplyblock-control-center-remote-token \
+#     -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+#   kubectl -n simplyblock create secret generic cc-ctx-site-b \
+#     --from-file=token --from-file=ca.crt
+#
+# The control plane v2 API accepts a ServiceAccount token of its own cluster,
+# so the same token serves /cp/<name>/. Add cp-token when the control plane
+# needs a different credential, and cp-ca.crt when it serves a certificate
+# from a different CA than the API server (a public certificate needs neither:
+# the image's system bundle verifies it).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cc-ctx-site-b
+  namespace: simplyblock
+  labels:
+    app.kubernetes.io/name: simplyblock-control-center
+    app.kubernetes.io/component: ui
+type: Opaque
+stringData:
+  token: "<ServiceAccount token from the remote cluster>"
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    <the remote cluster's API server CA>
+    -----END CERTIFICATE-----
+  # cp-token: "<a different token for the control plane, if needed>"
+  # cp-ca.crt: |
+  #   -----BEGIN CERTIFICATE-----
+  #   <the control plane's CA, if it differs from the API server's>
+  #   -----END CERTIFICATE-----

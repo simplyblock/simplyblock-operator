@@ -765,6 +765,65 @@ controlCenter:
   helmUrl: ""
   prometheusUrl: ""
 
+  # The control plane v2 REST API of this cluster, proxied as /cp/local/ with
+  # the pod's own ServiceAccount token (the API accepts a token of the cluster
+  # it runs in). Empty resolves the way the operator does: the chart's
+  # simplyblock-webappapi service on port 5000, over HTTPS verified against
+  # the chart's CA bundle when tls.enabled, plain HTTP otherwise.
+  controlPlaneUrl: ""
+
+  # How this cluster appears in the console next to the contexts below. The
+  # name is what the console shows; the proxy paths stay /k8s/ and /cp/local/.
+  # Empty labels are dropped; empty namespaces means the release namespace.
+  localContext:
+    name: local
+    labels:
+      site: ""
+      stage: ""
+      tenant: ""
+    namespaces: []
+
+  # Feature flags handed to the console as SB_CONFIG.features, e.g. [logs].
+  features: []
+
+  # Other Kubernetes clusters the console reaches. Each becomes a context: the
+  # browser calls same-origin /k8s/<name>/ and /cp/<name>/, and the console
+  # pod proxies them to that cluster's API server and control plane with the
+  # credentials in secretName, a Secret in the release namespace. The browser
+  # never sees a URL, a CA, or a token. The remote side is produced by
+  # remoteAccess.enabled below, installed on that cluster.
+  #
+  # name is a path segment: lowercase letters, digits, and dashes, at most 32
+  # characters, and none of `api`, `apis`, `version`, `openapi`, `healthz`,
+  # `livez`, `readyz`, `metrics`, or `local`. egress feeds the NetworkPolicy
+  # when enabled.
+  contexts: []
+  #  - name: site-b
+  #    labels: {site: ams2, stage: prd, tenant: ""}
+  #    kubernetesApi: https://10.1.2.3:6443
+  #    # SNI and Host for that API server: a name on its certificate
+  #    kubernetesApiHost: kubernetes
+  #    # keys: token, ca.crt, and optionally cp-token and cp-ca.crt when the
+  #    # control plane needs a different token or a different CA
+  #    secretName: cc-ctx-site-b
+  #    namespaces: [simplyblock]
+  #    controlPlane:
+  #      url: https://cp.site-b.example:5000
+  #      host: cp.site-b.example
+  #    egress:
+  #      - cidr: 10.1.2.3/32
+  #        port: 6443
+  #      - cidr: 203.0.113.10/32
+  #        port: 5000
+
+  # Rendered on a cluster that a hub's console reaches as a context: a
+  # ServiceAccount holding the console's ClusterRole and a long-lived token
+  # Secret, <fullname>-remote-token. Copy its token and ca.crt into the hub's
+  # context Secret. Independent of enabled above, so a remote cluster need
+  # not run a console of its own.
+  remoteAccess:
+    enabled: false
+
   rbac:
     # Required in serviceaccount mode: the proxied token needs these rules or
     # every request returns 403 and the console renders empty. Set false only
@@ -786,11 +845,17 @@ controlCenter:
       nginx.ingress.kubernetes.io/auth-secret: simplyblock-control-center-auth
       nginx.ingress.kubernetes.io/auth-realm: simplyblock Control Center
       nginx.ingress.kubernetes.io/proxy-body-size: 2m
+      # Watches on /k8s/* and SSE on /cp/* stream for up to an hour; buffering
+      # in the Ingress would hold events back, and HTTP/2 (the default on a
+      # TLS-terminating Ingress) is what lets a browser keep more than six
+      # streams open to one origin.
+      nginx.ingress.kubernetes.io/proxy-buffering: "off"
       nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     tls: []
 
   networkPolicy:
-    # Caps the console's egress to its three upstreams plus DNS. Off by default
+    # Caps the console's egress to its in-namespace upstreams, the API server,
+    # each context's egress[] entries, and DNS. Off by default
     # because the API-server CIDRs below are cluster-specific: narrow them to
     # your API server endpoint (`kubectl get endpoints kubernetes -n default`)
     # or your service CIDR before enabling.

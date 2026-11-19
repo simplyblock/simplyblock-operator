@@ -137,7 +137,10 @@ function scopeNamespaces(sc) {
 }
 
 // ---- rule evaluation (SSRR, local) --------------------------------------------
-const ruleAllows = (r, verb, resource, group, name) => ((r.apiGroups || []).includes(group || "simplyblock.io") || (r.apiGroups || []).includes("*"))
+// the storage kinds live in storage.simplyblock.io; the bare simplyblock.io
+// group is accepted for fixtures written against the earlier design
+const ruleAllows = (r, verb, resource, group, name) => ((r.apiGroups || []).includes(group || window.GROUP || "storage.simplyblock.io")
+    || (!group && (r.apiGroups || []).includes("simplyblock.io")) || (r.apiGroups || []).includes("*"))
   && (r.resources.includes(resource) || r.resources.includes("*")) && (r.verbs.includes(verb) || r.verbs.includes("*"))
   && (!r.resourceNames || !name || r.resourceNames.includes(name));
 function allowedIn(ns, verb, resource, group, name) {

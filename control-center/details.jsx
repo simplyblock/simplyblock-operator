@@ -76,8 +76,8 @@ const IOCards = ({o}) => (
 const DetailHead = ({obj, title, sub, badge}) => (
   <div className="dhead">
     <div style={{minWidth: 0, flex: 1}}>
-      <div style={{display: "flex", alignItems: "center", gap: 11, flexWrap: "wrap"}}><h1>{title}</h1><TrafficLight status={obj.status} />{badge}</div>
-      <div style={{display: "flex", alignItems: "center", gap: 14, marginTop: 5, flexWrap: "wrap"}}><Uuid value={obj.id} short={false} />{sub}</div>
+      <div style={{display: "flex", alignItems: "center", gap: 11, flexWrap: "wrap"}}><h1>{title}</h1><TrafficLight status={obj.status} />{badge}{window.AlertBadge && <AlertBadge obj={obj} nav={window.__nav} />}</div>
+      <div style={{display: "flex", alignItems: "center", gap: 14, marginTop: 5, flexWrap: "wrap"}}><Uuid value={obj.id} short={false} />{sub}{window.OpsLink && <OpsLink obj={obj} nav={window.__nav} />}</div>
     </div>
     <ActionBtn obj={obj} big />
   </div>
@@ -131,16 +131,16 @@ function ClusterDetail({o: c, nav}) {
       <Tabs active={tab} onChange={setTab} items={[
         {k: "overview", label: "Overview", icon: "cluster"},
         {k: "alerts", label: "Alerts", icon: "bell"},
-        {k: "ops", label: "Operations", icon: "refresh"},
-        {k: "file", label: "File storage", icon: "folder"},
-        c.caps.tasks && {k: "tasks", label: "Tasks", icon: "gauge"},
-        {k: "logs", label: "Cluster log", icon: "filter"},
+        {k: "ops", label: "Operations", icon: "clock"},
+        {k: "alllogs", label: "Logs", icon: "list"},
+        feature("fileStorage") && {k: "file", label: "File storage", icon: "folder"},
+        {k: "logs", label: "Event log", icon: "filter"},
         {k: "splane", label: "Storage plane logs", icon: "node"},
       ].filter(Boolean)} />
       {tab === "alerts" && <AlertsPanel cluster={c} nav={nav} />}
-      {tab === "ops" && <OperationsPanel cluster={c} nav={nav} />}
+      {tab === "ops" && (window.MonitorView ? <MonitorView scope={{t: "cluster", id: c.id}} nav={nav} /> : <OperationsPanel cluster={c} nav={nav} />)}
+      {tab === "alllogs" && (window.LogsView ? <LogsView cluster={c} nav={nav} embedded /> : <ClusterLogPanel cluster={c} />)}
       {tab === "file" && <FileStoragePanel cluster={c} nav={nav} />}
-      {tab === "tasks" && c.caps.tasks && <TasksPanel cluster={c} />}
       {tab === "logs" && <ClusterLogPanel cluster={c} />}
       {tab === "splane" && <StoragePlaneLogPanel cluster={c} />}
       {tab === "overview" && <>
@@ -168,10 +168,10 @@ function ClusterDetail({o: c, nav}) {
         <NavCard icon="clock" title="Backup policies" sub="schedules &amp; retention" count={c.counts.policies} onClick={() => nav.layer(c, "policies")} />
         <NavCard icon="shield" title="Replication policies" sub={c.caps.async_replication ? "DR & synchronous" : "Kubernetes only"}
           count={c.caps.async_replication ? c.counts.rpolicies : "n/a"} onClick={() => nav.layer(c, "rpolicies")} />
-        <NavCard icon="link" title="Consistency groups" sub="grouped volumes &amp; group snapshots" count={c.counts.cgroups} onClick={() => nav.layer(c, "cgroups")} />
-        <NavCard icon="move" title="Migrations" sub="move storage to other nodes or clusters" count={c.counts.migrations} onClick={() => nav.layer(c, "migrations")} />
-        {c.objectStorage.enabled && <NavCard icon="cloud" title="Buckets" sub="S3 on cluster capacity" count={c.counts.buckets} onClick={() => nav.layer(c, "buckets")} />}
-        <NavCard icon="zone" title="Zones" sub={c.stretched ? "stretched cluster" : "single zone"} count={c.counts.zones} onClick={() => nav.layer(c, "zones")} />
+        {feature("cgroups") && <NavCard icon="link" title="Consistency groups" sub="grouped volumes &amp; group snapshots" count={c.counts.cgroups} onClick={() => nav.layer(c, "cgroups")} />}
+        {feature("migrationPaths") && <NavCard icon="move" title="Migrations" sub="move storage to other nodes or clusters" count={c.counts.migrations} onClick={() => nav.layer(c, "migrations")} />}
+        {feature("buckets") && c.objectStorage.enabled && <NavCard icon="cloud" title="Buckets" sub="S3 on cluster capacity" count={c.counts.buckets} onClick={() => nav.layer(c, "buckets")} />}
+        {feature("zones") && <NavCard icon="zone" title="Zones" sub={c.stretched ? "stretched cluster" : "single zone"} count={c.counts.zones} onClick={() => nav.layer(c, "zones")} />}
       </div>
       <div className="dcols">
         <div className="card"><h3>Cluster configuration</h3><div className="bd" style={{paddingTop: 2, paddingBottom: 2}}>
@@ -282,6 +282,7 @@ function ClusterDetail({o: c, nav}) {
           </div></div>}
         </div>
       </div>
+      {window.CRSection && <CRSection vm={c} nav={nav} />}
       </>}
     </div>
   );
@@ -398,6 +399,7 @@ function HostDetail({o: h, nav}) {
           <div className="labels">{Object.entries(h.labels).map(([k, v]) => <span className="lab" key={k}><i>{k}</i>{v}</span>)}</div>
         </div></div>
       </div>
+      {window.CRSection && <CRSection vm={h} nav={nav} />}
     </div>
   );
 }
@@ -450,9 +452,13 @@ function NodeDetail({o: n, nav}) {
         sub={<span className="mono" style={{fontSize: 11.5, color: "var(--dim)"}}>{n.ip}:{n.port}</span>} />
       <Tabs active={tab} onChange={setTab} items={[
         {k: "overview", label: "Overview", icon: "node"},
+        {k: "ops", label: "Operations", icon: "clock"},
+        {k: "alllogs", label: "Logs", icon: "list"},
         {k: "threads", label: "SPDK threads", icon: "gauge"},
         {k: "logs", label: "SPDK logs", icon: "filter"}
       ]} />
+      {tab === "ops" && (window.MonitorView ? <MonitorView scope={{t: "cluster", id: n.clusterId}} seg={{p: {q: n.hostname}}} nav={nav} /> : <div className="lmsg">The monitor is not part of this build.</div>)}
+      {tab === "alllogs" && (window.LogsView ? <LogsView clusterSeg={{id: n.clusterId}} node={n} nav={nav} embedded /> : <NodeLogPanel node={n} />)}
       {tab === "threads" && <SpdkThreadsPanel node={n} />}
       {tab === "logs" && <NodeLogPanel node={n} />}
       {tab === "overview" && <>
@@ -513,6 +519,7 @@ function NodeDetail({o: n, nav}) {
           </div>
         </div></div>
       </div>
+      {window.CRSection && <CRSection vm={n} nav={nav} />}
       </>}
     </div>
   );
@@ -554,6 +561,7 @@ function DeviceDetail({o: d, nav}) {
         <IOCards o={d} />
       </div>
       <div style={{marginTop: 12}}><SmartCard device={d} /></div>
+      {window.CRSection && <CRSection vm={d} nav={nav} />}
     </div>
   );
 }

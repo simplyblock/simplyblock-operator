@@ -1,0 +1,73 @@
+{{/*
+  Remote access for a hub's Control Center.
+
+  Installed on a cluster that another cluster's console reaches as a context
+  (controlCenter.contexts[] on the hub). It is the remote half of that
+  arrangement: a ServiceAccount with the console's own ClusterRole, and a
+  long-lived token Secret the administrator copies to the hub.
+
+      kubectl -n <ns> get secret <fullname>-remote-token -o jsonpath='{.data.token}'  | base64 -d > token
+      kubectl -n <ns> get secret <fullname>-remote-token -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+      kubectl -n <hub-ns> create secret generic cc-ctx-<name> --from-file=token --from-file=ca.crt
+
+  The same token is accepted by this cluster's control plane v2 API, which
+  takes a ServiceAccount token of the cluster it runs in, so the hub's context
+  needs no separate cp-token unless the control plane is reached through
+  something that wants a different credential.
+
+  Independent of controlCenter.enabled on purpose: a remote cluster need not
+  run a console of its own. The token Secret is the legacy long-lived kind
+  because the hub has no way to request a projected token from here; rotate
+  it by deleting the Secret (the token controller re-issues it) and copying
+  the new token over.
+*/}}
+{{- if .Values.controlCenter.remoteAccess.enabled }}
+{{- $name := printf "%s-remote" (include "sbcc.fullname" .) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sbcc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui-remote-access
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}-token
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sbcc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui-remote-access
+  annotations:
+    kubernetes.io/service-account.name: {{ $name }}
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sbcc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui-remote-access
+rules:
+  {{- include "sbcc.clusterRoleRules" . | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sbcc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui-remote-access
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -12,9 +12,9 @@ import (
 )
 
 // K8sAPI serves Kubernetes API conventions — discovery, list/get/create/
-// update/patch/delete, /status subresources, pod logs and streaming watches —
-// against the Store. It expects paths relative to the API root (/api, /apis,
-// /version); mount it behind http.StripPrefix when proxied under /k8s.
+// update/patch/delete, /status subresources, pod logs, and streaming watches —
+// against the Store. It expects paths relative to the API root (`/api`, `/apis`,
+// `/version`). Mount it behind http.StripPrefix when proxied under `/k8s`.
 type K8sAPI struct {
 	store *Store
 	authz *AuthZ
@@ -64,7 +64,7 @@ func (a *K8sAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (a *K8sAPI) groupVersions() map[string][]string {
 	gv := map[string][]string{}
 	for _, d := range a.store.Defs() {
-		if d.Group == "" {
+		if d.Group == "" || d.Internal {
 			continue
 		}
 		found := false
@@ -125,7 +125,7 @@ func (a *K8sAPI) serveResourceList(w http.ResponseWriter, group, version string)
 	}
 	var resources []any
 	for _, d := range a.store.Defs() {
-		if d.Group != group || d.Version != version {
+		if d.Group != group || d.Version != version || d.Internal {
 			continue
 		}
 		resources = append(resources, map[string]any{
@@ -145,7 +145,7 @@ func (a *K8sAPI) serveResourceList(w http.ResponseWriter, group, version string)
 
 // ---- resource routing ---------------------------------------------------------
 
-// serveGroup handles everything after /api/v1 or /apis/{g}/{v}.
+// serveGroup handles everything after `/api/v1` or `/apis/{g}/{v}`.
 func (a *K8sAPI) serveGroup(w http.ResponseWriter, r *http.Request, group, version string, rest []string) {
 	if len(rest) == 0 {
 		a.serveResourceList(w, group, version)
@@ -181,7 +181,7 @@ func (a *K8sAPI) serveGroup(w http.ResponseWriter, r *http.Request, group, versi
 	}
 
 	d, ok := a.store.Lookup(group, version, resource)
-	if !ok {
+	if !ok || d.Internal {
 		a.writeStatus(w, &apiError{404, "NotFound", fmt.Sprintf("the server could not find resource %q in %s/%s", resource, group, version)})
 		return
 	}

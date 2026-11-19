@@ -10,6 +10,20 @@
 {{- if .Values.controlCenter.enabled }}
 {{- $cc := .Values.controlCenter }}
 {{- $name := include "sbcc.fullname" . }}
+{{- $localCpTls := include "sbcc.localCpTls" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-contexts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sbcc.labels" . | nindent 4 }}
+data:
+  # The contexts the console pod proxies, without their credentials: those
+  # are mounted from each context's Secret. Rendered by sbcc.contextsJson,
+  # which also swaps every URL for the mock's when the mock is enabled.
+  contexts.json: {{ include "sbcc.contextsJson" . | quote }}
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -44,10 +58,13 @@ spec:
     metadata:
       labels:
         {{- include "sbcc.selectorLabels" . | nindent 8 }}
-      {{- with $cc.podAnnotations }}
       annotations:
+        # The contexts file is read once at container start, so a change to
+        # it has to roll the pods.
+        checksum/contexts: {{ include "sbcc.contextsJson" . | sha256sum }}
+        {{- with $cc.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
     spec:
       serviceAccountName: {{ $name }}
       automountServiceAccountToken: true
@@ -107,6 +124,29 @@ spec:
               value: {{ ternary $mockURL ($cc.helmUrl | default (include "sbcc.operatorUrl" .)) $cc.mock.enabled | quote }}
             - name: SB_PROMETHEUS_URL
               value: {{ ternary $mockURL (include "sbcc.prometheusUrl" .) $cc.mock.enabled | quote }}
+            # The local control plane v2 API, /cp/local/. The token is the
+            # projected ServiceAccount token; the CA is mounted only when the
+            # URL is the chart's own service over TLS.
+            - name: SB_CP_URL
+              value: {{ include "sbcc.controlPlaneUrl" . | quote }}
+            {{- if $localCpTls }}
+            - name: SB_CP_CA_FILE
+              value: /etc/sb/cp-ca/ca.crt
+            {{- end }}
+            - name: SB_CONTEXTS_FILE
+              value: /etc/sb/contexts/contexts.json
+            - name: SB_LOCAL_CONTEXT_NAME
+              value: {{ ($cc.localContext).name | default "local" | quote }}
+            - name: SB_LOCAL_LABELS
+              value: {{ include "sbcc.localLabels" . | quote }}
+            {{- with ($cc.localContext).namespaces }}
+            - name: SB_LOCAL_NAMESPACES
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with $cc.features }}
+            - name: SB_FEATURES
+              value: {{ join "," . | quote }}
+            {{- end }}
             - name: SB_MOCK
               value: "false"
             - name: SB_LISTEN_PORT
@@ -137,11 +177,48 @@ spec:
               mountPath: /tmp/nginx
             - name: nginx-confd
               mountPath: /etc/nginx/conf.d
+            # The contexts file, and one directory of credentials per context
+            # (token, ca.crt, and optionally cp-token, cp-ca.crt) next to it.
+            - name: contexts
+              mountPath: /etc/sb/contexts/contexts.json
+              subPath: contexts.json
+              readOnly: true
+            {{- range $ctx := $cc.contexts }}
+            {{- if $ctx.secretName }}
+            - name: ctx-{{ $ctx.name }}
+              mountPath: /etc/sb/contexts/{{ $ctx.name }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
+            {{- if $localCpTls }}
+            - name: cp-ca
+              mountPath: /etc/sb/cp-ca
+              readOnly: true
+            {{- end }}
       volumes:
         - name: nginx-tmp
           emptyDir: {medium: Memory, sizeLimit: 16Mi}
         - name: nginx-confd
           emptyDir: {medium: Memory, sizeLimit: 1Mi}
+        - name: contexts
+          configMap:
+            name: {{ $name }}-contexts
+        {{- range $ctx := $cc.contexts }}
+        {{- if $ctx.secretName }}
+        - name: ctx-{{ $ctx.name }}
+          secret:
+            secretName: {{ $ctx.secretName }}
+            {{- if $cc.mock.enabled }}
+            # the mock needs no credential, so a demo install may omit the Secret
+            optional: true
+            {{- end }}
+        {{- else if not $cc.mock.enabled -}}
+        {{- fail (printf "controlCenter.contexts[%s].secretName is required: the console cannot reach a cluster without its token and CA" $ctx.name) }}
+        {{- end }}
+        {{- end }}
+        {{- if $localCpTls }}
+        {{- include "sbcc.cpCaVolume" . | nindent 8 }}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

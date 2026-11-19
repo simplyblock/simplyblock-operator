@@ -1,4 +1,98 @@
 // generated — do not edit; see build.md
+// ---- contexts.jsx ----
+(function(){
+// ---------------------------------------------------------------------------
+// CONTEXTS AND FEATURE FLAGS
+//
+// The console manages storage across several Kubernetes clusters. Each one is
+// a named context: the browser reaches its API server through the same-origin
+// proxy at `k8sBase` (/k8s for the local cluster, /k8s/<name> for a remote
+// one) and its simplyblock control plane through `cpBase` (/cp/<name>), both
+// rendered by the console pod's entrypoint from a contexts file. A context
+// without `cpBase` has no control plane reachable from the console: CRD views
+// still work, and anything only the control plane knows (tasks, the event log,
+// live I/O) degrades with a clear message instead of an error.
+//
+// A context carries labels {site, stage, tenant} that the fleet dashboard
+// groups by when a StorageCluster or its Namespace does not say otherwise
+// (see fleet-model.jsx for the precedence).
+//
+// Feature flags gate the views that have no real API behind them yet. They
+// are off in a deployment and on in the design preview, where the in-browser
+// fixture backend still serves them.
+//
+// This file loads first: every other module reads CONTEXTS.
+// ---------------------------------------------------------------------------
+const SBC = window.SB_CONFIG || {};
+
+// The local cluster reads every namespace its role grants: a tenant-per-
+// namespace layout keeps each tenant's clusters in its own namespace, and the
+// console's own namespace (SB_CONFIG.namespace) is only where it creates
+// objects that name no other home.
+const LOCAL_DEFAULT = {
+  name: "local",
+  local: true,
+  labels: {},
+  k8sBase: SBC.k8sBase || "/k8s",
+  cpBase: SBC.cpBase || "",
+  namespaces: "all"
+};
+function normalizeContext(c, i) {
+  const o = Object.assign({}, c);
+  o.name = String(o.name || (i === 0 ? "local" : `ctx-${i}`));
+  o.local = i === 0;
+  o.labels = Object.assign({
+    site: "",
+    stage: "",
+    tenant: ""
+  }, o.labels || {});
+  o.k8sBase = o.k8sBase || (o.local ? LOCAL_DEFAULT.k8sBase : `/k8s/${o.name}`);
+  o.cpBase = o.cpBase === undefined ? o.local ? LOCAL_DEFAULT.cpBase : `/cp/${o.name}` : o.cpBase || "";
+  if (o.namespaces !== "all" && !Array.isArray(o.namespaces)) o.namespaces = "all";
+  if (Array.isArray(o.namespaces) && o.namespaces.length === 0) o.namespaces = "all";
+  return o;
+}
+
+// The first context is always the local cluster, so a config.js written
+// before contexts existed still boots with exactly what it had.
+const CONTEXTS = (Array.isArray(SBC.contexts) && SBC.contexts.length ? SBC.contexts : [LOCAL_DEFAULT]).map(normalizeContext);
+const LOCAL_CTX = CONTEXTS[0].name;
+const ctxByName = name => CONTEXTS.find(c => c.name === (name || LOCAL_CTX)) || null;
+const ctxLabels = name => (ctxByName(name) || LOCAL_DEFAULT).labels || {};
+const hasControlPlane = name => !!(ctxByName(name) || {}).cpBase;
+const ctxNamespaces = name => (ctxByName(name) || LOCAL_DEFAULT).namespaces;
+// the context an object belongs to, read from the registry a normalizer fills
+const ctxOf = id => ((window.REG || {})[id] || {}).ctx || LOCAL_CTX;
+const FEATURES = Object.assign({
+  zones: false,
+  buckets: false,
+  cgroups: false,
+  migrationPaths: false,
+  fileStorage: false,
+  objectStorage: false,
+  fdbBackups: false,
+  accessRoles: false
+}, SBC.features || {});
+const feature = name => !!FEATURES[name];
+
+// Reasons a read could not be served, shared by every surface so a panel can
+// render the right empty state from `error.reason` alone.
+const REASON_NO_CONTROL_PLANE = "NoControlPlane";
+const REASON_FEATURE_DISABLED = "FeatureDisabled";
+Object.assign(window, {
+  CONTEXTS,
+  LOCAL_CTX,
+  ctxByName,
+  ctxLabels,
+  hasControlPlane,
+  ctxNamespaces,
+  ctxOf,
+  FEATURES,
+  feature,
+  REASON_NO_CONTROL_PLANE,
+  REASON_FEATURE_DISABLED
+});
+})();
 // ---- mock-backend.jsx ----
 (function(){
 // ---------------------------------------------------------------------------
@@ -5348,18 +5442,16 @@ window.SB_ADD_NODE = addStorageNode;
 // ---- k8s-client.jsx ----
 (function(){
 // ---------------------------------------------------------------------------
-// KUBERNETES / OPERATOR / HELM TRANSPORT
+// KUBERNETES TRANSPORT (per context), plus the Helm release view
 //
-// The console talks to exactly three things and nothing else:
-//   · the Kubernetes API   — CRDs in storage.simplyblock.io/v1alpha1, the DR
-//                            hub's dr.simplyblock.io/v1alpha1 (plus the Ramen
-//                            and OCM objects it derives), and core objects
-//                            (Node, Pod, PVC, StorageClass, Secret, Event)
-//   · the operator API     — what the operator exposes beyond CRDs
-//   · Helm                 — release state for the chart
+// Every read and write of a Kubernetes object goes through here. A call names
+// the context it addresses with `opts.ctx` (contexts.jsx); a call without one
+// addresses the local cluster exactly as before, which is what keeps the DR
+// section and the replication views untouched. The browser never holds a
+// credential: the console pod's nginx injects the right token per context.
 //
-// It does NOT call the control plane REST API. Anything the control plane knows
-// reaches the UI through a CRD status written by a controller.
+// The control plane REST API is a separate client (cp-client.jsx). The
+// operator exposes no HTTP API; what it knows is in CRD status.
 // ---------------------------------------------------------------------------
 const SB = window.SB_CONFIG;
 const GROUP = "storage.simplyblock.io";
@@ -5386,32 +5478,53 @@ const RESOURCES = {
   // entities
   StorageCluster: {
     plural: "storageclusters",
-    short: "sbc",
+    namespaced: true
+  },
+  StorageNodeSet: {
+    plural: "storagenodesets",
     namespaced: true
   },
   StorageNode: {
     plural: "storagenodes",
-    short: "sbn",
+    short: "sn",
     namespaced: true
   },
   StorageDevice: {
     plural: "storagedevices",
-    short: "sbd",
+    short: "sd",
     namespaced: true
   },
   StoragePool: {
     plural: "storagepools",
-    short: "sbp",
     namespaced: true
   },
   StorageBackup: {
     plural: "storagebackups",
-    short: "sbbk",
     namespaced: true
+  },
+  BackupPolicy: {
+    plural: "backuppolicies",
+    namespaced: true,
+    creatable: true
+  },
+  BackupRestore: {
+    plural: "backuprestores",
+    short: "br",
+    namespaced: true,
+    creatable: true
+  },
+  BackupImport: {
+    plural: "backupimports",
+    short: "bi",
+    namespaced: true,
+    creatable: true
   },
   ControlPlane: {
     plural: "controlplanes",
-    short: "sbcp",
+    namespaced: true
+  },
+  Task: {
+    plural: "tasks",
     namespaced: true
   },
   SimplyblockDriver: {
@@ -5421,8 +5534,9 @@ const RESOURCES = {
   },
   ClusterDeploymentConfig: {
     plural: "clusterdeploymentconfigs",
-    short: "sbcdc",
-    namespaced: true
+    short: "cdc",
+    namespaced: true,
+    version: "v1alpha2"
   },
   // replication: real kinds in v1alpha1. A slot is created by the operator from
   // a PVC annotation, so it is read-only here; the other three are creatable.
@@ -5449,54 +5563,33 @@ const RESOURCES = {
     namespaced: true,
     creatable: true
   },
-  // one-shot operations
+  // one-shot operations: the kinds that exist, with the entity each acts on.
+  // A migration is the per-volume operation kind of today's API; OperatorOps
+  // acts on the operator itself and names no target.
   StorageClusterOps: {
     plural: "storageclusterops",
-    short: "sbco",
+    short: "scops",
     namespaced: true,
     ops: "StorageCluster"
   },
   StorageNodeOps: {
     plural: "storagenodeops",
-    short: "sbno",
+    short: "snops",
     namespaced: true,
     ops: "StorageNode"
   },
-  StorageDeviceOps: {
-    plural: "storagedeviceops",
-    short: "sbdo",
-    namespaced: true,
-    ops: "StorageDevice"
-  },
-  StoragePoolOps: {
-    plural: "storagepoolops",
-    short: "sbpo",
-    namespaced: true,
-    ops: "StoragePool"
-  },
-  StorageBackupOps: {
-    plural: "storagebackupops",
-    short: "sbbo",
-    namespaced: true,
-    ops: "StorageBackup"
-  },
-  ControlPlaneOps: {
-    plural: "controlplaneops",
-    short: "sbcpo",
-    namespaced: true,
-    ops: "ControlPlane"
-  },
-  PersistentVolumeOps: {
-    plural: "persistentvolumeops",
-    short: "sbpvo",
+  VolumeMigration: {
+    plural: "volumemigrations",
+    short: "vmig",
     namespaced: true,
     ops: "PersistentVolume"
   },
   OperatorOps: {
     plural: "operatorops",
-    short: "sbop",
+    short: "oops",
     namespaced: true,
-    ops: null
+    ops: null,
+    version: "v1alpha2"
   },
   // ---- DR hub (dr-simplyblock) — dr.simplyblock.io/v1alpha1 ----------------
   // The hub has no REST API: every screen is a CR. Cluster-scoped kinds have
@@ -5618,6 +5711,11 @@ const RESOURCES = {
     namespaced: false
   },
   // core Kubernetes
+  Namespace: {
+    plural: "namespaces",
+    core: "v1",
+    namespaced: false
+  },
   Node: {
     plural: "nodes",
     core: "v1",
@@ -5651,6 +5749,33 @@ const RESOURCES = {
   StorageClass: {
     plural: "storageclasses",
     core: "storage.k8s.io/v1",
+    namespaced: false
+  },
+  VolumeSnapshot: {
+    plural: "volumesnapshots",
+    core: "snapshot.storage.k8s.io/v1",
+    namespaced: true,
+    creatable: true
+  },
+  VolumeSnapshotContent: {
+    plural: "volumesnapshotcontents",
+    core: "snapshot.storage.k8s.io/v1",
+    namespaced: false
+  },
+  VolumeSnapshotClass: {
+    plural: "volumesnapshotclasses",
+    core: "snapshot.storage.k8s.io/v1",
+    namespaced: false
+  },
+  Job: {
+    plural: "jobs",
+    core: "batch/v1",
+    namespaced: true
+  },
+  // the schema of a kind, read for its immutability rules and descriptions
+  CustomResourceDefinition: {
+    plural: "customresourcedefinitions",
+    core: "apiextensions.k8s.io/v1",
     namespaced: false
   },
   // application resources read for Ramen recipes
@@ -5702,7 +5827,7 @@ function pathFor(kind, opts) {
   const o = opts || {};
   const r = RESOURCES[kind];
   if (!r) throw new Error("unknown kind " + kind);
-  const prefix = !r.core ? `/apis/${API_GROUP}` : r.core === "v1" ? "/api/v1" : `/apis/${r.core}`;
+  const prefix = !r.core ? `/apis/${GROUP}/${r.version || VERSION}` : r.core === "v1" ? "/api/v1" : `/apis/${r.core}`;
   const ns = r.namespaced && !o.allNamespaces ? `/namespaces/${o.namespace || (r.dr ? DR_NS() : NS())}` : "";
   const name = o.name ? `/${o.name}` : "";
   const sub = o.subresource ? `/${o.subresource}` : "";
@@ -5711,14 +5836,22 @@ function pathFor(kind, opts) {
 // apiVersion string for a kind, for the objects the console authors
 const apiVersionOf = kind => {
   const r = RESOURCES[kind];
-  return !r.core ? API_GROUP : r.core;
+  return !r.core ? `${GROUP}/${r.version || VERSION}` : r.core;
 };
 
 // ---- transport -------------------------------------------------------------
+// The API server base for a context. A call without a context goes to the
+// local cluster, so every existing call site keeps its meaning.
+const baseFor = ctx => {
+  if (!ctx) return SB.k8sBase;
+  const c = window.ctxByName ? window.ctxByName(ctx) : null;
+  if (!c) throw new ApiError(0, `unknown context ${ctx}`, "", "UnknownContext");
+  return c.k8sBase;
+};
 async function call(base, path, init) {
   let res;
   const headers = Object.assign({
-    Accept: "application/json",
+    Accept: init && init.raw ? "text/plain" : "application/json",
     Authorization: `Bearer ${SB.token}`
   }, init && init.headers || {});
   try {
@@ -5728,9 +5861,12 @@ async function call(base, path, init) {
   } catch (e) {
     throw new ApiError(0, "Cannot reach the Kubernetes API", path, "Unreachable");
   }
+  // A text subresource (pods/log) is returned as is; a failure still arrives as
+  // a Status object, which is why the body is parsed before it is trusted.
+  const text = await res.text();
   let body = null;
   try {
-    body = await res.json();
+    body = JSON.parse(text);
   } catch (e) {}
   // A Kubernetes failure is a Status object. Trust the body, not just the code:
   // a Failure Status served with a 2xx is still a failure, and treating it as an
@@ -5740,43 +5876,159 @@ async function call(base, path, init) {
     const msg = body && body.message || res.statusText || "Request failed";
     throw new ApiError(body && body.code || res.status, msg, path, body && body.reason || null);
   }
-  return body;
+  return init && init.raw ? text : body;
+}
+
+// A namespaced list in a context whose namespaces are known lists each of them
+// rather than the whole cluster, so a context restricted to one tenant never
+// reads another's objects. "all" lists cluster-wide. Without a context the
+// console's own namespace applies, as it always did.
+function listScopes(kind, o) {
+  const r = RESOURCES[kind];
+  if (!r.namespaced || o.allNamespaces || o.namespace || !o.ctx || r.dr) return [o];
+  const nss = window.ctxNamespaces ? window.ctxNamespaces(o.ctx) : null;
+  if (nss === "all") return [Object.assign({}, o, {
+    allNamespaces: true
+  })];
+  if (Array.isArray(nss) && nss.length) return nss.map(ns => Object.assign({}, o, {
+    namespace: ns
+  }));
+  return [o];
 }
 const k8s = {
   // list: returns items[], never the List envelope
-  list: (kind, opts) => call(SB.k8sBase, pathFor(kind, opts) + qs(opts)).then(r => r && r.items || []),
-  get: (kind, name, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({
+  list: (kind, opts) => {
+    const o = opts || {};
+    const scopes = listScopes(kind, o);
+    return Promise.all(scopes.map(s => call(baseFor(s.ctx), pathFor(kind, s) + qs(s)).then(r => r && r.items || []))).then(rs => rs.flat());
+  },
+  get: (kind, name, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, Object.assign({
     name
-  }, opts))),
-  create: (kind, obj, opts) => call(SB.k8sBase, pathFor(kind, opts), {
+  }, opts)) + qs(opts)),
+  create: (kind, obj, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, opts) + qs(opts), {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
     body: JSON.stringify(obj)
   }),
-  // spec edits go through a merge patch, which is what kubectl edit does
-  patch: (kind, name, patch, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({
+  // spec edits go through a merge patch, which is what kubectl edit does.
+  // `dryRun: "All"` asks the API server (webhooks and CEL rules included) to
+  // validate without persisting, which is how the console checks an edit
+  // before it lands.
+  patch: (kind, name, patch, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, Object.assign({
     name
-  }, opts)), {
+  }, opts)) + qs(opts), {
     method: "PATCH",
     headers: {
       "Content-Type": "application/merge-patch+json"
     },
     body: JSON.stringify(patch)
   }),
-  remove: (kind, name, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({
+  remove: (kind, name, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, Object.assign({
     name
-  }, opts)), {
+  }, opts)) + qs(opts), {
     method: "DELETE"
   }),
-  // pod logs are the Kubernetes API, not a side channel
-  logs: (pod, opts) => call(SB.k8sBase, pathFor("Pod", {
+  // pod logs are the Kubernetes API, not a side channel; the body is text
+  logs: (pod, opts) => call(baseFor((opts || {}).ctx), pathFor("Pod", Object.assign({
     name: pod,
     subresource: "log"
-  }) + qs(Object.assign({
+  }, opts)) + qs(Object.assign({
     tailLines: 200
-  }, opts)))
+  }, opts)), {
+    raw: true
+  }),
+  // the API server's version, which doubles as the reachability probe of a context
+  version: ctx => call(baseFor(ctx), "/version"),
+  // A watch is the API server's own change stream: newline-delimited events
+  // {type: ADDED|MODIFIED|DELETED|BOOKMARK|ERROR, object}. The caller keeps the
+  // list it seeded from and applies events; `EXPIRED` (410) means the
+  // resourceVersion is too old and the caller lists again. Returns a handle
+  // with cancel() and the last resourceVersion seen.
+  watch: (kind, opts, onEvent) => {
+    const o = Object.assign({}, opts, {
+      watch: true,
+      allowWatchBookmarks: true
+    });
+    const ctrl = new AbortController();
+    let rv = o.resourceVersion || null;
+    (async () => {
+      let res;
+      try {
+        res = await fetch(baseFor(o.ctx) + pathFor(kind, o) + qs(o), {
+          headers: {
+            Accept: "application/json",
+            Authorization: `Bearer ${SB.token}`
+          },
+          signal: ctrl.signal
+        });
+      } catch (e) {
+        if (!ctrl.signal.aborted) onEvent({
+          type: "ERROR",
+          error: e
+        });
+        return;
+      }
+      if (!res.ok || !res.body) {
+        onEvent({
+          type: res.status === 410 ? "EXPIRED" : "ERROR",
+          status: res.status
+        });
+        return;
+      }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      try {
+        for (;;) {
+          const {
+            value,
+            done
+          } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, {
+            stream: true
+          });
+          let i;
+          while ((i = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, i).trim();
+            buf = buf.slice(i + 1);
+            if (!line) continue;
+            let ev;
+            try {
+              ev = JSON.parse(line);
+            } catch (e) {
+              continue;
+            }
+            if (ev.type === "ERROR") {
+              const code = ev.object && ev.object.code;
+              onEvent({
+                type: code === 410 ? "EXPIRED" : "ERROR",
+                object: ev.object
+              });
+              return;
+            }
+            const m = ev.object && ev.object.metadata;
+            if (m && m.resourceVersion) rv = m.resourceVersion;
+            onEvent(ev);
+          }
+        }
+        onEvent({
+          type: "CLOSED"
+        });
+      } catch (e) {
+        if (!ctrl.signal.aborted) onEvent({
+          type: "ERROR",
+          error: e
+        });
+      }
+    })();
+    return {
+      cancel: () => ctrl.abort(),
+      rv: () => rv
+    };
+  }
 };
 function qs(opts) {
   const o = Object.assign({}, opts);
@@ -5784,6 +6036,8 @@ function qs(opts) {
   delete o.name;
   delete o.subresource;
   delete o.allNamespaces;
+  delete o.ctx;
+  delete o.raw;
   const parts = Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => `${k}=${encodeURIComponent(v)}`);
   return parts.length ? "?" + parts.join("&") : "";
 }
@@ -5794,8 +6048,10 @@ function qs(opts) {
 // SelfSubjectRulesReview returns every rule that applies to the caller in a
 // namespace, including cluster-wide ones; a SelfSubjectReview says who the
 // caller is. All three are POSTs that create nothing.
+// Each takes the context as its last argument; without one it asks the local
+// API server, as before.
 const review = {
-  can: (verb, group, resource, ns, name) => k8s.create("SelfSubjectAccessReview", {
+  can: (verb, group, resource, ns, name, ctx) => k8s.create("SelfSubjectAccessReview", {
     apiVersion: "authorization.k8s.io/v1",
     kind: "SelfSubjectAccessReview",
     spec: {
@@ -5809,20 +6065,26 @@ const review = {
         name
       } : {})
     }
+  }, {
+    ctx
   }).then(r => !!(r.status && r.status.allowed)),
-  rules: ns => k8s.create("SelfSubjectRulesReview", {
+  rules: (ns, ctx) => k8s.create("SelfSubjectRulesReview", {
     apiVersion: "authorization.k8s.io/v1",
     kind: "SelfSubjectRulesReview",
     spec: {
       namespace: ns
     }
+  }, {
+    ctx
   }).then(r => r.status || {
     resourceRules: [],
     incomplete: true
   }),
-  whoami: () => k8s.create("SelfSubjectReview", {
+  whoami: ctx => k8s.create("SelfSubjectReview", {
     apiVersion: "authentication.k8s.io/v1",
     kind: "SelfSubjectReview"
+  }, {
+    ctx
   }).then(r => r.status && r.status.userInfo || {})
 };
 
@@ -5841,27 +6103,12 @@ const inCluster = name => ({
 });
 
 // ---- operator API ----------------------------------------------------------
-// What the operator serves that is not a CRD: the release/compat matrix it
-// mirrors from install.simplyblock.io, and the SSE stream.
+// The operator serves no HTTP API today. These two reads stay as the one
+// place the console would ask it anything, and fail with the proxy's 503
+// Status until it does.
 const operator = {
   releases: () => call(SB.operatorBase, "/releases"),
-  health: () => call(SB.operatorBase, "/healthz"),
-  // ?watch=true rows in the design are SSE subscriptions
-  watch: (kind, onEvent) => {
-    const url = SB.operatorBase + "/watch" + pathFor(kind);
-    let es;
-    try {
-      es = new EventSource(url);
-    } catch (e) {
-      return () => {};
-    }
-    es.onmessage = e => {
-      try {
-        onEvent(JSON.parse(e.data));
-      } catch (x) {}
-    };
-    return () => es.close();
-  }
+  health: () => call(SB.operatorBase, "/healthz")
 };
 
 // ---- Helm ------------------------------------------------------------------
@@ -5873,44 +6120,71 @@ const helm = {
 
 // ---- Ops helpers -----------------------------------------------------------
 // An action is not a verb against an entity: it is an <Entity>Ops object whose
-// spec.action names it. Aborting is a patch of the one mutable field.
+// spec names the target and the action. Each kind spells that differently, and
+// the shapes below are the ones the CRDs validate (operator/api/v1alpha1 and
+// v1alpha2). Aborting is a patch of the one mutable field, on the kinds that
+// have one (OperatorOps and VolumeMigration today).
 function opsKindFor(entityKind) {
   const hit = Object.entries(RESOURCES).find(([, r]) => r.ops === entityKind);
   return hit ? hit[0] : null;
 }
-function submitOps(entityKind, targetName, action, payload) {
+
+// spec builders per Ops kind: (targetName, action, payload) -> spec
+const OPS_SPEC = {
+  StorageClusterOps: (t, a, p) => Object.assign({
+    clusterRef: t,
+    action: a
+  }, p || {}),
+  StorageNodeOps: (t, a, p) => Object.assign({
+    storageNodeRef: t,
+    action: a
+  }, p || {}),
+  // a migration has no action field: moving the volume is the whole kind
+  VolumeMigration: (t, a, p) => Object.assign({
+    pvName: t
+  }, p || {}),
+  OperatorOps: (t, a, p) => Object.assign({
+    action: a
+  }, p ? {
+    [a.charAt(0).toLowerCase() + a.slice(1)]: p
+  } : {})
+};
+
+// submitOps(entityKind, targetName, action, payload, {ctx, namespace})
+// `action` is spelled as the CRD enum spells it (lowercase for the v1alpha1
+// kinds, PascalCase for OperatorOps); `payload` holds the action's own fields.
+function submitOps(entityKind, targetName, action, payload, opts) {
   const kind = opsKindFor(entityKind);
   if (!kind) throw new Error("no Ops kind for " + entityKind);
+  const o = opts || {};
   const stamp = Date.now().toString(36);
+  const slug = s => String(s || "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
   const body = {
-    apiVersion: API_GROUP,
+    apiVersion: apiVersionOf(kind),
     kind,
     metadata: {
-      name: `${targetName}-${action.toLowerCase()}-${stamp}`.slice(0, 63),
-      namespace: NS(),
-      labels: {
-        [`${GROUP}/target`]: targetName,
-        [`${GROUP}/action`]: action
-      }
+      name: [slug(targetName || "operator"), slug(action || kind), stamp].filter(Boolean).join("-").slice(0, 63),
+      namespace: o.namespace || NS(),
+      labels: Object.assign({
+        [`${GROUP}/action`]: slug(action || kind)
+      }, targetName ? {
+        [`${GROUP}/target`]: slug(targetName)
+      } : {})
     },
-    spec: Object.assign({
-      action
-    }, targetName ? {
-      targetRef: {
-        name: targetName
-      }
-    } : {}, payload ? {
-      [lowerFirst(action)]: payload
-    } : {})
+    spec: OPS_SPEC[kind](targetName, action, payload)
   };
-  return k8s.create(kind, body);
+  return k8s.create(kind, body, {
+    ctx: o.ctx,
+    namespace: o.namespace
+  });
 }
-const abortOps = (opsKind, name) => k8s.patch(opsKind, name, {
+const abortOps = (opsKind, name, opts) => k8s.patch(opsKind, name, {
   spec: {
     abort: true
   }
-});
-const lowerFirst = s => s.charAt(0).toLowerCase() + s.slice(1);
+}, opts);
+// the kinds whose spec has an abort field; everything else runs to completion
+const ABORTABLE_KINDS = ["OperatorOps", "VolumeMigration"];
 
 // Terminal phases, per the design's phase vocabulary (PascalCase).
 const OPS_TERMINAL = ["Succeeded", "Failed", "Aborted"];
@@ -5929,6 +6203,7 @@ Object.assign(window, {
   DR_API_GROUP,
   pathFor,
   apiVersionOf,
+  baseFor,
   ownedBy,
   inCluster,
   sel,
@@ -5937,6 +6212,7 @@ Object.assign(window, {
   opsKindFor,
   opsRunning,
   OPS_TERMINAL,
+  ABORTABLE_KINDS,
   NS,
   DR_NS
 });

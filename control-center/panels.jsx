@@ -148,90 +148,11 @@ const SEV = {critical: {c: "var(--bad)", label: "critical", rank: 2}, warning: {
 // Alerts are indicators, not events. Each row is a condition that is true right
 // now; when the condition clears the row disappears on the next poll. Nothing
 // is dismissed or closed — a lamp can only be silenced while it is lit.
+// Alerts are derived in alerts.jsx; this panel is the cluster-scoped view of
+// that store, kept under its old name for the detail tabs that render it.
 function AlertsPanel({cluster, nav}) {
-  const [rev, setRev] = useState(0);
-  const [q, setQ] = useState("");
-  const [sev, setSev] = useState([]);
-  const [showSilenced, setShowSilenced] = useState(true);
-  const {data, loading, error, reload} = useResource("alerts|" + (cluster ? cluster.id : "cp") + "|" + rev,
-    () => cluster ? api.alerts(cluster.id) : api.cpAlerts(), 5000);
-  const all = data || [];
-  const rows = all
-    .filter(a => (showSilenced || !a.silenced) && (!sev.length || sev.includes(a.severity))
-      && (!q || `${a.title} ${a.detail} ${a.rule} ${(a.nodeNames || []).join(" ")} ${(a.deviceNames || []).join(" ")}`.toLowerCase().includes(q.toLowerCase())))
-    .sort((x, y) => (x.silenced - y.silenced) || SEV[y.severity].rank - SEV[x.severity].rank || x.title.localeCompare(y.title));
-  const lit = all.filter(a => !a.silenced);
-  const counts = {critical: lit.filter(a => a.severity === "critical").length, warning: lit.filter(a => a.severity === "warning").length};
-  const act = async (a, f, msg) => {
-    try { await f(a.id); window.__toast(msg); setRev(r => r + 1); }
-    catch (e) { window.__toast(e.message); }
-  };
-  if (error) return <ErrorState error={error} onRetry={reload} />;
-  return (
-    <>
-      <div className="stats" style={{marginBottom: 12}}>
-        <Stat k="Critical" v={counts.critical} c={counts.critical ? "var(--bad)" : "var(--ok)"} s={counts.critical ? "conditions holding now" : "nothing lit"} />
-        <Stat k="Warning" v={counts.warning} c={counts.warning ? "var(--warn)" : "var(--ok)"} s={counts.warning ? "conditions holding now" : "nothing lit"} />
-        <Stat k="Silenced" v={all.filter(a => a.silenced).length} s="cleared when the condition clears" />
-        <Stat k="Rules watched" v={api.alertRuleCount(cluster ? "cluster" : "control-plane") || "—"} s={cluster ? "cluster scope" : "control plane scope"} />
-      </div>
-      <div className="card">
-        <div className="ptools">
-          <div className="search" style={{minWidth: 210}}><Icon n="search" s={13} c="var(--dim2)" />
-            <input value={q} placeholder="Search condition, node, device…" onChange={e => setQ(e.target.value)} /></div>
-          <div className="chips">
-            {["critical", "warning"].map(s => (
-              <button key={s} className={"chip" + (sev.includes(s) ? " on" : "")}
-                onClick={() => setSev(sev.includes(s) ? sev.filter(v => v !== s) : [...sev, s])}>
-                <Dot c={SEV[s].c} />{s}<span className="n">{counts[s]}</span></button>
-            ))}
-            <button className={"chip" + (showSilenced ? " on" : "")} onClick={() => setShowSilenced(!showSilenced)}>
-              <Icon n="check" s={10} />include silenced</button>
-          </div>
-          <div className="spacer"></div>
-          <span className="count">{rows.length}</span>
-          <span className="live"><i></i>live</span>
-        </div>
-        {loading && !all.length ? <div className="lmsg">loading…</div>
-          : !rows.length ? <div className="lmsg">{all.length ? "No condition matches this filter." : "Nothing lit. Every watched condition is currently false."}</div>
-          : <div className="alertlist">{rows.map(a => (
-            <div className={"alertrow " + a.severity + (a.silenced ? " ack" : "")} key={a.id}>
-              <span className="asev" title={a.severity}><i></i></span>
-              <div style={{minWidth: 0, flex: 1}}>
-                <div className="atitle">{a.title}
-                  {a.silenced && <span className="badge">silenced</span>}
-                </div>
-                <div className="adetail">{a.detail}</div>
-                <div className="ameta">
-                  {!cluster && a.clusterName && <span className="lab"><i>cluster</i>{a.clusterName}</span>}
-                  {(a.nodeNames || []).map((nm, i) => (
-                    <button className="lab link" key={a.nodeIds[i]} onClick={() => nav.openNode(a.clusterId, a.nodeIds[i])}>
-                      <Icon n="node" s={10} />{nm}</button>
-                  ))}
-                  {(a.deviceNames || []).slice(0, 4).map((nm, i) => (
-                    <button className="lab link" key={a.deviceIds[i]} onClick={() => nav.openDevice(a.clusterId, a.nodeId || a.nodeIds[0], a.deviceIds[i])}>
-                      <Icon n="device" s={10} />{nm}</button>
-                  ))}
-                  {(a.deviceNames || []).length > 4 && <span className="lab"><i>+</i>{a.deviceNames.length - 4} more devices</span>}
-                  {a.container && <span className="lab"><i>container</i>{a.container}</span>}
-                  {!a.nodeNames.length && !a.deviceNames.length && !a.container && cluster
-                    && <button className="lab link" onClick={() => nav.openCluster(a.clusterId)}><Icon n="cluster" s={10} />{cluster.name}</button>}
-                  <span className="lab"><i>rule</i>{a.rule}</span>
-                  <span className="lab"><i>lit</i>{fmtAgo(a.since)}</span>
-                </div>
-                <div className="aremedy"><Icon n="chev" s={10} />{a.remedy}</div>
-              </div>
-              <div className="aacts">
-                {a.silenced
-                  ? <button className="chip" onClick={() => act(a, api.alertUnsilence, "Alert unsilenced")}>Unsilence</button>
-                  : <button className="chip" onClick={() => act(a, api.alertSilence, "Alert silenced until the condition clears")}><Icon n="check" s={11} />Silence</button>}
-              </div>
-            </div>
-          ))}</div>}
-        <p className="mdesc" style={{margin: "10px 12px 12px"}}>These are indicators, not a history: a row is here because its condition is true right now, and it disappears by itself once the condition resolves. There is no reconciliation event and nothing to close. Silencing keeps a lamp out of the counts while it stays lit; the silence is forgotten when the condition clears.</p>
-      </div>
-    </>
-  );
+  if (!window.AlertsScoped) return <div className="lmsg">The alert module is not part of this build.</div>;
+  return <AlertsScoped cluster={cluster} nav={nav} />;
 }
 
 // ---- operations -----------------------------------------------------------
@@ -412,27 +333,25 @@ function ControlPlanePanel() {
   if (error) return <ErrorState error={error} onRetry={reload} />;
   return (
     <>
-      <div className="sech"><h2>Live allocation</h2><span className="ln"></span><SourceTag what="container runtime" /></div>
+      <div className="sech"><h2>Control plane pods</h2><span className="ln"></span><SourceTag what="pod status" /></div>
       {loading && !list.length ? <div className="grid">{Array.from({length: 6}).map((_, i) => <div className="skel" key={i} style={{height: 150}}></div>)}</div>
         : groups.map(g => (
           <div key={g}>
             <div className="grouplbl">{g}{g === "observability" && <em> · optional deployment</em>}</div>
             <div className="grid" style={{marginBottom: 12}}>
               {list.filter(c => c.group === g).map(c => (
-                <div className="tile static" key={c.name} style={{"--sc": c.state === "running" ? "var(--ok)" : "var(--dim2)"}}>
+                <div className="tile static" key={c.name} style={{"--sc": c.state === "running" && c.ready ? "var(--ok)" : c.state === "running" ? "var(--warn)" : "var(--bad)"}}>
                   <div className="th"><div style={{minWidth: 0, flex: 1}}>
-                    <TrafficLight status={c.state === "running" ? "online" : "offline"} />
+                    <TrafficLight status={c.state === "running" ? (c.ready ? "online" : "degraded") : "offline"} label={c.ready ? c.state : `${c.state}${c.reason ? " · " + c.reason : ""}`} />
                     <div className="tname">{c.name}</div>
                     <div className="tsub">{c.image}</div>
                   </div></div>
-                  <div style={{marginTop: 10}}>
-                    <AllocBar label="vCPU" used={c.cpu.pct / 100} total={c.cpu.alloc} unit="cores" color="var(--accent)" />
-                    <AllocBar label="RAM" used={c.mem.used} total={c.mem.limit} color="var(--ok)" />
-                    <AllocBar label="Disk" used={c.disk.used} total={c.disk.limit} color="var(--ro)" />
-                  </div>
                   <div className="kv" style={{marginTop: 9}}>
+                    <div><span>CPU</span><b>{c.cpu.request !== null ? `${c.cpu.request} req` : "—"}{c.cpu.limit !== null ? ` · ${c.cpu.limit} lim` : ""}</b></div>
+                    <div><span>Memory</span><b>{c.mem.request !== null ? `${fmtBytes(c.mem.request)} req` : "—"}{c.mem.limit !== null ? ` · ${fmtBytes(c.mem.limit)} lim` : ""}</b></div>
                     <div><span>Restarts</span><b>{c.restarts}</b></div>
-                    <div><span>Uptime</span><b>{c.uptimeH}h</b></div>
+                    <div><span>Uptime</span><b>{c.uptimeH !== null ? `${c.uptimeH}h` : "—"}</b></div>
+                    <div><span>Node</span><b className="mono">{c.node || "—"}</b></div>
                   </div>
                   <div className="tfoot"><button className="fbtn det" onClick={() => setSel(c.name)}>Logs<Icon n="chev" s={11} /></button></div>
                 </div>
@@ -452,7 +371,7 @@ function ContainerLogs({names, name, setName}) {
   const lines = (data || []).filter(l => (!lvl || l.level === lvl) && (!q || l.msg.toLowerCase().includes(q.toLowerCase())));
   return (
     <>
-      <div className="sech"><h2>Container logs</h2><span className="ln"></span><SourceTag what="kubectl logs" /></div>
+      <div className="sech"><h2>Container logs</h2><span className="ln"></span><SourceTag what="pod log" /></div>
       <div className="card">
         <LogStream lines={lines} loading={loading} error={error} onRetry={reload} tools={
           <div className="ptools">
@@ -563,7 +482,7 @@ function StoragePlaneLogPanel({cluster}) {
   if (!list.length) return <div className="empty"><Icon n="node" s={22} /><b>No storage nodes</b><span>Nothing is running on the storage plane yet.</span></div>;
   return (
     <>
-      <div className="sech"><h2>Storage plane logs</h2><span className="ln"></span><SourceTag what="node agent" /></div>
+      <div className="sech"><h2>Storage plane logs</h2><span className="ln"></span><SourceTag what="pod log" /></div>
       <div className="card">
         <LogStream lines={lines} loading={loading} error={error} onRetry={reload} height={480} tools={
           <div className="ptools">
@@ -571,10 +490,10 @@ function StoragePlaneLogPanel({cluster}) {
               {list.map(n => <option key={n.id} value={n.id}>{n.hostname}{n.status === "online" ? "" : " · " + n.status}</option>)}
             </select>
             <div className="seg">
-              {["spdk", "spdk-proxy"].map(s => <button key={s} className={stream === s ? "on" : ""} onClick={() => setStream(s)}>{s}</button>)}
+              {["spdk", "spdk-proxy", "snode-api"].map(s => <button key={s} className={stream === s ? "on" : ""} onClick={() => setStream(s)}>{s}</button>)}
             </div>
             <select className="sel" value={lvl} onChange={e => setLvl(e.target.value)}>
-              <option value="">All levels</option>{["INFO", "NOTICE", "WARNING", "ERROR"].map(l => <option key={l} value={l}>{l}</option>)}
+              <option value="">All levels</option>{["INFO", "NOTICE", "WARN", "ERROR"].map(l => <option key={l} value={l}>{l}</option>)}
             </select>
             <div className="search" style={{minWidth: 180}}><Icon n="search" s={13} c="var(--dim2)" />
               <input value={q} placeholder="Filter lines…" onChange={e => setQ(e.target.value)} /></div>
@@ -584,7 +503,7 @@ function StoragePlaneLogPanel({cluster}) {
           </div>
         } />
       </div>
-      <p className="mdesc">Streamed from the node agent on {active ? active.hostname : "—"} — the SPDK reactor and its proxy write to the pod's stdout, which the control plane API does not expose. Open the node itself for its thread utilization.</p>
+      <p className="mdesc">Read from the pods on {active ? active.hostname : "—"}: the SPDK reactor and its proxy run in the node's SPDK pod, the node API in its DaemonSet pod. Open the node itself for its thread utilization.</p>
     </>
   );
 }
@@ -597,15 +516,15 @@ function NodeLogPanel({node}) {
   const lines = (data || []).filter(l => (!lvl || l.level === lvl) && (!q || l.msg.toLowerCase().includes(q.toLowerCase())));
   return (
     <>
-      <div className="sech"><h2>Live log stream</h2><span className="ln"></span><SourceTag what="node agent" /></div>
+      <div className="sech"><h2>Live log stream</h2><span className="ln"></span><SourceTag what="pod log" /></div>
       <div className="card">
         <LogStream lines={lines} loading={loading} error={error} onRetry={reload} height={420} tools={
           <div className="ptools">
             <div className="seg">
-              {["spdk", "spdk-proxy"].map(s => <button key={s} className={stream === s ? "on" : ""} onClick={() => setStream(s)}>{s}</button>)}
+              {["spdk", "spdk-proxy", "snode-api"].map(s => <button key={s} className={stream === s ? "on" : ""} onClick={() => setStream(s)}>{s}</button>)}
             </div>
             <select className="sel" value={lvl} onChange={e => setLvl(e.target.value)}>
-              <option value="">All levels</option>{["INFO", "NOTICE", "WARNING", "ERROR"].map(l => <option key={l} value={l}>{l}</option>)}
+              <option value="">All levels</option>{["INFO", "NOTICE", "WARN", "ERROR"].map(l => <option key={l} value={l}>{l}</option>)}
             </select>
             <div className="search" style={{minWidth: 200}}><Icon n="search" s={13} c="var(--dim2)" />
               <input value={q} placeholder="Filter lines…" onChange={e => setQ(e.target.value)} /></div>
@@ -635,7 +554,7 @@ function SmartCard({device}) {
   const gone = data && data.unavailable;
   return (
     <div className="card">
-      <h3 style={{display: "flex", alignItems: "center", gap: 10}}>SMART health check<SourceTag what="nvme-cli on the node" />
+      <h3 style={{display: "flex", alignItems: "center", gap: 10}}>SMART health check<SourceTag what="control plane health-info" />
         <span style={{flex: 1}}></span>
         <button className="chip" disabled={busy || gone} onClick={refresh}
           title={gone ? "the drive is not attached, so nvme-cli cannot reach it" : null}><Icon n="refresh" s={11} />{busy ? "Reading…" : "Run health check"}</button>
@@ -682,7 +601,7 @@ function ControlPlaneView({nav}) {
         <div className="mdesc" style={{marginTop: 4}}>One deployment manages every storage cluster. Its services, logs and state database are shared, so they live here rather than under any single cluster.</div>
       </div></div>
       <div className="tabs">
-        {[["services", "Services"], ["alerts", "Alerts"], ["fdb", "State DB"], ["clusters", "Managed clusters"], showAccess && ["access", "Access"]].filter(Boolean).map(function (t) {
+        {[["services", "Services"], ["alerts", "Alerts"], feature("fdbBackups") && ["fdb", "State DB"], ["clusters", "Managed clusters"], showAccess && ["access", "Access"]].filter(Boolean).map(function (t) {
           return <button key={t[0]} className={"tab" + (tab === t[0] ? " on" : "")} onClick={() => setTab(t[0])}>{t[1]}</button>;
         })}
       </div>

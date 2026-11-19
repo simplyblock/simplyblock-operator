@@ -3,7 +3,7 @@ const Dot = ({c}) => <i style={{width: 8, height: 8, borderRadius: "50%", backgr
 const TileHead = ({obj, left, right}) => (
   <div className="th">
     <div style={{minWidth: 0, flex: 1}}>{left}</div>
-    <div style={{display: "flex", alignItems: "center", gap: 6, flex: "none"}}>{right}<ActionBtn obj={obj} /></div>
+    <div style={{display: "flex", alignItems: "center", gap: 6, flex: "none"}}>{right}{window.AlertBadge && <AlertBadge obj={obj} nav={window.__nav} />}<ActionBtn obj={obj} /></div>
   </div>
 );
 const Name = ({children}) => <div className="tname" title={children}>{children}</div>;
