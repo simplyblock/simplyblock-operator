@@ -89,6 +89,7 @@ type ObjectStoreReconciler struct {
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=objectstores,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=objectstores/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=objectstores/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;delete
