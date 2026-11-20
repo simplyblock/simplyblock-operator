@@ -194,6 +194,20 @@ spec:
                               with disks in its infra nodes meant those disks to be the storage, so a draft
                               proposes them ahead of the workers rather than leaving them out.
                             type: boolean
+                          enableFailureDomains:
+                            description: |-
+                              EnableFailureDomains overrides whether the draft proposes failure-domain
+                              mode, which a run otherwise decides from the workers' topology: on when
+                              every worker carries a failure-domain label in a layout the control plane
+                              accepts, and off otherwise.
+
+                              false turns the mode off and reads no failure domains at all, so a fleet
+                              spread over zones it does not want treated as failure domains is grouped by
+                              hardware alone, into one cluster the draft marks enableFailureDomains false.
+                              true proposes the mode on; the layout still has to pass the control plane's
+                              activation rules, which approval checks. Unset leaves the decision to the
+                              run, and is the usual first run.
+                            type: boolean
                           enableLogicalBlockDevices:
                             description: |-
                               EnableLogicalBlockDevices scans a worker's available logical block devices
@@ -244,15 +258,17 @@ spec:
                               aside: on a worker with ten 10 TB disks that is 10 TB, silently. So the run
                               does not guess.
 
-                              What it does instead depends on the class. An NVMe cluster with no
-                              dedicated journal device carves a journal partition out of every device, so
-                              the run leaves the field unset, says so, and every disk stays storage. A
-                              logical block-device cluster has no such layout — the control plane refuses
-                              the partitioned journal for the class — so the run fails rather than
-                              writing a document that creates the cluster, formats its drives, and then
-                              fails every node_add. Setting this is what asks for one of the equal disks
-                              to be taken anyway, and the draft says the disk was taken rather than
-                              offered.
+                              An NVMe cluster with no dedicated journal device carves a journal
+                              partition out of every device, so the run leaves the field unset, says so,
+                              and every disk stays storage. Setting this is what asks for one of the
+                              equal disks to be taken anyway, and the draft says the disk was taken
+                              rather than offered.
+
+                              A logical block-device cluster never proposes a dedicated journal device
+                              on its own: by default each storage node's journal is a partition carved
+                              from its smallest device (the journal split), and every disk carries data.
+                              For that class, setting this dedicates the smallest disk of every node to
+                              the journal, provided every worker hands over at least two disks.
 
                               It does not force the cases that are impossible rather than ambiguous. A
                               worker handing over a single disk is refused with it or without it, because
@@ -261,6 +277,235 @@ spec:
                               address, ascending, so two runs over one unchanged fleet propose the same
                               document.
                             type: boolean
+                          images:
+                            description: |-
+                              Images are the container images the draft pins, copied into its
+                              spec.images, so that an installation testing an SPDK or SPDK proxy build
+                              states it once rather than editing every draft before approving it.
+                              Unstated, each takes the default the draft's own field documents.
+                            properties:
+                              nodeAgent:
+                                description: |-
+                                  NodeAgent is the image the storage-node DaemonSet runs: the agent the
+                                  control plane drives a worker through, and the two init containers that
+                                  configure the host before it starts. The expansion writes it to
+                                  StorageCluster.spec.storageNodes, which is where the retired
+                                  StorageNodeSet.spec.clusterImage went.
+
+                                  It is the same artifact the control plane itself runs, which is why
+                                  spec.storageNodes.image defaults to the ControlPlane singleton's: the agent
+                                  and the tasks that call it are one codebase, and version skew between them
+                                  is what breaks a node add.
+
+                                  It is spent only where the document creates the cluster. A document that
+                                  names an existing one in ClusterRef adds nodes to a DaemonSet that is
+                                  already running under an image the cluster states, and this slot is ignored
+                                  the same way Cluster is.
+                                properties:
+                                  image:
+                                    description: |-
+                                      Image is the repository and tag, optionally digest-pinned. An empty value
+                                      is not written downstream, so the field it would fill keeps its own
+                                      default rather than being overridden with nothing.
+
+                                      Every image field in this API is held to the same reference format and
+                                      to no particular registry, so an air-gapped deployment can name its own
+                                      mirror.
+                                    pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
+                                    type: string
+                                  imagePullPolicy:
+                                    default: Always
+                                    description: |-
+                                      ImagePullPolicy is when that image is pulled. It defaults to Always,
+                                      because every image this product ships by default is a moving tag and a
+                                      node brought up after a release otherwise runs what its kubelet held.
+                                    enum:
+                                    - Always
+                                    - Never
+                                    - IfNotPresent
+                                    type: string
+                                type: object
+                              spdk:
+                                description: |-
+                                  SPDK is the SPDK image, which the expansion writes onto every
+                                  StorageNode.spec.config it creates rather than onto the cluster: the field
+                                  is per node so that a later rollout can walk the fleet one machine at a
+                                  time, and a document states the fleet's starting point.
+                                properties:
+                                  image:
+                                    description: |-
+                                      Image is the repository and tag, optionally digest-pinned. An empty value
+                                      is not written downstream, so the field it would fill keeps its own
+                                      default rather than being overridden with nothing.
+
+                                      Every image field in this API is held to the same reference format and
+                                      to no particular registry, so an air-gapped deployment can name its own
+                                      mirror.
+                                    pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
+                                    type: string
+                                  imagePullPolicy:
+                                    default: Always
+                                    description: |-
+                                      ImagePullPolicy is when that image is pulled. It defaults to Always,
+                                      because every image this product ships by default is a moving tag and a
+                                      node brought up after a release otherwise runs what its kubelet held.
+                                    enum:
+                                    - Always
+                                    - Never
+                                    - IfNotPresent
+                                    type: string
+                                type: object
+                              spdkProxy:
+                                description: SPDKProxy is the SPDK proxy image, written
+                                  per node for the reason SPDK is.
+                                properties:
+                                  image:
+                                    description: |-
+                                      Image is the repository and tag, optionally digest-pinned. An empty value
+                                      is not written downstream, so the field it would fill keeps its own
+                                      default rather than being overridden with nothing.
+
+                                      Every image field in this API is held to the same reference format and
+                                      to no particular registry, so an air-gapped deployment can name its own
+                                      mirror.
+                                    pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
+                                    type: string
+                                  imagePullPolicy:
+                                    default: Always
+                                    description: |-
+                                      ImagePullPolicy is when that image is pulled. It defaults to Always,
+                                      because every image this product ships by default is a moving tag and a
+                                      node brought up after a release otherwise runs what its kubelet held.
+                                    enum:
+                                    - Always
+                                    - Never
+                                    - IfNotPresent
+                                    type: string
+                                type: object
+                              talosctl:
+                                description: |-
+                                  Talosctl is the talosctl image a Talos worker's node runs as a Job to
+                                  reserve its huge pages through the Talos API. It is the fleet's, written
+                                  to StorageCluster.spec.storageNodes.talosctlImage: one DaemonSet, one Job
+                                  image. Unstated keeps the node agent's default; a deployment pins it to
+                                  the cluster's Talos minor, or to a mirror on an air-gapped site. Read only
+                                  for a document whose environment is Talos.
+                                properties:
+                                  image:
+                                    description: |-
+                                      Image is the repository and tag, optionally digest-pinned, on any
+                                      registry. An empty value is not written downstream, so the field it would
+                                      fill keeps its own default.
+                                    pattern: ^($|[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?/[a-z0-9][a-z0-9._/-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                                    type: string
+                                type: object
+                            type: object
+                          network:
+                            description: |-
+                              Network states the cluster network the draft proposes. Absent, a run
+                              proposes spdkOnHostNetwork, binding the host's primary NIC on workers with
+                              no additional interface. Set podNetwork: true to run the SPDK pods on the
+                              pod network instead. A cluster's network is fixed once it is created.
+                            properties:
+                              data:
+                                description: |-
+                                  Data are the Multus networks the storage nodes serve volumes on, each a
+                                  NetworkAttachmentDefinition the pod attaches to besides the pod network, which
+                                  podNetwork must therefore state.
+                                items:
+                                  description: |-
+                                    StorageNetwork is one data network a storage node's SPDK pod attaches to
+                                    through a NetworkAttachmentDefinition.
+                                  properties:
+                                    networkAttachmentRef:
+                                      description: |-
+                                        NetworkAttachmentRef is the Multus NetworkAttachmentDefinition in the
+                                        namespace of the storage cluster, and the key the nodes' addresses and
+                                        status use. The pod attaches to it and takes the interface the definition's
+                                        plugin creates.
+                                      properties:
+                                        addressPool:
+                                          description: |-
+                                            AddressPool is the range the operator takes each node's address on this
+                                            network from. Unset, the network takes the address the NIC the definition
+                                            moves holds on the worker.
+                                          properties:
+                                            first:
+                                              description: |-
+                                                First is the lowest address the operator may hand out. Unset, the range
+                                                starts at the subnet's first host address. It is set together with Last.
+                                              maxLength: 15
+                                              pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                              type: string
+                                            last:
+                                              description: |-
+                                                Last is the highest address the operator may hand out. Unset, the range
+                                                ends at the subnet's last host address. It is set together with First.
+                                              maxLength: 15
+                                              pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                              type: string
+                                            subnet:
+                                              description: |-
+                                                Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
+                                                length is the one each node's address carries.
+                                              maxLength: 18
+                                              pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$
+                                              type: string
+                                          required:
+                                          - subnet
+                                          type: object
+                                          x-kubernetes-validations:
+                                          - message: first and last are set together
+                                            rule: has(self.first) == has(self.last)
+                                          - message: first and last must lie inside
+                                              subnet
+                                            rule: '!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first))
+                                              && cidr(self.subnet).containsIP(ip(self.last)))'
+                                        name:
+                                          description: Name is the definition's name.
+                                          maxLength: 253
+                                          minLength: 1
+                                          type: string
+                                      required:
+                                      - name
+                                      type: object
+                                  required:
+                                  - networkAttachmentRef
+                                  type: object
+                                maxItems: 8
+                                type: array
+                                x-kubernetes-list-type: atomic
+                              podNetwork:
+                                description: |-
+                                  PodNetwork puts the SPDK pods on the cluster CNI's network. Alone, the pod's
+                                  one interface carries the RPC and the data, and a Service in front of the pod
+                                  is the address peers and clients hold, since the pod's own address changes on
+                                  every restart. The control plane keeps the Service and the ports it carries.
+                                  With data networks, the RPC stays on that interface and the data moves to the
+                                  networks' interfaces, whose addresses are stable, so no Service is kept.
+                                type: boolean
+                              spdkOnHostNetwork:
+                                description: |-
+                                  SpdkOnHostNetwork runs the SPDK pods on the host network, where they bind
+                                  host NICs. The NICs' names are not stated here, because a fleet's workers
+                                  do not agree on what their NICs are called: each node names its own in
+                                  its spec.config.dataInterfaces, which is allowed only in this mode.
+                                type: boolean
+                            type: object
+                            x-kubernetes-validations:
+                            - message: one of podNetwork and spdkOnHostNetwork must
+                                be set
+                              rule: (has(self.podNetwork) && self.podNetwork) || (has(self.spdkOnHostNetwork)
+                                && self.spdkOnHostNetwork)
+                            - message: podNetwork and spdkOnHostNetwork are exclusive
+                              rule: '!(has(self.podNetwork) && self.podNetwork &&
+                                has(self.spdkOnHostNetwork) && self.spdkOnHostNetwork)'
+                            - message: 'data networks require podNetwork: true'
+                              rule: '!has(self.data) || self.data.size() == 0 || (has(self.podNetwork)
+                                && self.podNetwork)'
+                            - message: data networks must name distinct NetworkAttachmentDefinitions
+                              rule: '!has(self.data) || self.data.all(a, self.data.exists_one(b,
+                                b.networkAttachmentRef.name == a.networkAttachmentRef.name))'
                           networkAttachment:
                             description: |-
                               NetworkAttachment attaches the proposed storage nodes through Multus
@@ -390,6 +635,11 @@ spec:
                             nodeSelector; state one or the other
                           rule: '!(has(self.workers) && size(self.workers) > 0 &&
                             has(self.nodeSelector) && size(self.nodeSelector) > 0)'
+                        - message: network.spdkOnHostNetwork cannot be combined with
+                            networkAttachment, which attaches the storage nodes through
+                            Multus
+                          rule: '!has(self.network) || !has(self.network.spdkOnHostNetwork)
+                            || !self.network.spdkOnHostNetwork || !has(self.networkAttachment)'
                     required:
                     - action
                     type: object
@@ -556,6 +806,20 @@ spec:
                             x-kubernetes-validations:
                             - message: field is immutable
                               rule: self == oldSelf
+                          volumeMode:
+                            description: |-
+                              VolumeMode is the volume mode of the restored claim and its volume. It
+                              defaults to the mode recorded in the backup's status.source, and has to be
+                              set for a backup that recorded none, such as one whose source volume was
+                              gone when the backup was discovered. A Block source restored as Filesystem
+                              is formatted over on first mount.
+                            enum:
+                            - Filesystem
+                            - Block
+                            type: string
+                            x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                         required:
                         - claimName
                         - targetPool
@@ -565,6 +829,8 @@ spec:
                           rule: '!has(oldSelf.claimLabels) || has(self.claimLabels)'
                         - message: field claimAnnotations is immutable once set
                           rule: '!has(oldSelf.claimAnnotations) || has(self.claimAnnotations)'
+                        - message: field volumeMode is immutable once set
+                          rule: '!has(oldSelf.volumeMode) || has(self.volumeMode)'
                     required:
                     - action
                     - clusterRef
