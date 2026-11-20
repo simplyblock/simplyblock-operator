@@ -385,6 +385,35 @@ spec:
                                 EnableMonitoring provisions the monitoring stack when the first storage
                                 cluster is created. Unset is off.
                               type: boolean
+                            prometheus:
+                              description: |-
+                                Prometheus says which Prometheus collects this control plane's metrics
+                                and evaluates its alert rules. Absent is Managed.
+                              properties:
+                                external:
+                                  description: |-
+                                    External configures the objects created for an external
+                                    prometheus-operator. Only valid when Mode is External.
+                                  properties:
+                                    labels:
+                                      additionalProperties:
+                                        type: string
+                                      description: |-
+                                        Labels are added to every ServiceMonitor, PodMonitor, ScrapeConfig, and
+                                        PrometheusRule, so that the Prometheus resource's selectors match them.
+                                      type: object
+                                  type: object
+                                mode:
+                                  default: Managed
+                                  description: Mode is Managed or External.
+                                  enum:
+                                    - Managed
+                                    - External
+                                  type: string
+                              type: object
+                              x-kubernetes-validations:
+                                - message: external is only valid when mode is External
+                                  rule: '!has(self.external) || self.mode == ''External'''
                             secretRef:
                               description: |-
                                 SecretRef names a Secret in this namespace holding the monitoring stack's

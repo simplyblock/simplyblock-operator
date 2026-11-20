@@ -194,6 +194,11 @@ spec:
             - --http-address=0.0.0.0:9091
             - --query.replica-label=replica
             - --store=simplyblock-thanos:10901
+            {{- if ne .Values.prometheus.mode "External" }}
+            # The managed Prometheus's Thanos sidecar serves the last two hours,
+            # before its block is uploaded.
+            - --store=simplyblock-prometheus-0.simplyblock-prometheus-headless.{{ .Release.Namespace }}.svc:10901
+            {{- end }}
           ports:
             - containerPort: 9091
               name: query-http

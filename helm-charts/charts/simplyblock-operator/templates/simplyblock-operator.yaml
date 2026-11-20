@@ -83,7 +83,9 @@ spec:
             {{- end }}
             {{- if .Values.metricsAPI.enabled }}
             - --metrics-api-bind-port={{ .Values.metricsAPI.port }}
-            - --prometheus-url={{ .Values.metricsAPI.prometheusURL }}
+            {{- $metricsPrometheus := .Values.metricsAPI.prometheusURL }}
+            {{- if kindIs "invalid" $metricsPrometheus }}{{ $metricsPrometheus = include "simplyblock.prometheusURL" . }}{{ end }}
+            - --prometheus-url={{ $metricsPrometheus }}
             {{- else }}
             # No APIService routes to it, so do not open the port at all.
             - --enable-metrics-api=false
@@ -143,13 +145,6 @@ spec:
             # chart no longer renders it, so its image comes from here.
             - name: SB_NUMA_PLUGIN_IMAGE
               value: "{{ .Values.image.numaResource.repository }}:{{ .Values.image.numaResource.tag }}"
-            {{- with include "simplyblock.extraMetricsServiceAccount" . }}
-            # A bring-your-own prometheus-operator's Prometheus pod scrapes as
-            # its own ServiceAccount (prometheus.serviceAccount); the
-            # management API trusts no metrics scraper without this.
-            - name: SB_EXTRA_METRICS_SERVICE_ACCOUNTS
-              value: {{ . | quote }}
-            {{- end }}
             {{- include "simplyblock.tlsEnv" . | nindent 12 }}
           resources:
             limits:

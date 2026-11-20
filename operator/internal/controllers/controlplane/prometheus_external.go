@@ -44,6 +44,10 @@ const (
 	// spdkProxyServerName is the name the storage nodes' proxy certificate is
 	// issued for, by sbcli's storage_deploy_spdk.yaml.j2.
 	spdkProxyServerName = "simplyblock-spdk-proxy"
+
+	// monitorSchemeHTTPS is ServiceMonitor and PodMonitor spelling; ScrapeConfig
+	// takes "HTTPS".
+	monitorSchemeHTTPS = "https"
 )
 
 var monitoringGVKs = []schema.GroupVersionKind{
@@ -231,7 +235,7 @@ func webAPIServiceMonitor(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Un
 		"authorization": scraperAuthorization(),
 	}
 	if local.ServesTLS() {
-		endpoint["scheme"] = "https"
+		endpoint["scheme"] = monitorSchemeHTTPS
 		endpoint["tlsConfig"] = monitorTLS(local, ComponentWebAPI)
 	}
 	return monitoringObject(cp, "v1", "ServiceMonitor", ComponentWebAPI, map[string]any{
@@ -299,7 +303,7 @@ func spdkProxyPodMonitor(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 	namespaces, selector := storageNodeSelector(cp)
 	endpoint := map[string]any{"port": "proxy-http", "path": "/_meta/metrics", "interval": scrapeInterval}
 	if local.ServesTLS() {
-		endpoint["scheme"] = "https"
+		endpoint["scheme"] = monitorSchemeHTTPS
 		endpoint["tlsConfig"] = monitorTLS(local, spdkProxyServerName)
 	}
 	return monitoringObject(cp, "v1", "PodMonitor", "simplyblock-spdk-proxy", map[string]any{

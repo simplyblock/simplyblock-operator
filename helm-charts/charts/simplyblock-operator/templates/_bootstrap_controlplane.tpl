@@ -85,16 +85,23 @@ spec:
         # OpenShift as the product does, the same translation
         # _bootstrap_simplyblockdriver.tpl performs.
         provider: {{ if eq .Values.tls.provider "openshift" }}OpenShift{{ else }}cert-manager{{ end }}
-      {{- if .Values.controlplane.observability.enabled }}
-      # The monitoring stack this chart installs beside the control plane. The
-      # control plane opens its Graylog input and creates its Grafana user when
-      # the first cluster is created, with the password from the Secret
-      # controlplane_secret.yaml renders.
       observability:
+        {{- if .Values.controlplane.observability.enabled }}
+        # The monitoring stack this chart installs beside the control plane. The
+        # control plane opens its Graylog input and creates its Grafana user when
+        # the first cluster is created, with the password from the Secret
+        # controlplane_secret.yaml renders.
         enableMonitoring: true
         secretRef:
           name: simplyblock-grafana-secrets
-      {{- end }}
+        {{- end }}
+        prometheus:
+          mode: {{ .Values.prometheus.mode }}
+          {{- if and (eq .Values.prometheus.mode "External") .Values.prometheus.external.labels }}
+          external:
+            labels:
+              {{- toYaml .Values.prometheus.external.labels | nindent 14 }}
+          {{- end }}
       {{- if .Values.controlplane.nodeSelector.create }}
       nodeSelector:
         {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value | quote }}

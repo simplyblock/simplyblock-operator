@@ -306,9 +306,15 @@ rules:
 - apiGroups:
   - monitoring.coreos.com
   resources:
+  - podmonitors
+  - prometheusrules
+  - scrapeconfigs
   - servicemonitors
   verbs:
+  - create
+  - delete
   - get
+  - patch
 - apiGroups:
   - operator.openshift.io
   resources:

@@ -32,4 +32,4 @@ dependencies:
   - name: kube-prometheus-stack
     version: 92.2.0
     repository: https://prometheus-community.github.io/helm-charts
-    condition: prometheus.enabled
+    condition: kube-prometheus-stack.enabled
