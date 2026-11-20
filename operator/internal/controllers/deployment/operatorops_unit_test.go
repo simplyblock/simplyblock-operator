@@ -387,6 +387,91 @@ func TestDiscoverHonorsTheNodeSelector(t *testing.T) {
 	}
 }
 
+// compactNode is a machine of a compact cluster: a control-plane node that also
+// carries the worker role, which is how OpenShift labels its masters once they
+// are schedulable.
+func compactNode(node *corev1.Node) {
+	labeled("node-role.kubernetes.io/master", "")(node)
+	labeled("node-role.kubernetes.io/worker", "")(node)
+}
+
+// Regression: 2026-11-19-compact-cluster-finds-no-worker. On an OpenShift
+// compact cluster every node is a control-plane node that also carries the
+// worker role, so a run that left enableControlPlaneNodes unset found no worker
+// at all. Such a run now uses them and says why.
+func TestDiscoverUsesTheControlPlaneOfACompactCluster(t *testing.T) {
+	r := newRunner(t, discoverRun(nil),
+		worker("master-0", compactNode), worker("master-1", compactNode), worker("master-2", compactNode))
+	recorder := events.NewFakeRecorder(64)
+	r.reconciler.Recorder = recorder
+
+	r.step()
+	_, ops := r.step()
+
+	if !slices.Equal(ops.Status.Workers, []string{"master-0", "master-1", "master-2"}) {
+		t.Fatalf("the run settled on %v, want all three control-plane nodes", ops.Status.Workers)
+	}
+	included := 0
+	for len(recorder.Events) > 0 {
+		line := <-recorder.Events
+		if strings.Contains(line, ControlPlaneNodeIncluded) && strings.Contains(line, "compact cluster") {
+			included++
+		}
+	}
+	if included != 3 {
+		t.Errorf("%d events name the compact cluster as the reason, want 3", included)
+	}
+}
+
+// An explicit false is a decision, and a compact cluster does not override it.
+func TestDiscoverHonorsAnExplicitNoOnACompactCluster(t *testing.T) {
+	r := newRunner(t,
+		discoverRun(&simplyblockv1alpha2.DiscoverSpec{EnableControlPlaneNodes: ptr.To(false)}),
+		worker("master-0", compactNode), worker("master-1", compactNode), worker("master-2", compactNode))
+
+	r.step()
+	_, ops := r.step()
+
+	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseFailed {
+		t.Fatalf("the run is %q with workers %v, want Failed", ops.Status.Phase, ops.Status.Workers)
+	}
+}
+
+// One dedicated worker makes the cluster an ordinary one, and its control-plane
+// nodes stay out even though they also carry the worker role.
+func TestDiscoverKeepsTheControlPlaneOutBesideADedicatedWorker(t *testing.T) {
+	r := newRunner(t, discoverRun(nil),
+		worker("master-0", compactNode), worker("master-1", compactNode), worker("master-2", compactNode),
+		worker("worker-0", labeled("node-role.kubernetes.io/worker", "")))
+
+	r.step()
+	_, ops := r.step()
+
+	if !slices.Equal(ops.Status.Workers, []string{"worker-0"}) {
+		t.Errorf("the run settled on %v, want worker-0 alone", ops.Status.Workers)
+	}
+}
+
+// Whether a cluster is compact is a question about the cluster, not about the
+// machines a selector picked: selecting only the control-plane nodes of a
+// cluster that has a dedicated worker does not make it compact.
+func TestDiscoverJudgesCompactnessOnTheWholeCluster(t *testing.T) {
+	selected := labeled("simplyblock.io/storage", "true")
+	r := newRunner(t,
+		discoverRun(&simplyblockv1alpha2.DiscoverSpec{
+			NodeSelector: map[string]string{"simplyblock.io/storage": "true"},
+		}),
+		worker("master-0", compactNode, selected), worker("master-1", compactNode, selected),
+		worker("worker-0", labeled("node-role.kubernetes.io/worker", "")))
+
+	r.step()
+	_, ops := r.step()
+
+	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseFailed {
+		t.Fatalf("the run is %q with workers %v, want Failed", ops.Status.Phase, ops.Status.Workers)
+	}
+}
+
 func TestDiscoverFailsWhenNoWorkerIsFree(t *testing.T) {
 	r := newRunner(t, discoverRun(nil), worker("control-plane", tainted))
 
