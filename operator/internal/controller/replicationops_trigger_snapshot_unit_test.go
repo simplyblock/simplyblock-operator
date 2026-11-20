@@ -186,6 +186,91 @@ func TestOps_Trigger_RefusedVolumeFailsTheOperation(t *testing.T) {
 	}
 }
 
+// slotInState is slotNamed in the given slot state.
+func slotInState(name, volumeID string, state simplyblockv1alpha1.ReplicationSlotState) *simplyblockv1alpha1.ReplicationSlot {
+	s := slotNamed(name, volumeID)
+	s.Status.State = string(state)
+	return s
+}
+
+// Regression (PR #806 review): failover leaves the pair's source cluster and the
+// slot's volume as they were, so a trigger of a failed-over volume snapshots the
+// superseded source and, once that source recovers from an unplanned failover,
+// replicates it toward the cluster that now serves the volume. Only a
+// replicating volume is triggered; the others are skipped and say why.
+func TestOps_Trigger_SkipsAVolumeThatIsNotReplicating(t *testing.T) {
+	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps(testPolicyName),
+		slotInState("pol-pvc1", "cluster-u:pool-u:vol-1", simplyblockv1alpha1.ReplicationSlotStateReplicating),
+		slotInState("pol-pvc2", "cluster-u:pool-u:vol-2", simplyblockv1alpha1.ReplicationSlotStateFailedOver),
+		slotInState("pol-pvc3", "cluster-u:pool-u:vol-3", simplyblockv1alpha1.ReplicationSlotStateCutoverDone),
+		slotInState("pol-pvc4", "cluster-u:pool-u:vol-4", simplyblockv1alpha1.ReplicationSlotStateAttaching),
+		opsFor("trigger", utils.ReplicationOpsScopePolicy, testPolicyName))
+	log := &callLog{}
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		log.add(req)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	if _, err := r.Reconcile(context.Background(), opsRequest(testOpsName)); err != nil {
+		t.Fatal(err)
+	}
+
+	got := wantPhase(t, cl, simplyblockv1alpha1.ReplicationOpsPhaseSucceeded)
+	if n := log.count(triggerPath("vol-1")); n != 1 {
+		t.Errorf("vol-1 triggered %d times, want 1", n)
+	}
+	for _, v := range []string{"vol-2", "vol-3", "vol-4"} {
+		if n := log.count(triggerPath(v)); n != 0 {
+			t.Errorf("%s is not replicating and was triggered %d times", v, n)
+		}
+	}
+	want := map[string]simplyblockv1alpha1.ReplicationOpsResultStatus{
+		"pol-pvc1": simplyblockv1alpha1.ReplicationOpsResultSucceeded,
+		"pol-pvc2": simplyblockv1alpha1.ReplicationOpsResultSkipped,
+		"pol-pvc3": simplyblockv1alpha1.ReplicationOpsResultSkipped,
+		"pol-pvc4": simplyblockv1alpha1.ReplicationOpsResultSkipped,
+	}
+	if len(got.Status.Results) != len(want) {
+		t.Fatalf("results = %+v, want one per slot", got.Status.Results)
+	}
+	for _, res := range got.Status.Results {
+		if res.Status != string(want[res.SlotRef]) {
+			t.Errorf("%s: %s (%s), want %s", res.SlotRef, res.Status, res.Detail, want[res.SlotRef])
+		}
+		if res.Status == string(simplyblockv1alpha1.ReplicationOpsResultSkipped) && res.Detail == "" {
+			t.Errorf("%s skipped without saying why", res.SlotRef)
+		}
+	}
+}
+
+// A slot in error fails the operation without a trigger, and its result carries
+// the slot's message.
+func TestOps_Trigger_SlotInErrorFailsTheOperation(t *testing.T) {
+	slot := slotInState("pol-pvc1", "cluster-u:pool-u:vol-1", simplyblockv1alpha1.ReplicationSlotStateError)
+	slot.Status.Message = "target unreachable"
+	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps(testPolicyName), slot,
+		opsFor("trigger", utils.ReplicationOpsScopePolicy, testPolicyName))
+	log := &callLog{}
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		log.add(req)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	if _, err := r.Reconcile(context.Background(), opsRequest(testOpsName)); err != nil {
+		t.Fatal(err)
+	}
+
+	got := wantPhase(t, cl, simplyblockv1alpha1.ReplicationOpsPhaseFailed)
+	if n := log.count("POST "); n != 0 {
+		t.Errorf("a slot in error was triggered (%v)", log.calls)
+	}
+	if len(got.Status.Results) != 1 || !strings.Contains(got.Status.Results[0].Detail, "target unreachable") {
+		t.Errorf("results = %+v, want one failed result naming the slot's error", got.Status.Results)
+	}
+}
+
 // ---------- snapshot ----------
 
 const groupsBody = `[{"id":"11111111-1111-1111-1111-111111111111","cluster_id":"` + testClusterUUID +
@@ -308,5 +393,62 @@ func TestOps_Snapshot_ScopeVolumeFails(t *testing.T) {
 	}
 	if n := log.count("POST "); n != 0 {
 		t.Errorf("a generation was taken (%v)", log.calls)
+	}
+}
+
+// Regression (PR #806 review): a generation is taken on the pair's source
+// cluster, which after a failover holds the superseded group. A policy with a
+// volume that is not replicating is skipped and says why, and no generation is
+// taken.
+func TestOps_Snapshot_SkipsAPolicyWithAVolumeThatIsNotReplicating(t *testing.T) {
+	for _, state := range []simplyblockv1alpha1.ReplicationSlotState{
+		simplyblockv1alpha1.ReplicationSlotStateFailedOver,
+		simplyblockv1alpha1.ReplicationSlotStateCutoverDone,
+		simplyblockv1alpha1.ReplicationSlotStateAttaching,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps(testPolicyName),
+				slotInState("pol-pvc1", "cluster-u:pool-u:vol-1", simplyblockv1alpha1.ReplicationSlotStateReplicating),
+				slotInState("pol-pvc2", "cluster-u:pool-u:vol-2", state),
+				opsFor("snapshot", utils.ReplicationOpsScopePolicy, testPolicyName))
+			log := &callLog{}
+			groupPlane(t, log)
+
+			if _, err := r.Reconcile(context.Background(), opsRequest(testOpsName)); err != nil {
+				t.Fatal(err)
+			}
+
+			got := wantPhase(t, cl, simplyblockv1alpha1.ReplicationOpsPhaseSucceeded)
+			if n := log.count("POST "); n != 0 {
+				t.Errorf("a generation was taken (%v)", log.calls)
+			}
+			if len(got.Status.Results) != 1 ||
+				got.Status.Results[0].Status != string(simplyblockv1alpha1.ReplicationOpsResultSkipped) ||
+				!strings.Contains(got.Status.Results[0].Detail, "pol-pvc2") {
+				t.Errorf("results = %+v, want the policy skipped, naming pol-pvc2", got.Status.Results)
+			}
+		})
+	}
+}
+
+// A policy with a slot in error fails the operation and takes no generation.
+func TestOps_Snapshot_SlotInErrorFailsThePolicy(t *testing.T) {
+	r, cl := newOpsReplReconciler(t, readyPairForOps(), readyPolicyForOps(testPolicyName),
+		slotInState("pol-pvc1", "cluster-u:pool-u:vol-1", simplyblockv1alpha1.ReplicationSlotStateError),
+		opsFor("snapshot", utils.ReplicationOpsScopePolicy, testPolicyName))
+	log := &callLog{}
+	groupPlane(t, log)
+
+	if _, err := r.Reconcile(context.Background(), opsRequest(testOpsName)); err != nil {
+		t.Fatal(err)
+	}
+
+	got := wantPhase(t, cl, simplyblockv1alpha1.ReplicationOpsPhaseFailed)
+	if n := log.count("POST "); n != 0 {
+		t.Errorf("a generation was taken (%v)", log.calls)
+	}
+	if len(got.Status.Results) != 1 ||
+		got.Status.Results[0].Status != string(simplyblockv1alpha1.ReplicationOpsResultFailed) {
+		t.Errorf("results = %+v, want the policy failed", got.Status.Results)
 	}
 }

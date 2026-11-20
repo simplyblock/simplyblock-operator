@@ -720,6 +720,13 @@ change. A trigger takes a new snapshot on every call, so each slot's outcome is 
 trigger a slot `status.results` already records. One volume refused fails the operation,
 and the others are still triggered. Event: `ReplicationTriggered`.
 
+Only a `replicating` slot is triggered. A failover changes neither the pair's source cluster
+nor the slot's volume, so a `failed_over` slot names the superseded source: triggering it
+snapshots that source and, once it recovers from an unplanned failover, replicates it toward
+the cluster that now serves the volume. A `failed_over`, `cutover_done`, or not yet
+replicating slot is therefore `skipped` with the reason, and a slot in `error` is `failed`,
+as the migration action treats them.
+
 ### 9.7 Consistency-group snapshot now (`snapshot`)
 
 `snapshot` takes one crash-consistent generation of a consistency-group policy's volumes
@@ -744,6 +751,11 @@ taking another. Each policy's result records the generation in `generation`.
 With scope `policy`, a policy that has no consistency group fails the operation. With
 scope `target` the action runs over every policy of the pair, and a policy without a group
 is `skipped`. Event: `GenerationTaken`.
+
+A policy is snapshotted only when every one of its slots is `replicating`, for the reason
+§9.6 gives: the generation is taken on the pair's source cluster, which after a failover
+holds the superseded group. A policy with a slot that is not replicating is `skipped`, and
+one with a slot in `error` is `failed`, without a take.
 
 ---
 
@@ -780,9 +792,10 @@ is `skipped`. Event: `GenerationTaken`.
 - `PVCAnnotationWatcher`: slot creation on bind, annotation changes, annotation removal.
 - `ReplicationOps` reconciler: failover and failback for scope=policy and scope=volume,
   mutual exclusion via `activeOpsRef`; trigger over each scope, with no second trigger of
-  a recorded slot; snapshot of a policy's group with the operation's UID as `request_id`,
-  a policy without a group failing scope policy and skipped by scope target, and scope
-  volume refused (`replicationops_trigger_snapshot_unit_test.go`).
+  a recorded slot, and only of a replicating slot; snapshot of a policy's group with the
+  operation's UID as `request_id`, a policy without a group failing scope policy and
+  skipped by scope target, a policy with a slot that is not replicating skipped or failed,
+  and scope volume refused (`replicationops_trigger_snapshot_unit_test.go`).
 
 ### Integration / e2e tests
 

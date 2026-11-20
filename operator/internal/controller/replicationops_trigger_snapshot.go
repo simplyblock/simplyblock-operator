@@ -44,6 +44,34 @@ func (r *ReplicationOpsReconciler) sourceClusterUUID(
 	return clusterUUID, nil
 }
 
+// slotNotReplicating is what a one-shot replication action makes of a slot that
+// is not replicating: a failed result for a slot in error, a skipped one for any
+// other state, with the reason. It is empty for a replicating slot.
+//
+// The action runs against the pair's source cluster and the slot's volume,
+// neither of which a failover changes, so a failed-over slot names the
+// superseded source. Acting on it snapshots that source and, once it recovers
+// from an unplanned failover, replicates it toward the cluster that now serves
+// the volume.
+func slotNotReplicating(slot *simplyblockv1alpha1.ReplicationSlot) (status, detail string) {
+	switch simplyblockv1alpha1.ReplicationSlotState(slot.Status.State) {
+	case simplyblockv1alpha1.ReplicationSlotStateReplicating:
+		return "", ""
+	case simplyblockv1alpha1.ReplicationSlotStateError:
+		return string(simplyblockv1alpha1.ReplicationOpsResultFailed),
+			fmt.Sprintf("replication slot %s is in error: %s", slot.Name, slot.Status.Message)
+	case simplyblockv1alpha1.ReplicationSlotStateFailedOver:
+		return string(simplyblockv1alpha1.ReplicationOpsResultSkipped),
+			fmt.Sprintf("volume of slot %s is failed over; fail it back first", slot.Name)
+	case simplyblockv1alpha1.ReplicationSlotStateCutoverDone:
+		return string(simplyblockv1alpha1.ReplicationOpsResultSkipped),
+			fmt.Sprintf("volume of slot %s is already cut over", slot.Name)
+	default:
+		return string(simplyblockv1alpha1.ReplicationOpsResultSkipped),
+			fmt.Sprintf("volume of slot %s is not replicating (slot state %q)", slot.Name, slot.Status.State)
+	}
+}
+
 // reconcileTrigger replicates every slot's volume now. A trigger takes a new
 // snapshot per call, so each outcome is written to status as it happens, and a
 // slot status already records is not triggered again when a reconcile resumes.
@@ -73,7 +101,9 @@ func (r *ReplicationOpsReconciler) reconcileTrigger(
 		result := simplyblockv1alpha1.ReplicationOpsResult{
 			SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultSucceeded),
 		}
-		if _, poolID, volumeID, ok := splitVolumeHandle(slot.Spec.VolumeID); !ok {
+		if status, detail := slotNotReplicating(slot); status != "" {
+			result.Status, result.Detail = status, detail
+		} else if _, poolID, volumeID, ok := splitVolumeHandle(slot.Spec.VolumeID); !ok {
 			result.Status, result.Detail = string(simplyblockv1alpha1.ReplicationOpsResultFailed), "invalid VolumeID"
 		} else {
 			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication/trigger",
@@ -100,7 +130,8 @@ func (r *ReplicationOpsReconciler) reconcileTrigger(
 		return r.failOps(ctx, ops, "Replication trigger failed for one or more volumes; see results for details")
 	}
 	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "ReplicationTriggered", "ReplicationTriggered",
-		"Replication triggered for %d volumes", len(ops.Status.Results))
+		"Replication triggered for %d volumes", countResults(ops.Status.Results,
+			simplyblockv1alpha1.ReplicationOpsResultSucceeded))
 	return r.succeedOps(ctx, ops, "Replication triggered; each volume replicates a new snapshot", ops.Status.Results)
 }
 
@@ -162,6 +193,14 @@ func (r *ReplicationOpsReconciler) reconcileSnapshot(
 			result.Status, result.Detail = string(simplyblockv1alpha1.ReplicationOpsResultSkipped),
 				"the policy has no consistency group"
 		default:
+			status, detail, err := r.policyNotReplicating(ctx, policy)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if status != "" {
+				result.Status, result.Detail = status, detail
+				break
+			}
 			seq, err := takeGeneration(ctx, apiClient, groupsPath+groupID+"/snapshots", string(ops.UID))
 			if err != nil {
 				result.Status, result.Detail = string(simplyblockv1alpha1.ReplicationOpsResultFailed),
@@ -184,8 +223,45 @@ func (r *ReplicationOpsReconciler) reconcileSnapshot(
 		return r.failOps(ctx, ops, "Consistency-group snapshot failed for one or more policies; see results for details")
 	}
 	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "GenerationTaken", "GenerationTaken",
-		"Consistency-group snapshot taken for %d policies", len(results))
+		"Consistency-group snapshot taken for %d policies", countResults(results,
+			simplyblockv1alpha1.ReplicationOpsResultSucceeded))
 	return r.succeedOps(ctx, ops, "Consistency-group generation taken", results)
+}
+
+// policyNotReplicating is slotNotReplicating over every slot of the policy: a
+// generation is all of the group's volumes or none, so one slot that is not
+// replicating holds the whole policy back. A slot in error outranks one that is
+// skipped.
+func (r *ReplicationOpsReconciler) policyNotReplicating(
+	ctx context.Context, policy *simplyblockv1alpha1.ReplicationPolicy,
+) (status, detail string, err error) {
+	var slots simplyblockv1alpha1.ReplicationSlotList
+	if err := r.List(ctx, &slots, client.InNamespace(policy.Namespace),
+		client.MatchingFields{"spec.policyRef": policy.Namespace + "/" + policy.Name}); err != nil {
+		return "", "", fmt.Errorf("list the slots of policy %s: %w", policy.Name, err)
+	}
+	for i := range slots.Items {
+		s, d := slotNotReplicating(&slots.Items[i])
+		if s == string(simplyblockv1alpha1.ReplicationOpsResultFailed) {
+			return s, d, nil
+		}
+		if s != "" && status == "" {
+			status, detail = s, d
+		}
+	}
+	return status, detail, nil
+}
+
+// countResults counts the results with the given status.
+func countResults(results []simplyblockv1alpha1.ReplicationOpsResult,
+	status simplyblockv1alpha1.ReplicationOpsResultStatus) int {
+	n := 0
+	for _, res := range results {
+		if res.Status == string(status) {
+			n++
+		}
+	}
+	return n
 }
 
 // takeGeneration posts one generation take and returns its sequence number.
