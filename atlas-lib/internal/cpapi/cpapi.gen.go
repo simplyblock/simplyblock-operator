@@ -54,6 +54,24 @@ func (e AlertDTOStatus) Valid() bool {
 	}
 }
 
+// Defines values for ArrayParamsJournal.
+const (
+	Local ArrayParamsJournal = "local"
+	Lun   ArrayParamsJournal = "lun"
+)
+
+// Valid indicates whether the value is a known member of the ArrayParamsJournal enum.
+func (e ArrayParamsJournal) Valid() bool {
+	switch e {
+	case Local:
+		return true
+	case Lun:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ClusterDTOStatus.
 const (
 	ClusterDTOStatusActive       ClusterDTOStatus = "active"
@@ -1216,6 +1234,9 @@ type ArrayDTO struct {
 	Endpoint       string                  `json:"endpoint"`
 	HasCredentials bool                    `json:"has_credentials"`
 	Id             string                  `json:"id"`
+	Journal        *string                 `json:"journal,omitempty"`
+	JournalLunSize *int                    `json:"journal_lun_size,omitempty"`
+	JournalOptions *map[string]interface{} `json:"journal_options,omitempty"`
 	LunSize        int                     `json:"lun_size"`
 	Options        map[string]interface{}  `json:"options"`
 	Plugin         string                  `json:"plugin"`
@@ -1228,6 +1249,15 @@ type ArrayParams struct {
 	Credentials   *map[string]string      `json:"credentials,omitempty"`
 	Endpoint      *string                 `json:"endpoint,omitempty"`
 
+	// Journal Where each node's journal is kept: local (a disk or partition of its host) or lun (a LUN of its own, created next to its data LUN; needs lun_size)
+	Journal *ArrayParamsJournal `json:"journal,omitempty"`
+
+	// JournalLunSize journal lun: size of each node's journal LUN; 0 = 3% of lun_size, at least 2 GiB
+	JournalLunSize *int `json:"journal_lun_size,omitempty"`
+
+	// JournalOptions journal lun: plugin options for the journal LUNs, applied over options, e.g. {"pool": "fast-pool"}
+	JournalOptions *map[string]interface{} `json:"journal_options,omitempty"`
+
 	// LunSize Size of the LUN created for each added node; 0 = none
 	LunSize *int                    `json:"lun_size,omitempty"`
 	Options *map[string]interface{} `json:"options,omitempty"`
@@ -1235,6 +1265,9 @@ type ArrayParams struct {
 	// Plugin Plugin name (entry point in simplyblock.array_plugins), e.g. aws-ebs
 	Plugin string `json:"plugin"`
 }
+
+// ArrayParamsJournal Where each node's journal is kept: local (a disk or partition of its host) or lun (a LUN of its own, created next to its data LUN; needs lun_size)
+type ArrayParamsJournal string
 
 // BackupConfigInput A cluster's backup configuration: a location plus how to authenticate to it.
 type BackupConfigInput struct {

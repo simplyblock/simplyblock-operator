@@ -145,6 +145,54 @@ func TestTheArrayIsRegisteredWithTheSecretsLogin(t *testing.T) {
 	}
 }
 
+// The journal placement reaches the registration: omitted, every node's
+// journal is a LUN of its own; Local keeps it on the node's own device; a
+// journal LUN may carry its size and the pool it is created in.
+func TestTheJournalPlacementIsRegistered(t *testing.T) {
+	size := resource.MustParse("64Gi")
+	for _, tc := range []struct {
+		name    string
+		journal *simplyblockv1alpha2.StorageArrayJournal
+		onLUN   bool
+		size    int64
+		pool    string
+	}{
+		{name: "omitted", onLUN: true},
+		{name: "LUN in a fast pool", onLUN: true, size: 64 << 30, pool: "fast",
+			journal: &simplyblockv1alpha2.StorageArrayJournal{
+				Placement: simplyblockv1alpha2.StorageArrayJournalLUN, Size: &size,
+				Options: map[string]string{"pool": "fast"}}},
+		{name: "local", journal: &simplyblockv1alpha2.StorageArrayJournal{
+			Placement: simplyblockv1alpha2.StorageArrayJournalLocal}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var sent []atlascp.ArrayRegistration
+			api := &fakeControlPlane{
+				cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
+				registerArray: func(_ string, reg atlascp.ArrayRegistration) (atlascp.Array, error) {
+					sent = append(sent, reg)
+					return registeredArray(reg)
+				},
+			}
+			cluster := newTestCluster(withArray(simplyblockv1alpha2.StorageArrayCredentialsSourceSecret),
+				func(c *simplyblockv1alpha2.StorageCluster) { c.Spec.MultiAttach.Array.Journal = tc.journal })
+			r := newClusterReconciler(t, api, &recorder{}, cluster, arraySecret("T0KEN"))
+			reconcileCluster(t, r, 1)
+			if len(sent) != 1 {
+				t.Fatalf("registered %d times, want 1", len(sent))
+			}
+			reg := sent[0]
+			if reg.JournalOnLUN != tc.onLUN || reg.JournalSizeBytes != tc.size || reg.JournalOptions["pool"] != tc.pool {
+				t.Errorf("journal = %v %d %v, want %v %d pool %q",
+					reg.JournalOnLUN, reg.JournalSizeBytes, reg.JournalOptions, tc.onLUN, tc.size, tc.pool)
+			}
+			if reg.Options["pool"] != "" {
+				t.Errorf("the journal pool leaked into the array's options: %v", reg.Options)
+			}
+		})
+	}
+}
+
 func TestAnExternalLoginIsNamedNotSent(t *testing.T) {
 	for _, tc := range []struct {
 		source simplyblockv1alpha2.StorageArrayCredentialsSource

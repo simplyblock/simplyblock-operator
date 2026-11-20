@@ -18815,6 +18815,21 @@
             "title": "Id",
             "type": "string"
           },
+          "journal": {
+            "default": "local",
+            "title": "Journal",
+            "type": "string"
+          },
+          "journal_lun_size": {
+            "default": 0,
+            "title": "Journal Lun Size",
+            "type": "integer"
+          },
+          "journal_options": {
+            "additionalProperties": true,
+            "title": "Journal Options",
+            "type": "object"
+          },
           "lun_size": {
             "title": "Lun Size",
             "type": "integer"
@@ -18861,6 +18876,29 @@
             "default": "",
             "title": "Endpoint",
             "type": "string"
+          },
+          "journal": {
+            "default": "local",
+            "description": "Where each node's journal is kept: local (a disk or partition of its host) or lun (a LUN of its own, created next to its data LUN; needs lun_size)",
+            "enum": [
+              "local",
+              "lun"
+            ],
+            "title": "Journal",
+            "type": "string"
+          },
+          "journal_lun_size": {
+            "default": 0,
+            "description": "journal lun: size of each node's journal LUN; 0 = 3% of lun_size, at least 2 GiB",
+            "minimum": 0.0,
+            "title": "Journal Lun Size",
+            "type": "integer"
+          },
+          "journal_options": {
+            "additionalProperties": true,
+            "description": "journal lun: plugin options for the journal LUNs, applied over options, e.g. {\"pool\": \"fast-pool\"}",
+            "title": "Journal Options",
+            "type": "object"
           },
           "lun_size": {
             "default": 0,

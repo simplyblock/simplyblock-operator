@@ -41,7 +41,16 @@ func blockGroupsOf(workers []string, count int) []simplyblockv1alpha2.NodeGroup 
 	return groups
 }
 
+// multiAttachTemplate keeps the journal on a local device: one named device
+// per node. arrayOnlyTemplate keeps it on a LUN of the array: none named.
 func multiAttachTemplate(ftt int32) *simplyblockv1alpha2.MultiAttachSpec {
+	ma := arrayOnlyTemplate(ftt)
+	ma.Array.Journal = &simplyblockv1alpha2.StorageArrayJournal{
+		Placement: simplyblockv1alpha2.StorageArrayJournalLocal}
+	return ma
+}
+
+func arrayOnlyTemplate(ftt int32) *simplyblockv1alpha2.MultiAttachSpec {
 	return &simplyblockv1alpha2.MultiAttachSpec{
 		FaultTolerance: ftt,
 		Array: &simplyblockv1alpha2.StorageArraySpec{
@@ -72,13 +81,14 @@ func multiAttachFindings(findings []finding) []finding {
 
 func TestAMultiAttachDocumentIsHeldToItsOwnFloors(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		ftt      int32
-		workers  int
-		devices  int // named per worker; 0 names none
-		slots    int32
-		reason   string
-		mentions []string
+		name      string
+		ftt       int32
+		workers   int
+		devices   int // named per worker; 0 names none
+		slots     int32
+		reason    string
+		mentions  []string
+		arrayOnly bool
 	}{
 		// The stated 2+1 stripe would need four nodes; a multi-attach cluster
 		// runs 1+0 and needs one node more than the failures it tolerates.
@@ -95,6 +105,13 @@ func TestAMultiAttachDocumentIsHeldToItsOwnFloors(t *testing.T) {
 		{name: "two nodes per worker, two devices each", ftt: 1, workers: 2, devices: 2, slots: 2},
 		{name: "two nodes per worker on one worker", ftt: 1, workers: 1, devices: 2, slots: 2,
 			reason: StripeBelowMinimumWorkers},
+		// The journal on a LUN of the array: the workers name no device.
+		{name: "journal LUN, nothing named", ftt: 1, workers: 2, devices: 0, arrayOnly: true},
+		{name: "journal LUN, two nodes per worker", ftt: 1, workers: 2, devices: 0, slots: 2, arrayOnly: true},
+		{name: "journal LUN, a device named", ftt: 1, workers: 2, devices: 1, arrayOnly: true,
+			reason: MultiAttachJournalDevice, mentions: []string{"group-1", "names 1 device", "Local"}},
+		{name: "journal LUN, one worker", ftt: 1, workers: 1, devices: 0, arrayOnly: true,
+			reason: StripeBelowMinimumNodes},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			names := workerNames(tc.workers)
@@ -104,6 +121,9 @@ func TestAMultiAttachDocumentIsHeldToItsOwnFloors(t *testing.T) {
 					DataChunks: ptr.To(int32(2)), ParityChunks: ptr.To(int32(1))}
 				c.Spec.Cluster.RaidDevices = ptr.To(true)
 				c.Spec.Cluster.MultiAttach = multiAttachTemplate(tc.ftt)
+				if tc.arrayOnly {
+					c.Spec.Cluster.MultiAttach = arrayOnlyTemplate(tc.ftt)
+				}
 				c.Spec.NodeSets[0].Groups = blockGroupsOf(names, tc.devices)
 				if tc.slots > 0 {
 					c.Spec.Cluster.NodesPerSocket = ptr.To(tc.slots)

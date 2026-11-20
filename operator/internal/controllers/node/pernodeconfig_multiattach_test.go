@@ -48,6 +48,27 @@ func TestAMultiAttachNodeNamesOnlyItsJournal(t *testing.T) {
 	}
 }
 
+// With the journal on a LUN of the array the node uses no local device:
+// node_configure.py is told so with --lblk-array-only and given no names.
+func TestAJournalLUNNodeNamesNoDevice(t *testing.T) {
+	cluster := multiAttachBlockCluster()
+	cluster.Spec.MultiAttach.Array = &simplyblockv1alpha2.StorageArraySpec{Plugin: "pure-flasharray"}
+	env := renderedNodeEnv(cluster)
+	if env["LBLK_ARRAY_ONLY"] != stated || env["LBLK"] != stated {
+		t.Errorf("LBLK_ARRAY_ONLY = %q, LBLK = %q", env["LBLK_ARRAY_ONLY"], env["LBLK"])
+	}
+	if env["BLK_NAMES"] != "" || env["LBLK_JOURNAL_ONLY"] != "" {
+		t.Errorf("BLK_NAMES = %q, LBLK_JOURNAL_ONLY = %q; want neither", env["BLK_NAMES"], env["LBLK_JOURNAL_ONLY"])
+	}
+
+	cluster.Spec.MultiAttach.Array.Journal = &simplyblockv1alpha2.StorageArrayJournal{
+		Placement: simplyblockv1alpha2.StorageArrayJournalLocal}
+	env = renderedNodeEnv(cluster)
+	if env["LBLK_JOURNAL_ONLY"] != stated || env["LBLK_ARRAY_ONLY"] != "" || env["BLK_NAMES"] != "/dev/nvme0n1" {
+		t.Errorf("a Local journal: %v", env)
+	}
+}
+
 // --lblk-journal-only and --lblk-journal-device exclude each other in
 // node_configure.py, so the dedicated-journal toggle is not passed beside it.
 func TestAMultiAttachNodeIgnoresTheDedicatedJournalToggle(t *testing.T) {

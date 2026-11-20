@@ -36,18 +36,33 @@ type ArrayRegistration struct {
 	// LunSizeBytes is the size of the LUN created for each node added to the
 	// cluster; zero creates none.
 	LunSizeBytes int64
+	// JournalOnLUN creates each node's journal as a LUN of its own next to its
+	// data LUN, presented to that node only; false keeps the journal on a
+	// local disk or partition the node names.
+	JournalOnLUN bool
+	// JournalSizeBytes is the size of a journal LUN; zero lets the control
+	// plane size it (3% of the data LUN, at least 2 GiB).
+	JournalSizeBytes int64
+	// JournalOptions are plugin settings for the journal LUNs, applied over
+	// Options (a faster pool).
+	JournalOptions map[string]string
 }
 
 // Array is the control plane's record of a registered array. It carries no
 // credential, only whether there are any and what kind of reference holds
 // them.
 type Array struct {
-	ID             string
-	Plugin         string
-	Endpoint       string
-	Options        map[string]string
-	LunSizeBytes   int64
-	HasCredentials bool
+	ID           string
+	Plugin       string
+	Endpoint     string
+	Options      map[string]string
+	LunSizeBytes int64
+	// JournalOnLUN, JournalSizeBytes, and JournalOptions are the journal
+	// placement as the control plane holds it.
+	JournalOnLUN     bool
+	JournalSizeBytes int64
+	JournalOptions   map[string]string
+	HasCredentials   bool
 	// CredentialKind is managed, vault-kv, kmip-secret, or empty.
 	CredentialKind string
 	// Protocols are the protocols the plugin reported it can serve, when the
@@ -72,6 +87,16 @@ func arrayFromDTO(d cpapi.ArrayDTO) Array {
 	}
 	for k, v := range d.Options {
 		out.Options[k] = fmt.Sprint(v)
+	}
+	out.JournalOnLUN = d.Journal != nil && *d.Journal == "lun"
+	if d.JournalLunSize != nil {
+		out.JournalSizeBytes = int64(*d.JournalLunSize)
+	}
+	if d.JournalOptions != nil && len(*d.JournalOptions) > 0 {
+		out.JournalOptions = map[string]string{}
+		for k, v := range *d.JournalOptions {
+			out.JournalOptions[k] = fmt.Sprint(v)
+		}
 	}
 	if d.CredentialRef != nil {
 		if kind, ok := (*d.CredentialRef)["kind"].(string); ok {
@@ -127,6 +152,22 @@ func (c *Client) RegisterArray(ctx context.Context, clusterID string, reg ArrayR
 		size := int(reg.LunSizeBytes)
 		body.LunSize = &size
 	}
+	journal := cpapi.Local
+	if reg.JournalOnLUN {
+		journal = cpapi.Lun
+		if reg.JournalSizeBytes > 0 {
+			size := int(reg.JournalSizeBytes)
+			body.JournalLunSize = &size
+		}
+		if len(reg.JournalOptions) > 0 {
+			opts := make(map[string]interface{}, len(reg.JournalOptions))
+			for k, v := range reg.JournalOptions {
+				opts[k] = v
+			}
+			body.JournalOptions = &opts
+		}
+	}
+	body.Journal = &journal
 	what := fmt.Sprintf("register array %s for cluster %s", reg.Plugin, clusterID)
 	resp, err := c.api.ClustersArraysCreateApiV2ClustersClusterIdArraysPostWithResponse(ctx, cluster, body)
 	if err != nil {

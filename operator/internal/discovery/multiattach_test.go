@@ -41,7 +41,16 @@ func arrayPlan(workers ...Worker) Plan {
 	return plan
 }
 
+// iscsiArray keeps the journal on a local device; iscsiArrayOnly on a LUN of
+// the array (the default placement).
 func iscsiArray() *simplyblockv1alpha2.MultiAttachSpec {
+	ma := iscsiArrayOnly()
+	ma.Array.Journal = &simplyblockv1alpha2.StorageArrayJournal{
+		Placement: simplyblockv1alpha2.StorageArrayJournalLocal}
+	return ma
+}
+
+func iscsiArrayOnly() *simplyblockv1alpha2.MultiAttachSpec {
 	return &simplyblockv1alpha2.MultiAttachSpec{
 		FaultTolerance: 1,
 		Array: &simplyblockv1alpha2.StorageArraySpec{
@@ -83,6 +92,39 @@ func TestAMultiAttachDraftCarriesTheArrayAndOneJournalPerNode(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(notes, " "), "journal") {
 		t.Errorf("notes do not explain the journal device: %v", notes)
+	}
+}
+
+func TestAJournalLUNDraftNamesNoLocalDevice(t *testing.T) {
+	iqn := &nodeprobe.SANInitiators{ISCSIIQN: "iqn.x"}
+	plan := arrayPlan(
+		blockWorker("worker-1", iqn, 960*gib, 120*gib),
+		blockWorker("worker-2", nil, 960*gib),
+	)
+	plan.Class = ClassNVMe // the class of devices nobody uses does not matter
+	template := &simplyblockv1alpha2.ClusterTemplate{}
+
+	notes := ApplyMultiAttach(&plan, template, iscsiArrayOnly())
+
+	if !template.MultiAttach.JournalOnLUN() {
+		t.Fatalf("template.multiAttach does not keep the journal on a LUN: %+v", template.MultiAttach.Array.Journal)
+	}
+	if got := plan.NodeSets[0].Groups[0].Devices; got != nil {
+		t.Errorf("group devices = %+v, want none", got)
+	}
+	if len(plan.Findings) != 1 || plan.Findings[0].Reason != ArrayInitiatorMissing ||
+		!strings.Contains(plan.Findings[0].Message, "worker-2") {
+		t.Errorf("findings = %+v, want worker-2 without an initiator only", plan.Findings)
+	}
+	if !strings.Contains(strings.Join(notes, " "), "no local device") {
+		t.Errorf("notes do not say that no local device is used: %v", notes)
+	}
+}
+
+func TestArrayOnlyRuleDeclinesEveryDevice(t *testing.T) {
+	ok, why := ArrayOnlyRule{}.Admit(nodeprobe.Report{}, disk("sda", "", 0, 100*gib))
+	if ok || !strings.Contains(why, "LUNs of its storage array") {
+		t.Errorf("Admit = %v, %q", ok, why)
 	}
 }
 

@@ -684,6 +684,44 @@ spec:
                               out.
                             maxLength: 2048
                             type: string
+                          journal:
+                            description: |-
+                              Journal is where each storage node keeps its journal. Omitted, every
+                              node's journal is a LUN of its own on the array.
+                            properties:
+                              options:
+                                additionalProperties:
+                                  type: string
+                                description: |-
+                                  Options are plugin settings for the journal LUNs, applied over the
+                                  array's options, such as a pool of higher performance or priority to
+                                  create them in.
+                                maxProperties: 64
+                                type: object
+                              placement:
+                                default: LUN
+                                description: |-
+                                  Placement is LUN (a LUN of its own on the array) or Local (a local disk
+                                  or partition of the worker).
+                                enum:
+                                - LUN
+                                - Local
+                                type: string
+                              size:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: |-
+                                  Size is the size of each node's journal LUN. Omitted, it is 3% of
+                                  lunSize, at least 2 GiB.
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                            type: object
+                            x-kubernetes-validations:
+                            - message: size and options apply to the placement LUN
+                                only
+                              rule: '!has(self.placement) || self.placement == ''LUN''
+                                || (!has(self.size) && !has(self.options))'
                           lunSize:
                             anyOf:
                             - type: integer

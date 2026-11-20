@@ -102,6 +102,20 @@ func (r *StorageClusterReconciler) arrayRegistration(
 	if spec.CABundle != "" {
 		reg.Options["ca_bundle"] = spec.CABundle
 	}
+	if journal := spec.Journal; journal == nil || journal.Placement != simplyblockv1alpha2.StorageArrayJournalLocal {
+		reg.JournalOnLUN = true
+		if journal != nil {
+			if journal.Size != nil {
+				reg.JournalSizeBytes = journal.Size.Value()
+			}
+			if len(journal.Options) > 0 {
+				reg.JournalOptions = make(map[string]string, len(journal.Options))
+				for k, v := range journal.Options {
+					reg.JournalOptions[k] = v
+				}
+			}
+		}
+	}
 
 	creds := spec.Credentials
 	switch creds.Source {

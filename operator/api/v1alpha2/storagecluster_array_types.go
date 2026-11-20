@@ -94,6 +94,58 @@ type StorageArraySpec struct {
 	// Credentials says where the array's login comes from.
 	// +kubebuilder:validation:Required
 	Credentials StorageArrayCredentials `json:"credentials"`
+
+	// Journal is where each storage node keeps its journal. Omitted, every
+	// node's journal is a LUN of its own on the array.
+	// +optional
+	Journal *StorageArrayJournal `json:"journal,omitempty"`
+}
+
+// StorageArrayJournalPlacement is where a storage node's journal is kept.
+// +kubebuilder:validation:Enum=LUN;Local
+type StorageArrayJournalPlacement string
+
+const (
+	// StorageArrayJournalLUN: a LUN of its own, created on the array when the
+	// node is added, next to its data LUN, and presented to that node only.
+	// The workers need no local device.
+	StorageArrayJournalLUN StorageArrayJournalPlacement = "LUN"
+	// StorageArrayJournalLocal: a local disk or partition of the worker,
+	// named per storage node in the deployment document and used whole.
+	StorageArrayJournalLocal StorageArrayJournalPlacement = "Local"
+)
+
+// StorageArrayJournal is where the storage nodes keep their journals, and how
+// a journal LUN is created.
+// +kubebuilder:validation:XValidation:rule="!has(self.placement) || self.placement == 'LUN' || (!has(self.size) && !has(self.options))",message="size and options apply to the placement LUN only"
+type StorageArrayJournal struct {
+	// Placement is LUN (a LUN of its own on the array) or Local (a local disk
+	// or partition of the worker).
+	// +kubebuilder:default=LUN
+	// +optional
+	Placement StorageArrayJournalPlacement `json:"placement,omitempty"`
+
+	// Size is the size of each node's journal LUN. Omitted, it is 3% of
+	// lunSize, at least 2 GiB.
+	// +optional
+	Size *resource.Quantity `json:"size,omitempty"`
+
+	// Options are plugin settings for the journal LUNs, applied over the
+	// array's options, such as a pool of higher performance or priority to
+	// create them in.
+	// +kubebuilder:validation:MaxProperties=64
+	// +optional
+	Options map[string]string `json:"options,omitempty"`
+}
+
+// JournalOnLUN reports whether the storage nodes keep their journals on LUNs
+// of the array, which the control plane creates as it adds them. A cluster
+// without an array keeps them locally.
+func (m *MultiAttachSpec) JournalOnLUN() bool {
+	if m == nil || m.Array == nil {
+		return false
+	}
+	return m.Array.Journal == nil || m.Array.Journal.Placement != StorageArrayJournalLocal
 }
 
 // StorageArrayCredentialsSource selects where an array's login is kept.

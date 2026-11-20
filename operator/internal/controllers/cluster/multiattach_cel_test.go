@@ -88,6 +88,23 @@ func TestStorageClusterCELValidatesMultiAttach(t *testing.T) {
 		{name: "unknown protocol", mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
 			s.MultiAttach.Array.Protocol = "smoke-signals"
 		}, wantDenied: "protocol"},
+		{name: "journal LUN in a fast pool", mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
+			size := resource.MustParse("64Gi")
+			s.MultiAttach.Array.Journal = &simplyblockv1alpha2.StorageArrayJournal{
+				Placement: simplyblockv1alpha2.StorageArrayJournalLUN, Size: &size,
+				Options: map[string]string{"pool": "fast"}}
+		}},
+		{name: "local journal", mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
+			s.MultiAttach.Array.Journal = &simplyblockv1alpha2.StorageArrayJournal{
+				Placement: simplyblockv1alpha2.StorageArrayJournalLocal}
+		}},
+		{name: "local journal with a pool", mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
+			s.MultiAttach.Array.Journal = &simplyblockv1alpha2.StorageArrayJournal{
+				Placement: simplyblockv1alpha2.StorageArrayJournalLocal, Options: map[string]string{"pool": "fast"}}
+		}, wantDenied: "size and options apply to the placement LUN only"},
+		{name: "unknown journal placement", mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
+			s.MultiAttach.Array.Journal = &simplyblockv1alpha2.StorageArrayJournal{Placement: "NVRAM"}
+		}, wantDenied: "placement"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cluster := multiAttachCluster(tc.mutate)

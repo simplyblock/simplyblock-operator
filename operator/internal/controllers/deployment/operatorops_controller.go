@@ -604,7 +604,17 @@ func (r *OperatorOpsReconciler) write(
 	}
 
 	planner := discoverypkg.Planner{KubeNodes: kubeNodes}
+	if spec.MultiAttach.JournalOnLUN() {
+		// The nodes' journals and data are LUNs the control plane creates on
+		// the array, so no local device is drafted and a worker with none is
+		// kept: what the plan needs of it is its CPUs, memory, and network.
+		planner.DeviceRules = []discoverypkg.DeviceRule{discoverypkg.ArrayOnlyRule{}}
+		planner.WorkerRules = []discoverypkg.WorkerRule{}
+	}
 	plan := planner.Plan(collected, spec)
+	if spec.MultiAttach.JournalOnLUN() {
+		plan.Class = discoverypkg.ClassBlock
+	}
 
 	if len(plan.NodeSets) == 0 {
 		// The rules worked out why every machine was dropped, and a run that

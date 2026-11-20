@@ -52,33 +52,47 @@ func ApplyMultiAttach(plan *Plan, template *simplyblockv1alpha2.ClusterTemplate,
 			"stripe does not apply: a multi-attach cluster runs 1+0",
 		arrayPlugin(ma), ma.FaultTolerance))
 
-	if plan.Class != ClassBlock {
+	switch {
+	case ma.JournalOnLUN():
+		// Nothing local is used: the plan was drawn with every device
+		// declined (ArrayOnlyRule), and the groups name none.
+		for s := range plan.NodeSets {
+			for g := range plan.NodeSets[s].Groups {
+				plan.NodeSets[s].Groups[g].Devices = nil
+			}
+		}
+		notes = append(notes,
+			"the groups name no local device: each storage node's journal and data device are LUNs "+
+				"created on the array when the node is added (the array's journal placement LUN). "+
+				"Set the placement to Local and name one device per storage node to keep the journal local")
+	case plan.Class != ClassBlock:
 		plan.Findings = append(plan.Findings, Finding{
 			Reason: MultiAttachNeedsBlockDevices,
 			Message: "a multi-attach cluster names its nodes' journals as logical block devices, " +
 				"and this run found NVMe devices; run it again with enableLogicalBlockDevices",
 		})
 		return notes
-	}
-
-	slots := ptr.IntFrom(template.NodesPerSocket, 1)
-	byName := map[string]Worker{}
-	for _, w := range plan.Workers {
-		byName[w.Name] = w
-	}
-	for s := range plan.NodeSets {
-		for g := range plan.NodeSets[s].Groups {
-			group := &plan.NodeSets[s].Groups[g]
-			if group.Devices == nil || len(group.Devices.Block) <= slots || len(group.Workers) == 0 {
-				continue
-			}
-			group.Devices.Block = smallestAddresses(byName[group.Workers[0]], group.Devices.Block, slots)
+	default:
+		slots := ptr.IntFrom(template.NodesPerSocket, 1)
+		byName := map[string]Worker{}
+		for _, w := range plan.Workers {
+			byName[w.Name] = w
 		}
+		for s := range plan.NodeSets {
+			for g := range plan.NodeSets[s].Groups {
+				group := &plan.NodeSets[s].Groups[g]
+				if group.Devices == nil || len(group.Devices.Block) <= slots || len(group.Workers) == 0 {
+					continue
+				}
+				group.Devices.Block = smallestAddresses(byName[group.Workers[0]], group.Devices.Block, slots)
+			}
+		}
+		notes = append(notes,
+			"every group names its smallest local device per storage node, as the node's journal: "+
+				"a multi-attach node's data device is its LUN on the array, so the other disks are "+
+				"left alone. This is the line to correct if another disk or partition should carry "+
+				"the journal")
 	}
-	notes = append(notes,
-		"every group names its smallest local device per storage node, as the node's journal: "+
-			"a multi-attach node's data device is its LUN on the array, so the other disks are "+
-			"left alone. This is the line to correct if another disk should carry the journal")
 
 	if missing := workersWithoutInitiator(plan.Workers, ma); len(missing) > 0 {
 		plan.Findings = append(plan.Findings, Finding{
@@ -91,6 +105,17 @@ func ApplyMultiAttach(plan *Plan, template *simplyblockv1alpha2.ClusterTemplate,
 		})
 	}
 	return notes
+}
+
+// ArrayOnlyRule declines every local device of a multi-attach run whose
+// journals are LUNs of the array: such a node uses no local device.
+type ArrayOnlyRule struct{}
+
+func (ArrayOnlyRule) Name() string { return "journal on the array" }
+
+func (ArrayOnlyRule) Admit(nodeprobe.Report, nodeprobe.Device) (bool, string) {
+	return false, "the cluster keeps each node's journal and data on LUNs of its storage array, " +
+		"so no local device is used"
 }
 
 func arrayPlugin(ma *simplyblockv1alpha2.MultiAttachSpec) string {

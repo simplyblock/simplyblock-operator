@@ -217,6 +217,19 @@ func multiAttachChecks(
 				continue
 			}
 			named := namedDevices(group)
+			if subject.multiAttachArrayOnly {
+				if named == 0 {
+					continue
+				}
+				return []StripeCheck{{
+					Reason: MultiAttachJournalDevice,
+					Message: fmt.Sprintf("group %s of node set %s names %d device(s), and a multi-attach "+
+						"worker whose journals are LUNs of the array names none: each node's journal "+
+						"and data device are LUNs created on the array when the node is added. Remove "+
+						"the devices, or set the array's journal placement to Local",
+						group.Name, set.Name, named),
+				}}
+			}
 			if named == slots {
 				continue
 			}
@@ -539,6 +552,9 @@ type stripeSubject struct {
 	// for any other. Such a cluster runs 1+0 whatever stripe is stated, and
 	// its data devices are LUNs created on the array as nodes are added.
 	multiAttachFTT int32
+	// multiAttachArrayOnly is a multi-attach cluster whose nodes keep their
+	// journals on LUNs of the array too, so they name no local device.
+	multiAttachArrayOnly bool
 	// slots is how many storage nodes each worker runs.
 	slots int32
 	// existing is what the cluster already has on this site, and nodes are
@@ -570,14 +586,15 @@ func stripeSubjectOf(
 			return subject, false, nil
 		}
 		return stripeSubject{
-			scheme:         erasurecoding.SchemeOf(template.Stripe),
-			name:           "spec.cluster.stripe",
-			topology:       erasurecoding.TopologyOf(template.ClusterMode),
-			raidDevices:    ptr.BoolFromOrFalse(template.RaidDevices),
-			journalDevice:  ptr.BoolFromOrFalse(template.EnableJournalDevice),
-			multiAttachFTT: multiAttachFTT(template.MultiAttach),
-			slots:          slotsOf(template.SocketsToUse, template.NodesPerSocket),
-			existing:       newFootprint(),
+			scheme:               erasurecoding.SchemeOf(template.Stripe),
+			name:                 "spec.cluster.stripe",
+			topology:             erasurecoding.TopologyOf(template.ClusterMode),
+			raidDevices:          ptr.BoolFromOrFalse(template.RaidDevices),
+			journalDevice:        ptr.BoolFromOrFalse(template.EnableJournalDevice),
+			multiAttachFTT:       multiAttachFTT(template.MultiAttach),
+			multiAttachArrayOnly: template.MultiAttach.JournalOnLUN(),
+			slots:                slotsOf(template.SocketsToUse, template.NodesPerSocket),
+			existing:             newFootprint(),
 		}, true, nil
 	}
 
@@ -595,11 +612,12 @@ func stripeSubjectOf(
 		return subject, false, err
 	}
 	return stripeSubject{
-		scheme:         erasurecoding.SchemeOf(cluster.Spec.Stripe),
-		name:           fmt.Sprintf("the stripe of cluster %s", cluster.Name),
-		topology:       erasurecoding.TopologyOf(cluster.Spec.ClusterMode),
-		raidDevices:    ptr.BoolFromOrFalse(cluster.Spec.RaidDevices),
-		multiAttachFTT: multiAttachFTT(cluster.Spec.MultiAttach),
+		scheme:               erasurecoding.SchemeOf(cluster.Spec.Stripe),
+		name:                 fmt.Sprintf("the stripe of cluster %s", cluster.Name),
+		topology:             erasurecoding.TopologyOf(cluster.Spec.ClusterMode),
+		raidDevices:          ptr.BoolFromOrFalse(cluster.Spec.RaidDevices),
+		multiAttachFTT:       multiAttachFTT(cluster.Spec.MultiAttach),
+		multiAttachArrayOnly: cluster.Spec.MultiAttach.JournalOnLUN(),
 		journalDevice: cluster.Spec.StorageNodes != nil &&
 			ptr.BoolFromOrFalse(cluster.Spec.StorageNodes.EnableJournalDevice),
 		slots:    slotsPerWorker(&cluster),

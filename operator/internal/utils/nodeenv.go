@@ -95,5 +95,6 @@ ARGS="--max-lvol=${MAX_SUBSYS_COUNT}"
 [ "${LBLK_FORCE_FORMAT}" = "true" ] && ARGS="${ARGS} --force"
 [ "${LBLK_JOURNAL_DEVICE}" = "true" ] && ARGS="${ARGS} --lblk-journal-device"
 [ "${LBLK_JOURNAL_ONLY}" = "true" ] && ARGS="${ARGS} --lblk-journal-only"
+[ "${LBLK_ARRAY_ONLY}" = "true" ] && ARGS="${ARGS} --lblk-array-only"
 ARGS="${ARGS}`
 }
