@@ -241,7 +241,7 @@ function SiteBoard({sites, nav}) {
   if (!sites.length) return <div className="empty"><Icon n="zone" s={24} /><b>No sites yet</b><span>Label a StorageCluster, its Namespace, a context, or the worker Nodes' zone to place clusters on a site.</span></div>;
   return <div className="grid">{sites.map(s => <SiteCard key={s.id} s={s} nav={nav} />)}</div>;
 }
-function SiteDetail({seg, nav, rev}) {
+function FleetSiteDetail({seg, nav, rev}) {
   const fleet = useFleet(rev);
   const site = fleet.sites.find(s => s.id === seg.id) || null;
   const {data: nodes} = useResource("sitenodes|" + seg.id + "|" + (site ? site.clusters.map(c => c.id).join(",") : ""),
@@ -346,7 +346,7 @@ function DashboardView({nav, seg, rev}) {
           {[["matrix", "list"], ["tiles", "cluster"], ["sites", "zone"]].map(([k, ic]) => <button key={k} className={view === k ? "on" : ""} onClick={() => setView(k)} title={k}><Icon n={ic} s={12} /></button>)}
         </div>
         <button className="chip" onClick={fleet.reload} title="Refresh"><Icon n="refresh" s={12} /></button>
-        {nav.deployWizard && <button className="btn primary" onClick={() => nav.k8s()}><Icon n="plus" s={12} />Deploy cluster</button>}
+        {nav.discovery && <button className="btn primary" onClick={() => nav.discovery(LOCAL_CTX)} title="Discover the local cluster's workers and draft a deployment"><Icon n="plus" s={12} />Deploy cluster</button>}
       </div>
       <div className="scroll">
         {ctxErrors.map(([ctx, errs]) => <div className="banner" key={ctx}><Icon n="alert" s={15} />
@@ -355,7 +355,7 @@ function DashboardView({nav, seg, rev}) {
         {fleet.loading && !all.length ? <div className="stats">{Array.from({length: 8}).map((_, i) => <div className="skel" key={i} style={{height: 62}}></div>)}</div>
           : <FleetRollup clusters={filtered} sites={fleet.sites} nav={nav} />}
         {!fleet.loading && !all.length && !fleet.error && <div className="empty"><Icon n="cluster" s={24} /><b>No clusters yet</b><span>No StorageCluster in any configured context.</span>
-          {nav.k8s && <button className="btn primary" style={{marginTop: 8}} onClick={() => nav.k8s()}><Icon n="plus" s={12} />Deploy a cluster</button>}</div>}
+          {nav.discovery && <button className="btn primary" style={{marginTop: 8}} onClick={() => nav.discovery(LOCAL_CTX)}><Icon n="plus" s={12} />Deploy a cluster</button>}</div>}
         {all.length > 0 && !filtered.length && <div className="empty"><Icon n="search" s={22} /><b>No clusters match</b><button className="chip" style={{marginTop: 6}} onClick={() => { setQ(""); setStatus([]); }}>Reset filters</button></div>}
         {filtered.length > 0 && view === "matrix" && <ClusterMatrix groups={groups} nav={nav} grouping={group} />}
         {filtered.length > 0 && view === "tiles" && groups.map(g => <div key={g.key}>
@@ -367,4 +367,4 @@ function DashboardView({nav, seg, rev}) {
   );
 }
 
-Object.assign(window, {DashboardView, SitesView, SiteBoard, SiteDetail, ClusterMatrix, FleetRollup, Meter, SevCount, OpsCount, VirtualList, GROUPINGS, groupBy, useFleet, loadFleet, Provenance, SM});
+Object.assign(window, {DashboardView, SitesView, SiteBoard, FleetSiteDetail, ClusterMatrix, FleetRollup, Meter, SevCount, OpsCount, VirtualList, GROUPINGS, groupBy, useFleet, loadFleet, Provenance, SM});

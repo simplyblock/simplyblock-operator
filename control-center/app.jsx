@@ -838,7 +838,6 @@ function App() {
           <button className={section === "clusters" ? "on" : ""} onClick={() => nav.root()} title="Clusters"><Icon n="cluster" s={13} /><span className="swlabel">Clusters</span></button>
           {window.AlertsView && <button className={section === "alerts" ? "on" : ""} onClick={() => nav.alerts()} title="Alerts"><Icon n="bell" s={13} /><span className="swlabel">Alerts</span></button>}
           {window.MonitorView && <button className={section === "ops" ? "on" : ""} onClick={() => nav.monitor()} title="Tasks and operations"><Icon n="clock" s={13} /><span className="swlabel">Operations</span></button>}
-          {acc.canAnywhere("read", "k8scluster") && <button className={section === "k8s" ? "on" : ""} onClick={() => nav.k8s()} title="Kubernetes"><Icon n="k8s" s={13} /><span className="swlabel">Kubernetes</span></button>}
           {drVisible && <button className={section === "dr" ? "on" : ""} onClick={() => nav.dr()} title="Disaster recovery"><Icon n="shield" s={13} /><span className="swlabel">Disaster recovery</span></button>}
           <button className={section === "cp" ? "on" : ""} onClick={() => nav.cp()} title="Control plane"><Icon n="host" s={13} /><span className="swlabel">Control plane</span></button>
         </div>}
@@ -899,7 +898,7 @@ function App() {
       {!acc.state.ready ? <div className="scroll"><div className="lmsg">Resolving your access…</div></div> :
       <ViewBoundary routeKey={viewKey} onReset={() => nav.root()}>
       {cur.t === "site"
-        ? <SiteDetail key={viewKey} seg={cur} nav={nav} rev={rev} />
+        ? <FleetSiteDetail key={viewKey} seg={cur} nav={nav} rev={rev} />
         : cur.t === "cr"
         ? (window.CRView ? <CRView key={viewKey} seg={cur} nav={nav} /> : <ComingView name="The resource view" />)
         : cur.t === "nodesets" || cur.t === "served" || cur.t === "pods"

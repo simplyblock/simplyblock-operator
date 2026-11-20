@@ -19883,7 +19883,7 @@ function SiteBoard({
     nav: nav
   })));
 }
-function SiteDetail({
+function FleetSiteDetail({
   seg,
   nav,
   rev
@@ -20157,9 +20157,10 @@ function DashboardView({
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "refresh",
     s: 12
-  })), nav.deployWizard && /*#__PURE__*/React.createElement("button", {
+  })), nav.discovery && /*#__PURE__*/React.createElement("button", {
     className: "btn primary",
-    onClick: () => nav.k8s()
+    onClick: () => nav.discovery(LOCAL_CTX),
+    title: "Discover the local cluster's workers and draft a deployment"
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "plus",
     s: 12
@@ -20193,12 +20194,12 @@ function DashboardView({
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "cluster",
     s: 24
-  }), /*#__PURE__*/React.createElement("b", null, "No clusters yet"), /*#__PURE__*/React.createElement("span", null, "No StorageCluster in any configured context."), nav.k8s && /*#__PURE__*/React.createElement("button", {
+  }), /*#__PURE__*/React.createElement("b", null, "No clusters yet"), /*#__PURE__*/React.createElement("span", null, "No StorageCluster in any configured context."), nav.discovery && /*#__PURE__*/React.createElement("button", {
     className: "btn primary",
     style: {
       marginTop: 8
     },
-    onClick: () => nav.k8s()
+    onClick: () => nav.discovery(LOCAL_CTX)
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "plus",
     s: 12
@@ -20241,7 +20242,7 @@ Object.assign(window, {
   DashboardView,
   SitesView,
   SiteBoard,
-  SiteDetail,
+  FleetSiteDetail,
   ClusterMatrix,
   FleetRollup,
   Meter,
@@ -39310,16 +39311,7 @@ function App() {
     s: 13
   }), /*#__PURE__*/React.createElement("span", {
     className: "swlabel"
-  }, "Operations")), acc.canAnywhere("read", "k8scluster") && /*#__PURE__*/React.createElement("button", {
-    className: section === "k8s" ? "on" : "",
-    onClick: () => nav.k8s(),
-    title: "Kubernetes"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "k8s",
-    s: 13
-  }), /*#__PURE__*/React.createElement("span", {
-    className: "swlabel"
-  }, "Kubernetes")), drVisible && /*#__PURE__*/React.createElement("button", {
+  }, "Operations")), drVisible && /*#__PURE__*/React.createElement("button", {
     className: section === "dr" ? "on" : "",
     onClick: () => nav.dr(),
     title: "Disaster recovery"
@@ -39469,7 +39461,7 @@ function App() {
   }, "Resolving your access\u2026")) : /*#__PURE__*/React.createElement(ViewBoundary, {
     routeKey: viewKey,
     onReset: () => nav.root()
-  }, cur.t === "site" ? /*#__PURE__*/React.createElement(SiteDetail, {
+  }, cur.t === "site" ? /*#__PURE__*/React.createElement(FleetSiteDetail, {
     key: viewKey,
     seg: cur,
     nav: nav,
