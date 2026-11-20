@@ -369,6 +369,16 @@ type NodeGroup struct {
 	// are refused, because each is what a whole cluster runs.
 	// +optional
 	Environment KubernetesEnvironment `json:"environment,omitempty"`
+
+	// HostOS is the operating system these workers run, where it is not the
+	// one spec.hostOS names. That is a cluster whose workers run more than one,
+	// such as an EKS cluster with Amazon Linux and Ubuntu node groups, or one
+	// distribution in two releases. The expansion gives it to each of the
+	// group's nodes as StorageNode.spec.config.hostOS, which decides what the
+	// storage node prepares on the worker before it starts. Unset is the
+	// document's host OS.
+	// +optional
+	HostOS *HostOSSpec `json:"hostOS,omitempty"`
 }
 
 // NodeSet is the organizational grouping of a deployment, usually a rack: the

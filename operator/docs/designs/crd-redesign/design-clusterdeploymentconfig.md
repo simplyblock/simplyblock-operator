@@ -316,6 +316,19 @@ A document that states no `hostOS` states nothing about `ubuntuHost` either, and
 that is not the same as stating a host that is not Ubuntu. The cluster then
 falls back to its own default, which is what a hand-written cluster gets.
 
+**A group states its own host OS when its workers run another.** One cluster can
+run workers on several operating systems: an EKS cluster with Amazon Linux and
+Ubuntu node groups, an OKE cluster with Oracle Linux and Ubuntu pools, or one
+distribution in two releases. `spec.hostOS` is then the fleet's default, and a
+group whose workers run something else states it in its own `hostOS`, the same
+`HostOSSpec`. The cluster carries one `ubuntuHost` for the whole storage-node
+DaemonSet, so the group's answer goes on its nodes instead: the expansion gives
+the group's `hostOS` to each of its nodes whole, as
+`StorageNode.spec.config.hostOS`, and the node resolves it into its own per-node
+ConfigMap entry. The node carries the operating system rather than the flag, so
+a later decision on the family or the release reads the same field. A group
+that states none leaves its nodes on the fleet's value.
+
 **`spec.cluster.backup` is where the cluster's backups go, and it is on the
 document for the reason `kms` is.** The expansion creates the cluster and its own
 reconciler reads it back on the very next pass, so a store stated here is present
@@ -1603,6 +1616,16 @@ type NodeGroup struct {
 	// are refused, because each is what a whole cluster runs.
 	// +optional
 	Environment KubernetesEnvironment `json:"environment,omitempty"`
+
+	// HostOS is the operating system these workers run, where it is not the
+	// one spec.hostOS names. That is a cluster whose workers run more than one,
+	// such as an EKS cluster with Amazon Linux and Ubuntu node groups, or one
+	// distribution in two releases. The expansion gives it to each of the
+	// group's nodes as StorageNode.spec.config.hostOS, which decides what the
+	// storage node prepares on the worker before it starts. Unset is the
+	// document's host OS.
+	// +optional
+	HostOS *HostOSSpec `json:"hostOS,omitempty"`
 }
 
 // NodeSet is the organizational grouping of a deployment, usually a rack: the

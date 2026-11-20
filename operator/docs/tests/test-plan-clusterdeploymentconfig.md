@@ -318,6 +318,10 @@ and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-252     | A group naming `OpenShift` or `Talos` is refused at admission                                                                         | Negative   | `TestAGroupMayNotNameOpenShiftOrTalos`                                                                                          |
 | U-253     | An `OpenShift` document with a group stating any `environment` is refused at admission                                                | Negative   | `TestAGroupMayNotStateAnEnvironmentUnderOpenShift`                                                                              |
 | U-254     | A GKE document with an EKS group is admitted                                                                                          | Positive   | `TestAGroupOnAnotherProviderIsAccepted`                                                                                         |
+| U-263     | A group stating its own `hostOS`: every node of it states that host OS whole, release included                                        | Positive   | `TestAGroupsHostOSReachesItsNodes`                                                                                              |
+| U-264     | A group that states no `hostOS`: its nodes state none, and the cluster's `ubuntuHost` decides                                         | Boundary   | `TestAGroupWithNoHostOSStatesNoneOnItsNodes`                                                                                    |
+| U-265     | A group stating Amazon Linux 2 is admitted                                                                                            | Positive   | `TestAGroupsHostOSIsAdmittedAndHeldToItsShape`                                                                                  |
+| U-266     | A group whose `hostOS.version` is not an os-release `VERSION_ID` is refused at admission                                              | Negative   | `TestAGroupsHostOSIsAdmittedAndHeldToItsShape`                                                                                  |
 | U-255     | Discovery on workers of three providers under a GKE control plane: the EKS and OKE workers each get a group stating their environment | Positive   | `TestAWorkerOnAnotherProviderStatesItsOwnEnvironment`, `TMPL-09`                                                                |
 | U-256     | The same run raises `WorkerEnvironmentDiffers` naming the workers, their provider, and the control plane's                            | Positive   | `TestTheDraftNamesTheWorkersOnAnotherProvider`                                                                                  |
 | U-257     | Discovery on a fleet of one provider: no group states an environment, and no finding is raised                                        | Negative   | `TestAFleetOnOneProviderStatesNoGroupEnvironment`                                                                               |
@@ -661,11 +665,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 194       | 61      | 133         | 9         |
+| Unit        | 198       | 65      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **264**   | **64**  | **200**     | **12**    |
+| **Total**   | **268**   | **68**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as

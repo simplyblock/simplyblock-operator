@@ -1336,6 +1336,48 @@ spec:
                                 maxLength: 63
                                 pattern: ^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$
                                 type: string
+                              hostOS:
+                                description: |-
+                                  HostOS is the operating system these workers run, where it is not the
+                                  one spec.hostOS names. That is a cluster whose workers run more than one,
+                                  such as an EKS cluster with Amazon Linux and Ubuntu node groups, or one
+                                  distribution in two releases. The expansion gives it to each of the
+                                  group's nodes as StorageNode.spec.config.hostOS, which decides what the
+                                  storage node prepares on the worker before it starts. Unset is the
+                                  document's host OS.
+                                properties:
+                                  distro:
+                                    description: |-
+                                      Distro is the distribution's os-release ID, lowercase and verbatim:
+                                      `ubuntu`, `rocky`, `rhel`, `talos`. It is what the expansion reads.
+                                    maxLength: 63
+                                    pattern: ^[a-z0-9][a-z0-9._-]*$
+                                    type: string
+                                  family:
+                                    description: |-
+                                      Family is the packaging tradition Distro belongs to. A discovery run
+                                      concludes it from the distribution itself, or from the distributions its
+                                      os-release says it is built on, which is what places a derivative this
+                                      product has never heard of. It is left unstated for a host with no
+                                      package manager.
+                                    enum:
+                                    - Debian
+                                    - RedHat
+                                    - SUSE
+                                    - Alpine
+                                    - Arch
+                                    type: string
+                                  version:
+                                    description: |-
+                                      Version is the distribution's os-release VERSION_ID, verbatim: `22.04`,
+                                      `2023`, `9.4`. It is what tells two releases of one distribution apart,
+                                      such as Amazon Linux 2 and Amazon Linux 2023, which share the ID `amzn`. A
+                                      discovery run states it only when every worker it describes agrees, and a
+                                      rolling distribution states none.
+                                    maxLength: 63
+                                    pattern: ^[a-z0-9][a-z0-9._-]*$
+                                    type: string
+                                type: object
                               journalManager:
                                 description: JournalManager tunes the journal managers
                                   on these nodes.

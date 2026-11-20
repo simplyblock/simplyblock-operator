@@ -836,7 +836,11 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 				// plane's, which the cluster's one flag cannot describe. It
 				// reaches the node's entry as the reserved CPUs do.
 				EnableKubeletConfiguration: groupKubeletConfiguration(config, group),
-				JournalManager:             group.JournalManager,
+				// A group of workers on another operating system than the
+				// document's. It goes to the node whole, which resolves it into
+				// its entry, so a group that states none leaves the fleet's.
+				HostOS:         group.HostOS.DeepCopy(),
+				JournalManager: group.JournalManager,
 				// The two SPDK slots of spec.images. They are the document's
 				// statement for the whole fleet and land per node, because the
 				// fields are per node so that a later rollout can walk it one
