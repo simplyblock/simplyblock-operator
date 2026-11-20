@@ -89,6 +89,12 @@ type Worker struct {
 	// groupable, because a NodeGroup states one environment for every worker it
 	// lists.
 	Environment simplyblockv1alpha2.KubernetesEnvironment
+
+	// HostOS is the operating system the worker runs where it is not the one the
+	// document states, and nil where it is. It is part of what makes two workers
+	// groupable, because a NodeGroup states one host OS for every worker it
+	// lists.
+	HostOS *simplyblockv1alpha2.HostOSSpec
 }
 
 // Addresses is how the draft names this worker's devices, ascending and without
@@ -146,6 +152,10 @@ type Group struct {
 	// Environment is the distribution every worker in the group runs on, empty
 	// where it is the cluster's.
 	Environment simplyblockv1alpha2.KubernetesEnvironment
+
+	// HostOS is the operating system every worker in the group runs, nil where
+	// it is the document's.
+	HostOS *simplyblockv1alpha2.HostOSSpec
 }
 
 // Grouper puts workers into groups.
@@ -176,7 +186,8 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 	for _, worker := range workers {
 		addresses := worker.Addresses()
 		signature := worker.Class.signature(addresses, worker.Mgmt.Name, worker.Data) + "\x00" + worker.FailureDomain +
-			"\x00" + attachmentSignature(worker.Attachment) + "\x00" + string(worker.Environment)
+			"\x00" + attachmentSignature(worker.Attachment) + "\x00" + string(worker.Environment) +
+			"\x00" + hostOSSignature(worker.HostOS)
 
 		group, seen := bySignature[signature]
 		if !seen {
@@ -188,6 +199,7 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 				NetworkAttachment: worker.Attachment,
 				FailureDomain:     worker.FailureDomain,
 				Environment:       worker.Environment,
+				HostOS:            worker.HostOS,
 			}
 			bySignature[signature] = group
 			order = append(order, signature)
@@ -227,6 +239,15 @@ func (c DeviceClass) signature(addresses []string, mgmtInterface string, dataInt
 		string(c) + "\x00" + mgmtInterface + "\x00" + strings.Join(dataInterfaces, ",") +
 			"\x00" + strings.Join(addresses, "\x00")))
 	return hex.EncodeToString(digest[:])
+}
+
+// hostOSSignature is a worker's host OS as part of its group key. The family
+// follows from the distro, so the distro and the release are the whole of it.
+func hostOSSignature(os *simplyblockv1alpha2.HostOSSpec) string {
+	if os == nil {
+		return ""
+	}
+	return os.Distro + "\x00" + os.Version
 }
 
 // attachmentSignature is a worker's attachment as part of its group key.
@@ -327,6 +348,7 @@ func nodeGroupOf(group Group) simplyblockv1alpha2.NodeGroup {
 		DataInterfaces: group.DataInterfaces,
 		FailureDomain:  group.FailureDomain,
 		Environment:    group.Environment,
+		HostOS:         group.HostOS.DeepCopy(),
 	}
 	if group.NetworkAttachment != nil {
 		attachment := *group.NetworkAttachment

@@ -286,6 +286,9 @@ and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-195     | A distribution with no package manager: the distro is stated and the family is not                                                    | Boundary   | `TestHostOSForStatesNoFamilyForAHostThatHasNone`                                                                                |
 | U-261     | A fleet whose workers all report one release: the draft states its version and the note names it                                      | Positive   | `TestHostOSForStatesWhatEveryWorkerAgreesOn`                                                                                    |
 | U-262     | A fleet of one distribution in two releases: the draft states the distro and no version, and a note names which worker runs which     | Negative   | `TestHostOSForStatesTheDistroAndNoVersionForAFleetOfTwoReleases`                                                                |
+| U-267     | A fleet on two operating systems: the draft states no `spec.hostOS`, and each operating system is a group stating its own `hostOS`    | Positive   | `TestAFleetOnTwoOperatingSystemsIsDraftedAsGroupsStatingTheirOwn`                                                               |
+| U-268     | A fleet of one distribution in two releases: each group states its release                                                            | Positive   | `TestAFleetOfTwoReleasesIsDraftedAsGroupsStatingTheirRelease`                                                                   |
+| U-269     | A uniform fleet: one group, and no group repeats the document's `hostOS`                                                              | Boundary   | `TestAUniformFleetIsDraftedWithNoGroupHostOS`                                                                                   |
 | U-196     | `spec.cluster.tolerations`: the cluster's storage nodes tolerate what the document states                                             | Positive   | `TestTheDocumentsTolerationsReachTheStorageNodes`                                                                               |
 | U-197     | A growth document: no tolerations are stated, because the cluster it names already carries its own                                    | Boundary   | `TestAGrowthDocumentStatesNoTolerations`                                                                                        |
 | U-198     | `spec.discover.tolerations`: every probe Job tolerates what the run states                                                            | Positive   | `TestDiscoverProbesTolerateWhatTheRunWasToldTo`                                                                                 |
@@ -665,11 +668,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 198       | 65      | 133         | 9         |
+| Unit        | 201       | 68      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **268**   | **68**  | **200**     | **12**    |
+| **Total**   | **271**   | **71**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as

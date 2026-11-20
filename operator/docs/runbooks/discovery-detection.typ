@@ -152,11 +152,13 @@ Read from the host's `/etc/os-release` (`ID`, `ID_LIKE`, `VERSION_ID`, `PRETTY_N
 )
 
 #v(4pt)
-The draft sets `hostOS` (distribution, family, and version) only when every worker reports the same distribution.
-Workers on different distributions, or a worker whose os-release could not be read, leave it unset with a note
-naming the workers. The version (`VERSION_ID`) is set only when the workers also agree on it: a fleet of
-Amazon Linux 2 and Amazon Linux 2023 workers, which share the ID `amzn`, gets the distribution and no version,
-with a note naming which worker runs which release.
+The draft sets `spec.hostOS` (distribution, family, and version) only when every worker reports the same distribution,
+and the version (`VERSION_ID`) only when they also agree on it. Workers on different distributions, or a worker whose
+os-release could not be read, leave it unset with a note naming the workers. Every worker that does not run exactly
+what `spec.hostOS` states is grouped by its operating system, and its group states its own `hostOS`: a fleet of
+Ubuntu and Amazon Linux 2023 workers becomes one group per operating system, and a fleet of Amazon Linux 2 and
+Amazon Linux 2023 workers, which share the ID `amzn`, gets the distribution with no version and one group per release.
+A worker whose os-release could not be read gets no `hostOS` of its own.
 
 == Kernel
 
@@ -481,7 +483,7 @@ draft's `spec.images` unchanged.]
   [`enableFailureDomains`], [Failure-domain label], [On when every worker carries a valid value and the stripe fits the domains.],
   [`enableMetadataJournal`], [Block size, power-fail atomicity, atomic write unit, LBA formats], [On unless every device completes a 4K write whole as a storage node will have it: 4K blocks, or an aligned 4K write within the drive's power-fail atomicity and across none of its boundaries, or, where the drive states nothing, an atomic write unit from at most 4K up to at least 4K. With `enableDriveFormat`, an NVMe namespace not at 4K is judged at the plain 4K format it is reformatted to, or at format 0 where it has none, and its atomic write unit no longer applies. A device with no reading counts as one that needs the journal.],
   [`enableChecksumValidation`, `enableAtomicity4K`], [Same], [Never set: checksum validation is the reviewer's choice. A note says what turning it on would need: which devices have neither a metadata format (8 bytes or more) nor 4K blocks and report an atomic write unit that covers 4K, so need `enableAtomicity4K`, and which report one under 4K, so cannot be checked at all.],
-  [`hostOS`], [os-release], [Set when every worker runs the same distribution.],
+  [`hostOS`], [os-release], [Set when every worker runs the same distribution, and per group for workers that run another.],
   [Group `environment`], [The worker's own distribution markers], [Set on a group whose workers run on another distribution than the cluster's.],
 )
 
@@ -640,7 +642,7 @@ under `spec.nodeSets[].cluster`, on a document with more than one node set or on
   [`enableChecksumValidation`, `socketsToUse`, `nodesPerSocket`], [Not set. Nothing the probe reads decides them. A note says what checksum validation would need on these devices.], [`enableChecksumValidation` is applied to each disk when the cluster is created and never afterward, so a cluster created without it cannot have it. Set `enableAtomicity4K` with it when the note names devices that need it.],
   [`enableAtomicity4K`], [Not set, because checksum validation is not.], [Safe only on a device that completes a 4K write whole. The note names the devices whose report says so.],
   [`tolerations`], [The tolerations the run probed with.], [What the storage-node pods tolerate. Correct it when the run's tolerations are not the fleet's taints.],
-  [`spec.hostOS`], [The workers' distribution, when they all run the same one.], [Set it when os-release was unreadable. One document states one host OS for all its workers, so workers on different distributions go into separate documents.],
+  [`spec.hostOS`], [The workers' distribution, when they all run the same one.], [Set it when os-release was unreadable. Workers on another operating system are in groups that state their own `hostOS`, which overrides it for their nodes.],
   [`spec.environment`], [The run's `status.environment`.], [Correct it when the platform was misread, for example after `EnvironmentPartiallyRead`. In a cluster with workers from several providers it is the control plane's.],
   [Group `environment`], [The distribution of a group's workers, where it is not the cluster's.], [Decides the group's `enableKubeletConfiguration`, which matters only where CPU topology is on. A stated `spec.cluster.enableKubeletConfiguration` overrides it for every group.],
 )

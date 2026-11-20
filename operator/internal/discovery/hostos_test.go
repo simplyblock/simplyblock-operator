@@ -1,16 +1,18 @@
-// What a run concludes about the fleet's operating system, and when it refuses
-// to conclude anything.
+// What a run concludes about the fleet's operating system, and what it drafts
+// for the workers that run another one.
 //
-// The cases that matter are the disagreements. One document states one host OS
-// because one cluster runs one DaemonSet, so a fleet whose workers differ has
-// no answer to state, and the interesting question is whether the run says so
-// or averages it away.
+// The cases that matter are the disagreements. The document states one host OS
+// for the fleet only where every worker agrees, and a fleet whose workers differ
+// is drafted as groups that each state their own, so the interesting question
+// is whether the run says so or averages it away.
 
 package discovery
 
 import (
 	"strings"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/api/equality"
 
 	"github.com/simplyblock/atlas/inventory"
 
@@ -85,9 +87,8 @@ func TestHostOSForStatesTheDistroAndNoVersionForAFleetOfTwoReleases(t *testing.T
 }
 
 func TestHostOSForRefusesToStateOneForAFleetThatDisagrees(t *testing.T) {
-	// One document becomes one cluster, and one cluster runs one storage-node
-	// DaemonSet with one UBUNTU_HOST in it. There is no per-worker answer to
-	// state, so a fleet that disagrees gets none and a reviewer is told which
+	// A fleet that disagrees has no one host OS for the document to state, so
+	// it states none, its groups state their own, and a reviewer is told which
 	// workers run what.
 	plan := Plan{Workers: []Worker{
 		runningOS("worker-01", "ubuntu", "Debian", "22.04"),
@@ -168,5 +169,77 @@ func TestHostOSForIgnoresAWorkerTheDraftLeftOut(t *testing.T) {
 	os, _ := HostOSFor(plan)
 	if os == nil || os.Distro != simplyblockv1alpha2.DistroUbuntu {
 		t.Fatalf("stated %+v, want ubuntu", os)
+	}
+}
+
+// osPlan plans a uniform fleet whose workers worker-1, worker-2, and so on read
+// the operating systems given, each a distro and a version, in that order.
+func osPlan(oses ...[2]string) Plan {
+	reports := uniformFleet(len(oses))
+	for i, os := range oses {
+		reports[i].HostOS = nodeprobe.HostOS{Distro: os[0], Version: os[1], Architecture: "x86_64"}
+	}
+	return Planner{}.Plan(reports, nil)
+}
+
+// hostOSByWorker maps every drafted worker to its group's host OS.
+func hostOSByWorker(plan Plan) map[string]*simplyblockv1alpha2.HostOSSpec {
+	out := map[string]*simplyblockv1alpha2.HostOSSpec{}
+	for _, set := range plan.NodeSets {
+		for _, group := range set.Groups {
+			for _, worker := range group.Workers {
+				out[worker] = group.HostOS
+			}
+		}
+	}
+	return out
+}
+
+func TestAFleetOnTwoOperatingSystemsIsDraftedAsGroupsStatingTheirOwn(t *testing.T) {
+	// An EKS cluster with an Ubuntu node group beside Amazon Linux ones: the
+	// document states no host OS, so every group states the one its workers
+	// run, and identical hardware on two operating systems is two groups.
+	plan := osPlan([2]string{"ubuntu", "22.04"}, [2]string{"amzn", "2023"}, [2]string{"amzn", "2023"})
+
+	want := map[string]simplyblockv1alpha2.HostOSSpec{
+		"worker-1": {Distro: "ubuntu", Family: simplyblockv1alpha2.HostOSFamilyDebian, Version: "22.04"},
+		"worker-2": {Distro: "amzn", Family: simplyblockv1alpha2.HostOSFamilyRedHat, Version: "2023"},
+		"worker-3": {Distro: "amzn", Family: simplyblockv1alpha2.HostOSFamilyRedHat, Version: "2023"},
+	}
+	got := hostOSByWorker(plan)
+	for worker, os := range want {
+		if got[worker] == nil || !equality.Semantic.DeepEqual(*got[worker], os) {
+			t.Errorf("%s is drafted with hostOS %+v, want %+v", worker, got[worker], os)
+		}
+	}
+	if n := groupCount(plan); n != 2 {
+		t.Errorf("the draft has %d group(s), want one per operating system", n)
+	}
+}
+
+func TestAFleetOfTwoReleasesIsDraftedAsGroupsStatingTheirRelease(t *testing.T) {
+	// The document states amzn and no version, which no worker runs exactly,
+	// so each group states its release.
+	plan := osPlan([2]string{"amzn", "2"}, [2]string{"amzn", "2023"})
+
+	got := hostOSByWorker(plan)
+	for worker, version := range map[string]string{"worker-1": "2", "worker-2": "2023"} {
+		if got[worker] == nil || got[worker].Version != version {
+			t.Errorf("%s is drafted with hostOS %+v, want the release %q", worker, got[worker], version)
+		}
+	}
+}
+
+func TestAUniformFleetIsDraftedWithNoGroupHostOS(t *testing.T) {
+	// The document states what every worker runs, so no group repeats it.
+	plan := osPlan([2]string{"ubuntu", "22.04"}, [2]string{"ubuntu", "22.04"}, [2]string{"ubuntu", "22.04"})
+
+	for worker, os := range hostOSByWorker(plan) {
+		if os != nil {
+			t.Errorf("%s is drafted with hostOS %+v, which the document already states", worker, *os)
+		}
+	}
+	if n := groupCount(plan); n != 1 {
+		t.Errorf("the draft has %d group(s), want the one a uniform fleet is", n)
 	}
 }

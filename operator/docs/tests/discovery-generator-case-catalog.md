@@ -502,6 +502,7 @@ The question each unratified rung is really asking:
 | TMPL-07 | `spec.environment` from the run's status                      | Copied verbatim into the document                                                                  | `CM`    |
 | TMPL-08 | Any run                                                       | No `deviceFilter` anywhere in the document: the resolved list is the record                        | `CM`    |
 | TMPL-09 | Workers from three providers under a GKE control plane        | `spec.environment: GKE`, and the EKS and OKE workers each in a group stating its own `environment` | `CM`    |
+| TMPL-10 | An Ubuntu worker beside two Amazon Linux 2023 workers on EKS  | No `spec.hostOS`, and each operating system in a group stating its own `hostOS`, release included  | `CM`    |
 
 ## 13a. Captured fleets
 

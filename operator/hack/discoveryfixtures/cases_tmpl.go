@@ -67,6 +67,15 @@ func templateCases() map[string]Case {
 	cases["TMPL-09"] = Case{Family: "tmpl", Reports: providers, Nodes: providerNodes,
 		Environment: simplyblockv1alpha2.KubernetesEnvironmentGKE}
 
+	// One EKS cluster on two operating systems: an Ubuntu node group beside
+	// Amazon Linux 2023 ones, on otherwise identical machines.
+	systems := plain()
+	for i := 1; i < len(systems); i++ {
+		systems[i].HostOS = runningAmazonLinux()
+	}
+	cases["TMPL-10"] = Case{Family: "tmpl", Reports: systems, Nodes: kubeFleet(systems),
+		Environment: simplyblockv1alpha2.KubernetesEnvironmentEKS}
+
 	cases["TMPL-04"] = with(&simplyblockv1alpha2.DiscoverSpec{
 		ConfigName: "discovered-the-quarterly-storage-expansion-for-the-frankfurt-racks",
 	})
@@ -81,6 +90,7 @@ func templateCases() map[string]Case {
 		"TMPL-07": "the-environment-is-copied-through",
 		"TMPL-08": "the-filter-is-resolved-and-not-carried",
 		"TMPL-09": "workers-on-three-providers",
+		"TMPL-10": "workers-on-two-operating-systems",
 	}
 	gaps := map[string]string{"TMPL-04": "G-11", "TMPL-06": "G-12"}
 	for id, slug := range slugs {

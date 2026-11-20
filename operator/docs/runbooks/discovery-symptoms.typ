@@ -171,7 +171,7 @@ D 12.
   [Some workers carry no label (`TopologyIncomplete`), a value is invalid (`FailureDomainInvalid`), or the stripe does not fit the domains.],
   [R 8.1, D 10],
   [`hostOS` is missing from the draft], [The `ConfigWritten` events, and `hostOS` in the reports],
-  [The workers run different distributions, or a worker's os-release could not be read.],
+  [The workers run different distributions, in which case each group states its own `hostOS`, or a worker's os-release could not be read.],
   [D 4],
   [`vcpuCount` or `minHugePagesSize` is lower than expected], [`cpu` and `hugePages` in the reports],
   [Both come from the smallest worker, counted on the NUMA node the disks are on. Huge pages under 1 GiB leave the setting unset.],

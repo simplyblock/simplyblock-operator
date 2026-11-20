@@ -974,15 +974,16 @@ toward either.
 **`spec.hostOS` is read the same way and stated only when the fleet agrees.**
 Each probe reads its own host's `os-release`, which is on the worker's root
 filesystem rather than in the trees the rest of the inventory comes from, and
-the run states what every worker reported. One document becomes one cluster,
-which runs one storage-node DaemonSet, which carries one host OS for every
-worker it schedules, so a fleet whose workers run different distributions has no
-answer to state: the run states none and writes an event naming which worker
-runs what. The same is true of a fleet whose `os-release` nothing could read,
-which on a probe means its host's root filesystem was not mounted into it. The
-version follows the same rule one level down: a fleet of one distribution in two
-releases states the distribution and no version, with a note naming which worker
-runs which release.
+the run states what every worker reported. A fleet whose workers run different
+distributions has no host OS for the whole document, so the run states none
+there, and every worker that does not run exactly what the document states
+carries its own into its group key: identical machines on two operating systems
+become two groups, each stating its `hostOS`, and a note names which worker runs
+what. The same holds one level down for the version: a fleet of one distribution
+in two releases states the distribution and no version, and each group states
+its release. A worker whose `os-release` nothing could read, which on a probe
+means its host's root filesystem was not mounted into it, says nothing about
+itself and is drafted without a host OS of its own.
 
 **`spec.discover.tolerations` is what the run may probe through, and what the
 draft then states.** A probe pod is pinned with `spec.nodeName`, which bypasses
