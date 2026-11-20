@@ -154,6 +154,9 @@ class MetadataWorkload(Component):
         #: The release thread of each worker, by worker pod: while it runs, a worker without
         #: an op log is still on its way, not one whose agent never ran.
         self._release_of: dict[str, threading.Thread] = {}
+        #: The cluster's node names. The run carries the short ones, and a pod's nodeName
+        #: has to be the full one or the pod is never scheduled.
+        self._nodes: list[str] = []
 
     # ── the run ──────────────────────────────────────────────────────────────────────
 
@@ -173,6 +176,7 @@ class MetadataWorkload(Component):
         # shortens the work and never the quiet tail.
         self._stop_at = time.time() + span
         ns = str(self.opt("namespace"))
+        self._nodes = kube.node_names()
         for a in plan:
             w = _Worker(a=a, pod=f"{ctx.run_id}-meta-{a.index}",
                         verifier=f"{ctx.run_id}-metaverify-{a.index}",
@@ -378,7 +382,8 @@ class MetadataWorkload(Component):
             "apiVersion": "v1", "kind": "Pod",
             "metadata": {"name": name, "labels": self._labels(ctx)},
             "spec": {
-                "nodeName": node, "restartPolicy": "Never", "terminationGracePeriodSeconds": 5,
+                "nodeName": kube.full_node_name(node, self._nodes),
+                "restartPolicy": "Never", "terminationGracePeriodSeconds": 5,
                 "containers": [{
                     "name": "meta", "image": str(self.opt("image")),
                     "imagePullPolicy": "IfNotPresent", "command": ["sh", "-c", script],

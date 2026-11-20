@@ -82,6 +82,14 @@ func (t *Tracker) Check(ctx context.Context, spec export.Spec) error {
 	return t.Relay.Check(ctx, spec)
 }
 
+// Assembled remembers an export the guest assembled outside Create, as a
+// promotion does, so the refresh and reassembly cover it from then on.
+func (t *Tracker) Assembled(spec export.Spec, conn lvol.Connection) {
+	unlock := t.lock(spec.Path)
+	defer unlock()
+	t.track(spec, conn)
+}
+
 func (t *Tracker) track(spec export.Spec, conn lvol.Connection) {
 	spec.Connection = nil
 	t.mu.Lock()

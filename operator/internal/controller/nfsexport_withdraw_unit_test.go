@@ -16,7 +16,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
-	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // fakeFlows records the addresses the reconciler asked the nodes to forget.
@@ -230,7 +229,7 @@ func TestAReplacementWithTheSameAddressForgetsNothingMore(t *testing.T) {
 func TestTheServiceIPIsReadFromTheServiceWhenTheStatusLacksIt(t *testing.T) {
 	r, cl, _, flows := newWithdrawReconciler(t, readyPodHosted(), terminatingMDSPod())
 	svc := &corev1.Service{}
-	key := client.ObjectKey{Namespace: testOperatorNS, Name: utils.MDSServiceName(testMDSPod)}
+	key := client.ObjectKey{Namespace: testOperatorNS, Name: mdsServiceNameOf(testMDSPod)}
 	if err := cl.Get(context.Background(), key, svc); err != nil {
 		t.Fatal(err)
 	}
