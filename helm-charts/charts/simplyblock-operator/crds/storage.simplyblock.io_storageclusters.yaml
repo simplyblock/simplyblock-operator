@@ -1049,6 +1049,225 @@ spec:
                     count requires, so simplyblock takes more when it needs more. Omitted,
                     the computed minimum is used.
                   type: string
+                multiAttach:
+                  description: |-
+                    MultiAttach runs the cluster on LUNs of an external storage array, each
+                    presented to several storage nodes so a failed node's LUN is taken over
+                    by another. It requires raidDevices, deviceClass LogicalBlock, and a
+                    cluster mode other than Single, and is fixed when the cluster is
+                    created; the array block within it may change (endpoint, options, a
+                    rotated login).
+                  properties:
+                    array:
+                      description: |-
+                        Array is the storage array simplyblock creates, presents, grows, and
+                        cuts off the cluster's LUNs on. Omitted, the LUNs are presented to the
+                        workers by other means, and a failed node's LUN is never taken over,
+                        because nothing can cut the failed node off first.
+                      properties:
+                        caBundle:
+                          description: |-
+                            CABundle is the PEM certificate (or bundle) the array's management
+                            endpoint is verified against, for an array whose certificate no public
+                            authority signed.
+                          maxLength: 65536
+                          type: string
+                        credentials:
+                          description: Credentials says where the array's login comes from.
+                          properties:
+                            allowLocalKeyStore:
+                              description: |-
+                                AllowLocalKeyStore lets a cluster without an external key management
+                                service keep a Secret's login in its local key store, where it is
+                                effectively unencrypted. It is meant for test environments; without it
+                                such a registration is refused. Omitted, the control plane's setting is
+                                left as it is.
+                              type: boolean
+                            kmipSecret:
+                              description: KMIPSecret names the KMIP secret-data object holding the login.
+                              properties:
+                                field:
+                                  description: |-
+                                    Field takes the object's whole value as the one login field of this
+                                    name (an API token). Omitted, the value is read as a JSON object of
+                                    login fields.
+                                  maxLength: 64
+                                  type: string
+                                uid:
+                                  description: UID is the object's unique identifier on the KMIP server.
+                                  maxLength: 255
+                                  minLength: 1
+                                  type: string
+                              required:
+                                - uid
+                              type: object
+                            secretRef:
+                              description: |-
+                                SecretRef names the Secret, in the cluster's namespace, whose keys are
+                                the plugin's login fields. Editing the Secret rotates the login.
+                              properties:
+                                name:
+                                  default: ""
+                                  description: |-
+                                    Name of the referent.
+                                    This field is effectively required, but due to backwards compatibility is
+                                    allowed to be empty. Instances of this type with an empty value here are
+                                    almost certainly wrong.
+                                    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                  type: string
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            source:
+                              description: |-
+                                Source selects where the login is kept: None, Secret, VaultKV, or
+                                KMIPSecret.
+                              enum:
+                                - None
+                                - Secret
+                                - VaultKV
+                                - KMIPSecret
+                              type: string
+                            vaultKV:
+                              description: VaultKV names the Vault KV v2 secret holding the login fields.
+                              properties:
+                                mount:
+                                  description: Mount is the KV v2 secrets engine's mount path, e.g., secret.
+                                  maxLength: 255
+                                  minLength: 1
+                                  type: string
+                                path:
+                                  description: Path is the secret's path within the mount, e.g., arrays/pure01.
+                                  maxLength: 1024
+                                  minLength: 1
+                                  type: string
+                                version:
+                                  description: |-
+                                    Version pins one version of the secret. Omitted, the newest is read
+                                    every time, so rotating the secret in Vault rotates the login.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                              required:
+                                - mount
+                                - path
+                              type: object
+                          required:
+                            - source
+                          type: object
+                          x-kubernetes-validations:
+                            - message: secretRef is set exactly when source is Secret
+                              rule: (self.source == 'Secret') == has(self.secretRef)
+                            - message: vaultKV is set exactly when source is VaultKV
+                              rule: (self.source == 'VaultKV') == has(self.vaultKV)
+                            - message: kmipSecret is set exactly when source is KMIPSecret
+                              rule: (self.source == 'KMIPSecret') == has(self.kmipSecret)
+                            - message: allowLocalKeyStore applies to the source Secret only
+                              rule: '!has(self.allowLocalKeyStore) || self.source == ''Secret'''
+                        endpoint:
+                          description: |-
+                            Endpoint is the array's management URL, e.g.
+                            https://pure01.example.com. Plugins that need none (aws-ebs) leave it
+                            out.
+                          maxLength: 2048
+                          type: string
+                        journal:
+                          description: |-
+                            Journal is where each storage node keeps its journal. Omitted, every
+                            node's journal is a LUN of its own on the array.
+                          properties:
+                            options:
+                              additionalProperties:
+                                type: string
+                              description: |-
+                                Options are plugin settings for the journal LUNs, applied over the
+                                array's options, such as a pool of higher performance or priority to
+                                create them in.
+                              maxProperties: 64
+                              type: object
+                            placement:
+                              default: LUN
+                              description: |-
+                                Placement is LUN (a LUN of its own on the array) or Local (a local disk
+                                or partition of the worker).
+                              enum:
+                                - LUN
+                                - Local
+                              type: string
+                            size:
+                              anyOf:
+                                - type: integer
+                                - type: string
+                              description: |-
+                                Size is the size of each node's journal LUN. Omitted, it is 3% of
+                                lunSize, at least 2 GiB.
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                          type: object
+                          x-kubernetes-validations:
+                            - message: size and options apply to the placement LUN only
+                              rule: '!has(self.placement) || self.placement == ''LUN'' || (!has(self.size) && !has(self.options))'
+                        lunSize:
+                          anyOf:
+                            - type: integer
+                            - type: string
+                          description: |-
+                            LunSize is the size of the LUN created for each storage node. All
+                            nodes' LUNs are created at this size and grown together: raising it
+                            grows every LUN at the array and the cluster's devices onto it, online
+                            (status.array.lunSize follows). It cannot be lowered.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        options:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            Options are the plugin's own settings, such as the pool, storage
+                            virtual machine, CPG, or port group the LUNs are created in. Each
+                            plugin documents the keys it reads.
+                          maxProperties: 64
+                          type: object
+                        plugin:
+                          description: |-
+                            Plugin names the array family: pure-flasharray, netapp-ontap,
+                            dell-powerstore, dell-powermax, dell-powerflex, hpe-wsapi, hpe-nimble,
+                            ibm-flashsystem, hitachi-vsp, huawei-dorado, infinidat-infinibox, or
+                            aws-ebs. A plugin installed into the control plane separately is named
+                            the same way.
+                          maxLength: 64
+                          minLength: 1
+                          pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
+                          type: string
+                        protocol:
+                          description: |-
+                            Protocol is how the workers reach the LUNs. Each worker is registered on
+                            the array with its initiator for this protocol: its iSCSI IQN, FC port
+                            names, NVMe host NQN, or PowerFlex SDC GUID. Required by every plugin but
+                            aws-ebs.
+                          enum:
+                            - iscsi
+                            - fc
+                            - nvme-tcp
+                            - nvme-rdma
+                            - nvme-fc
+                            - sdc
+                          type: string
+                      required:
+                        - credentials
+                        - lunSize
+                        - plugin
+                      type: object
+                    faultTolerance:
+                      description: |-
+                        FaultTolerance is how many storage-node failures the cluster survives:
+                        1 or 2. It is fixed when the cluster is created.
+                      enum:
+                        - 1
+                        - 2
+                      format: int32
+                      type: integer
+                  required:
+                    - faultTolerance
+                  type: object
                 nvmfBasePort:
                   default: 4420
                   description: |-
@@ -1061,6 +1280,20 @@ spec:
                   maximum: 65535
                   minimum: 1024
                   type: integer
+                  x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                raidDevices:
+                  default: false
+                  description: |-
+                    RaidDevices declares that every data device of the cluster is protected
+                    below simplyblock: a hardware RAID LUN, or an md or dm RAID array, so
+                    that a disk failure is absorbed under the device and never costs a
+                    stripe a chunk. The cluster then needs dataChunks+parityChunks data
+                    devices rather than dataChunks+2*parityChunks, since the spare devices a
+                    rebuild would land on are not needed. It is sent to the control plane as
+                    raid_devices when the cluster is created and cannot change afterward.
+                  type: boolean
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
@@ -1913,6 +2146,8 @@ spec:
               x-kubernetes-validations:
                 - message: field stripe is immutable once set
                   rule: '!has(oldSelf.stripe) || has(self.stripe)'
+                - message: field raidDevices is immutable once set
+                  rule: '!has(oldSelf.raidDevices) || has(self.raidDevices)'
                 - message: field fabricType is immutable once set
                   rule: '!has(oldSelf.fabricType) || has(self.fabricType)'
                 - message: field nvmfBasePort is immutable once set
@@ -1953,6 +2188,10 @@ spec:
                   rule: (has(self.storageNodes) && has(self.storageNodes.network)) == (has(oldSelf.storageNodes) && has(oldSelf.storageNodes.network))
                 - message: a cluster cannot become a supercluster, or stop being one, after creation
                   rule: has(self.supercluster) == has(oldSelf.supercluster)
+                - message: multiAttach and its faultTolerance are fixed when the cluster is created
+                  rule: has(self.multiAttach) == has(oldSelf.multiAttach) && (!has(self.multiAttach) || self.multiAttach.faultTolerance == oldSelf.multiAttach.faultTolerance)
+                - message: multiAttach requires raidDevices, deviceClass LogicalBlock, and a cluster mode other than Single
+                  rule: '!has(self.multiAttach) || (has(self.raidDevices) && self.raidDevices && has(self.deviceClass) && self.deviceClass == ''LogicalBlock'' && !(has(self.clusterMode) && self.clusterMode == ''Single''))'
                 - message: superclusterRef is set at creation and never changed
                   rule: has(self.superclusterRef) == has(oldSelf.superclusterRef) && (!has(self.superclusterRef) || self.superclusterRef == oldSelf.superclusterRef)
                 - message: a supercluster cannot be a member of another
@@ -2026,6 +2265,48 @@ spec:
                         State is the arbiter's state: steady, deciding, partitioned, degraded or
                         healing.
                       type: string
+                  type: object
+                array:
+                  description: Array is the registration of a multi-attach cluster's storage array.
+                  properties:
+                    credentialsVersion:
+                      description: |-
+                        CredentialsVersion is the resource version of the credentials Secret
+                        last registered; a newer one is registered again.
+                      type: string
+                    id:
+                      description: ID is the control plane's id of the registered array.
+                      type: string
+                    lunSize:
+                      anyOf:
+                        - type: integer
+                        - type: string
+                      description: |-
+                        LunSize is the size every LUN of the cluster has been grown to. Raising
+                        spec.multiAttach.array.lunSize above it grows every LUN at the array and
+                        the cluster's devices onto it; LunSize follows once that succeeded.
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    message:
+                      description: |-
+                        Message is why the last registration was refused; empty once the array
+                        is registered.
+                      type: string
+                    observedGeneration:
+                      description: ObservedGeneration is the cluster generation last registered.
+                      format: int64
+                      type: integer
+                    protocols:
+                      description: Protocols are the protocols the array reported it can serve.
+                      items:
+                        type: string
+                      type: array
+                    registered:
+                      description: |-
+                        Registered is true once the control plane has connected to the array
+                        with the current spec and login and saved the registration. Storage
+                        nodes are added only after that, because adding one creates its LUN.
+                      type: boolean
                   type: object
                 capacity:
                   description: Capacity is the members' capacity summed, on a supercluster only.

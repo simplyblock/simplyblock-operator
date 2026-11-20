@@ -876,6 +876,8 @@ const (
 // +kubebuilder:validation:XValidation:rule="has(self.supercluster) || (has(self.maxSubsystemCount) && has(self.vcpuCount))",message="maxSubsystemCount and vcpuCount are required unless the cluster is a supercluster"
 // +kubebuilder:validation:XValidation:rule="(has(self.storageNodes) && has(self.storageNodes.network)) == (has(oldSelf.storageNodes) && has(oldSelf.storageNodes.network))",message="spec.storageNodes.network is set when the cluster is created and cannot be added or removed afterward"
 // +kubebuilder:validation:XValidation:rule="has(self.supercluster) == has(oldSelf.supercluster)",message="a cluster cannot become a supercluster, or stop being one, after creation"
+// +kubebuilder:validation:XValidation:rule="has(self.multiAttach) == has(oldSelf.multiAttach) && (!has(self.multiAttach) || self.multiAttach.faultTolerance == oldSelf.multiAttach.faultTolerance)",message="multiAttach and its faultTolerance are fixed when the cluster is created"
+// +kubebuilder:validation:XValidation:rule="!has(self.multiAttach) || (has(self.raidDevices) && self.raidDevices && has(self.deviceClass) && self.deviceClass == 'LogicalBlock' && !(has(self.clusterMode) && self.clusterMode == 'Single'))",message="multiAttach requires raidDevices, deviceClass LogicalBlock, and a cluster mode other than Single"
 // +kubebuilder:validation:XValidation:rule="has(self.superclusterRef) == has(oldSelf.superclusterRef) && (!has(self.superclusterRef) || self.superclusterRef == oldSelf.superclusterRef)",message="superclusterRef is set at creation and never changed"
 // +kubebuilder:validation:XValidation:rule="!(has(self.supercluster) && has(self.superclusterRef))",message="a supercluster cannot be a member of another"
 // +kubebuilder:validation:XValidation:rule="has(self.superclusterRef) || !has(self.disablePlacement)",message="disablePlacement is valid only on a member"
@@ -923,6 +925,27 @@ type StorageClusterSpec struct {
 	// +optional
 	// +k8s:immutable
 	Stripe *StripeSpec `json:"stripe,omitempty"`
+
+	// RaidDevices declares that every data device of the cluster is protected
+	// below simplyblock: a hardware RAID LUN, or an md or dm RAID array, so
+	// that a disk failure is absorbed under the device and never costs a
+	// stripe a chunk. The cluster then needs dataChunks+parityChunks data
+	// devices rather than dataChunks+2*parityChunks, since the spare devices a
+	// rebuild would land on are not needed. It is sent to the control plane as
+	// raid_devices when the cluster is created and cannot change afterward.
+	// +kubebuilder:default=false
+	// +optional
+	// +k8s:immutable
+	RaidDevices *bool `json:"raidDevices,omitempty"`
+
+	// MultiAttach runs the cluster on LUNs of an external storage array, each
+	// presented to several storage nodes so a failed node's LUN is taken over
+	// by another. It requires raidDevices, deviceClass LogicalBlock, and a
+	// cluster mode other than Single, and is fixed when the cluster is
+	// created; the array block within it may change (endpoint, options, a
+	// rotated login).
+	// +optional
+	MultiAttach *MultiAttachSpec `json:"multiAttach,omitempty"`
 
 	// FabricType is the storage fabric the cluster serves volumes over. It
 	// describes on-wire layout, so it cannot change under a live cluster.
@@ -1439,6 +1462,10 @@ type StorageClusterStatus struct {
 	// control plane; set only when spec.stretched is.
 	// +optional
 	Stretched *StretchedStatus `json:"stretched,omitempty"`
+
+	// Array is the registration of a multi-attach cluster's storage array.
+	// +optional
+	Array *StorageArrayStatus `json:"array,omitempty"`
 
 	// Role is what this cluster is within a supercluster: Standalone,
 	// Supercluster, or PlacementGroup for a member.

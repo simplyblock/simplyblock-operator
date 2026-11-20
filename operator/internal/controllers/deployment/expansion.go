@@ -337,6 +337,8 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 			EnableMetadataJournal:    template.EnableMetadataJournal,
 			MinHugePagesSize:         template.MinHugePagesSize,
 			Stripe:                   template.Stripe,
+			RaidDevices:              template.RaidDevices,
+			MultiAttach:              template.MultiAttach.DeepCopy(),
 			ClusterMode:              template.ClusterMode,
 			EnableArbitration:        template.EnableArbitration,
 			Arbitration:              template.Arbitration,

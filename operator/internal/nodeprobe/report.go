@@ -62,7 +62,23 @@ import (
 // holds, and is a bump because a version-10 report decodes with none. A run
 // asked to attach its storage nodes through a definition would read that as a
 // worker in a cluster without Multus and plan it onto host networking.
-const ReportVersion = 11
+//
+// Version 12 carries the worker's SAN initiators, and is a bump because a
+// version-11 report decodes with none: a multi-attach run would read that as a
+// worker the storage array cannot present a LUN to.
+const ReportVersion = 12
+
+// SANInitiators are a worker's storage-network identities. A field is empty
+// when the worker has no such initiator configured.
+type SANInitiators struct {
+	// ISCSIIQN is the iSCSI initiator name.
+	ISCSIIQN string `json:"iscsiIQN,omitempty"`
+	// FCWWPNs are the Fibre Channel HBA port names.
+	FCWWPNs []string `json:"fcWWPNs,omitempty"`
+	// NVMeHostNQN is the NVMe host NQN, the identity on NVMe/TCP, NVMe/RDMA,
+	// and NVMe/FC alike.
+	NVMeHostNQN string `json:"nvmeHostNQN,omitempty"`
+}
 
 // Report is one worker's inventory as the probe found it.
 type Report struct {
@@ -104,6 +120,11 @@ type Report struct {
 	// which package manager would install it, and two workers of one cluster
 	// can differ.
 	HostOS HostOS `json:"hostOS"`
+
+	// SANInitiators are what a storage array knows the worker by, for a
+	// cluster whose LUNs the array presents to it. Nil when the worker has
+	// none configured.
+	SANInitiators *SANInitiators `json:"sanInitiators,omitempty"`
 
 	// NVMeControllers is every NVMe controller on the machine's PCI bus, with
 	// the driver that owns each.

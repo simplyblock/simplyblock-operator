@@ -132,6 +132,21 @@ const (
 	// the only record that an attempt was made and lost.
 	ActivationRetried = "ActivationRetried"
 
+	// ArrayRegistered says the control plane connected to a multi-attach
+	// cluster's storage array with the current spec and login and saved it.
+	ArrayRegistered = "ArrayRegistered"
+	// ArrayRegistrationRefused says the array was not registered: its login
+	// could not be read, or the control plane could not connect with it.
+	// Storage nodes are not added until it is.
+	ArrayRegistrationRefused = "ArrayRegistrationRefused"
+	// ArrayLUNsGrown says every LUN of the cluster was grown to the size of
+	// spec.multiAttach.array.lunSize, and the cluster's devices with them.
+	ArrayLUNsGrown = "ArrayLUNsGrown"
+	// ArrayLUNGrowthFailed says the LUNs could not all be grown to lunSize;
+	// the growth is repeated, and a LUN that already has the size is left
+	// alone.
+	ArrayLUNGrowthFailed = "ArrayLUNGrowthFailed"
+
 	// ServiceClassesApplied says spec.serviceClasses differed from what the
 	// control plane held and was sent to it.
 	ServiceClassesApplied = "ServiceClassesApplied"

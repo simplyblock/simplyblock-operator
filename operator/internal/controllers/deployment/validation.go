@@ -647,7 +647,7 @@ func (r *ClusterDeploymentConfigReconciler) growthLimit(
 	case err != nil:
 		return "", fmt.Errorf("reading StorageCluster %s: %w", config.Spec.ClusterRef, err)
 	}
-	held, err := existingFootprint(ctx, r.Client, config.Namespace, cluster.Name)
+	held, _, err := existingFootprint(ctx, r.Client, config.Namespace, cluster.Name)
 	if err != nil {
 		return "", err
 	}

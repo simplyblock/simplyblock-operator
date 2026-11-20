@@ -350,42 +350,43 @@ Files: `operator/internal/controllers/cluster/cel_validation_test.go`,
 `operator/internal/controllers/cluster/imagepullpolicy_test.go`, and
 `operator/internal/controllers/cluster/interfaces_test.go`
 
-| #    | Scenario                                                                                                 | Type     | Test                                                                  |
-|------|----------------------------------------------------------------------------------------------------------|----------|-----------------------------------------------------------------------|
-| I-01 | Reconciling a not-found resource returns no requeue                                                      | Negative | `TestReconcilingAClusterThatIsGoneDoesNothing` (unit)                 |
-| I-02 | `spec.stripe` changed after creation: rejected by the CEL rule                                           | Negative | —                                                                     |
-| I-03 | `spec.fabricType` omitted at creation, set later: accepted, then frozen                                  | Boundary | —                                                                     |
-| I-04 | `spec.enableFailureDomains` omitted at creation, set later: rejected                                     | Boundary | —                                                                     |
-| I-05 | `spec.enableNodeAffinity` set at creation, changed later: rejected                                       | Negative | —                                                                     |
-| I-06 | `spec.maxSubsystemCount` omitted: creation rejected as `Required`                                        | Negative | —                                                                     |
-| I-07 | `spec.maxSubsystemCount` of 9 and of 76: both rejected by the range                                      | Boundary | —                                                                     |
-| I-08 | `spec.maxSubsystemCount` of 10 and of 500: both accepted                                                 | Boundary | —                                                                     |
-| I-09 | `spec.vcpuCount` of 3 rejected, of 4 accepted                                                            | Boundary | `TestStorageClusterVCPUCountMinimum`                                  |
-| I-10 | `spec.maxConcurrentWorkerRestarts` of 0: rejected by the minimum                                         | Boundary | —                                                                     |
-| I-11 | `spec.volumeMigrationSettings.dataRealignment.minMoves` of 0: rejected                                   | Boundary | —                                                                     |
-| I-12 | `spec.action` on `StorageClusterOps` outside the enum: rejected by admission                             | Negative | —                                                                     |
-| I-13 | `spec.clusterRef` changed after creation: rejected as immutable                                          | Negative | —                                                                     |
-| I-14 | Two `StorageClusterOps` for one cluster: the second stays `Pending`, then runs                           | Positive | —                                                                     |
-| I-15 | Lock released: the queued operation wakes from the cluster watch, not the requeue                        | Positive | —                                                                     |
-| I-16 | `kubectl delete` on a `Running` operation: `activeOpsRef` cleared                                        | Positive | —                                                                     |
-| I-17 | Operations on two different clusters run concurrently without interference                               | Positive | —                                                                     |
-| I-18 | Operation targeting a cluster with no `status.uuid` yet: fails informatively                             | Negative | —                                                                     |
-| I-19 | Short name `scops` resolves to the same list as the full kind                                            | Positive | —                                                                     |
-| I-20 | `spec.deviceClass` omitted at creation: the stored object reads `NVMe`                                   | Boundary | `TestStorageClusterDeviceClassIsImmutableFromCreation`                |
-| I-21 | `spec.deviceClass` created as `LogicalBlock`, changed to `NVMe`: rejected as immutable                   | Negative | `TestStorageClusterDeviceClassIsImmutableFromCreation`                |
-| I-22 | `spec.deviceClass` created as `LogicalBlock` and reapplied unchanged: accepted                           | Positive | —                                                                     |
-| I-23 | `spec.deviceClass` outside the enum: rejected                                                            | Negative | —                                                                     |
-| I-24 | `spec.deviceClass` omitted, then set to `LogicalBlock`: rejected, since the default is already the value | Boundary | `TestStorageClusterDeviceClassIsImmutableFromCreation`                |
-| I-25 | `spec.kms` absent at creation, set later: accepted; changed or cleared after: rejected                   | Boundary | `TestStorageClusterKMSIsImmutableOnceSet`                             |
-| I-26 | `status.step.state` outside the declared set: rejected by the CEL rule                                   | Negative | `TestStorageClusterStepRejectsAnUnknownValue`                         |
-| I-27 | `enableAtomic4kWrites` without `enableChecksumValidation`: rejected                                      | Negative | `TestStorageClusterCELRejectsAtomic4kWritesWithoutChecksumValidation` |
-| I-28 | Either checksum field changed or cleared after creation: rejected as immutable                           | Negative | `TestStorageClusterChecksumValidationFieldsAreImmutable`              |
-| I-29 | The default pool a cluster is created with picks up the CRD's declared defaults                          | Positive | `TestTheDefaultPoolIsFormattedXFS`                                    |
-| I-30 | Each of the seven supported schemes at creation: accepted; 3+1, 8+2, 2+0, 4+0, 1+3, and 16+4: rejected   | Negative | `TestStorageClusterCELAcceptsOnlyTheSupportedErasureCodingSchemes`    |
-| I-31 | A stripe stating one half only: read as the control plane's default for the other, and accepted          | Boundary | `TestStorageClusterCELReadsAnUnstatedHalfAsTheDefault`                |
-| I-32 | `spec.storageNodes` present with no `imagePullPolicy`: the stored object reads `Always`                  | Boundary | `TestAStorageClusterThatNamesNoPullPolicyPullsAlways`                 |
-| I-33 | `spec.storageNodes.dataInterfaces` changed, appended to, or cleared after creation: rejected             | Negative | `TestTheDataInterfacesAreImmutableOnceSet`                            |
-| I-34 | `spec.storageNodes.dataInterfaces` absent at creation, set later: accepted                               | Boundary | `TestTheDataInterfacesCanBeSetOnceOnAClusterThatOmittedThem`          |
+| #    | Scenario                                                                                                           | Type     | Test                                                                  |
+|------|--------------------------------------------------------------------------------------------------------------------|----------|-----------------------------------------------------------------------|
+| I-01 | Reconciling a not-found resource returns no requeue                                                                | Negative | `TestReconcilingAClusterThatIsGoneDoesNothing` (unit)                 |
+| I-02 | `spec.stripe` changed after creation: rejected by the CEL rule                                                     | Negative | —                                                                     |
+| I-03 | `spec.fabricType` omitted at creation, set later: accepted, then frozen                                            | Boundary | —                                                                     |
+| I-04 | `spec.enableFailureDomains` omitted at creation, set later: rejected                                               | Boundary | —                                                                     |
+| I-35 | `spec.raidDevices` defaults to false and is refused in either direction after creation; an unrelated update passes | Boundary | `TestStorageClusterRaidDevicesIsImmutable`                            |
+| I-05 | `spec.enableNodeAffinity` set at creation, changed later: rejected                                                 | Negative | —                                                                     |
+| I-06 | `spec.maxSubsystemCount` omitted: creation rejected as `Required`                                                  | Negative | —                                                                     |
+| I-07 | `spec.maxSubsystemCount` of 9 and of 76: both rejected by the range                                                | Boundary | —                                                                     |
+| I-08 | `spec.maxSubsystemCount` of 10 and of 500: both accepted                                                           | Boundary | —                                                                     |
+| I-09 | `spec.vcpuCount` of 3 rejected, of 4 accepted                                                                      | Boundary | `TestStorageClusterVCPUCountMinimum`                                  |
+| I-10 | `spec.maxConcurrentWorkerRestarts` of 0: rejected by the minimum                                                   | Boundary | —                                                                     |
+| I-11 | `spec.volumeMigrationSettings.dataRealignment.minMoves` of 0: rejected                                             | Boundary | —                                                                     |
+| I-12 | `spec.action` on `StorageClusterOps` outside the enum: rejected by admission                                       | Negative | —                                                                     |
+| I-13 | `spec.clusterRef` changed after creation: rejected as immutable                                                    | Negative | —                                                                     |
+| I-14 | Two `StorageClusterOps` for one cluster: the second stays `Pending`, then runs                                     | Positive | —                                                                     |
+| I-15 | Lock released: the queued operation wakes from the cluster watch, not the requeue                                  | Positive | —                                                                     |
+| I-16 | `kubectl delete` on a `Running` operation: `activeOpsRef` cleared                                                  | Positive | —                                                                     |
+| I-17 | Operations on two different clusters run concurrently without interference                                         | Positive | —                                                                     |
+| I-18 | Operation targeting a cluster with no `status.uuid` yet: fails informatively                                       | Negative | —                                                                     |
+| I-19 | Short name `scops` resolves to the same list as the full kind                                                      | Positive | —                                                                     |
+| I-20 | `spec.deviceClass` omitted at creation: the stored object reads `NVMe`                                             | Boundary | `TestStorageClusterDeviceClassIsImmutableFromCreation`                |
+| I-21 | `spec.deviceClass` created as `LogicalBlock`, changed to `NVMe`: rejected as immutable                             | Negative | `TestStorageClusterDeviceClassIsImmutableFromCreation`                |
+| I-22 | `spec.deviceClass` created as `LogicalBlock` and reapplied unchanged: accepted                                     | Positive | —                                                                     |
+| I-23 | `spec.deviceClass` outside the enum: rejected                                                                      | Negative | —                                                                     |
+| I-24 | `spec.deviceClass` omitted, then set to `LogicalBlock`: rejected, since the default is already the value           | Boundary | `TestStorageClusterDeviceClassIsImmutableFromCreation`                |
+| I-25 | `spec.kms` absent at creation, set later: accepted; changed or cleared after: rejected                             | Boundary | `TestStorageClusterKMSIsImmutableOnceSet`                             |
+| I-26 | `status.step.state` outside the declared set: rejected by the CEL rule                                             | Negative | `TestStorageClusterStepRejectsAnUnknownValue`                         |
+| I-27 | `enableAtomic4kWrites` without `enableChecksumValidation`: rejected                                                | Negative | `TestStorageClusterCELRejectsAtomic4kWritesWithoutChecksumValidation` |
+| I-28 | Either checksum field changed or cleared after creation: rejected as immutable                                     | Negative | `TestStorageClusterChecksumValidationFieldsAreImmutable`              |
+| I-29 | The default pool a cluster is created with picks up the CRD's declared defaults                                    | Positive | `TestTheDefaultPoolIsFormattedXFS`                                    |
+| I-30 | Each of the seven supported schemes at creation: accepted; 3+1, 8+2, 2+0, 4+0, 1+3, and 16+4: rejected             | Negative | `TestStorageClusterCELAcceptsOnlyTheSupportedErasureCodingSchemes`    |
+| I-31 | A stripe stating one half only: read as the control plane's default for the other, and accepted                    | Boundary | `TestStorageClusterCELReadsAnUnstatedHalfAsTheDefault`                |
+| I-32 | `spec.storageNodes` present with no `imagePullPolicy`: the stored object reads `Always`                            | Boundary | `TestAStorageClusterThatNamesNoPullPolicyPullsAlways`                 |
+| I-33 | `spec.storageNodes.dataInterfaces` changed, appended to, or cleared after creation: rejected                       | Negative | `TestTheDataInterfacesAreImmutableOnceSet`                            |
+| I-34 | `spec.storageNodes.dataInterfaces` absent at creation, set later: accepted                                         | Boundary | `TestTheDataInterfacesCanBeSetOnceOnAClusterThatOmittedThem`          |
 
 `I-01` is answered by a unit test rather than an integration one: a not-found read
 needs no API server to be a not-found read, and the row is kept because the ID is

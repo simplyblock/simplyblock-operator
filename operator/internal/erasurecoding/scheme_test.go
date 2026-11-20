@@ -155,8 +155,10 @@ func TestMinimumNodesFor(t *testing.T) {
 	}
 }
 
-// A single-node cluster places each chunk of a stripe on its own device, so
-// the scheme's width is the device floor (sbcli activation_minimum_devices,
+// Every storage node hands over at least one data device, whatever the
+// topology: a node with none is a node count the stripe cannot place a chunk
+// on. A single-node cluster places each chunk of a stripe on its own device,
+// so there the floor is the scheme's width (sbcli activation_minimum_devices,
 // no spare at one node).
 func TestMinimumDevicesPerNode(t *testing.T) {
 	one := Topology{SingleNode: true}
@@ -169,8 +171,87 @@ func TestMinimumDevicesPerNode(t *testing.T) {
 		if got := tc.s.MinimumDevicesPerNode(one); got != tc.want {
 			t.Errorf("%s single node: %d devices, want %d", tc.s, got, tc.want)
 		}
-		if got := tc.s.MinimumDevicesPerNode(Topology{}); got != 0 {
-			t.Errorf("%s ordinary cluster: %d, want 0", tc.s, got)
+		for _, topology := range []Topology{{}, {TwoNode: true}} {
+			if got := tc.s.MinimumDevicesPerNode(topology); got != 1 {
+				t.Errorf("%s %+v: %d devices per node, want 1", tc.s, topology, got)
+			}
+		}
+	}
+}
+
+// The data-device floor of a cluster, written out scheme by scheme: ndcs+npcs
+// devices to place a stripe across plus one spare device per tolerated failure
+// to rebuild onto, unless every device is declared RAID-protected below
+// simplyblock (raidDevices), in which case a device failure is not a chunk
+// loss and the spares are not needed.
+func TestMinimumDataDevices(t *testing.T) {
+	for _, tc := range []struct {
+		s        Scheme
+		plain    int
+		withRAID int
+	}{
+		{Scheme{1, 0}, 1, 1},
+		{Scheme{1, 1}, 3, 2},
+		{Scheme{2, 1}, 4, 3},
+		{Scheme{1, 2}, 5, 3},
+		{Scheme{2, 2}, 6, 4},
+		{Scheme{4, 1}, 6, 5},
+		{Scheme{4, 2}, 8, 6},
+	} {
+		if got := tc.s.MinimumDataDevices(false); got != tc.plain {
+			t.Errorf("%s: %d data devices, want %d", tc.s, got, tc.plain)
+		}
+		if got := tc.s.MinimumDataDevices(true); got != tc.withRAID {
+			t.Errorf("%s with raidDevices: %d data devices, want %d", tc.s, got, tc.withRAID)
+		}
+	}
+}
+
+// The topology-aware floor: a standard or two-node cluster counts devices
+// across its nodes, and a single-node cluster keeps its own rule, one device
+// per chunk of a stripe on the one node, which raidDevices does not lower
+// further because it is already the stripe's width.
+func TestMinimumDataDevicesFor(t *testing.T) {
+	for _, tc := range []struct {
+		s        Scheme
+		topology Topology
+		raid     bool
+		want     int
+	}{
+		{Scheme{1, 1}, Topology{}, false, 3},
+		{Scheme{1, 1}, Topology{}, true, 2},
+		{Scheme{1, 1}, Topology{TwoNode: true}, false, 3},
+		{Scheme{1, 1}, Topology{TwoNode: true}, true, 2},
+		{Scheme{4, 2}, Topology{}, false, 8},
+		{Scheme{4, 2}, Topology{}, true, 6},
+		{Scheme{1, 1}, Topology{SingleNode: true}, false, 2},
+		{Scheme{1, 1}, Topology{SingleNode: true}, true, 2},
+		{Scheme{2, 2}, Topology{SingleNode: true}, false, 4},
+		{Scheme{4, 2}, Topology{SingleNode: true}, true, 6},
+	} {
+		if got := tc.s.MinimumDataDevicesFor(tc.topology, tc.raid); got != tc.want {
+			t.Errorf("%s %+v raid=%v: %d data devices, want %d", tc.s, tc.topology, tc.raid, got, tc.want)
+		}
+	}
+}
+
+// The failure-domain floor is the stripe's width: a chunk per domain, so that
+// the loss of any one domain costs the stripe one chunk and no more.
+func TestMinimumFailureDomains(t *testing.T) {
+	for _, tc := range []struct {
+		s    Scheme
+		want int
+	}{
+		{Scheme{1, 0}, 1},
+		{Scheme{1, 1}, 2},
+		{Scheme{2, 1}, 3},
+		{Scheme{1, 2}, 3},
+		{Scheme{2, 2}, 4},
+		{Scheme{4, 1}, 5},
+		{Scheme{4, 2}, 6},
+	} {
+		if got := tc.s.MinimumFailureDomains(); got != tc.want {
+			t.Errorf("%s: %d failure domains, want %d", tc.s, got, tc.want)
 		}
 	}
 }

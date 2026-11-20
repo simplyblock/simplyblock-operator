@@ -933,7 +933,7 @@
     "/api/v2/clusters/{cluster_id}/grow-devices": {
       "post": {
         "summary": "Clusters:Grow Devices",
-        "description": "Grow every online lblk data device of the cluster to the size of its\nblock device, one device at a time. Used after the LUNs of the cluster\nwere grown on the storage array. If they have grown unevenly, the device\nweights are set to the new sizes and the cluster is rebalanced, unless\n``rebalance`` is false.",
+        "description": "Grow all lblk data devices of the cluster online by the same factor.\n\nEvery block device is rescanned (for example, after its LUN was grown on\nthe storage array), and every device grows by the smallest growth factor\nof all of them; the rest of a larger block device stays unused\n(`unused_size`). If one block device did not grow, nothing grows\n(`grown` false, `reason`). Device weights and data placement never change.\nA block device smaller than its device is refused, listed in `shrunk`\nand `errors`, and raises the device_shrunk alert.\n\nOn a cluster whose array plugin creates its LUNs, every LUN is grown at\nthe array first: by `lun_factor`, or to `lun_size` bytes (a LUN already\nthat large is left alone, so the call can be repeated after a failure;\nnodes added later get LUNs of that size).",
         "operationId": "clusters_grow_devices_api_v2_clusters__cluster_id__grow_devices_post",
         "security": [
           {
@@ -952,13 +952,37 @@
             }
           },
           {
-            "name": "rebalance",
+            "name": "lun_factor",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "boolean",
-              "default": true,
-              "title": "Rebalance"
+              "anyOf": [
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 1.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lun Factor"
+            }
+          },
+          {
+            "name": "lun_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "exclusiveMinimum": 0.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lun Size"
             }
           }
         ],
@@ -11761,6 +11785,219 @@
           }
         }
       }
+    },
+    "/api/v2/clusters/{cluster_id}/arrays/": {
+      "get": {
+        "operationId": "clusters_arrays_list_api_v2_clusters__cluster_id__arrays__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Cluster Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ArrayDTO"
+                  },
+                  "title": "Response Clusters Arrays List Api V2 Clusters  Cluster Id  Arrays  Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Clusters:Arrays:List"
+      },
+      "post": {
+        "description": "Register the cluster's storage array (or re-register it, e.g. to\nrotate its credentials). The plugin is loaded and connected with the\ncredentials and its capabilities read before anything is saved.",
+        "operationId": "clusters_arrays_create_api_v2_clusters__cluster_id__arrays__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Cluster Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArrayParams"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArrayDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Clusters:Arrays:Create"
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/arrays/{array_id}": {
+      "delete": {
+        "description": "Remove the registration and its credentials. Refused while LUNs\ncreated through the array exist, unless ``force``.",
+        "operationId": "clusters_arrays_delete_api_v2_clusters__cluster_id__arrays__array_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "array_id",
+            "required": true,
+            "schema": {
+              "title": "Array Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Cluster Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Clusters:Arrays:Delete"
+      },
+      "get": {
+        "operationId": "clusters_arrays_get_api_v2_clusters__cluster_id__arrays__array_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "array_id",
+            "required": true,
+            "schema": {
+              "title": "Array Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Cluster Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArrayDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Clusters:Arrays:Get"
+      }
     }
   },
   "components": {
@@ -12749,6 +12986,11 @@
           "node_label_suffix": {
             "type": "string",
             "title": "Node Label Suffix"
+          },
+          "multi_attach": {
+            "default": false,
+            "title": "Multi Attach",
+            "type": "boolean"
           }
         },
         "type": "object",
@@ -12968,6 +13210,11 @@
             "title": "Is Single Node",
             "default": false
           },
+          "raid_devices": {
+            "type": "boolean",
+            "title": "Raid Devices",
+            "default": false
+          },
           "fabric": {
             "type": "string",
             "title": "Fabric",
@@ -13145,6 +13392,26 @@
             "pattern": "^(-[a-z0-9]{1,3})?$",
             "title": "Node Label Suffix",
             "default": ""
+          },
+          "multi_attach": {
+            "default": false,
+            "title": "Multi Attach",
+            "type": "boolean"
+          },
+          "ftt": {
+            "anyOf": [
+              {
+                "enum": [
+                  1,
+                  2
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ftt"
           }
         },
         "type": "object",
@@ -14008,41 +14275,63 @@
         "properties": {
           "devices": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/DeviceGrowthEntryDTO"
             },
-            "type": "array",
-            "title": "Devices"
+            "title": "Devices",
+            "type": "array"
           },
           "errors": {
             "additionalProperties": {
               "type": "string"
             },
-            "type": "object",
-            "title": "Errors"
+            "title": "Errors",
+            "type": "object"
           },
-          "uniform": {
-            "type": "boolean",
-            "title": "Uniform"
+          "factor": {
+            "title": "Factor",
+            "type": "number"
           },
-          "rebalance": {
+          "grown": {
+            "title": "Grown",
+            "type": "boolean"
+          },
+          "luns": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/DeviceRebalanceDTO"
+                "additionalProperties": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "object"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Luns"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "shrunk": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Shrunk",
+            "type": "array"
           }
         },
-        "type": "object",
         "required": [
+          "grown",
+          "factor",
           "devices",
           "errors",
-          "uniform"
+          "reason"
         ],
-        "title": "DeviceGrowthDTO"
+        "title": "DeviceGrowthDTO",
+        "type": "object"
       },
       "DeviceHealthAssessmentDTO": {
         "properties": {
@@ -14485,29 +14774,6 @@
           "verdict"
         ],
         "title": "DevicePerformanceAssessmentDTO"
-      },
-      "DeviceRebalanceDTO": {
-        "properties": {
-          "weights_updated": {
-            "type": "boolean",
-            "title": "Weights Updated"
-          },
-          "started": {
-            "type": "boolean",
-            "title": "Started"
-          },
-          "reason": {
-            "type": "string",
-            "title": "Reason"
-          }
-        },
-        "type": "object",
-        "required": [
-          "weights_updated",
-          "started",
-          "reason"
-        ],
-        "title": "DeviceRebalanceDTO"
       },
       "DeviceResizeDTO": {
         "properties": {
@@ -19289,6 +19555,197 @@
           "spdk_image"
         ],
         "title": "_UpdateParams"
+      },
+      "ArrayDTO": {
+        "properties": {
+          "capabilities": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capabilities"
+          },
+          "credential_ref": {
+            "additionalProperties": true,
+            "title": "Credential Ref",
+            "type": "object"
+          },
+          "endpoint": {
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "has_credentials": {
+            "title": "Has Credentials",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "journal": {
+            "default": "local",
+            "title": "Journal",
+            "type": "string"
+          },
+          "journal_lun_size": {
+            "default": 0,
+            "title": "Journal Lun Size",
+            "type": "integer"
+          },
+          "journal_options": {
+            "additionalProperties": true,
+            "title": "Journal Options",
+            "type": "object"
+          },
+          "lun_size": {
+            "title": "Lun Size",
+            "type": "integer"
+          },
+          "options": {
+            "additionalProperties": true,
+            "title": "Options",
+            "type": "object"
+          },
+          "plugin": {
+            "title": "Plugin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "plugin",
+          "endpoint",
+          "options",
+          "lun_size",
+          "has_credentials"
+        ],
+        "title": "ArrayDTO",
+        "type": "object"
+      },
+      "ArrayParams": {
+        "properties": {
+          "allow_local_kms_credentials": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opt in (true) or out (false) of keeping the credentials in the cluster's local key store, effectively unencrypted, when it has no external KMS (test environments); omitted, unchanged",
+            "title": "Allow Local Kms Credentials"
+          },
+          "credential_ref": {
+            "additionalProperties": true,
+            "description": "Instead of credentials: a secret kept outside simplyblock, {\"kind\": \"vault-kv\", \"mount\": ..., \"path\": ..., \"version\": ...} or {\"kind\": \"kmip-secret\", \"uid\": ..., \"field\": ...}",
+            "title": "Credential Ref",
+            "type": "object"
+          },
+          "credentials": {
+            "additionalProperties": {
+              "format": "password",
+              "type": "string",
+              "writeOnly": true
+            },
+            "title": "Credentials",
+            "type": "object"
+          },
+          "endpoint": {
+            "default": "",
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "journal": {
+            "default": "local",
+            "description": "Where each node's journal is kept: local (a disk or partition of its host) or lun (a LUN of its own, created next to its data LUN; needs lun_size)",
+            "enum": [
+              "local",
+              "lun"
+            ],
+            "title": "Journal",
+            "type": "string"
+          },
+          "journal_lun_size": {
+            "default": 0,
+            "description": "journal lun: size of each node's journal LUN; 0 = 3% of lun_size, at least 2 GiB",
+            "minimum": 0.0,
+            "title": "Journal Lun Size",
+            "type": "integer"
+          },
+          "journal_options": {
+            "additionalProperties": true,
+            "description": "journal lun: plugin options for the journal LUNs, applied over options, e.g. {\"pool\": \"fast-pool\"}",
+            "title": "Journal Options",
+            "type": "object"
+          },
+          "lun_size": {
+            "default": 0,
+            "description": "Size of the LUN created for each added node; 0 = none",
+            "minimum": 0.0,
+            "title": "Lun Size",
+            "type": "integer"
+          },
+          "options": {
+            "additionalProperties": true,
+            "title": "Options",
+            "type": "object"
+          },
+          "plugin": {
+            "description": "Plugin name (entry point in simplyblock.array_plugins), e.g. aws-ebs",
+            "minLength": 1,
+            "title": "Plugin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plugin"
+        ],
+        "title": "ArrayParams",
+        "type": "object"
+      },
+      "DeviceGrowthEntryDTO": {
+        "properties": {
+          "device_id": {
+            "title": "Device Id",
+            "type": "string"
+          },
+          "old_size": {
+            "title": "Old Size",
+            "type": "integer"
+          },
+          "new_size": {
+            "title": "New Size",
+            "type": "integer"
+          },
+          "backend_size": {
+            "title": "Backend Size",
+            "type": "integer"
+          },
+          "unused_size": {
+            "title": "Unused Size",
+            "type": "integer"
+          },
+          "placement_size": {
+            "title": "Placement Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "device_id",
+          "old_size",
+          "new_size",
+          "backend_size",
+          "unused_size",
+          "placement_size"
+        ],
+        "title": "DeviceGrowthEntryDTO",
+        "type": "object"
       }
     },
     "securitySchemes": {

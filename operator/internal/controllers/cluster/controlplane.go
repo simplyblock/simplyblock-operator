@@ -108,6 +108,16 @@ type ControlPlane interface {
 	// is still used by a volume.
 	SetServiceClasses(ctx context.Context, clusterID string, config ServiceClassConfig) error
 
+	// RegisterArray registers a multi-attach cluster's storage array, or
+	// registers it again with a changed spec or login. The control plane
+	// connects to the array first, so a refusal changes nothing.
+	RegisterArray(ctx context.Context, clusterID string, reg atlascp.ArrayRegistration) (atlascp.Array, error)
+
+	// GrowLUNs grows every LUN of a multi-attach cluster to sizeBytes at its
+	// array and the cluster's devices onto them. A LUN that already has the
+	// size is left alone, so a failed call is simply repeated.
+	GrowLUNs(ctx context.Context, clusterID string, sizeBytes int64) (atlascp.LUNGrowth, error)
+
 	// Endpoint is the base URL this call would currently reach the control
 	// plane at, resolved the same way every other call resolves it (§3.3).
 	// upsertCSICredentials carries it into the CSI driver's aggregate Secret,
@@ -179,6 +189,26 @@ func (c *httpControlPlane) Cluster(
 		return atlascp.Cluster{}, err
 	}
 	return api.GetCluster(ctx, clusterID)
+}
+
+func (c *httpControlPlane) RegisterArray(
+	ctx context.Context, clusterID string, reg atlascp.ArrayRegistration,
+) (atlascp.Array, error) {
+	api, err := c.atlasFor(ctx)
+	if err != nil {
+		return atlascp.Array{}, err
+	}
+	return api.RegisterArray(ctx, clusterID, reg)
+}
+
+func (c *httpControlPlane) GrowLUNs(
+	ctx context.Context, clusterID string, sizeBytes int64,
+) (atlascp.LUNGrowth, error) {
+	api, err := c.atlasFor(ctx)
+	if err != nil {
+		return atlascp.LUNGrowth{}, err
+	}
+	return api.GrowLUNs(ctx, clusterID, sizeBytes)
 }
 
 func (c *httpControlPlane) Clusters(ctx context.Context) ([]atlascp.Cluster, error) {

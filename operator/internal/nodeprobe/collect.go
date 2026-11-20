@@ -40,8 +40,21 @@ func FromInventory(node string, at time.Time, inv inventory.Inventory, unreadabl
 		NVMeControllers:    controllersOf(inv.NVMeControllers, inv.NVMeFormats),
 		Reclaimed:          controllersOf(inv.Reclaimed, nil),
 		HostOS:             hostOSOf(inv.HostOS),
+		SANInitiators:      sanInitiatorsOf(inv.SANInitiators),
 		NetworkAttachments: networkAttachmentsOf(inv.NetworkAttachments),
 		Unreadable:         sentences(unreadable),
+	}
+}
+
+// sanInitiatorsOf renders the initiators, or nothing for a worker with none.
+func sanInitiatorsOf(in inventory.SANInitiators) *SANInitiators {
+	if in.ISCSIIQN == "" && len(in.FCWWPNs) == 0 && in.NVMeHostNQN == "" {
+		return nil
+	}
+	return &SANInitiators{
+		ISCSIIQN:    in.ISCSIIQN,
+		FCWWPNs:     append([]string(nil), in.FCWWPNs...),
+		NVMeHostNQN: in.NVMeHostNQN,
 	}
 }
 

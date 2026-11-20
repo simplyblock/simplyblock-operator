@@ -34,6 +34,11 @@ const (
 	HostUnreachable   = "HostUnreachable"
 	AwaitingSlot      = "AwaitingSlot"
 
+	// AwaitingArray is a node of a multi-attach cluster held before its add,
+	// because adding it creates its LUN on the cluster's storage array and the
+	// array is not registered yet.
+	AwaitingArray = "AwaitingArray"
+
 	// WorkerAway is the machine this node is being added to being not Ready or
 	// cordoned, which is every MachineConfig reboot and every drain.
 	WorkerAway = "WorkerAway"
