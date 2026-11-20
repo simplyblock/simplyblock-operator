@@ -11336,6 +11336,219 @@
           }
         }
       }
+    },
+    "/api/v2/clusters/{cluster_id}/arrays/": {
+      "get": {
+        "operationId": "clusters_arrays_list_api_v2_clusters__cluster_id__arrays__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Cluster Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ArrayDTO"
+                  },
+                  "title": "Response Clusters Arrays List Api V2 Clusters  Cluster Id  Arrays  Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Clusters:Arrays:List"
+      },
+      "post": {
+        "description": "Register the cluster's storage array (or re-register it, e.g. to\nrotate its credentials). The plugin is loaded and connected with the\ncredentials and its capabilities read before anything is saved.",
+        "operationId": "clusters_arrays_create_api_v2_clusters__cluster_id__arrays__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Cluster Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArrayParams"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArrayDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Clusters:Arrays:Create"
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/arrays/{array_id}": {
+      "delete": {
+        "description": "Remove the registration and its credentials. Refused while LUNs\ncreated through the array exist, unless ``force``.",
+        "operationId": "clusters_arrays_delete_api_v2_clusters__cluster_id__arrays__array_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "array_id",
+            "required": true,
+            "schema": {
+              "title": "Array Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Cluster Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Clusters:Arrays:Delete"
+      },
+      "get": {
+        "operationId": "clusters_arrays_get_api_v2_clusters__cluster_id__arrays__array_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "array_id",
+            "required": true,
+            "schema": {
+              "title": "Array Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Cluster Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArrayDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Clusters:Arrays:Get"
+      }
     }
   },
   "components": {
@@ -12316,6 +12529,11 @@
           "node_label_suffix": {
             "type": "string",
             "title": "Node Label Suffix"
+          },
+          "multi_attach": {
+            "default": false,
+            "title": "Multi Attach",
+            "type": "boolean"
           }
         },
         "type": "object",
@@ -12685,6 +12903,26 @@
             "pattern": "^(-[a-z0-9]{1,3})?$",
             "title": "Node Label Suffix",
             "default": ""
+          },
+          "multi_attach": {
+            "default": false,
+            "title": "Multi Attach",
+            "type": "boolean"
+          },
+          "ftt": {
+            "anyOf": [
+              {
+                "enum": [
+                  1,
+                  2
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ftt"
           }
         },
         "type": "object",
@@ -18545,6 +18783,109 @@
           "spdk_image"
         ],
         "title": "_UpdateParams"
+      },
+      "ArrayDTO": {
+        "properties": {
+          "capabilities": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capabilities"
+          },
+          "credential_ref": {
+            "additionalProperties": true,
+            "title": "Credential Ref",
+            "type": "object"
+          },
+          "endpoint": {
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "has_credentials": {
+            "title": "Has Credentials",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "lun_size": {
+            "title": "Lun Size",
+            "type": "integer"
+          },
+          "options": {
+            "additionalProperties": true,
+            "title": "Options",
+            "type": "object"
+          },
+          "plugin": {
+            "title": "Plugin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "plugin",
+          "endpoint",
+          "options",
+          "lun_size",
+          "has_credentials"
+        ],
+        "title": "ArrayDTO",
+        "type": "object"
+      },
+      "ArrayParams": {
+        "properties": {
+          "credential_ref": {
+            "additionalProperties": true,
+            "description": "Instead of credentials: a secret kept outside simplyblock, {\"kind\": \"vault-kv\", \"mount\": ..., \"path\": ..., \"version\": ...} or {\"kind\": \"kmip-secret\", \"uid\": ..., \"field\": ...}",
+            "title": "Credential Ref",
+            "type": "object"
+          },
+          "credentials": {
+            "additionalProperties": {
+              "format": "password",
+              "type": "string",
+              "writeOnly": true
+            },
+            "title": "Credentials",
+            "type": "object"
+          },
+          "endpoint": {
+            "default": "",
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "lun_size": {
+            "default": 0,
+            "description": "Size of the LUN created for each added node; 0 = none",
+            "minimum": 0.0,
+            "title": "Lun Size",
+            "type": "integer"
+          },
+          "options": {
+            "additionalProperties": true,
+            "title": "Options",
+            "type": "object"
+          },
+          "plugin": {
+            "description": "Plugin name (entry point in simplyblock.array_plugins), e.g. aws-ebs",
+            "minLength": 1,
+            "title": "Plugin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plugin"
+        ],
+        "title": "ArrayParams",
+        "type": "object"
       }
     },
     "securitySchemes": {
